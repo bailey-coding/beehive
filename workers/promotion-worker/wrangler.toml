@@ -1,0 +1,59 @@
+# Beehive Promotion Worker Configuration
+# Implements M3 promotion train with tournament and merge-train modes
+
+name = "beehive-promotion-worker"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+# Cloudflare Artifacts configuration
+[vars]
+PROMOTION_MODE = "tournament"
+MAX_CONCURRENT_CANDIDATES = "5"
+PROMOTION_TIMEOUT = "3600"
+
+# Queue for promotion events
+[[queues.consumers]]
+  queue = "promotion-events"
+  max_batch_size = 100
+  max_batch_timeout = 30
+
+# Service bindings to other Beehive workers
+[[services]]
+  binding = "SPEC_DO"
+  service = "beehive"
+
+[[services]]
+  binding = "PREVIEW_MANAGER"
+  service = "beehive-preview-manager"
+
+[[services]]
+  binding = "GATE_WORKFLOW"
+  service = "beehive-gate-workflow"
+
+[[services]]
+  binding = "SHADOW_ROUTER"
+  service = "beehive-shadow-router"
+
+# Analytics Engine for promotion metrics
+[[analytics_engine_datasets]]
+  binding = "ANALYTICS"
+  dataset = "beehive-metrics"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true

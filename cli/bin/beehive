@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+
+/**
+ * Beehive CLI Executable
+ * This is the entry point when running `beehive` command
+ */
+
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+
+// Get the directory of this file
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Try to use the built version first, then fall back to source
+async function run() {
+  const distPath = join(__dirname, '..', 'dist', 'index.js');
+  const srcPath = join(__dirname, '..', 'src', 'index.ts');
+
+  try {
+    // Try to load the built version
+    const { default: main } = await import(distPath);
+    await main;
+  } catch (buildError) {
+    try {
+      // Fall back to source using tsx
+      const { execa } = await import('execa');
+      const result = execa('node', ['--loader', 'tsx/esm', srcPath], {
+        stdio: 'inherit',
+      });
+      
+      // Forward exit code
+      const exitCode = await result;
+      if (exitCode) {
+        process.exit(exitCode);
+      }
+    } catch (tsxError) {
+      // Fall back to direct import
+      try {
+        const { default: main } = await import(srcPath.replace('.ts', '.js'));
+        await main;
+      } catch (directError) {
+        console.error('Failed to start Beehive CLI:');
+        console.error('Please run: npm run build');
+        console.error('');
+        console.error('Alternatively, run with: npm run dev');
+        process.exit(1);
+      }
+    }
+  }
+}
+
+// Handle errors
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection:', reason);
+  process.exit(1);
+});
+
+// Run
+run().catch((error) => {
+  console.error('CLI Error:', error);
+  process.exit(1);
+});

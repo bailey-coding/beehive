@@ -1,0 +1,44 @@
+# Beehive Shadow Router Worker
+# Mirrors production traffic to candidate Workers for Scientist comparison
+# Discards all candidate responses - comparison is async via Scientist
+
+name = "beehive-shadow-router"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+# Cloudflare Artifacts configuration
+[vars]
+
+# Analytics Engine for per-candidate metrics
+# Note: SPEC_DO binding removed for initial testing
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "beehive-metrics"
+
+# Queue for sending comparison requests to Scientist Comparator
+[[queues.producers]]
+binding = "SCIENTIST_QUEUE"
+queue = "beehive-scientist-comparisons"
+
+[[queues.producers]]
+binding = "PREVIEW_SCIENTIST_QUEUE"
+queue = "preview-scientist-comparisons"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true

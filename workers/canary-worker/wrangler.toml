@@ -1,0 +1,52 @@
+# Beehive Canary Worker
+# Handles canary deployments with SLO monitoring and auto-rollback
+
+name = "beehive-canary-worker"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+# Cloudflare account ID
+[vars]
+CANARY_SLO_LATENCY_P95 = "1000"  # 1 second
+CANARY_SLO_ERROR_RATE = "0.01"   # 1%
+
+# Durable Object binding for Spec DO (cross-script)
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"
+
+# Service binding to Preview Manager
+[[services]]
+binding = "PREVIEW_MANAGER"
+service = "beehive-preview-manager"
+
+# Analytics Engine for SLO metrics
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "beehive-metrics"
+
+# Queue for rollback triggers
+[[queues.consumers]]
+queue = "canary-rollback-triggers"
+max_batch_size = 100
+max_batch_timeout = 30
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true

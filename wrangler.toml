@@ -1,0 +1,43 @@
+# Beehive Cloudflare Workers Configuration
+# This is the orchestration spine - hand-written, not agent-generated
+#
+# This config deploys the edge router/API worker ("beehive"), which also hosts
+# the SpecDO class (exported from workers/api/index.ts). The other workers have
+# their own configs:
+#   workers/gate-workflow/wrangler.toml   -> beehive-gate-workflow
+#   workers/sandbox-runner/wrangler.toml  -> beehive-sandbox-runner
+#   workers/queue-consumer/wrangler.toml  -> beehive-queue-consumer
+# They bind to the Spec DO via script_name = "beehive".
+#
+# For local multi-worker dev, run `wrangler dev` in each worker directory;
+# service/DO bindings resolve through the dev registry by worker name.
+
+name = "beehive"
+main = "workers/api/index.ts"
+compatibility_date = "2026-10-09"
+
+# Cloudflare Artifacts configuration
+# Set CLOUDFLARE_API_TOKEN as a secret: wrangler secret put CLOUDFLARE_API_TOKEN
+# CLOUDFLARE_ACCOUNT_ID is injected at deploy time (--var in package.json deploy scripts)
+[vars]
+ALLOWED_GITHUB_USERS = "bailey-coding, OliverVermeulen"
+
+# Durable Object for Spec coordination (class exported by this script)
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+
+# Analytics Engine for per-candidate metrics
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "beehive-metrics"
+
+# Service binding to Gate Workflow
+[[services]]
+binding = "GATE_WORKFLOW"
+service = "beehive-gate-workflow"
+
+# DO migration - SQLite-backed (required for state.storage.sql)
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SpecDO"]

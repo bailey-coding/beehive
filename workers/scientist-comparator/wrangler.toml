@@ -1,0 +1,56 @@
+# Beehive Scientist Comparator Worker
+# Implements the Shadow rung of the oracle ladder
+# Compares candidate responses against baseline using declared delta surface
+
+name = "beehive-scientist-comparator"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+# Cloudflare Account configuration
+[vars]
+
+# Auth token - must match other workers
+# Set via: wrangler secret put API_AUTH_TOKEN
+# Local dev: add to .dev.vars
+
+# Durable Object binding for Spec DO (cross-script)
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"
+
+# Analytics Engine for per-candidate metrics
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "beehive-metrics"
+
+# Queue consumer for scientist comparison requests
+[[queues.consumers]]
+queue = "beehive-scientist-comparisons"
+max_batch_size = 100
+max_batch_timeout = 30
+
+[[queues.consumers]]
+queue = "preview-scientist-comparisons"
+max_batch_size = 100
+max_batch_timeout = 30
+
+# Observability configuration
+[observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true

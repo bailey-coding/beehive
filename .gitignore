@@ -1,0 +1,66 @@
+# Environment files
+/.env
+/.env.*
+!.env.example
+!.env.test.local
+!.env.test.staging
+!.env.test.production
+
+# Dev vars
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Cloudflare
+/.wrangler/
+/.cloudflare/
+
+# Node.js
+/node_modules/
+/package-lock.json
+package-lock.json
+
+# Compiled output
+/dist/
+*.js.map
+
+# Build artifacts
+/build/
+*.log
+*.bak
+*.tmp
+
+# Test files in root
+/test/
+
+# Allow tests/ directory for integration and e2e tests
+!/tests/
+
+# Ignore test files elsewhere (with leading slash to prevent matching in tests/)
+/*.test.ts
+/*.test.js
+/*.spec.ts
+/*.spec.js
+
+# Coverage
+/coverage/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local development files
+create-repo.js
+create-repo.js.map
+
+# Per-worker dependencies
+workers/*/node_modules/
+
+# Vitest cache
+.vitest-cache/

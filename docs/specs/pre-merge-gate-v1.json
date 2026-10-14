@@ -1,0 +1,159 @@
+{
+  "id": "spec-002",
+  "name": "Pre-merge Gate v1",
+  "description": "First rung of the oracle ladder. Runs automated tests, property checks, and spec conformance validation against a candidate without live traffic.",
+  "contract": {
+    "endpoints": [
+      {
+        "path": "/gates/pre-merge",
+        "method": "POST",
+        "request": {
+          "body": {
+            "type": "object",
+            "properties": {
+              "candidateId": { "type": "string", "description": "ID of the candidate to evaluate" },
+              "specId": { "type": "string", "description": "ID of the spec being implemented" },
+              "commitSha": { "type": "string", "description": "The commit SHA to test" },
+              "baseCommitSha": { "type": "string", "description": "The baseline commit SHA for diff comparison" }
+            },
+            "required": ["candidateId", "specId", "commitSha", "baseCommitSha"]
+          },
+          "headers": {
+            "X-Actor-ID": { "type": "string", "description": "Actor ID of the requester" }
+          }
+        },
+        "response": {
+          "body": {
+            "type": "object",
+            "properties": {
+              "verdictId": { "type": "string" },
+              "status": { "enum": ["pass", "fail", "pending"] },
+              "score": { "type": "number", "minimum": 0, "maximum": 100 },
+              "complexityDelta": { "type": "number" },
+              "testResults": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "testName": { "type": "string" },
+                    "passed": { "type": "boolean" },
+                    "durationMs": { "type": "number" },
+                    "error": { "type": "string", "nullable": true }
+                  }
+                }
+              },
+              "conformanceErrors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": { "type": "string" },
+                    "expected": { "type": "string" },
+                    "actual": { "type": "string" },
+                    "severity": { "enum": ["error", "warning"] }
+                  }
+                }
+              }
+            },
+            "required": ["verdictId", "status", "score", "complexityDelta", "testResults"]
+          }
+        }
+      },
+      {
+        "path": "/gates/pre-merge/status/{verdictId}",
+        "method": "GET",
+        "response": {
+          "body": {
+            "type": "object",
+            "properties": {
+              "status": { "enum": ["pending", "running", "complete"] },
+              "progress": { "type": "number", "minimum": 0, "maximum": 100 },
+              "startedAt": { "type": "string", "format": "date-time" },
+              "completedAt": { "type": "string", "format": "date-time", "nullable": true }
+            }
+          }
+        }
+      }
+    ],
+    "models": {
+      "GateVerdict": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "candidateId": { "type": "string" },
+          "gate": { "const": "pre-merge" },
+          "status": { "enum": ["pass", "fail", "pending"] },
+          "score": { "type": "number" },
+          "complexityDelta": { "type": "number" },
+          "notes": { "type": "string", "nullable": true },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "decidedBy": { "type": "string" }
+        }
+      }
+    },
+    "workflow": {
+      "steps": [
+        {
+          "name": "clone_repository",
+          "description": "Clone the candidate's repository to a sandbox environment",
+          "output": "sandboxPath"
+        },
+        {
+          "name": "install_dependencies",
+          "description": "Install dependencies defined in the candidate's package.json/requirements",
+          "output": "installSuccess"
+        },
+        {
+          "name": "run_unit_tests",
+          "description": "Execute unit tests from the candidate's test suite",
+          "output": "testResults"
+        },
+        {
+          "name": "run_property_tests",
+          "description": "Run property-based tests against the spec contract",
+          "output": "propertyTestResults"
+        },
+        {
+          "name": "calculate_complexity_delta",
+          "description": "Compute complexity difference between candidate and baseline",
+          "output": "complexityDelta"
+        },
+        {
+          "name": "validate_spec_conformance",
+          "description": "Verify candidate matches the spec's declared delta surface",
+          "output": "conformanceScore"
+        },
+        {
+          "name": "aggregate_results",
+          "description": "Combine all test results into final score and verdict",
+          "output": "finalVerdict"
+        },
+        {
+          "name": "record_verdict",
+          "description": "Write the gate verdict to the Spec DO ledger",
+          "output": "verdictId"
+        }
+      ],
+      "passingScore": 80,
+      "requiredTests": ["unit", "property", "conformance"]
+    },
+    "sandbox": {
+      "timeoutSeconds": 300,
+      "memoryMB": 1024,
+      "cpu": 1,
+      "networkAccess": false
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "backoffMultiplier": 2
+    }
+  },
+  "declaredDeltaSurface": [
+    "POST /gates/pre-merge",
+    "GET /gates/pre-merge/status/{verdictId}"
+  ],
+  "organizationId": "org-001",
+  "createdBy": "human-001",
+  "stage": "draft",
+  "createdAt": "2026-10-09T00:00:00Z"
+}

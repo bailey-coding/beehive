@@ -1,0 +1,71 @@
+{
+  "name": "beehive",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Beehive - Agent-native version control and collaboration platform",
+  "main": "workers/api/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:gate": "wrangler dev --config workers/gate-workflow/wrangler.toml",
+    "dev:sandbox": "wrangler dev --config workers/sandbox-runner/wrangler.toml",
+    "dev:queue": "wrangler dev --config workers/queue-consumer/wrangler.toml",
+    "dev:shadow": "wrangler dev --config workers/shadow-router/wrangler.toml",
+    "dev:scientist": "wrangler dev --config workers/scientist-comparator/wrangler.toml",
+    "dev:preview": "wrangler dev --config workers/preview-manager/wrangler.toml",
+    "dev:candidate": "wrangler dev --config workers/candidate-service/wrangler.toml",
+    "dev:canary": "wrangler dev --config workers/canary-worker/wrangler.toml",
+    "dev:promotion": "wrangler dev --config workers/promotion-worker/wrangler.toml",
+    "deploy": "wrangler deploy --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:gate": "wrangler deploy --config workers/gate-workflow/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:sandbox": "wrangler deploy --config workers/sandbox-runner/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:queue": "wrangler deploy --config workers/queue-consumer/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:shadow": "wrangler deploy --config workers/shadow-router/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:scientist": "wrangler deploy --config workers/scientist-comparator/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:preview": "wrangler deploy --config workers/preview-manager/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:candidate": "wrangler deploy --config workers/candidate-service/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:canary": "wrangler deploy --config workers/canary-worker/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:promotion": "wrangler deploy --config workers/promotion-worker/wrangler.toml --var CLOUDFLARE_ACCOUNT_ID:$CLOUDFLARE_ACCOUNT_ID --var WORKERS_SUBDOMAIN:$WORKERS_SUBDOMAIN",
+    "deploy:all": "npm run deploy && npm run deploy:gate && npm run deploy:sandbox && npm run deploy:queue && npm run deploy:shadow && npm run deploy:scientist && npm run deploy:preview && npm run deploy:candidate && npm run deploy:canary && npm run deploy:promotion",
+    "queue:create": "wrangler queues create beehive-artifacts-push",
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint 'workers/**/*.ts'",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run tests/e2e",
+    "test:e2e:local": "E2E_ENVIRONMENT=local vitest run tests/e2e",
+    "test:e2e:staging": "E2E_ENVIRONMENT=staging vitest run tests/e2e",
+    "test:e2e:production": "E2E_ENVIRONMENT=production vitest run tests/e2e",
+    "test:e2e:watch": "E2E_ENVIRONMENT=local vitest watch tests/e2e"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.71.1",
+    "@typescript-eslint/parser": "^8.71.1",
+    "dotenv": "^18.0.7",
+    "eslint": "^9.0.0",
+    "sql.js": "^1.11.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^2.0.0",
+    "wrangler": "^4.149.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "durable-objects",
+    "version-control",
+    "agents"
+  ],
+  "author": "",
+  "license": "MIT"
+}

@@ -1,0 +1,67 @@
+# Beehive Queue Consumer Worker
+# Consumes Artifacts push events from the beehive-artifacts-push queue.
+# Binds to the Spec DO hosted by the "beehive" (API) worker via script_name,
+# and to the gate workflow worker via a service binding.
+#
+# The queue must exist before deploying:
+#   wrangler queues create beehive-artifacts-push
+
+name = "beehive-queue-consumer"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+# Cloudflare Artifacts configuration
+# Set CLOUDFLARE_API_TOKEN as a secret: wrangler secret put CLOUDFLARE_API_TOKEN
+[vars]
+
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"
+
+[[services]]
+binding = "GATE_WORKFLOW"
+service = "beehive-gate-workflow"
+
+[[services]]
+binding = "PREVIEW_MANAGER"
+service = "beehive-preview-manager"
+
+# Analytics Engine for per-candidate metrics
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "beehive-metrics"
+
+[[queues.consumers]]
+queue = "beehive-artifacts-push"
+max_batch_size = 100
+max_batch_timeout = 30
+
+[[queues.consumers]]
+queue = "preview-artifacts-push"
+max_batch_size = 100
+max_batch_timeout = 30
+
+[[queues.consumers]]
+queue = "preview-artifacts-events"
+max_batch_size = 100
+max_batch_timeout = 30
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true

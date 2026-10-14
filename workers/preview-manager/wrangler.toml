@@ -1,0 +1,48 @@
+# Beehive Preview Manager Worker
+# Manages Workers Builds preview deployments for candidate implementations
+# Called by queue-consumer to deploy previews; sends to preview-scientist-comparisons queue
+
+name = "beehive-preview-manager"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+[vars]
+
+# Cloudflare API Token for Workers Builds and Artifacts
+# Set via: wrangler secret put CLOUDFLARE_API_TOKEN
+# Required scope: Workers:Edit + Artifacts:Read
+
+# Durable Object binding for Spec DO (cross-script)
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"
+
+# Analytics Engine for per-candidate metrics
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "beehive-metrics"
+
+# Queue producer for preview scientist comparisons
+[[queues.producers]]
+queue = "preview-scientist-comparisons"
+binding = "PREVIEW_SCIENTIST_QUEUE"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true

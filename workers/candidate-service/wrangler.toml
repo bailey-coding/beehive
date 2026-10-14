@@ -1,0 +1,38 @@
+# Beehive Candidate Service Worker
+# Handles candidate-specific operations including preview deployments and health checks
+
+name = "beehive-candidate-service"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+[vars]
+
+# Durable Object binding for Spec DO (cross-script)
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"
+
+# Analytics Engine for per-candidate metrics
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "beehive-metrics"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issues]
+enabled = true

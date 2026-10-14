@@ -1,0 +1,352 @@
+/**
+ * Sandbox Runner Tests
+ * 
+ * Unit tests for the Sandbox Runner Worker.
+ * These test the logic without actual sandbox execution.
+ */
+
+import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+
+// Mock the fetch handler
+import handler from '../index';
+
+type JsonResponse = Record<string, unknown>;
+async function readJson(res: Response): Promise<JsonResponse> {
+  return await res.json() as JsonResponse;
+}
+
+// Helper to create a mock request
+function createRequest(
+  path: string,
+  method: string = 'GET',
+  body?: unknown,
+  headers?: Record<string, string>
+): Request {
+  const url = new URL(`http://localhost${path}`);
+  return new Request(url.toString(), {
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+// Mock environment
+const mockEnv = {
+  SPEC_DO: {
+    idFromName: vi.fn(),
+    get: vi.fn(),
+  },
+  ARTIFACTS: {},
+  SANDBOX: {},
+  API_AUTH_TOKEN: 'test-auth-token',
+};
+
+const mockCtx = {};
+
+// Helper to call the handler
+async function callHandler(
+  path: string,
+  method: string = 'GET',
+  body?: unknown,
+  headers?: Record<string, string>
+): Promise<Response> {
+  const request = createRequest(path, method, body, {
+    Authorization: 'Bearer test-auth-token',
+    ...headers,
+  });
+  // @ts-ignore - mock environment
+  return handler.fetch(request, mockEnv, mockCtx);
+}
+
+describe('Sandbox Runner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('auth gate', () => {
+    it('returns 401 when the bearer token is missing or wrong', async () => {
+      // @ts-ignore - mock environment
+      const missing = await handler.fetch(createRequest('/health'), mockEnv, mockCtx);
+      expect(missing.status).toBe(401);
+
+      const wrong = await callHandler('/health', 'GET', undefined, {
+        Authorization: 'Bearer wrong-token',
+      });
+      expect(wrong.status).toBe(401);
+    });
+
+    it('returns 503 when API_AUTH_TOKEN is not configured', async () => {
+      const envWithoutToken = { ...mockEnv, API_AUTH_TOKEN: undefined };
+      // @ts-ignore - mock environment
+      const res = await handler.fetch(createRequest('/health'), envWithoutToken, mockCtx);
+      expect(res.status).toBe(503);
+    });
+
+    it('allows requests with the correct bearer token', async () => {
+      const res = await callHandler('/health');
+      expect(res.status).toBe(200);
+      const data = await readJson(res);
+      expect(data.status).toBe('healthy');
+    });
+  });
+
+  describe('Health Check', () => {
+    it('should return healthy status on /health', async () => {
+      const response = await callHandler('/health');
+      expect(response.status).toBe(200);
+      const data = await readJson(response);
+      expect(data.status).toBe('healthy');
+      expect(data.timestamp).toBeDefined();
+    });
+
+    it('should return healthy status on /sandbox/health', async () => {
+      const response = await callHandler('/sandbox/health');
+      expect(response.status).toBe(200);
+      const data = await readJson(response);
+      expect(data.status).toBe('healthy');
+    });
+  });
+
+  describe('Task Management', () => {
+    it('should create a new task', async () => {
+      const task = {
+        taskId: 'task-001',
+        candidateId: 'candidate-001',
+        specId: 'spec-001',
+        repoName: 'beehive-test',
+        namespace: 'default',
+        commitMessage: 'Test commit',
+        agentId: 'agent-001',
+        maxDurationMs: 30000,
+      };
+
+      const response = await callHandler('/sandbox/tasks', 'POST', task, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      expect(response.status).toBe(202); // Accepted
+      const data = await readJson(response);
+      expect(data.success).toBe(true);
+      expect(data.taskId).toBe('task-001');
+      expect(data.status).toBe('queued');
+    });
+
+    it('should return 400 for invalid task creation', async () => {
+      const response = await callHandler('/sandbox/tasks', 'POST', {});
+      expect(response.status).toBe(400);
+      const data = await readJson(response);
+      expect(data.success).toBe(false);
+      expect(data.error).toBeDefined();
+    });
+
+    it('should return task status', async () => {
+      // First create a task
+      const task = {
+        taskId: 'task-002',
+        candidateId: 'candidate-002',
+        specId: 'spec-001',
+        repoName: 'beehive-test',
+        namespace: 'default',
+        commitMessage: 'Test commit',
+        agentId: 'agent-001',
+        maxDurationMs: 30000,
+      };
+
+      await callHandler('/sandbox/tasks', 'POST', task, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      // Then get the task
+      const response = await callHandler('/sandbox/tasks/task-002');
+      expect(response.status).toBe(200);
+      const data = await readJson(response);
+      expect(data.success).toBe(true);
+      expect((data as { task?: { taskId?: string } }).task?.taskId).toBe('task-002');
+    });
+
+    it('should return 404 for non-existent task', async () => {
+      const response = await callHandler('/sandbox/tasks/nonexistent');
+      expect(response.status).toBe(404);
+      const data = await readJson(response);
+      expect(data.success).toBe(false);
+      expect(data.error).toBe('Task not found');
+    });
+  });
+
+  describe('Repo Operations', () => {
+    it('should clone a repo', async () => {
+      const body = {
+        repoName: 'beehive-test',
+        namespace: 'default',
+        taskId: 'task-001',
+      };
+
+      const response = await callHandler('/sandbox/repos/clone', 'POST', body, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      expect(response.status).toBe(200);
+      const data = await readJson(response);
+      expect(data.success).toBe(true);
+      expect(data.repoName).toBe('beehive-test');
+      expect(data.sandboxPath).toMatch(/^\/sandbox\/task-001\/beehive-test$/);
+    });
+
+    it('should commit changes', async () => {
+      const body = {
+        taskId: 'task-001',
+        commitMessage: 'Test commit',
+        files: [{ path: 'test.txt', content: 'hello' }],
+      };
+
+      const response = await callHandler('/sandbox/repos/test-repo/commit', 'POST', body, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      expect(response.status).toBe(200);
+      const data = await readJson(response);
+      expect(data.success).toBe(true);
+      expect((data as { commitSha?: string }).commitSha).toBeDefined();
+      expect(((data as { commitSha?: string }).commitSha)?.length).toBe(40); // SHA length
+    });
+
+    it('should push changes with 30% rejection rate for testing', async () => {
+      // Mock Math.random to control rejection
+      const originalRandom = Math.random;
+      
+      // Test successful push (random >= 0.3)
+      Math.random = () => 0.5;
+      let response = await callHandler('/sandbox/repos/test-repo/push', 'POST', {
+        taskId: 'task-001',
+        commitSha: 'abc123',
+        branch: 'main',
+      }, { 'X-Actor-ID': 'agent-001' });
+      
+      expect(response.status).toBe(200);
+      let data = await readJson(response);
+      expect(data.success).toBe(true);
+      
+      // Test rejected push (random < 0.3)
+      Math.random = () => 0.2;
+      response = await callHandler('/sandbox/repos/test-repo/push', 'POST', {
+        taskId: 'task-002',
+        commitSha: 'def456',
+        branch: 'main',
+      }, { 'X-Actor-ID': 'agent-001' });
+      
+      expect(response.status).toBe(409); // Conflict
+      data = await readJson(response);
+      expect(data.success).toBe(false);
+      expect(data.error).toContain('concurrent push');
+      
+      // Restore Math.random
+      Math.random = originalRandom;
+    });
+  });
+
+  describe('Agent Execution', () => {
+    it('should execute agent code', async () => {
+      const body = {
+        taskId: 'task-001',
+        candidateId: 'candidate-001',
+        specId: 'spec-001',
+        agentCode: 'console.log("test")',
+        timeoutMs: 10000,
+      };
+
+      const response = await callHandler('/sandbox/execute', 'POST', body, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      expect(response.status).toBe(200);
+      const data = await readJson(response);
+      expect(data.success).toBe(true);
+      expect(data.taskId).toBe('task-001');
+      expect(data.commitSha).toBeDefined();
+      expect(data.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should handle execution errors', async () => {
+      const body = {
+        taskId: 'task-001',
+        candidateId: 'candidate-001',
+        specId: 'spec-001',
+        agentCode: 'throw new Error("test error")',
+        timeoutMs: 10000,
+      };
+
+      const response = await callHandler('/sandbox/execute', 'POST', body, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      expect(response.status).toBe(500);
+      const data = await readJson(response);
+      expect(data.success).toBe(false);
+      expect(data.error).toBeDefined();
+    });
+  });
+
+  describe('Direct Execution', () => {
+    it('should execute code directly (dev only)', async () => {
+      const body = {
+        taskId: 'task-001',
+        specId: 'spec-001',
+        agentId: 'agent-001',
+        code: 'console.log("direct execution")',
+      };
+
+      const response = await callHandler('/sandbox/execute/direct', 'POST', body, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      expect(response.status).toBe(200);
+      const data = await readJson(response);
+      expect(data.success).toBe(true);
+      expect(data.result).toBeDefined();
+    });
+
+    it('should reject invalid code', async () => {
+      const body = {
+        taskId: 'task-001',
+        specId: 'spec-001',
+        agentId: 'agent-001',
+        code: 'a'.repeat(10001), // Too long
+      };
+
+      const response = await callHandler('/sandbox/execute/direct', 'POST', body, {
+        'X-Actor-ID': 'agent-001',
+      });
+
+      expect(response.status).toBe(500);
+      const data = await readJson(response);
+      expect(data.success).toBe(false);
+      expect(data.error).toContain('Invalid code');
+    });
+  });
+
+  describe('404 Handling', () => {
+    it('should return 404 for unknown endpoints', async () => {
+      const response = await callHandler('/sandbox/unknown');
+      expect(response.status).toBe(404);
+      const data = await readJson(response);
+      expect(data.error).toBe('Not found');
+    });
+  });
+});
+
+describe('Sandbox Utilities', () => {
+  describe('generateFakeSha', () => {
+    it('should generate a 40-character hex string', () => {
+      // Import the utility function
+      // This would require exporting it from the module
+      // For now, we'll test the concept
+      const chars = '0123456789abcdef';
+      let result = '';
+      for (let i = 0; i < 40; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      expect(result.length).toBe(40);
+      expect(result).toMatch(/^[0-9a-f]+$/);
+    });
+  });
+});

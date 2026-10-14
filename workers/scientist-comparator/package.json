@@ -1,0 +1,32 @@
+{
+  "name": "beehive-scientist-comparator",
+  "version": "1.0.0",
+  "description": "Beehive Scientist Comparator Worker - Implements the Shadow rung of the oracle ladder",
+  "main": "index.ts",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "delete": "wrangler delete --force"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "typescript": "^5.3.3",
+    "wrangler": "^4.150.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "beehive",
+    "scientist",
+    "comparator"
+  ],
+  "author": "Bailey <bailey@example.com>",
+  "license": "MIT"
+}
