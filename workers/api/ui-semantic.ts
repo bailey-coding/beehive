@@ -107,119 +107,119 @@ export interface ArtifactsContentsResponse {
   path: string;
 }
 
-/**
- * Fetch contents from Cloudflare Artifacts for a repository.
- * Returns null if Artifacts is not configured or if the fetch fails.
- */
-export async function fetchArtifactsContents(
-  env: ArtifactsUiEnv,
-  accountId: string,
-  namespace: string,
-  repoName: string,
-  ref: string,
-  path: string = ''
-): Promise<ArtifactsContentsResponse | null> {
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
-    console.log('[Artifacts] API token or account ID not configured, skipping real fetch');
-    return null;
-  }
+function artifactsRepoBase(env: ArtifactsUiEnv, namespace: string, repoName: string): string {
+  return `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/artifacts/namespaces/${encodeURIComponent(namespace)}/repos/${encodeURIComponent(repoName)}`;
+}
 
+async function artifactsJson(env: ArtifactsUiEnv, url: string): Promise<any | null> {
   try {
-    const encodedPath = path ? `/${encodeURIComponent(path)}` : '';
-    const url = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/artifacts/repositories/${namespace}/${repoName}/contents${encodedPath}?ref=${encodeURIComponent(ref)}`;
-    
     const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
     });
-    
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[Artifacts] Error fetching contents: ${response.status} - ${errorText}`);
+      console.error(`[Artifacts] ${url} -> ${response.status} ${(await response.text()).slice(0, 300)}`);
       return null;
     }
-    
-    const data = await response.json();
-    
-    if (!data.success) {
-      const errors = data.errors?.map((e: any) => e.message).join(', ') || 'Unknown error';
-      console.error(`[Artifacts] API returned success=false: ${errors}`);
+    const data: any = await response.json();
+    if (data && data.success === false) {
+      console.error(`[Artifacts] ${url} success=false: ${JSON.stringify(data.errors)}`);
       return null;
     }
-    
-    return data.result as ArtifactsContentsResponse;
+    return data && data.result !== undefined ? data.result : data;
   } catch (error) {
-    console.error(`[Artifacts] Error fetching contents:`, error);
+    console.error(`[Artifacts] Error fetching ${url}:`, error);
     return null;
   }
 }
 
 /**
- * Fetch a specific file's content from Cloudflare Artifacts.
- * Returns the decoded content string or null if not found/error.
+ * Fetch the root tree of a repository at `ref` via log -> commit -> tree.
+ * Response shapes for these routes are undocumented, so parsing is defensive
+ * (see docs/OPEN-QUESTIONS.md). Returns null if anything is missing.
+ */
+export async function fetchArtifactsContents(
+  env: ArtifactsUiEnv,
+  _accountId: string,
+  namespace: string,
+  repoName: string,
+  ref: string,
+  _path: string = ''
+): Promise<ArtifactsContentsResponse | null> {
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
+    console.log('[Artifacts] API token or account ID not configured, skipping real fetch');
+    return null;
+  }
+  const base = artifactsRepoBase(env, namespace, repoName);
+
+  const log = await artifactsJson(env, `${base}/log?ref=${encodeURIComponent(ref)}&limit=1`);
+  const commits = Array.isArray(log) ? log : log?.commits ?? log?.log ?? [];
+  const head = commits[0];
+  const commitHash: string | undefined = head?.hash ?? head?.sha ?? head?.id ?? head?.oid;
+  if (!commitHash) {
+    console.error(`[Artifacts] No commit hash in log response: ${JSON.stringify(log)?.slice(0, 300)}`);
+    return null;
+  }
+
+  const commit = await artifactsJson(env, `${base}/commit/${commitHash}`);
+  const treeRef = commit?.tree ?? commit?.commit?.tree;
+  const treeHash: string | undefined = typeof treeRef === 'string' ? treeRef : treeRef?.hash ?? treeRef?.sha;
+  if (!treeHash) {
+    console.error(`[Artifacts] No tree hash in commit response: ${JSON.stringify(commit)?.slice(0, 300)}`);
+    return null;
+  }
+
+  const tree = await artifactsJson(env, `${base}/tree/${treeHash}`);
+  const raw: any[] = Array.isArray(tree) ? tree : tree?.entries ?? tree?.tree ?? [];
+  if (!raw.length) {
+    console.error(`[Artifacts] No entries in tree response: ${JSON.stringify(tree)?.slice(0, 300)}`);
+    return null;
+  }
+
+  const entries: ArtifactsFileEntry[] = raw.map((e) => {
+    const t = String(e.type ?? e.kind ?? '');
+    const isDir = t === 'tree' || t === 'dir' || t === 'directory' || String(e.mode ?? '') === '040000' || String(e.mode ?? '') === '40000';
+    return {
+      path: String(e.path ?? e.name),
+      mode: String(e.mode ?? ''),
+      type: isDir ? 'dir' : 'file',
+      size: typeof e.size === 'number' ? e.size : undefined,
+    };
+  });
+
+  return { repository: { id: '', name: repoName }, commit: { sha: commitHash }, tree: entries, path: '' };
+}
+
+/**
+ * Fetch a file's text from Cloudflare Artifacts (GET .../file?ref=&path=).
+ * Returns null if not found or on error.
  */
 export async function fetchArtifactsFileContent(
   env: ArtifactsUiEnv,
-  accountId: string,
+  _accountId: string,
   namespace: string,
   repoName: string,
   ref: string,
   filePath: string
 ): Promise<string | null> {
-  const contents = await fetchArtifactsContents(env, accountId, namespace, repoName, ref, filePath);
-  
-  if (!contents) {
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
     return null;
   }
-  
-  // Find the file in the tree
-  const file = contents.tree.find(f => f.path === filePath);
-  
-  if (!file) {
-    console.log(`[Artifacts] File ${filePath} not found at ref ${ref}`);
-    return null;
-  }
-  
-  if (file.type !== 'file') {
-    console.log(`[Artifacts] Path ${filePath} is not a file`);
-    return null;
-  }
-  
-  // If content is provided as base64, decode it
-  if (file.content) {
-    try {
-      return atob(file.content);
-    } catch {
-      console.error(`[Artifacts] Failed to decode base64 content for ${filePath}`);
-      return null;
-    }
-  }
-  
-  // If download_url is provided, fetch it
-  if (file.download_url) {
-    try {
-      const response = await fetch(file.download_url, {
-        headers: {
-          'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-        },
-      });
-      
-      if (!response.ok) {
-        console.error(`[Artifacts] Failed to download file: ${response.status}`);
-        return null;
+  try {
+    const url = `${artifactsRepoBase(env, namespace, repoName)}/file?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(filePath)}`;
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
+    });
+    if (!response.ok) {
+      if (response.status !== 404) {
+        console.error(`[Artifacts] file ${filePath} -> ${response.status}`);
       }
-      
-      return await response.text();
-    } catch (error) {
-      console.error(`[Artifacts] Error downloading file ${filePath}:`, error);
       return null;
     }
+    return await response.text();
+  } catch (error) {
+    console.error(`[Artifacts] Error fetching file ${filePath}:`, error);
+    return null;
   }
-  
-  console.log(`[Artifacts] No content or download_url available for file ${filePath}`);
-  return null;
 }
 
 /**
@@ -1003,50 +1003,37 @@ export async function renderFileTreeSection(
   remoteUrl?: string,
   defaultBranch?: string
 ): Promise<SafeHtml> {
-  // Try to fetch real data from Artifacts if configured
+  let readmeHtml = '';
+  let realTree: FileNode | null = null;
   if (env && remoteUrl && defaultBranch) {
     const parsed = parseArtifactsRemoteUrl(remoteUrl);
     if (parsed) {
-      // Use accountId from env if available, otherwise from parsed URL
       const accountId = env.CLOUDFLARE_ACCOUNT_ID || parsed.accountId;
-      
-      // Fetch the root directory contents
-      const contents = await fetchArtifactsContents(
-        env,
-        accountId,
-        parsed.namespace,
-        parsed.repoName,
-        defaultBranch,
-        ''
-      );
-      
+      const contents = await fetchArtifactsContents(env, accountId, parsed.namespace, parsed.repoName, defaultBranch, '');
       if (contents) {
-        // Build file tree from real data
-        const tree = buildFileTreeFromArtifacts(contents.tree);
-        
-        // Check if README exists and fetch its content
-        const readmeContent = await tryFetchReadme(
-          env,
-          accountId,
-          parsed.namespace,
-          parsed.repoName,
-          defaultBranch
-        );
-        
-        return safeHtml(`
-    <div class="file-tree">
-      ${readmeContent ? `<div class="readme-section"><h4>README.md</h4><div class="readme-content">${esc(readmeContent)}</div></div>` : ''}
-      ${renderFileTree(tree)}
-    </div>
-  `);
+        realTree = buildFileTreeFromArtifacts(contents.tree);
+      }
+      const readme = await tryFetchReadme(env, accountId, parsed.namespace, parsed.repoName, defaultBranch);
+      if (readme) {
+        readmeHtml = `<div class="readme-section"><h4>README.md</h4><pre class="readme-content" style="white-space:pre-wrap;">${esc(readme)}</pre></div>`;
       }
     }
   }
-  
-  // Fall back to mock data
+
+  if (realTree) {
+    return safeHtml(`
+    <div class="file-tree">
+      ${readmeHtml}
+      ${renderFileTree(realTree)}
+    </div>
+  `);
+  }
+
+  // Fall back to mock tree (README, if fetched, is still real)
   const tree = mockFileTree(repoId, repoType);
   return safeHtml(`
     <div class="file-tree">
+      ${readmeHtml}
       ${mockedLabel('File tree')}
       ${renderFileTree(tree)}
     </div>
