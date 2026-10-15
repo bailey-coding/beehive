@@ -15,9 +15,10 @@ checked without a fresh Cloudflare account.
 ## 1. Local development
 
 ```bash
-npm ci
+npm install        # package-lock.json is gitignored, so `npm ci` has nothing to use
 npm run typecheck        # 2 known errors in workers/api/ui-semantic.ts (see Known issues)
-npm test                 # unit tests; e2e files need local workers (below)
+npm test                 # tests/**, including tests/e2e: fails with ECONNREFUSED unless local workers run (below)
+npx vitest run workers   # per-worker unit tests are not covered by `npm test`
 ```
 
 Every worker fails closed without `API_AUTH_TOKEN` (`workers/shared/auth.ts`), including
@@ -56,12 +57,21 @@ the workers do not implement:
 | Test calls | Worker actually routes |
 |---|---|
 | `/canary/slo/config`, `/canary/slo/metrics` | `/slo-status` |
-| `/canary/deployments/:id[/rollback]` | `/deploy-canary`, `/rollback`, `/canary-deployments/:id` |
-| `/shadow/config` | `/statsig/config`, `/statsig/presets`, `/statsig/classify` |
-| `/promotion/mode`, `/promotion/health`, `/promotion/candidates/:id/status`, `/promotion/merge-train/:id` | `/promote/:id`, `/promote/:id/retry`, `/promote/:id/cancel` |
+| `/canary/deploy` | `/deploy-canary` |
+| `/canary/deployments/:id` | `/canary-deployments/:id` (keyed by **candidate** ID, tests pass a deployment ID) |
+| `/canary/deployments/:id/rollback` | `/rollback` |
+| `/shadow/config` | `/statsig/config`, `/statsig/presets` |
+| `/shadow/classify` | `/statsig/classify` |
+| `/promotion/health` | exists (`workers/promotion-worker/index.ts:49`); its body assertion failed in one local run and passed in another, so re-check |
+| `/promotion/mode` | `GET/POST /mode` |
+| `/promotion/candidates/promote` | `POST /promote`, `GET /promote/:id` |
+| `/promotion/merge-train/:id` | `/merge-train?specId=`, `/merge-train/status`, `/merge-train/list` |
+| `/promotion/merge-train/start`, `/promotion/tournament/start` | **no equivalent** |
 
-Either the tests or the workers need to change; this is test/implementation drift, not an
-environment problem. `m3-features.test.ts` and `oracle-ladder.test.ts` pass or skip.
+Other real promotion routes: `/tournament[/status|/list]`, `/merge/retry`, `/merge/rollback`,
+`/stats`, `/promote/:id/retry`, `/promote/:id/cancel`. Most failures are test-side drift, but
+the two `start` tests need new routes or deletion. `m3-features.test.ts` and
+`oracle-ladder.test.ts` pass or skip.
 
 ## 2. Deploying your own copy
 
@@ -75,7 +85,9 @@ Deploys run from `.github/workflows/deploy.yml` on every push to `main` (never r
 | `wrangler.toml` `[vars]` | `CLOUDFLARE_ACCOUNT_ID`, `ALLOWED_GITHUB_USERS` (the `deploy` scripts override the account ID via `--var`) |
 | `cli/src/index.ts`, `cli/src/utils/config.ts`, `cli/src/utils/api-client.ts`, `cli/src/commands/auth.ts` | default API URL `https://beehive.bz23711.workers.dev` |
 | `workers/shadow-router/config.ts:145` | `beehive-main` preview URL |
-| `tests/e2e/config.ts` | `production` URLs |
+| `tests/e2e/config.ts`, `tests/e2e/m3-features.test.ts:33-53` | `production` URLs (m3-features has its own map) |
+| `.env.test.production:16-19`, `scripts/e2e-test.ts:40` | production URLs |
+| `workers/shadow-router/tests/shadow.test.ts:216` | asserts the `bz23711` URL, so it breaks when `config.ts:145` changes |
 | `scripts/*.sh`, `scripts/test-workers-builds.ts` | `bz23711` subdomain |
 
 ### b. GitHub Actions secrets
@@ -102,24 +114,29 @@ npx wrangler queues create preview-scientist-comparisons
 for w in beehive beehive-gate-workflow beehive-sandbox-runner beehive-queue-consumer \
          beehive-shadow-router beehive-scientist-comparator beehive-preview-manager \
          beehive-candidate-service beehive-canary-worker beehive-promotion-worker; do
-  wrangler secret put API_AUTH_TOKEN -n $w
+  wrangler secret put API_AUTH_TOKEN --name $w
 done
+# Artifacts token: beehive AND beehive-preview-manager (previews are simulated without it)
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-preview-manager
 # beehive only:
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive
-wrangler secret put GITHUB_CLIENT_ID -n beehive       # web UI login
-wrangler secret put GITHUB_CLIENT_SECRET -n beehive
+wrangler secret put GITHUB_CLIENT_ID --name beehive       # web UI login
+wrangler secret put GITHUB_CLIENT_SECRET --name beehive
 ```
 
 The web UI is served by the `beehive` worker (`/login` -> GitHub OAuth -> `/app`); only users
 in `ALLOWED_GITHUB_USERS` can sign in. Create a GitHub OAuth app whose callback is on your
-worker's URL.
+worker's URL, path `/auth/callback`.
 
 ### e. Validated and unvalidated
 
 - Validated: all ten workers bundle with `wrangler deploy --dry-run`.
 - **UNVERIFIED**: a first deploy to an empty account. `beehive` has a service binding to
   `beehive-gate-workflow`, while the gate workflow binds the `SpecDO` class from `beehive`
-  via `script_name`; the cross-reference may need a two-pass first deploy.
+  via `script_name`. `deploy.yml` also deploys queue-consumer, canary-worker and
+  promotion-worker before preview-manager, though all three service-bind it. If Cloudflare
+  rejects bindings to Workers that do not exist yet, re-running the workflow cannot break the
+  cycle; a binding would have to be removed temporarily.
 - **UNVERIFIED**: Artifacts access and Workers Builds API use need an account with those
   products enabled (`docs/ARTIFACTS-SETUP.md`).
 - Wiping the ledger: see `docs/OPS.md`.

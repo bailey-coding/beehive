@@ -19,7 +19,7 @@ surprise → write into OPEN-QUESTIONS.md immediately.
 declared delta surface); orchestrator Worker (fork → sandbox → cheap-model agents); push
 event → Queue → gate Workflow (tests only); DO ledger with scores + actor identity +
 complexity delta; trial UI showing candidate comparison.
-- **Ledger lifecycle (spine work).** The Spec DO is append-only with no delete routes
+- **Ledger lifecycle (spine work) — OPEN, not built (verified 2026-10-15).** The Spec DO is append-only with no delete routes
   (2026-10-11 finding in OPEN-QUESTIONS.md: the only wipe is `wrangler delete beehive
   --force` + redeploy, which destroys all ledger data and worker secrets — fine for
   test data, unacceptable once real trials exist). Ship with M1: soft-delete/tombstones
@@ -39,7 +39,10 @@ complexity delta; trial UI showing candidate comparison.
 
 **M3 — Promotion train + Architectural Foundation (2–3 days).** PARTIAL: `promotion-worker`
 (tournament and merge-train modes), `canary-worker` (rollback), and Statsig config in
-`shadow-router` exist. Facets, capability minting, and ArtifactFS below are not implemented.
+`shadow-router` (local traffic-split config, no Statsig SDK) exist. Facets, capability minting,
+and ArtifactFS below are not implemented; canary auto-rollback is not wired (monitor never
+called, `getMetric` returns 0), `canary-rollback-triggers` and `promotion-events` have no
+producers, and speculative projection forks have no code.
 Statsig slicing, speculative projection forks, tournament vs merge-train modes, canary with
 auto-rollback.
 **Varda-inspired spine work (OPEN):**
@@ -51,8 +54,8 @@ auto-rollback.
 - **Capability-scoped mounting** — Spec DO mints capabilities with path restrictions; ArtifactFS respects these scopes at mount time
 **Exit criteria:** Promotion pipeline operational with isolated candidate execution; capability-based access control between Spec DO and candidate grains; ArtifactFS lazy-loading verified for agent workspaces.
 
-**M4 — Submission package + Agent Autonomy Demo (1–2 days).** SUBMITTED 2026-10-15
-(demo video recorded, LICENSE is MIT). Agent-autonomy items below were not verified in the
+**M4 — Submission package + Agent Autonomy Demo (1–2 days).** SUBMITTED (reported by
+maintainer 2026-10-15; demo video recorded, LICENSE is MIT). Agent-autonomy items below were not verified in the
 repo; treat as open unless a commit says otherwise. Demo video (one spec, three agents, live winner), MIT/Apache LICENSE, repo cleanup, 5–10 min video requirement.
 **Agent autonomy:**
 - **Agent-created issues/specs** — When agents detect out-of-scope problems, they create new issues and optionally draft new spec candidates

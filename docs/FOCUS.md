@@ -13,11 +13,14 @@ Completed items are removed, not struck through; history lives in git.*
 ## Decide first
 
 1. **22 failing e2e tests** (`tests/e2e/cross-worker-flows.test.ts`) call routes the workers
-   don't implement (`/canary/slo/config`, `/shadow/config`, `/promotion/mode`, ...). Change
-   the tests to the real routes (`/slo-status`, `/statsig/config`, `/promote/:id`), or
-   implement the routes. Route table in `docs/SETUP.md`.
-2. **Push** the 3 local commits on `main` (milestones, SETUP.md, e2e auth fix). A push
-   deploys all ten workers via `.github/workflows/deploy.yml`.
+   don't implement. Most map to real routes (table in `docs/SETUP.md`); the merge-train and
+   tournament `start` tests have no equivalent and need new routes or deletion.
+2. **Docs bodies are uncommitted.** `docs/*.md` (ARCHITECTURE, TROUBLESHOOTING,
+   ARTIFACTS-SETUP, ...) are header-only stubs in HEAD since the public release (`bbccf9e`);
+   full bodies exist only in the working tree. Commit them or decide they stay private.
+3. **Public `/roadmap` page overstates status** (`workers/api/index.ts:646-661`): marks M3
+   complete incl. facets/capabilities/ArtifactFS and "M7 Observability Layer" complete.
+   `scripts/demo-multi-agent.sh` also prints hard-coded ArtifactFS numbers.
 
 ## Open work
 
@@ -31,8 +34,14 @@ Completed items are removed, not struck through; history lives in git.*
     binding cycle may need two passes).
 - **README drift:** says local e2e uses mocks (it makes real HTTP calls) and points to
   `docs/SETUP.md` as complete; update `README.md` and `tests/e2e/README.md`.
-- **M3 spine items with no implementation:** DO facets, capability minting, ArtifactFS
-  (`docs/MILESTONES.md`).
+- **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; canary
+  `SLOMonitor.monitorAndTriggerRollback` is never called and `getMetric` returns 0
+  (`canary-worker/slo.ts:67-78`); no producer for `canary-rollback-triggers` or
+  `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
+  config, not an SDK integration.
+- **M1 ledger lifecycle** (tombstones, admin purge route) is not built; this is why a wipe
+  means deleting the worker.
+- **OPEN-QUESTIONS.md** has no ledger-lifecycle finding, though MILESTONES cites one.
 
 ## Next demo (post-submission)
 

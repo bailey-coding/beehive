@@ -32,7 +32,8 @@ verdicts, and outcomes as first-class, linked artifacts.
 5. **The always-pushed invariant.** No agent task reaches done/failed without a final
    push. Intermediate states go to `scratch/*` refs. Nothing is ever local-only.
 6. **No external CI.** Validation = Sandboxes via Workflows (Cloudflare CI SDK pattern).
-   Deploys = Workers Builds.
+   Deploys = Workers Builds (candidate pipeline; the platform's own workers deploy via
+   GitHub Actions `deploy.yml`, see `docs/OPS.md`).
 7. **Rollback is a ref operation.** Promotion and demotion must remain equally cheap.
 
 ### The oracle ladder (memorize)
@@ -50,7 +51,7 @@ serialization point for promotion decisions.
 
 ### Working conventions
 
-- Follow the milestone plan; do not skip ahead to M3 features during the spike.
+- Work only on the current phase in `docs/MILESTONES.md`; spine items (rule 2) need a human.
 - Undocumented Artifacts behavior → write a finding into `docs/OPEN-QUESTIONS.md`, never
   a silent workaround.
 - Candidate services stay small and stateless (price calculator / URL shortener shape).
@@ -68,7 +69,6 @@ serialization point for promotion decisions.
 - **Batch edits.** Group related file changes into single commits with descriptive messages.
 - **Prefer search_replace over rewrite.** Edit files in-place to preserve existing structure and comments.
 - **Avoid redundant summaries.** Skip generic explanations; state facts, decisions, and actionable items only.
-- **Leverage the milestone plan.** Do not implement M3+ features during M1. Check `docs/MILESTONES.md` for current phase.
 - **Keep the context pack lean.** `AGENTS.md` is loaded into every turn. Add a note here only after the same mistake happens twice, and prune stale notes. Keep this file under ~200 lines.
 - **Reference files by path, don't paste.** Point at `path:line` instead of pasting file contents or logs. Trim logs and stack traces to the relevant 20–30 lines.
 - **Clear and compact between phases.** Start a fresh session for unrelated work (new milestone, new worker). Compact mid-task only when a long task must continue. Hand off state via a committed doc, not chat history.
@@ -77,16 +77,16 @@ serialization point for promotion decisions.
 
 ### Model routing and delegation
 
-Match model to task: heavy tier (hard debugging, spec/architecture, promotion-train logic)
-plan first; default tier for features and tests; light tier for lookups and edits. Spawn
-agents through the orchestrator API, never via Worker-side spawning. Details and the tier
-table: `docs/AGENT-ROUTING.md`.
+Tiers: heavy (hard debugging, spec/architecture, promotion-train logic; plan first), default
+(features, tests), light (lookups, edits). Orchestrator: spawn agents via its API. Inside a
+Worker: never use orchestrator spawning; run solo or use `tools.subagent`. Table and detail:
+`docs/AGENT-ROUTING.md`.
 
 ### Working patterns
 
 - **Fork-per-agent invariant.** Each agent works in its own fork. Never push to shared branches.
-- **Always-pushed invariant.** Every task ends with a push. Use `scratch/*` refs for intermediate states.
-- **GitHub auto-deploy.** Never run `wrangler deploy` — pushing to GitHub automatically deploys all workers via GitHub Actions workflows.
+- **Always-pushed invariant.** Every task ends with a push. Use `scratch/*` refs for intermediate states. Applies to candidate forks and `scratch/*`; pushing `main` deploys production, so only on explicit human approval.
+- **GitHub auto-deploy.** Never run `wrangler deploy` — pushing to GitHub automatically deploys all workers via GitHub Actions workflows. `wrangler deploy --dry-run` is fine for validation.
 - **Deterministic outputs.** Commit messages follow the format: `step: <desc> | task: <id> | spec: <clause> | confidence: <0-1>`.
 - **Document surprises immediately.** Any undocumented Artifacts behavior goes straight to `docs/OPEN-QUESTIONS.md`.
 - **Avoid duplicate work.** Before creating new agents, check if existing agents or subagents have already completed the task. Flag overlaps explicitly: "Agent X already delivered Y. Creating new agents will duplicate work. Confirm?"
@@ -113,20 +113,24 @@ See `docs/ARTIFACTS-SETUP.md` for verified setup patterns, CLI commands, authent
 Ten Workers, deployed by `.github/workflows/deploy.yml` on every push to `main`; each has its
 own wrangler config and the worker `name` there is the source of truth for URLs. The web UI
 is served by the `beehive` worker (`workers/api/ui.ts`); the React app in `ui/` is **not**
-built or deployed. Full topology, secrets, token scopes and the ledger-wipe procedure:
-`docs/OPS.md`. Symptoms: `docs/TROUBLESHOOTING.md`. Self-hosting and local dev: `docs/SETUP.md`.
+built or deployed. Topology, secrets, token scopes, ledger wipe: `docs/OPS.md`.
+
+**Never run e2e against production without human approval.** The Spec DO ledger has no
+delete routes; the only cleanup deletes the `beehive` worker (all ledger data and secrets).
 
 Config rules that bit this repo twice:
 - Service bindings take `binding = "..."`, never `name = "..."`.
 - Queue consumers attach via `[[queues.consumers]]`; `[[queues]]` is the producer form.
 
 Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missing
-`API_AUTH_TOKEN` → 503, wrong bearer → 401, including `/health`, local dev, and test
-helpers. Any new client or helper must send the bearer token (`.dev.vars` locally).
+`API_AUTH_TOKEN` → 503, wrong bearer → 401, including `/health` and local dev. Workers read
+`API_AUTH_TOKEN` (`.dev.vars` locally). Clients must send `Authorization: Bearer`, from
+`BEEHIVE_API_TOKEN` in `.env`; local e2e uses `local.apiToken` in `tests/e2e/config.ts`,
+which must match `.dev.vars`.
 
 Local e2e (`npm run test:e2e:local`) makes real HTTP calls: start the workers on ports
-8787–8790 first (see `docs/SETUP.md`). Before marking a milestone item done, grep for the
-implementation; docs have drifted from code before. Current focus: `docs/FOCUS.md`.
+8787–8790 first (`docs/SETUP.md`). Before marking a milestone item done, grep for the
+implementation; docs have drifted from code before.
 
 See `docs/OPEN-QUESTIONS.md` for dated findings (Artifacts behavior, wrangler config
 gotchas, deploy learnings).
