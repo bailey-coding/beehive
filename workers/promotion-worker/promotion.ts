@@ -94,7 +94,7 @@ export class PromotionWorker {
       }
 
       if (result.success) {
-        await this.stateManager.markAsCompleted(promotionState.id);
+        await this.stateManager.markAsCompleted(promotionState.id, promotionState.targetRung);
       } else {
         await this.stateManager.markAsFailed(promotionState.id, result.message);
       }

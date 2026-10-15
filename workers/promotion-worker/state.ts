@@ -85,11 +85,14 @@ export class PromotionStateManager {
   }
 
   /**
-   * Mark promotion as completed
+   * Mark promotion as completed and advance `currentRung` to the rung it reached.
+   * `currentRung` is the candidate's rung after the latest completed promotion; for
+   * pending/failed attempts it stays the rung the attempt started from (retry relies on that).
    */
-  async markAsCompleted(stateId: string): Promise<PromotionState> {
+  async markAsCompleted(stateId: string, reachedRung: Rung): Promise<PromotionState> {
     return this.updatePromotionState(stateId, {
       status: 'completed',
+      currentRung: reachedRung,
       completedAt: new Date().toISOString(),
     });
   }

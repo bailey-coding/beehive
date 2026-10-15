@@ -22,6 +22,10 @@ export const PromotionStateSchema = z
     id: z.string().min(1),
     candidateId: z.string().min(1),
     specId: z.string().min(1),
+    /**
+     * The candidate's rung after the latest completed promotion; for pending/failed
+     * attempts, the rung the attempt started from.
+     */
     currentRung: RungSchema,
     targetRung: RungSchema,
     status: z.enum(['pending', 'in_progress', 'completed', 'failed', 'rolled_back', 'cancelled']),

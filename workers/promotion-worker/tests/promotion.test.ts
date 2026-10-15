@@ -607,7 +607,7 @@ describe('Spec DO promotion ledger wiring', () => {
 
     const states = spec.listPromotionStates('cand-1');
     expect(states).toHaveLength(1);
-    expect(states[0]).toMatchObject({ status: 'completed', mode: 'tournament', currentRung: 'shadow', targetRung: 'train' });
+    expect(states[0]).toMatchObject({ status: 'completed', mode: 'tournament', currentRung: 'train', targetRung: 'train' });
 
     const tournaments = spec.listTournaments('spec-1');
     expect(tournaments).toHaveLength(1);
@@ -667,6 +667,18 @@ describe('Spec DO promotion ledger wiring', () => {
     const second = await worker.promoteCandidate({ ...request('cand-1'), fromRung: 'train', toRung: 'canary' });
     expect(second.status).toBe(200);
     expect(spec.listPromotionStates('cand-1').map((s) => s.targetRung)).toEqual(['canary', 'train']);
+  });
+
+  it('currentRung advances to targetRung on completion and stays the start rung on failure', async () => {
+    const { spec, env } = await ledgerEnv('tournament');
+    const manager = new PromotionStateManager(env);
+    const ok = await manager.createPromotionState('cand-ok', 'spec-1', 'shadow', 'train', 'tournament');
+    const bad = await manager.createPromotionState('cand-bad', 'spec-1', 'shadow', 'train', 'tournament');
+    await manager.markAsCompleted(ok.id, ok.targetRung);
+    await manager.markAsFailed(bad.id, 'boom');
+
+    expect(spec.listPromotionStates('cand-ok')[0]).toMatchObject({ status: 'completed', currentRung: 'train' });
+    expect(spec.listPromotionStates('cand-bad')[0]).toMatchObject({ status: 'failed', currentRung: 'shadow' });
   });
 
   it('an undefined field in an update clears it in the DO (retry reset)', async () => {
