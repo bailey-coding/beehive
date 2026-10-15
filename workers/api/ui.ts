@@ -12,6 +12,8 @@ export interface UiEnv {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   ALLOWED_GITHUB_USERS?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
 }
 
 import { page, esc, str, table } from './ui-html';
@@ -157,7 +159,7 @@ export async function handleUi(
     }
     
     // Render using UUID (all existing page code works unchanged)
-    return repoPage(pick(repo, 'id'), url, session, doReader);
+    return repoPage(pick(repo, 'id'), url, session, doReader, env);
   }
 
   // NEW: Detail page routes (GET only, after actor check - R9)
@@ -181,7 +183,7 @@ export async function handleUi(
       case 'orgs':
         return orgPage(id, url, session, doReader);
       case 'repos':
-        return repoPage(id, url, session, doReader);
+        return repoPage(id, url, session, doReader, env);
       case 'specs':
         return specPage(id, url, session, doReader);
       case 'candidates':

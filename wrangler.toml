@@ -18,8 +18,8 @@ compatibility_date = "2026-10-09"
 
 # Cloudflare Artifacts configuration
 # Set CLOUDFLARE_API_TOKEN as a secret: wrangler secret put CLOUDFLARE_API_TOKEN
-# CLOUDFLARE_ACCOUNT_ID is injected at deploy time (--var in package.json deploy scripts)
 [vars]
+CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
 ALLOWED_GITHUB_USERS = "bailey-coding, OliverVermeulen"
 
 # Durable Object for Spec coordination (class exported by this script)
@@ -41,3 +41,20 @@ service = "beehive-gate-workflow"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SpecDO"]
+
+# ...
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[observability.issue_detection]
+enabled = true
+# ...
+

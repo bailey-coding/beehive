@@ -18,6 +18,210 @@
 
 import { esc, mockedLabel, link, badge, appLink, buildBadge } from './ui-html';
 
+// ============================================================================
+// Artifacts URL parsing
+// ============================================================================
+
+/**
+ * Parse an Artifacts remote URL to extract accountId, namespace, and repoName.
+ * Expected format: https://{accountId}.artifacts.cloudflare.net/git/{namespace}/{repoName}.git
+ * Returns null if the URL doesn't match the expected pattern.
+ */
+export function parseArtifactsRemoteUrl(remoteUrl: string): {
+  accountId: string;
+  namespace: string;
+  repoName: string;
+} | null {
+  try {
+    const url = new URL(remoteUrl);
+    const hostname = url.hostname;
+    
+    // Match pattern: {accountId}.artifacts.cloudflare.net
+    const hostnameMatch = hostname.match(/^([a-f0-9]{32})\.artifacts\.cloudflare\.net$/i);
+    if (!hostnameMatch) {
+      return null;
+    }
+    
+    const accountId = hostnameMatch[1];
+    
+    // Path should be: /git/{namespace}/{repoName}.git
+    const pathParts = url.pathname.split('/').filter(Boolean);
+    if (pathParts.length < 3) {
+      return null;
+    }
+    
+    // pathParts[0] should be "git"
+    if (pathParts[0] !== 'git') {
+      return null;
+    }
+    
+    const namespace = pathParts[1];
+    const repoNameWithExt = pathParts[2];
+    
+    // Remove .git extension
+    const repoName = repoNameWithExt.endsWith('.git') 
+      ? repoNameWithExt.slice(0, -4)
+      : repoNameWithExt;
+    
+    if (!namespace || !repoName) {
+      return null;
+    }
+    
+    return { accountId, namespace, repoName };
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
+// Artifacts File Fetching
+// ============================================================================
+
+/**
+ * Environment variables needed for Artifacts API access
+ */
+export interface ArtifactsUiEnv {
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+}
+
+/**
+ * File entry from Artifacts API
+ */
+export interface ArtifactsFileEntry {
+  path: string;
+  mode: string;
+  type: 'file' | 'dir' | 'symlink' | 'submodule';
+  size?: number;
+  content?: string;
+  download_url?: string;
+}
+
+/**
+ * Response from Artifacts contents API
+ */
+export interface ArtifactsContentsResponse {
+  repository: { id: string; name: string };
+  commit: { sha: string };
+  tree: ArtifactsFileEntry[];
+  path: string;
+}
+
+/**
+ * Fetch contents from Cloudflare Artifacts for a repository.
+ * Returns null if Artifacts is not configured or if the fetch fails.
+ */
+export async function fetchArtifactsContents(
+  env: ArtifactsUiEnv,
+  accountId: string,
+  namespace: string,
+  repoName: string,
+  ref: string,
+  path: string = ''
+): Promise<ArtifactsContentsResponse | null> {
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
+    console.log('[Artifacts] API token or account ID not configured, skipping real fetch');
+    return null;
+  }
+
+  try {
+    const encodedPath = path ? `/${encodeURIComponent(path)}` : '';
+    const url = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/artifacts/repositories/${namespace}/${repoName}/contents${encodedPath}?ref=${encodeURIComponent(ref)}`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Artifacts] Error fetching contents: ${response.status} - ${errorText}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    if (!data.success) {
+      const errors = data.errors?.map((e: any) => e.message).join(', ') || 'Unknown error';
+      console.error(`[Artifacts] API returned success=false: ${errors}`);
+      return null;
+    }
+    
+    return data.result as ArtifactsContentsResponse;
+  } catch (error) {
+    console.error(`[Artifacts] Error fetching contents:`, error);
+    return null;
+  }
+}
+
+/**
+ * Fetch a specific file's content from Cloudflare Artifacts.
+ * Returns the decoded content string or null if not found/error.
+ */
+export async function fetchArtifactsFileContent(
+  env: ArtifactsUiEnv,
+  accountId: string,
+  namespace: string,
+  repoName: string,
+  ref: string,
+  filePath: string
+): Promise<string | null> {
+  const contents = await fetchArtifactsContents(env, accountId, namespace, repoName, ref, filePath);
+  
+  if (!contents) {
+    return null;
+  }
+  
+  // Find the file in the tree
+  const file = contents.tree.find(f => f.path === filePath);
+  
+  if (!file) {
+    console.log(`[Artifacts] File ${filePath} not found at ref ${ref}`);
+    return null;
+  }
+  
+  if (file.type !== 'file') {
+    console.log(`[Artifacts] Path ${filePath} is not a file`);
+    return null;
+  }
+  
+  // If content is provided as base64, decode it
+  if (file.content) {
+    try {
+      return atob(file.content);
+    } catch {
+      console.error(`[Artifacts] Failed to decode base64 content for ${filePath}`);
+      return null;
+    }
+  }
+  
+  // If download_url is provided, fetch it
+  if (file.download_url) {
+    try {
+      const response = await fetch(file.download_url, {
+        headers: {
+          'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+        },
+      });
+      
+      if (!response.ok) {
+        console.error(`[Artifacts] Failed to download file: ${response.status}`);
+        return null;
+      }
+      
+      return await response.text();
+    } catch (error) {
+      console.error(`[Artifacts] Error downloading file ${filePath}:`, error);
+      return null;
+    }
+  }
+  
+  console.log(`[Artifacts] No content or download_url available for file ${filePath}`);
+  return null;
+}
+
 /**
  * Helper to create safe HTML strings (internal use only).
  * All HTML returned from this module is already properly escaped.
@@ -788,8 +992,58 @@ ${indent}</details>`
 
 /**
  * Render a full file tree section.
+ * If Artifacts env and remote URL are provided, fetches real file tree from Artifacts.
+ * Otherwise falls back to mock data.
  */
-export function renderFileTreeSection(repoId: string, repoType?: string, now?: number): SafeHtml {
+export async function renderFileTreeSection(
+  repoId: string,
+  repoType?: string,
+  now?: number,
+  env?: ArtifactsUiEnv,
+  remoteUrl?: string,
+  defaultBranch?: string
+): Promise<SafeHtml> {
+  // Try to fetch real data from Artifacts if configured
+  if (env && remoteUrl && defaultBranch) {
+    const parsed = parseArtifactsRemoteUrl(remoteUrl);
+    if (parsed) {
+      // Use accountId from env if available, otherwise from parsed URL
+      const accountId = env.CLOUDFLARE_ACCOUNT_ID || parsed.accountId;
+      
+      // Fetch the root directory contents
+      const contents = await fetchArtifactsContents(
+        env,
+        accountId,
+        parsed.namespace,
+        parsed.repoName,
+        defaultBranch,
+        ''
+      );
+      
+      if (contents) {
+        // Build file tree from real data
+        const tree = buildFileTreeFromArtifacts(contents.tree);
+        
+        // Check if README exists and fetch its content
+        const readmeContent = await tryFetchReadme(
+          env,
+          accountId,
+          parsed.namespace,
+          parsed.repoName,
+          defaultBranch
+        );
+        
+        return safeHtml(`
+    <div class="file-tree">
+      ${readmeContent ? `<div class="readme-section"><h4>README.md</h4><div class="readme-content">${esc(readmeContent)}</div></div>` : ''}
+      ${renderFileTree(tree)}
+    </div>
+  `);
+      }
+    }
+  }
+  
+  // Fall back to mock data
   const tree = mockFileTree(repoId, repoType);
   return safeHtml(`
     <div class="file-tree">
@@ -797,4 +1051,106 @@ export function renderFileTreeSection(repoId: string, repoType?: string, now?: n
       ${renderFileTree(tree)}
     </div>
   `);
+}
+
+/**
+ * Try to fetch README.md content from Artifacts repository.
+ * Checks various possible locations (root, docs, etc.).
+ */
+async function tryFetchReadme(
+  env: ArtifactsUiEnv,
+  accountId: string,
+  namespace: string,
+  repoName: string,
+  ref: string
+): Promise<string | null> {
+  const possiblePaths = ['README.md', 'README.MD', 'readme.md', 'docs/README.md'];
+  
+  for (const path of possiblePaths) {
+    const content = await fetchArtifactsFileContent(
+      env,
+      accountId,
+      namespace,
+      repoName,
+      ref,
+      path
+    );
+    
+    if (content) {
+      return content;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Build a FileNode tree from Artifacts file entries.
+ * Converts flat list of files/dirs into nested tree structure.
+ */
+function buildFileTreeFromArtifacts(files: ArtifactsFileEntry[]): FileNode {
+  const root: FileNode = {
+    name: '.',
+    type: 'dir',
+    children: [],
+  };
+  
+  // Group files by directory
+  const dirs: Record<string, FileNode> = {};
+  
+  for (const file of files) {
+    const pathParts = file.path.split('/');
+    const name = pathParts.pop()!;
+    const dirPath = pathParts.join('/');
+    
+    const node: FileNode = {
+      name,
+      type: file.type as 'file' | 'dir',
+      bytes: file.size !== undefined ? file.size : undefined,
+      summary: file.type === 'file' && file.size !== undefined ? `${file.size} bytes` : undefined,
+    };
+    
+    if (dirPath) {
+      // File is in a subdirectory
+      if (!dirs[dirPath]) {
+        // Create directory structure
+        const dirParts = dirPath.split('/');
+        let currentPath = '';
+        let parent = root;
+        
+        for (const part of dirParts) {
+          currentPath = currentPath ? `${currentPath}/${part}` : part;
+          let dir = parent.children!.find(c => c.name === part && c.type === 'dir');
+          
+          if (!dir) {
+            dir = { name: part, type: 'dir' as const, children: [] };
+            parent.children!.push(dir);
+          }
+          
+          parent = dir;
+        }
+        
+        dirs[dirPath] = parent;
+      }
+      
+      // Ensure the directory has a children array
+      if (!dirs[dirPath].children) {
+        dirs[dirPath].children = [];
+      }
+      dirs[dirPath].children.push(node);
+    } else {
+      // File is in root
+      root.children.push(node);
+    }
+  }
+  
+  // Sort children for consistent display
+  root.children.sort((a, b) => {
+    // Directories first, then files
+    if (a.type === 'dir' && b.type !== 'dir') return -1;
+    if (a.type !== 'dir' && b.type === 'dir') return 1;
+    return a.name.localeCompare(b.name);
+  });
+  
+  return root;
 }

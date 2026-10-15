@@ -16,7 +16,8 @@ import {
   semanticSearch, renderSearch, 
   semanticChangelog, renderChangelog,
   mockCommits, renderCommits,
-  mockFileTree, renderFileTree, renderFileTreeSection
+  mockFileTree, renderFileTree, renderFileTreeSection,
+  type ArtifactsUiEnv
 } from './ui-semantic';
 
 // Session type (re-exported from ui.ts for tests)
@@ -329,7 +330,8 @@ export async function repoPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  env?: ArtifactsUiEnv
 ): Promise<Response> {
   if (!isValidId(id)) {
     return page('Not found', '<p>Invalid repository ID.</p>', 404);
@@ -382,7 +384,7 @@ export async function repoPage(
   
   const commits = mockCommits(id, linkedSpec ? getId(linkedSpec) : undefined, Date.now(), 8);
   
-  const tabContent = renderRepoTab(activeTab, repo, repoOrg, linkedSpec, repoIssues, repoCandidates, repoSpecs, commits, trials, promotions);
+  const tabContent = await renderRepoTab(activeTab, repo, repoOrg, linkedSpec, repoIssues, repoCandidates, repoSpecs, commits, trials, promotions, env);
   
   const body = `
     ${subHeader(getName(repo), '/app', 'All repositories')}
@@ -426,7 +428,7 @@ export async function repoPage(
 /**
  * Render repository tab content.
  */
-function renderRepoTab(
+async function renderRepoTab(
   tab: string,
   repo: DoRow,
   org: DoRow | undefined,
@@ -436,8 +438,9 @@ function renderRepoTab(
   specs: DoRow[],
   commits: any[],
   trials: DoRow[],
-  promotions: DoRow[]
-): string {
+  promotions: DoRow[],
+  env?: ArtifactsUiEnv
+): Promise<string> {
   switch (tab) {
     case 'overview':
       return renderRepoOverview(repo, org, spec, candidates, trials, promotions);
@@ -450,7 +453,19 @@ function renderRepoTab(
     case 'commits':
       return renderCommits(commits).toString();
     case 'files':
-      return renderFileTreeSection(getId(repo), pick(repo, 'repo_type', 'repoType')).toString();
+      // Try to fetch real file tree from Artifacts if configured
+      const remoteUrl = getRemoteUrl(repo);
+      const defaultBranch = pick(repo, 'default_branch', 'defaultBranch') || 'main';
+      
+      const result = await renderFileTreeSection(
+        getId(repo),
+        pick(repo, 'repo_type', 'repoType'),
+        undefined,
+        env,
+        remoteUrl || undefined,
+        defaultBranch || undefined
+      );
+      return result.toString();
     default:
       return renderRepoOverview(repo, org, spec, candidates, trials, promotions);
   }
