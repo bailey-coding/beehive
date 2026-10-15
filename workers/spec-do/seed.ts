@@ -130,8 +130,8 @@ const seedData: {
       organizationId: 'org-001',
       repoType: 'baseline',
       specId: 'spec-001',
-      remoteUrl: 'https://localhost:8787/git/default/beehive-url-shortener.git',
-      namespace: 'default',
+      remoteUrl: 'https://localhost:8787/git/beehive-demo/beehive-url-shortener.git',
+      namespace: 'beehive-demo',
     },
     {
       id: 'repo-002',
@@ -139,8 +139,8 @@ const seedData: {
       organizationId: 'org-001',
       repoType: 'candidate',
       agentId: 'agent-001',
-      remoteUrl: 'https://localhost:8787/git/default/beehive-url-shortener-agent-alpha.git',
-      namespace: 'default',
+      remoteUrl: 'https://localhost:8787/git/beehive-demo/beehive-url-shortener-agent-alpha.git',
+      namespace: 'beehive-demo',
     },
     {
       id: 'repo-003',
@@ -148,8 +148,8 @@ const seedData: {
       organizationId: 'org-001',
       repoType: 'candidate',
       agentId: 'agent-002',
-      remoteUrl: 'https://localhost:8787/git/default/beehive-url-shortener-agent-beta.git',
-      namespace: 'default',
+      remoteUrl: 'https://localhost:8787/git/beehive-demo/beehive-url-shortener-agent-beta.git',
+      namespace: 'beehive-demo',
     },
     {
       id: 'repo-004',
@@ -157,8 +157,8 @@ const seedData: {
       organizationId: 'org-001',
       repoType: 'candidate',
       agentId: 'agent-003',
-      remoteUrl: 'https://localhost:8787/git/default/beehive-url-shortener-agent-gamma.git',
-      namespace: 'default',
+      remoteUrl: 'https://localhost:8787/git/beehive-demo/beehive-url-shortener-agent-gamma.git',
+      namespace: 'beehive-demo',
     },
   ],
 

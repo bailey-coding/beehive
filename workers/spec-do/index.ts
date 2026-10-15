@@ -714,7 +714,12 @@ export class SpecDO {
       throw new Error(`Spec not found: ${specId}`);
     }
 
-    const namespace = 'default';
+    // Use org name as namespace for isolation
+    const org = this.getOrganization(spec.organization_id);
+    if (!org) {
+      throw new Error(`Organization not found: ${spec.organization_id}`);
+    }
+    const namespace = org.name;
     const repoName = `candidate-${specId.slice(0, 8)}-${agentId.slice(0, 8)}`;
 
     // Get Artifacts config from environment

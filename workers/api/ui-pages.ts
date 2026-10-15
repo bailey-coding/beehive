@@ -170,8 +170,9 @@ function buildRepoUrl(repo: DoRow, orgs: DoRow[], repoIdFallback?: string): stri
     return `/app/repos/${esc(encodeURIComponent(id))}`;
   }
   
-  // All valid - build hierarchical URL
-  return `/app/repos/${esc(encodeURIComponent(orgName))}/${esc(encodeURIComponent(namespace))}/${esc(encodeURIComponent(repoName))}`;
+  // If namespace equals orgName, use 2-part URL; otherwise use 3-part
+  const namespacePart = namespace === orgName ? '' : `/${esc(encodeURIComponent(namespace))}`;
+  return `/app/repos/${esc(encodeURIComponent(orgName))}${namespacePart}/${esc(encodeURIComponent(repoName))}`;
 }
 
 // ============================================================================

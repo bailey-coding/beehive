@@ -375,7 +375,9 @@ async function dashboard(url: URL, session: Session, stub: DurableObjectStub, do
       const repoName = pick(r, 'name') || pick(r, 'id');
       const validComponent = /^[A-Za-z0-9_.-]{1,64}$/;
       if (validComponent.test(orgName) && validComponent.test(namespace) && validComponent.test(repoName)) {
-        repoUrl = `/app/repos/${esc(encodeURIComponent(orgName))}/${esc(encodeURIComponent(namespace))}/${esc(encodeURIComponent(repoName))}`;
+        // If namespace equals orgName, use 2-part URL; otherwise use 3-part
+        const namespacePart = namespace === orgName ? '' : `/${esc(encodeURIComponent(namespace))}`;
+        repoUrl = `/app/repos/${esc(encodeURIComponent(orgName))}${namespacePart}/${esc(encodeURIComponent(repoName))}`;
       } else {
         repoUrl = `/app/repos/${esc(encodeURIComponent(pick(r, 'id')))}`;
       }
