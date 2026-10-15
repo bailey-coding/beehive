@@ -1127,12 +1127,12 @@ function buildFileTreeFromArtifacts(files: ArtifactsFileEntry[]): FileNode {
       dirs[dirPath].children.push(node);
     } else {
       // File is in root
-      root.children.push(node);
+      root.children!.push(node);
     }
   }
   
   // Sort children for consistent display
-  root.children.sort((a, b) => {
+  root.children!.sort((a, b) => {
     // Directories first, then files
     if (a.type === 'dir' && b.type !== 'dir') return -1;
     if (a.type !== 'dir' && b.type === 'dir') return 1;
