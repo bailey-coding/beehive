@@ -11,6 +11,7 @@ import { TournamentManager } from './tournament';
 import { MergeTrainManager } from './merge-train';
 import { authGate, AuthEnv } from '../shared/auth';
 import { Env, PromotionMode, Rung } from './types';
+import { getSpecDo, resolvePromotionMode } from './spec-do';
 
 // Extend Env with auth requirements
 export interface PromotionEnv extends Env, AuthEnv {}
@@ -51,7 +52,7 @@ async function handleFetch(
       status: 'healthy',
       worker: 'promotion-worker',
       timestamp: Date.now(),
-      mode: worker.getMode(),
+      mode: await resolvePromotionMode(env),
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -120,16 +121,25 @@ async function handleFetch(
   // MODE MANAGEMENT
   // ============================================================================
 
-  // GET /mode - Get current promotion mode
+  // GET /mode - Get current promotion mode (persisted in Spec DO)
   if (path === '/mode' && method === 'GET') {
-    return await worker.getCurrentMode();
+    const mode = await resolvePromotionMode(env);
+    return new Response(JSON.stringify({
+      success: true,
+      mode,
+      timestamp: new Date().toISOString()
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 
-  // POST /mode - Set promotion mode
+  // POST /mode - Set promotion mode (persisted in Spec DO)
   if (path === '/mode' && method === 'POST') {
+    let requested: string | undefined;
     try {
-      const body = await request.json() as { mode: PromotionMode };
-      return await worker.setMode(body);
+      const body = await request.json() as { mode?: string };
+      requested = body.mode;
     } catch (error) {
       return new Response(JSON.stringify({
         success: false,
@@ -137,6 +147,40 @@ async function handleFetch(
         timestamp: new Date().toISOString()
       }), {
         status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const validModes: PromotionMode[] = ['tournament', 'merge-train'];
+    if (!validModes.includes(requested as PromotionMode)) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: `Invalid mode. Must be one of: ${validModes.join(', ')}`,
+        timestamp: new Date().toISOString()
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    try {
+      const mode = await getSpecDo(env).setPromotionMode(requested as PromotionMode);
+      return new Response(JSON.stringify({
+        success: true,
+        mode,
+        message: `Promotion mode set to ${mode}`,
+        timestamp: new Date().toISOString()
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: `Failed to persist promotion mode: ${error instanceof Error ? error.message : String(error)}`,
+        timestamp: new Date().toISOString()
+      }), {
+        status: 500,
         headers: { 'Content-Type': 'application/json' }
       });
     }

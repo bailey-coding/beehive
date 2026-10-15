@@ -5,15 +5,16 @@
  */
 
 import { PromotionState, PromotionMode, Rung, Env } from './types';
+import { SpecDOStub, getSpecDo } from './spec-do';
 
 /**
  * Manages promotion state stored in the Spec DO
  */
 export class PromotionStateManager {
-  private readonly specDo: Service;
-  
+  private readonly specDo: SpecDOStub;
+
   constructor(private env: Env) {
-    this.specDo = env.SPEC_DO;
+    this.specDo = getSpecDo(env);
   }
 
   /**

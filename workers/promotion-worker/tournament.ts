@@ -13,6 +13,7 @@ import {
   Rung,
   Env,
 } from './types';
+import { getSpecDo } from './spec-do';
 
 /**
  * Extended tournament type with ID
@@ -205,7 +206,7 @@ export class TournamentManager {
    * Get tournament by spec ID
    */
   private async getTournamentBySpec(specId: string): Promise<TournamentWithId | null> {
-    const response = await this.env.SPEC_DO.fetch(
+    const response = await getSpecDo(this.env).fetch(
       `/tournament-status?specId=${encodeURIComponent(specId)}`
     );
 
@@ -223,7 +224,7 @@ export class TournamentManager {
    * Get all tournaments
    */
   private async getAllTournaments(): Promise<TournamentWithId[]> {
-    const response = await this.env.SPEC_DO.fetch('/tournament-status/all');
+    const response = await getSpecDo(this.env).fetch('/tournament-status/all');
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -239,7 +240,7 @@ export class TournamentManager {
    * Save tournament to Spec DO
    */
   private async saveTournament(tournament: TournamentWithId): Promise<void> {
-    const response = await this.env.SPEC_DO.fetch(
+    const response = await getSpecDo(this.env).fetch(
       '/tournament-status',
       {
         method: 'POST',
@@ -260,7 +261,7 @@ export class TournamentManager {
     tournamentId: string,
     updates: Partial<TournamentStatus>
   ): Promise<void> {
-    const response = await this.env.SPEC_DO.fetch(
+    const response = await getSpecDo(this.env).fetch(
       `/tournament-status/${encodeURIComponent(tournamentId)}`,
       {
         method: 'PATCH',
@@ -339,7 +340,7 @@ export class TournamentManager {
     };
 
     try {
-      const specDoResponse = await this.env.SPEC_DO.fetch(
+      const specDoResponse = await getSpecDo(this.env).fetch(
         `/candidates/${encodeURIComponent(candidateId)}`
       );
 
@@ -520,7 +521,7 @@ export class TournamentManager {
   ): Promise<void> {
     console.log(`[Tournament] Promoting winner ${winner.candidateId} to ${toRung}`);
 
-    await this.env.SPEC_DO.fetch(
+    await getSpecDo(this.env).fetch(
       `/candidates/${encodeURIComponent(winner.candidateId)}`,
       {
         method: 'PATCH',

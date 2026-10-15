@@ -27,8 +27,19 @@ import type {
 // Mock Environment
 // ============================================================================
 
+// Stands in for the SpecDO RPC surface; persistedMode models the DO storage value
+let persistedMode: PromotionMode | null = null;
+
 const mockSpecDoService = {
   fetch: vi.fn(),
+  getPromotionMode: async () => persistedMode,
+  setPromotionMode: async (mode: PromotionMode) => (persistedMode = mode),
+};
+
+// SPEC_DO is a DurableObjectNamespace: idFromName/get resolve to the stub above
+const mockSpecDoNamespace = {
+  idFromName: () => 'spec-do-id',
+  get: () => mockSpecDoService,
 };
 
 const mockPreviewManager = {
@@ -48,7 +59,7 @@ const mockAnalytics = {
 };
 
 const mockEnv: Env = {
-  SPEC_DO: mockSpecDoService as unknown as Service,
+  SPEC_DO: mockSpecDoNamespace as unknown as DurableObjectNamespace,
   PREVIEW_MANAGER: mockPreviewManager as unknown as Service,
   GATE_WORKFLOW: mockGateWorkflow as unknown as Service,
   SHADOW_ROUTER: mockShadowRouter as unknown as Service,
@@ -102,6 +113,7 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSpecDoService.fetch.mockReset();
+  persistedMode = null;
   mockPreviewManager.fetch.mockReset();
   mockGateWorkflow.fetch.mockReset();
   mockShadowRouter.fetch.mockReset();

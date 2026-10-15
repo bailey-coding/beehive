@@ -1223,6 +1223,20 @@ export class SpecDO {
     };
   }
 
+  // Promotion mode is train state: persisted in DO storage so every promotion
+  // worker isolate reads the same value. Null means "never set" (use env default).
+  async getPromotionMode(): Promise<'tournament' | 'merge-train' | null> {
+    return (await this.state.storage.get<'tournament' | 'merge-train'>('promotion_mode')) ?? null;
+  }
+
+  async setPromotionMode(mode: 'tournament' | 'merge-train'): Promise<'tournament' | 'merge-train'> {
+    if (mode !== 'tournament' && mode !== 'merge-train') {
+      throw new Error(`Invalid promotion mode: ${String(mode)}`);
+    }
+    await this.state.storage.put('promotion_mode', mode);
+    return mode;
+  }
+
   private async handleInternal(request: Request, path: string, method: string): Promise<Response> {
     const json = (data: unknown, status = 200) =>
       new Response(JSON.stringify({ success: status < 400, data, timestamp: Date.now() }), {

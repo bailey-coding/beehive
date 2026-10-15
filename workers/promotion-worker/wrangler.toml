@@ -17,11 +17,13 @@ PROMOTION_TIMEOUT = "3600"
   max_batch_size = 100
   max_batch_timeout = 30
 
-# Service bindings to other Beehive workers
-[[services]]
-  binding = "SPEC_DO"
-  service = "beehive"
+# Spec DO hosted by the "beehive" (API) worker
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"
 
+# Service bindings to other Beehive workers
 [[services]]
   binding = "PREVIEW_MANAGER"
   service = "beehive-preview-manager"

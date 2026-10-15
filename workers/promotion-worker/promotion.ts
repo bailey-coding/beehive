@@ -13,18 +13,17 @@ import {
 import { TournamentManager } from './tournament';
 import { MergeTrainManager } from './merge-train';
 import { PromotionStateManager } from './state';
+import { resolvePromotionMode } from './spec-do';
 
 /**
  * Main promotion worker that orchestrates promotion based on mode
  */
 export class PromotionWorker {
-  private mode: PromotionMode;
   private tournament: TournamentManager;
   private mergeTrain: MergeTrainManager;
   private stateManager: PromotionStateManager;
 
   constructor(private env: Env) {
-    this.mode = (env.PROMOTION_MODE as PromotionMode) || 'tournament';
     this.tournament = new TournamentManager(env);
     this.mergeTrain = new MergeTrainManager(env);
     this.stateManager = new PromotionStateManager(env);
@@ -71,20 +70,22 @@ export class PromotionWorker {
         });
       }
 
+      const mode = await resolvePromotionMode(this.env);
+
       const promotionState = await this.stateManager.createPromotionState(
         request.candidateId,
         request.specId,
         request.fromRung,
         request.toRung,
-        this.mode,
+        mode,
         request.actorId
       );
 
       await this.stateManager.transitionToInProgress(promotionState.id);
 
       let result: PromotionResult;
-      
-      if (this.mode === 'tournament') {
+
+      if (mode === 'tournament') {
         console.log(`[Promotion] Using tournament mode`);
         result = await this.tournament.executeTournament(request);
       } else {
@@ -101,7 +102,7 @@ export class PromotionWorker {
       await this.logAnalytics('promotion', {
         candidateId: request.candidateId,
         specId: request.specId,
-        mode: this.mode,
+        mode,
         success: result.success ? 1 : 0,
         fromRung: request.fromRung,
         toRung: request.toRung,
@@ -153,51 +154,6 @@ export class PromotionWorker {
         headers: { 'Content-Type': 'application/json' }
       });
     }
-  }
-
-  /**
-   * Get current promotion mode
-   */
-  async getCurrentMode(): Promise<Response> {
-    return new Response(JSON.stringify({
-      success: true,
-      mode: this.mode,
-      timestamp: new Date().toISOString()
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  /**
-   * Set promotion mode
-   */
-  async setMode(request: { mode: PromotionMode }): Promise<Response> {
-    const validModes: PromotionMode[] = ['tournament', 'merge-train'];
-    
-    if (!validModes.includes(request.mode)) {
-      return new Response(JSON.stringify({
-        success: false,
-        error: `Invalid mode. Must be one of: ${validModes.join(', ')}`,
-        timestamp: new Date().toISOString()
-      }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    this.mode = request.mode;
-    console.log(`[Promotion] Mode changed to: ${this.mode}`);
-
-    return new Response(JSON.stringify({
-      success: true,
-      mode: this.mode,
-      message: `Promotion mode set to ${this.mode}`,
-      timestamp: new Date().toISOString()
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
   }
 
   /**
@@ -407,13 +363,6 @@ export class PromotionWorker {
     const fromIndex = rungOrder.indexOf(fromRung);
     const toIndex = rungOrder.indexOf(toRung);
     return toIndex >= fromIndex;
-  }
-
-  /**
-   * Get current promotion mode
-   */
-  getMode(): PromotionMode {
-    return this.mode;
   }
 
   /**

@@ -11,6 +11,7 @@ import {
   Rung,
   Env,
 } from './types';
+import { getSpecDo } from './spec-do';
 
 /**
  * Extended merge train type with ID
@@ -200,7 +201,7 @@ export class MergeTrainManager {
    * Get merge train by spec ID
    */
   private async getMergeTrainBySpec(specId: string): Promise<MergeTrainWithId | null> {
-    const response = await this.env.SPEC_DO.fetch(
+    const response = await getSpecDo(this.env).fetch(
       `/merge-train-status?specId=${encodeURIComponent(specId)}`
     );
 
@@ -218,7 +219,7 @@ export class MergeTrainManager {
    * Get all merge trains
    */
   private async getAllMergeTrains(): Promise<MergeTrainWithId[]> {
-    const response = await this.env.SPEC_DO.fetch('/merge-train-status/all');
+    const response = await getSpecDo(this.env).fetch('/merge-train-status/all');
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -234,7 +235,7 @@ export class MergeTrainManager {
    * Save merge train to Spec DO
    */
   private async saveMergeTrain(train: MergeTrainWithId): Promise<void> {
-    const response = await this.env.SPEC_DO.fetch(
+    const response = await getSpecDo(this.env).fetch(
       '/merge-train-status',
       {
         method: 'POST',
@@ -255,7 +256,7 @@ export class MergeTrainManager {
     trainId: string,
     updates: Partial<MergeTrainStatus>
   ): Promise<void> {
-    const response = await this.env.SPEC_DO.fetch(
+    const response = await getSpecDo(this.env).fetch(
       `/merge-train-status/${encodeURIComponent(trainId)}`,
       {
         method: 'PATCH',
@@ -505,7 +506,7 @@ export class MergeTrainManager {
 
       await this.saveMergeTrain(updatedTrain);
 
-      await this.env.SPEC_DO.fetch(
+      await getSpecDo(this.env).fetch(
         `/candidates/${encodeURIComponent(candidateId)}/rollback`,
         {
           method: 'POST',

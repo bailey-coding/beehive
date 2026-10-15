@@ -158,7 +158,7 @@ type AnalyticsEngine = {
 
 // Environment interface for the worker
 export interface Env {
-  SPEC_DO: Service;
+  SPEC_DO: DurableObjectNamespace;
   PREVIEW_MANAGER: Service;
   GATE_WORKFLOW: Service;
   SHADOW_ROUTER: Service;
