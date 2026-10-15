@@ -16,7 +16,7 @@ export interface UiEnv {
   CLOUDFLARE_API_TOKEN?: string;
 }
 
-import { page, esc, str, table } from './ui-html';
+import { page, esc, str, table, tableHtml } from './ui-html';
 import { orgPage, repoPage, specPage, candidatePage, trialPage, type DoReader, type DoRow, type Session } from './ui-pages';
 
 // Re-export Session for use by tests
@@ -413,7 +413,7 @@ async function dashboard(url: URL, session: Session, stub: DurableObjectStub, do
 
     <section>
       <h2>Organizations (${orgs.length})</h2>
-      ${table(['Name', 'Type', 'ID'], orgRows)}
+      ${tableHtml(['Name', 'Type', 'ID'], orgRows)}
       <form method="POST" action="/app/organizations" class="inline">
         <input name="name" placeholder="Name" required>
         <select name="type">${ORG_TYPES.map((t) => `<option>${t}</option>`).join('')}</select>
@@ -424,7 +424,7 @@ async function dashboard(url: URL, session: Session, stub: DurableObjectStub, do
 
     <section>
       <h2>Repositories (${repos.length})</h2>
-      ${table(
+      ${tableHtml(
         ['Name', 'Org', 'Type', 'Spec'],
         repoRows
       )}
@@ -441,7 +441,7 @@ async function dashboard(url: URL, session: Session, stub: DurableObjectStub, do
 
     <section>
       <h2>Specs (${specs.length})</h2>
-      ${table(
+      ${tableHtml(
         ['Name', 'Org', 'Stage', 'ID'],
         specRows
       )}
