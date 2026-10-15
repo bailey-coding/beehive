@@ -32,8 +32,8 @@ async function readJson(res: Response): Promise<JsonResponse> {
 // Production base URL
 const PRODUCTION_BASE_URL = process.env.BEEHIVE_PRODUCTION_URL || 'https://beehive.bz23711.workers.dev';
 
-// Production auth token - set via BEEHIVE_AUTH_TOKEN environment variable
-const PRODUCTION_AUTH_TOKEN = process.env.BEEHIVE_AUTH_TOKEN;
+// Production auth token - set via BEEHIVE_API_TOKEN environment variable
+const PRODUCTION_AUTH_TOKEN = process.env.BEEHIVE_API_TOKEN;
 
 // Worker URLs for production
 const WORKER_URLS = {

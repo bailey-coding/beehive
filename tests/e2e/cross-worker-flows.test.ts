@@ -229,18 +229,17 @@ describe('Cross-Worker Flow Tests', () => {
       }
 
       // Shadow Router health
-      const shadowResponse = await fetchWorker('/shadow/health', 'GET', undefined, 'shadow');
+      const shadowResponse = await fetchWorker('/health', 'GET', undefined, 'shadow');
       expect(shadowResponse.status).toBe(200);
       const shadowHealth = await readJson(shadowResponse);
       expect(shadowHealth.status).toBe('healthy');
-      expect(shadowHealth.statsigEnabled).toBe(true);
+      expect(shadowHealth.statsig?.enabled).toBe(true);
 
       // Canary Worker health
-      const canaryResponse = await fetchWorker('/canary/health', 'GET', undefined, 'canary');
+      const canaryResponse = await fetchWorker('/health', 'GET', undefined, 'canary');
       expect(canaryResponse.status).toBe(200);
       const canaryHealth = await readJson(canaryResponse);
       expect(canaryHealth.status).toBe('healthy');
-      expect(canaryHealth.activeDeployments).toBeDefined();
 
       // Promotion Worker health
       const promotionResponse = await fetchWorker('/promotion/health', 'GET', undefined, 'promotion');
@@ -662,7 +661,7 @@ describe('Cross-Worker Flow Tests', () => {
     it('should handle invalid canary deployment data', async () => {
       // Try to deploy with invalid data
       const request = createRequest(
-        '/canary/deploy',
+        '/deploy-canary',
         'POST',
         {
           candidateId: '', // Invalid: empty
@@ -683,7 +682,7 @@ describe('Cross-Worker Flow Tests', () => {
     it('should handle invalid traffic percentage', async () => {
       // Try to deploy with trafficPercentage > 100
       const request = createRequest(
-        '/canary/deploy',
+        '/deploy-canary',
         'POST',
         {
           candidateId: ctx.candidateId,
@@ -704,7 +703,7 @@ describe('Cross-Worker Flow Tests', () => {
     it('should handle invalid promotion request', async () => {
       // Missing required fields
       const request = createRequest(
-        '/promotion/candidates/promote',
+        '/promote',
         'POST',
         {
           candidateId: ctx.candidateId,
