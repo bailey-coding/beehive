@@ -19,23 +19,34 @@ Completed items are removed, not struck through; history lives in git.*
 - ✅ Added CI gates: typecheck + unit tests run before deploy in `deploy.yml`
 - ✅ Updated cross-worker-flows tests: renamed routes to match workers, removed tests for non-existent routes
 - ✅ Updated MILESTONES.md: split M5 into M5a/M5b, deferred M6.5, merged M6.2 with M3 capability work
+- ✅ Removed fake handlers: deleted oracle-ladder.test.ts, cleaned m3-features.test.ts to use only real worker tests
+- ✅ Fixed promotion mode bug: mode now persists in Spec DO storage (not worker memory), survives worker restarts
+- ✅ Fixed typecheck errors: ui-semantic.ts root.children errors resolved
+- ✅ Added spec-do.ts to promotion-worker for Spec DO access via fetch router
+
+## Current state
+
+**E2E tests:**
+- `m3-features.test.ts`: 31 tests, all skipped (requires BEEHIVE_AUTH_TOKEN for production)
+- `cross-worker-flows.test.ts`: 22 tests, 15 failures, 2 skipped, 5 passing (local dev)
+- Main issues: route mismatches between tests and workers, auth token issues, service binding connectivity
+
+**Infrastructure:**
+- All 10 workers deployed to Cloudflare
+- CI now runs typecheck and unit tests before deploy
+- Promotion mode persists across worker restarts via Spec DO
 
 ## Decide first
 
-1. **Fake handlers in oracle-ladder and m3-features tests** need deletion. These tests
-   pass by testing their own mocks, not the real workers. They give false confidence.
-   Keep only their real-worker health and auth tests.
-2. **Promotion mode bug:** Mode is stored in worker memory, not persisted. `POST /mode`
-   returns success but mode reverts on next request. Rule 4 violation: train state must
-   live in Spec DO. Fix by storing mode in Spec DO and fetching it on each request.
-3. **Public `/roadmap` page overstates status** (`workers/api/index.ts:646-661`): marks M3
+1. **Public `/roadmap` page overstates status** (`workers/api/index.ts:646-661`): marks M3
    complete incl. facets/capabilities/ArtifactFS and "M7 Observability Layer" complete.
    `scripts/demo-multi-agent.sh` also prints hard-coded ArtifactFS numbers.
+2. **Update test routes:** Some cross-worker-flows tests still use incorrect routes or expect wrong status codes
+3. **Service binding connectivity:** Local dev tests need all workers running with proper service bindings
 
 ## Open work
 
-- **Typecheck:** 2 errors in `workers/api/ui-semantic.ts:1130,1135` (`root.children`
-  possibly undefined). CI now runs typecheck (added to `deploy.yml`).
+- **Typecheck:** All errors resolved. CI now runs typecheck (added to `deploy.yml`).
 - **Self-hosting gaps** (details in `docs/SETUP.md` section 2):
   - Workflow creates only 2 of 7 queues; add the other 5 to `deploy.yml` or document as-is.
   - Account ID, `ALLOWED_GITHUB_USERS` and the `bz23711` subdomain are hardcoded across
@@ -52,6 +63,7 @@ Completed items are removed, not struck through; history lives in git.*
 - **M1 ledger lifecycle** (tombstones, admin purge route) is not built; this is why a wipe
   means deleting the worker.
 - **OPEN-QUESTIONS.md** has no ledger-lifecycle finding, though MILESTONES cites one.
+- **Cross-worker e2e tests:** 15 failures remain due to route mismatches and auth issues. Need triage.
 
 ## Next demo (post-submission)
 
