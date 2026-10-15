@@ -91,6 +91,25 @@ closer to the platform vision with semantic intelligence at its core, even if mo
 - **Agent Integration** — Enable agents to use semantic navigation for file discovery and change tracing, reducing token usage by >20%
 **Exit criteria:** Semantic search operational with >80% recall and sub-500ms latency; change classification >90% accurate; navigation graph covers >95% of entities; all M6 mocked features use real data; agents successfully use semantic navigation.
 
+**M7 — Session Provenance & Intent Index (post-submission, 2–4 days).** Link every candidate
+and commit to the agent session that produced it, so review can use rationale as well as
+outcome. Inspired by Entire's checkpoints (commit trailer → session record); Beehive's
+addition is joining rationale to oracle-ladder outcomes.
+- **Provenance trailer** — Commits carry a `Beehive-Trial: <candidate-id>` trailer pointing
+  at the Spec DO record. Pointer only; never queried as live state (rule 4).
+- **Session records** — Agent transcript, tool activity, and token usage stored per
+  candidate (R2 body, DO row with metadata and content hash). A git note holds only the hash
+  for portable provenance.
+- **Redaction at the sandbox boundary** — Secrets scrubbed before a transcript reaches R2,
+  D1, or Analytics Engine; redaction counts recorded on the session row.
+- **Intent index (D1)** — Cross-spec search over spec clauses, candidate rationale, and
+  verdict reasons ("which candidates failed this clause before, and why?").
+- **Successor handoff** — A candidate held at shadow can seed a new fork with the prior
+  session summary and diff verdict (iterate, don't contend).
+**Exit criteria:** Every new commit resolves to a trial and session record; no secret
+fixtures survive redaction in tests; intent search returns prior failures for a clause;
+one successor candidate demonstrably starts from a prior session.
+
 **Architecture of distrust principle:** "The agent cannot be trusted, so build so that its mistakes cannot matter." — Every agent starts with zero capabilities; authority flows only through explicit capability grants.
 
 - **Enriched issue intake.** Every reported issue carries, from creation:
