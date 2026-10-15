@@ -48,6 +48,7 @@ invocation_logs = true
 persist = true
 
 [observability.traces]
+destinations = ["honeycomb-traces"]
 enabled = true
 head_sampling_rate = 1
 persist = true

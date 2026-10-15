@@ -48,7 +48,7 @@ max_batch_size = 100
 max_batch_timeout = 30
 
 [observability]
-enabled = false
+enabled = true
 head_sampling_rate = 1
 redact_query_string = false
 
@@ -59,6 +59,7 @@ invocation_logs = true
 persist = true
 
 [observability.traces]
+destinations = ["honeycomb-traces"]
 enabled = true
 head_sampling_rate = 1
 persist = true
