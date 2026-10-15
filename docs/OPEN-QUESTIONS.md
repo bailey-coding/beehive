@@ -112,6 +112,29 @@ tags:
 
 **Interim rule**: do not run e2e against production without human approval (`AGENTS.md`).
 
+## 2026-10-15: Promotion ledger DO routes (spine item 1, option A) - follow-ups
+
+Branch `agent/spine-item1-do-routes` adds `/promotion-states*`, `/tournament-status*`,
+`/merge-train-status*` to SpecDO (tables `promotion_states`, `tournaments`, `merge_trains`,
+migration m3 -> m4, additive). Contract: `workers/shared/promotion-ledger.ts`. The live DO only
+migrates once this reaches `main` (human approval). Open points:
+
+- **No foreign keys on the new tables (deviation from the plan; human call).** DO SQLite enforces
+  FKs, and the promotion worker (and the e2e suite) promote ids that have no `candidates`/`specs`
+  row. FKs would reject every such promotion. Adding or removing FKs later needs a table rebuild.
+- **`currentRung` never advances.** `state.ts` stores `currentRung = fromRung`; completion does not
+  move it to `targetRung`. e2e "promote through valid rung transitions" expects `canary` after
+  train -> canary. That is promotion-state semantics; not changed.
+- **e2e/worker response-shape drift (not spine):** `GET /promote/:id` returns `{ state: {...} }`
+  but e2e reads top-level `currentRung`; `POST /mode` returns `mode` but e2e reads `newMode`.
+- **Still unserved by SpecDO:** `GET/PATCH /candidates/:id` and `POST /candidates/:id/rollback`
+  (tournament.ts metrics + winner promotion, merge-train.ts rollback). Metrics fall back to defaults
+  and the PATCH/rollback responses are ignored, so these fail silently. `/api/canary-deployments*`
+  is item 2.
+- Ledger writes are not in `entity_history`: its `entity_type` CHECK has no promotion types and
+  widening it needs a CHECK rebuild.
+- `/promotion-mode` still answers before `init()` (KV only, no SQL); not renamed to `/internal/`.
+
 ## 2026-10-15: Cross-worker e2e failures (local) - root causes
 
 Local run of `tests/e2e/cross-worker-flows.test.ts` after route fixes: 11 pass, 9 fail, 2 skip

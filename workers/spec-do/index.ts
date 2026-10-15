@@ -4,17 +4,21 @@
  * Orchestration spine - hand-written, not agent-generated.
  * This is the single source of truth for all coordination state.
  * 
- * Tables: organizations, repositories, actors, specs, candidates, 
- *         gate_verdicts, trials, promotions, issues, and their links.
+ * Tables: organizations, repositories, actors, specs, candidates,
+ *         gate_verdicts, trials, promotions, issues, and their links;
+ *         promotion ledger: promotion_states, tournaments, merge_trains.
  */
 
 import { DurableObject } from '@cloudflare/workers-types/experimental';
 import { createSqlStorage, SqlDb } from './sql-storage';
 
 // Schema SQL (inlined; esbuild has no ?raw loader for .sql in wrangler builds)
-import { SCHEMA_SQL, SERVICE_ACCOUNTS_SQL } from './schema-inline';
+import { SCHEMA_SQL, SERVICE_ACCOUNTS_SQL, PROMOTION_LEDGER_SQL } from './schema-inline';
 
 class ConflictError extends Error {}
+
+// /promotion-states, /tournament-status, /merge-train-status, each with an optional /<id> segment
+const LEDGER_ROUTE = /^(\/promotion-states|\/tournament-status|\/merge-train-status)(?:\/([^\/]+))?$/;
 
 // Service binding type for Gate Workflow
 type Service = { fetch: (request: Request) => Promise<Response> };
@@ -24,6 +28,23 @@ import { seedDatabase, isSeeded } from './seed';
 
 // Artifacts client
 import { createFork, createRepoToken, type ArtifactsConfig } from '../shared/artifacts';
+
+// Promotion ledger contract (shared with the promotion worker)
+import type { ZodType } from 'zod';
+import {
+  LEDGER_PATHS,
+  LIST_ALL_SUFFIX,
+  RECORD_NOT_FOUND,
+  PromotionStateSchema,
+  PromotionStatePatchSchema,
+  TournamentRecordSchema,
+  TournamentPatchSchema,
+  MergeTrainRecordSchema,
+  MergeTrainPatchSchema,
+  type PromotionState,
+  type TournamentRecord,
+  type MergeTrainRecord,
+} from '../shared/promotion-ledger';
 
 // Types
 import type {
@@ -230,6 +251,11 @@ function now(): number {
   return Date.now();
 }
 
+// SQL NULL -> absent key, for records whose optional fields are undefined, not null
+function dropNulls(o: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
+}
+
 export class SpecDO {
   state: DurableObjectState;
   env: Env;
@@ -386,6 +412,25 @@ export class SpecDO {
       } catch (e) {
         // If migration fails (e.g., columns already exist), that's okay
         console.log('[SpecDO] Migration to m2: columns may already exist, continuing');
+      }
+    }
+
+    // Migration from m3 to m4: promotion ledger tables (promotion_states,
+    // tournaments, merge_trains). Additive only: CREATE TABLE/INDEX IF NOT EXISTS.
+    // Runs on any pre-m4 version so the routes work on first init after deploy;
+    // an m2 ledger reaches m3 in ensureServiceAccountTables() and m4 next init.
+    if (currentVersion !== 'm4') {
+      try {
+        this.db.exec(PROMOTION_LEDGER_SQL);
+        const updateVersion = this.db.prepare(
+          "UPDATE metadata SET value = 'm4', updated_at = ? WHERE key = 'schema_version' AND value = 'm3'"
+        );
+        updateVersion.bind(now());
+        updateVersion.step();
+        updateVersion.free();
+      } catch (e) {
+        // Logged, not thrown (same as ensureServiceAccountTables): ledger routes then 500
+        console.log('[SpecDO] Migration to m4 failed:', e instanceof Error ? e.message : String(e));
       }
     }
   }
@@ -1293,6 +1338,340 @@ export class SpecDO {
     return fail('Not found', 404);
   }
 
+  // ============================================================================
+  // PROMOTION LEDGER (promotion states, tournaments, merge trains)
+  // Payload shapes: workers/shared/promotion-ledger.ts. Responses are the bare
+  // records the promotion worker reads. Every write runs in one transactionSync.
+  // ============================================================================
+
+  private async handlePromotionLedger(
+    request: Request,
+    url: URL,
+    collection: string,
+    rawId: string | undefined,
+    method: string
+  ): Promise<Response> {
+    const json = (data: unknown, status = 200) =>
+      new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+    const fail = (error: string, status: number, code?: string) =>
+      json({ success: false, error, ...(code ? { code } : {}), timestamp: Date.now() }, status);
+    // Coded so the client can tell "no such record" from "no such route"
+    const notFound = (what: string) => fail(`${what} not found`, 404, RECORD_NOT_FOUND);
+
+    const id = rawId === undefined ? undefined : decodeURIComponent(rawId);
+    const isListAll = id !== undefined && `/${id}` === LIST_ALL_SUFFIX;
+
+    let body: unknown;
+    if (method === 'POST' || method === 'PATCH') {
+      try {
+        body = await request.json();
+      } catch {
+        return fail('Invalid JSON body', 400);
+      }
+    }
+    const parse = <T>(schema: ZodType<T>, what: string): { data: T } | { error: Response } => {
+      const parsed = schema.safeParse(body);
+      return parsed.success
+        ? { data: parsed.data }
+        : { error: fail(`Invalid ${what}: ${parsed.error.message}`, 400) };
+    };
+
+    if (collection === LEDGER_PATHS.promotionStates) {
+      if (id === undefined && method === 'GET') {
+        return json(this.listPromotionStates(url.searchParams.get('candidateId') ?? undefined));
+      }
+      if (id === undefined && method === 'POST') {
+        const p = parse(PromotionStateSchema, 'promotion state');
+        if ('error' in p) return p.error;
+        return json(this.createPromotionState(p.data), 201);
+      }
+      if (id !== undefined && method === 'PATCH') {
+        const p = parse(PromotionStatePatchSchema, 'promotion state patch');
+        if ('error' in p) return p.error;
+        const updated = this.patchPromotionState(id, p.data);
+        return updated ? json(updated) : notFound('Promotion state');
+      }
+    }
+
+    if (collection === LEDGER_PATHS.tournaments) {
+      if (isListAll && method === 'GET') {
+        return json(this.listTournaments());
+      }
+      if (id === undefined && method === 'GET') {
+        const specId = url.searchParams.get('specId');
+        if (!specId) return fail('specId required', 400);
+        const tournament = this.listTournaments(specId)[0];
+        return tournament ? json(tournament) : notFound('Tournament');
+      }
+      if (id === undefined && method === 'POST') {
+        const p = parse(TournamentRecordSchema, 'tournament');
+        if ('error' in p) return p.error;
+        const { record, created } = this.state.storage.transactionSync(() => {
+          const created = !this.getTournament(p.data.id);
+          this.writeTournament(p.data);
+          return { record: this.getTournament(p.data.id), created };
+        });
+        return json(record, created ? 201 : 200);
+      }
+      if (id !== undefined && !isListAll && method === 'PATCH') {
+        const p = parse(TournamentPatchSchema, 'tournament patch');
+        if ('error' in p) return p.error;
+        const updated = this.state.storage.transactionSync(() => {
+          const current = this.getTournament(id);
+          if (!current) return null;
+          this.writeTournament(TournamentRecordSchema.parse({ ...current, ...p.data, id }));
+          return this.getTournament(id);
+        });
+        return updated ? json(updated) : notFound('Tournament');
+      }
+    }
+
+    if (collection === LEDGER_PATHS.mergeTrains) {
+      if (isListAll && method === 'GET') {
+        return json(this.listMergeTrains());
+      }
+      if (id === undefined && method === 'GET') {
+        const specId = url.searchParams.get('specId');
+        if (!specId) return fail('specId required', 400);
+        const train = this.listMergeTrains(specId)[0];
+        return train ? json(train) : notFound('Merge train');
+      }
+      if (id === undefined && method === 'POST') {
+        const p = parse(MergeTrainRecordSchema, 'merge train');
+        if ('error' in p) return p.error;
+        const { record, created } = this.state.storage.transactionSync(() => {
+          const created = !this.getMergeTrain(p.data.id);
+          this.writeMergeTrain(p.data);
+          return { record: this.getMergeTrain(p.data.id), created };
+        });
+        return json(record, created ? 201 : 200);
+      }
+      if (id !== undefined && !isListAll && method === 'PATCH') {
+        const p = parse(MergeTrainPatchSchema, 'merge train patch');
+        if ('error' in p) return p.error;
+        const updated = this.state.storage.transactionSync(() => {
+          const current = this.getMergeTrain(id);
+          if (!current) return null;
+          this.writeMergeTrain(MergeTrainRecordSchema.parse({ ...current, ...p.data, id }));
+          return this.getMergeTrain(id);
+        });
+        return updated ? json(updated) : notFound('Merge train');
+      }
+    }
+
+    return fail('Not found', 404);
+  }
+
+  /** Newest first: the promotion worker treats element 0 as the candidate's current state. */
+  listPromotionStates(candidateId?: string): PromotionState[] {
+    const rows = candidateId
+      ? this.queryAll(
+          'SELECT * FROM promotion_states WHERE candidate_id = ? ORDER BY created_at DESC, rowid DESC',
+          candidateId
+        )
+      : this.queryAll('SELECT * FROM promotion_states ORDER BY created_at DESC, rowid DESC');
+    return rows.map((r) => this.rowToPromotionState(r));
+  }
+
+  createPromotionState(state: PromotionState): PromotionState {
+    return this.state.storage.transactionSync(() => {
+      if (this.getPromotionState(state.id)) {
+        throw new ConflictError(`Promotion state '${state.id}' already exists`);
+      }
+      const ts = now();
+      this.run(
+        `INSERT INTO promotion_states (id, candidate_id, spec_id, current_rung, target_rung, status, mode,
+           started_at, completed_at, failed_at, failure_reason, rollback_reason, actor_id, metadata,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ...this.promotionStateColumns(state),
+        ts,
+        ts
+      );
+      return this.getPromotionState(state.id)!;
+    });
+  }
+
+  /** Null when the id is unknown. A null field in the patch clears that field. */
+  patchPromotionState(
+    id: string,
+    patch: Record<string, unknown>
+  ): PromotionState | null {
+    return this.state.storage.transactionSync(() => {
+      const current = this.getPromotionState(id);
+      if (!current) return null;
+      const merged: Record<string, unknown> = { ...current };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete merged[key];
+        else merged[key] = value;
+      }
+      const next = PromotionStateSchema.parse({ ...merged, id });
+      const [, ...columns] = this.promotionStateColumns(next);
+      this.run(
+        `UPDATE promotion_states SET candidate_id = ?, spec_id = ?, current_rung = ?, target_rung = ?,
+           status = ?, mode = ?, started_at = ?, completed_at = ?, failed_at = ?, failure_reason = ?,
+           rollback_reason = ?, actor_id = ?, metadata = ?, updated_at = ?
+         WHERE id = ?`,
+        ...columns,
+        now(),
+        id
+      );
+      return this.getPromotionState(id);
+    });
+  }
+
+  private getPromotionState(id: string): PromotionState | null {
+    const row = this.queryAll('SELECT * FROM promotion_states WHERE id = ?', id)[0];
+    return row ? this.rowToPromotionState(row) : null;
+  }
+
+  // Column order of promotion_states from id through metadata
+  private promotionStateColumns(s: PromotionState): (string | null)[] {
+    return [
+      s.id,
+      s.candidateId,
+      s.specId,
+      s.currentRung,
+      s.targetRung,
+      s.status,
+      s.mode,
+      s.startedAt,
+      s.completedAt ?? null,
+      s.failedAt ?? null,
+      s.failureReason ?? null,
+      s.rollbackReason ?? null,
+      s.actorId ?? null,
+      s.metadata === undefined ? null : JSON.stringify(s.metadata),
+    ];
+  }
+
+  private rowToPromotionState(r: Record<string, unknown>): PromotionState {
+    return PromotionStateSchema.parse(
+      dropNulls({
+        id: r.id,
+        candidateId: r.candidate_id,
+        specId: r.spec_id,
+        currentRung: r.current_rung,
+        targetRung: r.target_rung,
+        status: r.status,
+        mode: r.mode,
+        startedAt: r.started_at,
+        completedAt: r.completed_at,
+        failedAt: r.failed_at,
+        failureReason: r.failure_reason,
+        rollbackReason: r.rollback_reason,
+        actorId: r.actor_id,
+        metadata: r.metadata == null ? null : JSON.parse(r.metadata as string),
+      })
+    );
+  }
+
+  /** Newest first; filtered to one spec when specId is given. */
+  listTournaments(specId?: string): TournamentRecord[] {
+    const rows = specId
+      ? this.queryAll('SELECT * FROM tournaments WHERE spec_id = ? ORDER BY created_at DESC, rowid DESC', specId)
+      : this.queryAll('SELECT * FROM tournaments ORDER BY created_at DESC, rowid DESC');
+    return rows.map((r) => this.rowToTournament(r));
+  }
+
+  private getTournament(id: string): TournamentRecord | null {
+    const row = this.queryAll('SELECT * FROM tournaments WHERE id = ?', id)[0];
+    return row ? this.rowToTournament(row) : null;
+  }
+
+  // Upsert by id: the promotion worker re-POSTs whole tournaments after changing them
+  private writeTournament(t: TournamentRecord): void {
+    const ts = now();
+    this.run(
+      `INSERT INTO tournaments (id, spec_id, status, winner, candidates, comparisons, started_at, completed_at,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET spec_id = excluded.spec_id, status = excluded.status,
+         winner = excluded.winner, candidates = excluded.candidates, comparisons = excluded.comparisons,
+         started_at = excluded.started_at, completed_at = excluded.completed_at, updated_at = excluded.updated_at`,
+      t.id,
+      t.specId,
+      t.status,
+      t.winner ?? null,
+      JSON.stringify(t.candidates),
+      JSON.stringify(t.comparisons),
+      t.startedAt,
+      t.completedAt ?? null,
+      ts,
+      ts
+    );
+  }
+
+  private rowToTournament(r: Record<string, unknown>): TournamentRecord {
+    return TournamentRecordSchema.parse(
+      dropNulls({
+        id: r.id,
+        mode: 'tournament',
+        specId: r.spec_id,
+        candidates: JSON.parse(r.candidates as string),
+        winner: r.winner,
+        comparisons: JSON.parse(r.comparisons as string),
+        startedAt: r.started_at,
+        completedAt: r.completed_at,
+        status: r.status,
+      })
+    );
+  }
+
+  /** Newest first; filtered to one spec when specId is given. */
+  listMergeTrains(specId?: string): MergeTrainRecord[] {
+    const rows = specId
+      ? this.queryAll('SELECT * FROM merge_trains WHERE spec_id = ? ORDER BY created_at DESC, rowid DESC', specId)
+      : this.queryAll('SELECT * FROM merge_trains ORDER BY created_at DESC, rowid DESC');
+    return rows.map((r) => this.rowToMergeTrain(r));
+  }
+
+  private getMergeTrain(id: string): MergeTrainRecord | null {
+    const row = this.queryAll('SELECT * FROM merge_trains WHERE id = ?', id)[0];
+    return row ? this.rowToMergeTrain(row) : null;
+  }
+
+  // Upsert by id: rollbackMergedCandidate re-POSTs an existing train
+  private writeMergeTrain(t: MergeTrainRecord): void {
+    const ts = now();
+    this.run(
+      `INSERT INTO merge_trains (id, spec_id, status, current_position, next_merge, candidates, started_at,
+         completed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET spec_id = excluded.spec_id, status = excluded.status,
+         current_position = excluded.current_position, next_merge = excluded.next_merge,
+         candidates = excluded.candidates, started_at = excluded.started_at,
+         completed_at = excluded.completed_at, updated_at = excluded.updated_at`,
+      t.id,
+      t.specId,
+      t.status,
+      t.currentPosition,
+      t.nextMerge,
+      JSON.stringify(t.candidates),
+      t.startedAt ?? null,
+      t.completedAt ?? null,
+      ts,
+      ts
+    );
+  }
+
+  private rowToMergeTrain(r: Record<string, unknown>): MergeTrainRecord {
+    return MergeTrainRecordSchema.parse({
+      ...dropNulls({
+        id: r.id,
+        mode: 'merge-train',
+        specId: r.spec_id,
+        candidates: JSON.parse(r.candidates as string),
+        currentPosition: r.current_position,
+        status: r.status,
+        startedAt: r.started_at,
+        completedAt: r.completed_at,
+      }),
+      // nextMerge is nullable, not optional
+      nextMerge: r.next_merge ?? null,
+    });
+  }
+
   // Fetch from Durable Object
   async fetch(request: Request): Promise<Response> {
     // Promotion mode is key-value state: answer before the SQL schema is touched
@@ -1331,6 +1710,12 @@ export class SpecDO {
       // Internal routes: built only by the beehive edge with fixed paths.
       if (path.startsWith('/internal/')) {
         return await this.handleInternal(request, path, method);
+      }
+
+      // Promotion ledger: called by the promotion worker over the SPEC_DO binding
+      const ledgerRoute = path.match(LEDGER_ROUTE);
+      if (ledgerRoute) {
+        return await this.handlePromotionLedger(request, url, ledgerRoute[1], ledgerRoute[2], method);
       }
 
       // Extract actor ID from headers

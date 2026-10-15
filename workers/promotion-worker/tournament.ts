@@ -13,7 +13,7 @@ import {
   Rung,
   Env,
 } from './types';
-import { getSpecDo } from './spec-do';
+import { getSpecDo, getPromotionLedger } from './spec-do';
 
 /**
  * Extended tournament type with ID
@@ -206,52 +206,21 @@ export class TournamentManager {
    * Get tournament by spec ID
    */
   private async getTournamentBySpec(specId: string): Promise<TournamentWithId | null> {
-    const response = await getSpecDo(this.env).fetch(
-      `/tournament-status?specId=${encodeURIComponent(specId)}`
-    );
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return null;
-      }
-      throw new Error(`Failed to get tournament: ${await response.text()}`);
-    }
-
-    return await response.json() as TournamentWithId;
+    return getPromotionLedger(this.env).getTournamentBySpec(specId);
   }
 
   /**
    * Get all tournaments
    */
   private async getAllTournaments(): Promise<TournamentWithId[]> {
-    const response = await getSpecDo(this.env).fetch('/tournament-status/all');
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return [];
-      }
-      throw new Error(`Failed to get tournaments: ${await response.text()}`);
-    }
-
-    return await response.json() as TournamentWithId[];
+    return getPromotionLedger(this.env).listTournaments();
   }
 
   /**
    * Save tournament to Spec DO
    */
   private async saveTournament(tournament: TournamentWithId): Promise<void> {
-    const response = await getSpecDo(this.env).fetch(
-      '/tournament-status',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tournament),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to save tournament: ${await response.text()}`);
-    }
+    await getPromotionLedger(this.env).saveTournament(tournament);
   }
 
   /**
@@ -261,18 +230,7 @@ export class TournamentManager {
     tournamentId: string,
     updates: Partial<TournamentStatus>
   ): Promise<void> {
-    const response = await getSpecDo(this.env).fetch(
-      `/tournament-status/${encodeURIComponent(tournamentId)}`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to update tournament: ${await response.text()}`);
-    }
+    await getPromotionLedger(this.env).updateTournament(tournamentId, updates);
   }
 
   /**

@@ -5,16 +5,17 @@
  */
 
 import { PromotionState, PromotionMode, Rung, Env } from './types';
-import { SpecDOClient, getSpecDo } from './spec-do';
+import { getPromotionLedger } from './spec-do';
+import type { PromotionLedgerClient, PromotionStatePatch } from '../shared/promotion-ledger';
 
 /**
  * Manages promotion state stored in the Spec DO
  */
 export class PromotionStateManager {
-  private readonly specDo: SpecDOClient;
+  private readonly ledger: PromotionLedgerClient;
 
   constructor(private env: Env) {
-    this.specDo = getSpecDo(env);
+    this.ledger = getPromotionLedger(env);
   }
 
   /**
@@ -40,63 +41,25 @@ export class PromotionStateManager {
       actorId,
     };
 
-    const response = await this.specDo.fetch(
-      '/promotion-states',
-      {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-Actor-ID': actorId || 'system',
-        },
-        body: JSON.stringify(state),
-      }
-    );
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to create promotion state: ${error}`);
-    }
-
-    const created = await response.json() as PromotionState;
+    const created = await this.ledger.createPromotionState(state, actorId);
     console.log(`[State] Created promotion state: ${created.id} for candidate ${candidateId}`);
     return created;
   }
 
   /**
-   * Get promotion state for a specific candidate
+   * Latest promotion state for a candidate (the DO lists newest first), or null
+   * if it has none. Any non-OK DO response, 404 included, throws.
    */
   async getPromotionState(candidateId: string): Promise<PromotionState | null> {
-    const response = await this.specDo.fetch(
-      `/promotion-states?candidateId=${encodeURIComponent(candidateId)}`
-    );
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return null;
-      }
-      const error = await response.text();
-      throw new Error(`Failed to get promotion state: ${error}`);
-    }
-
-    const states = await response.json() as PromotionState[];
+    const states = await this.ledger.listPromotionStates({ candidateId });
     return states[0] || null;
   }
 
   /**
-   * Get all promotion states
+   * Get all promotion states. Any non-OK DO response, 404 included, throws.
    */
   async getPromotionStates(): Promise<PromotionState[]> {
-    const response = await this.specDo.fetch('/promotion-states');
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return [];
-      }
-      const error = await response.text();
-      throw new Error(`Failed to get promotion states: ${error}`);
-    }
-
-    return await response.json() as PromotionState[];
+    return this.ledger.listPromotionStates();
   }
 
   /**
@@ -104,23 +67,9 @@ export class PromotionStateManager {
    */
   async updatePromotionState(
     stateId: string,
-    updates: Partial<PromotionState>
+    updates: PromotionStatePatch
   ): Promise<PromotionState> {
-    const response = await this.specDo.fetch(
-      `/promotion-states/${encodeURIComponent(stateId)}`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      }
-    );
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to update promotion state: ${error}`);
-    }
-
-    const updated = await response.json() as PromotionState;
+    const updated = await this.ledger.updatePromotionState(stateId, updates);
     console.log(`[State] Updated promotion state: ${stateId} to status ${updates.status}`);
     return updated;
   }

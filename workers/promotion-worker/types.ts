@@ -7,11 +7,19 @@
 // Core Types
 // ============================================================================
 
-// Promotion mode
-export type PromotionMode = 'tournament' | 'merge-train';
-
-// Rung types based on the oracle ladder
-export type Rung = 'pre-merge' | 'shadow' | 'train' | 'canary' | 'full';
+// Ledger payloads (validated at the Spec DO boundary) live in the shared module
+export type {
+  PromotionMode,
+  Rung,
+  PromotionState,
+  TournamentStatus,
+  TournamentCandidate,
+  CandidateComparison,
+  MergeTrainStatus,
+  MergeTrainCandidate,
+  CandidateMetrics,
+} from '../shared/promotion-ledger';
+import type { PromotionMode, Rung } from '../shared/promotion-ledger';
 
 // ============================================================================
 // Request/Response Types
@@ -38,109 +46,6 @@ export interface PromotionResult {
   timestamp: string;
   mode?: PromotionMode;
   details?: Record<string, unknown>;
-}
-
-// ============================================================================
-// Tournament Mode Types
-// ============================================================================
-
-// Tournament status
-export interface TournamentStatus {
-  mode: 'tournament';
-  specId: string;
-  candidates: TournamentCandidate[];
-  winner?: string;
-  comparisons: CandidateComparison[];
-  startedAt: string;
-  completedAt?: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed';
-}
-
-// Tournament candidate
-export interface TournamentCandidate {
-  candidateId: string;
-  specId: string;
-  score: number;
-  status: 'competing' | 'winner' | 'eliminated' | 'disqualified';
-  metrics: CandidateMetrics;
-  promotedAt?: string;
-}
-
-// Candidate comparison result
-export interface CandidateComparison {
-  candidate1: string;
-  candidate2: string;
-  winner: string;
-  comparisonScore: number;
-  comparedAt: string;
-  criteria?: Record<string, number>;
-}
-
-// ============================================================================
-// Merge-Train Mode Types
-// ============================================================================
-
-// Merge-train status
-export interface MergeTrainStatus {
-  mode: 'merge-train';
-  specId: string;
-  candidates: MergeTrainCandidate[];
-  currentPosition: number;
-  nextMerge: string | null;
-  status: 'idle' | 'processing' | 'paused' | 'failed';
-  startedAt?: string;
-  completedAt?: string;
-}
-
-// Merge-train candidate
-export interface MergeTrainCandidate {
-  candidateId: string;
-  specId: string;
-  position: number;
-  status: 'waiting' | 'merging' | 'merged' | 'failed' | 'rolled_back';
-  mergedAt?: string;
-  failedAt?: string;
-  failureReason?: string;
-}
-
-// ============================================================================
-// Candidate Metrics
-// ============================================================================
-
-// Candidate metrics for scoring and comparison
-export interface CandidateMetrics {
-  passRate: number;
-  failureRate: number;
-  latencyP95: number;
-  latencyP50: number;
-  errorRate: number;
-  throughput: number;
-  score: number;
-  conformanceScore: number;
-  complexityDelta: number;
-  stability: number;
-}
-
-// ============================================================================
-// Promotion State (Spec DO)
-// ============================================================================
-
-// Promotion state stored in Spec DO
-export interface PromotionState {
-  id: string;
-  candidateId: string;
-  specId: string;
-  currentRung: Rung;
-  targetRung: Rung;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'rolled_back' | 'cancelled';
-  mode: PromotionMode;
-  startedAt: string;
-  completedAt?: string;
-  failedAt?: string;
-  failureReason?: string;
-  rollbackReason?: string;
-  actorId?: string;
-  metadata?: Record<string, unknown>;
 }
 
 // ============================================================================

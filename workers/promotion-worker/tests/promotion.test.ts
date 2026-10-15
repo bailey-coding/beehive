@@ -22,6 +22,9 @@ import type {
   Env,
   PromotionState,
 } from '../types';
+import { PromotionStateManager } from '../state';
+import { PromotionLedgerClient, RECORD_NOT_FOUND } from '../../shared/promotion-ledger';
+import { makeSpecDo } from '../../spec-do/tests/sqlite-state';
 
 // ============================================================================
 // Mock Environment
@@ -564,5 +567,190 @@ describe('Promotion Operations', () => {
     const response = await worker.getCandidatePromotionStatus('candidate-001');
     
     expect(response.status).toBeDefined();
+  });
+});
+
+// ============================================================================
+// Spec DO ledger wiring: the promotion worker against a real SpecDO (node:sqlite)
+// ============================================================================
+
+describe('Spec DO promotion ledger wiring', () => {
+  async function ledgerEnv(mode: PromotionMode) {
+    const spec = makeSpecDo();
+    await spec.init();
+    const env: Env = {
+      ...mockEnv,
+      PROMOTION_MODE: mode,
+      SPEC_DO: {
+        idFromName: () => 'main',
+        get: () => ({ fetch: (request: Request) => spec.fetch(request) }),
+      } as unknown as DurableObjectNamespace,
+    };
+    return { spec, env };
+  }
+
+  const request = (candidateId: string, specId = 'spec-1'): PromotionRequest => ({
+    candidateId,
+    specId,
+    fromRung: 'shadow',
+    toRung: 'train',
+    actorId: 'agent-1',
+  });
+
+  it('tournament mode: records the promotion state and the tournament in the DO', async () => {
+    const { spec, env } = await ledgerEnv('tournament');
+    const worker = new PromotionWorker(env);
+
+    const response = await worker.promoteCandidate(request('cand-1'));
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as PromotionResult).success).toBe(true);
+
+    const states = spec.listPromotionStates('cand-1');
+    expect(states).toHaveLength(1);
+    expect(states[0]).toMatchObject({ status: 'completed', mode: 'tournament', currentRung: 'shadow', targetRung: 'train' });
+
+    const tournaments = spec.listTournaments('spec-1');
+    expect(tournaments).toHaveLength(1);
+    expect(tournaments[0].candidates.map((c) => c.candidateId)).toEqual(['cand-1']);
+  });
+
+  it('tournament mode: a second candidate completes the tournament via PATCH', async () => {
+    const { spec, env } = await ledgerEnv('tournament');
+    mockShadowRouter.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ winner: 'cand-2', score: 90 }), { status: 200 })
+    );
+    const worker = new PromotionWorker(env);
+
+    await worker.promoteCandidate(request('cand-1'));
+    const response = await worker.promoteCandidate(request('cand-2'));
+    expect(response.status).toBe(200);
+
+    const [tournament] = spec.listTournaments('spec-1');
+    expect(tournament.status).toBe('completed');
+    expect(tournament.winner).toBeDefined();
+    expect(tournament.candidates).toHaveLength(2);
+  });
+
+  it('merge-train mode: records the train and the merged car in the DO', async () => {
+    const { spec, env } = await ledgerEnv('merge-train');
+    mockGateWorkflow.fetch.mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    const worker = new PromotionWorker(env);
+
+    const response = await worker.promoteCandidate(request('cand-1'));
+    expect(response.status).toBe(200);
+
+    const [train] = spec.listMergeTrains('spec-1');
+    expect(train.candidates).toEqual([
+      expect.objectContaining({ candidateId: 'cand-1', position: 1, status: 'merged' }),
+    ]);
+    expect(train.status).toBe('idle');
+    expect(train.nextMerge).toBeNull();
+    expect(spec.listPromotionStates('cand-1')[0].status).toBe('completed');
+  });
+
+  it('candidate status reads the latest state from the DO', async () => {
+    const { env } = await ledgerEnv('tournament');
+    const worker = new PromotionWorker(env);
+    await worker.promoteCandidate(request('cand-1'));
+
+    const body = (await (await worker.getCandidatePromotionStatus('cand-1')).json()) as { state: PromotionState };
+    expect(body.state).toMatchObject({ candidateId: 'cand-1', status: 'completed' });
+
+    const none = (await (await worker.getCandidatePromotionStatus('cand-x')).json()) as { status: string };
+    expect(none.status).toBe('not_started');
+  });
+
+  it('a second promotion of a candidate is allowed once the first completed', async () => {
+    const { spec, env } = await ledgerEnv('tournament');
+    const worker = new PromotionWorker(env);
+    await worker.promoteCandidate(request('cand-1'));
+    const second = await worker.promoteCandidate({ ...request('cand-1'), fromRung: 'train', toRung: 'canary' });
+    expect(second.status).toBe(200);
+    expect(spec.listPromotionStates('cand-1').map((s) => s.targetRung)).toEqual(['canary', 'train']);
+  });
+
+  it('an undefined field in an update clears it in the DO (retry reset)', async () => {
+    const { spec, env } = await ledgerEnv('tournament');
+    const manager = new PromotionStateManager(env);
+    const state = await manager.createPromotionState('cand-1', 'spec-1', 'shadow', 'train', 'tournament');
+    await manager.markAsFailed(state.id, 'boom');
+    await manager.updatePromotionState(state.id, { status: 'pending', failedAt: undefined, failureReason: undefined });
+
+    const [stored] = spec.listPromotionStates('cand-1');
+    expect(stored.status).toBe('pending');
+    expect(stored).not.toHaveProperty('failedAt');
+    expect(stored).not.toHaveProperty('failureReason');
+  });
+});
+
+describe('Spec DO errors are not empty results', () => {
+  // A Spec DO that serves no ledger routes: every call is the router's generic 404
+  function unservedEnv(): Env {
+    return {
+      ...mockEnv,
+      SPEC_DO: {
+        idFromName: () => 'main',
+        get: () => ({
+          fetch: async (req: Request) =>
+            new URL(req.url).pathname === '/promotion-mode'
+              ? new Response(JSON.stringify({ mode: null }))
+              : new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 }),
+        }),
+      } as unknown as DurableObjectNamespace,
+    };
+  }
+
+  it('getPromotionState throws on 404 instead of returning null', async () => {
+    const manager = new PromotionStateManager(unservedEnv());
+    await expect(manager.getPromotionState('cand-1')).rejects.toThrow(/404/);
+  });
+
+  it('getPromotionStates throws on 404 instead of returning []', async () => {
+    const manager = new PromotionStateManager(unservedEnv());
+    await expect(manager.getPromotionStates()).rejects.toThrow(/404/);
+  });
+
+  it('getPromotionState throws on 500', async () => {
+    const env = {
+      ...mockEnv,
+      SPEC_DO: {
+        idFromName: () => 'main',
+        get: () => ({ fetch: async () => new Response('db down', { status: 500 }) }),
+      } as unknown as DurableObjectNamespace,
+    };
+    await expect(new PromotionStateManager(env).getPromotionState('cand-1')).rejects.toThrow(/500 db down/);
+  });
+
+  it('promoteCandidate fails (500) rather than treating the train as empty', async () => {
+    const response = await new PromotionWorker(unservedEnv()).promoteCandidate({
+      candidateId: 'cand-1',
+      specId: 'spec-1',
+      fromRung: 'shadow',
+      toRung: 'train',
+    });
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { success: boolean }).success).toBe(false);
+  });
+
+  it('client: coded 404 on a lookup is null, uncoded 404 throws', async () => {
+    const coded = new PromotionLedgerClient({
+      fetch: async () => new Response(JSON.stringify({ code: RECORD_NOT_FOUND }), { status: 404 }),
+    });
+    expect(await coded.getTournamentBySpec('spec-1')).toBeNull();
+    expect(await coded.getMergeTrainBySpec('spec-1')).toBeNull();
+
+    const uncoded = new PromotionLedgerClient({
+      fetch: async () => new Response(JSON.stringify({ error: 'Not found' }), { status: 404 }),
+    });
+    await expect(uncoded.getTournamentBySpec('spec-1')).rejects.toThrow(/404/);
+    await expect(uncoded.listTournaments()).rejects.toThrow(/404/);
+    await expect(uncoded.listMergeTrains()).rejects.toThrow(/404/);
+  });
+
+  it('client: a malformed DO response is rejected', async () => {
+    const client = new PromotionLedgerClient({
+      fetch: async () => new Response(JSON.stringify([{ id: 'x', candidate_id: 'snake_case' }]), { status: 200 }),
+    });
+    await expect(client.listPromotionStates()).rejects.toThrow(/invalid Spec DO response/);
   });
 });

@@ -306,3 +306,62 @@ CREATE TABLE IF NOT EXISTS service_accounts (
 CREATE INDEX IF NOT EXISTS idx_service_accounts_org ON service_accounts(organization_id);
 CREATE INDEX IF NOT EXISTS idx_service_accounts_active ON service_accounts(is_active);
 CREATE INDEX IF NOT EXISTS idx_service_accounts_token ON service_accounts(token_hash);
+
+-- ============================================================================
+-- PROMOTION LEDGER (promotion worker train state; m3 -> m4, additive)
+-- Ids are not foreign keys: the promotion worker records candidates and specs
+-- by id before (or without) their M1 rows existing. Timestamps are the ISO
+-- strings the worker sends. Nested lists are JSON (the worker reads and writes
+-- the whole tournament / train object).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS promotion_states (
+  id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL,
+  spec_id TEXT NOT NULL,
+  current_rung TEXT NOT NULL,
+  target_rung TEXT NOT NULL,
+  status TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  failed_at TEXT,
+  failure_reason TEXT,
+  rollback_reason TEXT,
+  actor_id TEXT,
+  metadata TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_promotion_states_candidate ON promotion_states(candidate_id, created_at);
+
+CREATE TABLE IF NOT EXISTS tournaments (
+  id TEXT PRIMARY KEY,
+  spec_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  winner TEXT,
+  candidates TEXT NOT NULL,
+  comparisons TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tournaments_spec ON tournaments(spec_id, created_at);
+
+CREATE TABLE IF NOT EXISTS merge_trains (
+  id TEXT PRIMARY KEY,
+  spec_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  current_position INTEGER NOT NULL,
+  next_merge TEXT,
+  candidates TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_merge_trains_spec ON merge_trains(spec_id, created_at);

@@ -5,6 +5,7 @@
  */
 
 import type { Env, PromotionMode } from './types';
+import { PromotionLedgerClient } from '../shared/promotion-ledger';
 
 const DEFAULT_SPEC_DO_NAME = 'main';
 const SPEC_DO_ORIGIN = 'https://spec-do.internal';
@@ -24,6 +25,13 @@ export function getSpecDo(env: Env): SpecDOClient {
     fetch: (input, init) =>
       stub.fetch(typeof input === 'string' ? new Request(new URL(input, SPEC_DO_ORIGIN), init) : input),
   };
+}
+
+/**
+ * Typed client for the promotion ledger routes (promotion states, tournaments, merge trains)
+ */
+export function getPromotionLedger(env: Env): PromotionLedgerClient {
+  return new PromotionLedgerClient(getSpecDo(env));
 }
 
 /**

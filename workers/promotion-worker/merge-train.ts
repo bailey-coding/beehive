@@ -11,7 +11,7 @@ import {
   Rung,
   Env,
 } from './types';
-import { getSpecDo } from './spec-do';
+import { getSpecDo, getPromotionLedger } from './spec-do';
 
 /**
  * Extended merge train type with ID
@@ -201,52 +201,21 @@ export class MergeTrainManager {
    * Get merge train by spec ID
    */
   private async getMergeTrainBySpec(specId: string): Promise<MergeTrainWithId | null> {
-    const response = await getSpecDo(this.env).fetch(
-      `/merge-train-status?specId=${encodeURIComponent(specId)}`
-    );
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return null;
-      }
-      throw new Error(`Failed to get merge train: ${await response.text()}`);
-    }
-
-    return await response.json() as MergeTrainWithId;
+    return getPromotionLedger(this.env).getMergeTrainBySpec(specId);
   }
 
   /**
    * Get all merge trains
    */
   private async getAllMergeTrains(): Promise<MergeTrainWithId[]> {
-    const response = await getSpecDo(this.env).fetch('/merge-train-status/all');
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        return [];
-      }
-      throw new Error(`Failed to get merge trains: ${await response.text()}`);
-    }
-
-    return await response.json() as MergeTrainWithId[];
+    return getPromotionLedger(this.env).listMergeTrains();
   }
 
   /**
    * Save merge train to Spec DO
    */
   private async saveMergeTrain(train: MergeTrainWithId): Promise<void> {
-    const response = await getSpecDo(this.env).fetch(
-      '/merge-train-status',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(train),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to save merge train: ${await response.text()}`);
-    }
+    await getPromotionLedger(this.env).saveMergeTrain(train);
   }
 
   /**
@@ -256,18 +225,7 @@ export class MergeTrainManager {
     trainId: string,
     updates: Partial<MergeTrainStatus>
   ): Promise<void> {
-    const response = await getSpecDo(this.env).fetch(
-      `/merge-train-status/${encodeURIComponent(trainId)}`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to update merge train: ${await response.text()}`);
-    }
+    await getPromotionLedger(this.env).updateMergeTrain(trainId, updates);
   }
 
   /**
