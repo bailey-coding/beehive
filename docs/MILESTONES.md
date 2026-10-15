@@ -24,7 +24,11 @@ surprise → write into OPEN-QUESTIONS.md immediately.
 declared delta surface); orchestrator Worker (fork → sandbox → cheap-model agents); push
 event → Queue → gate Workflow (tests only); DO ledger with scores + actor identity +
 complexity delta; trial UI showing candidate comparison.
-- **Ledger lifecycle (spine work) — OPEN, not built (verified 2026-10-15).** The Spec DO is append-only with no delete routes
+- **Ledger lifecycle (spine work) — implemented on branch `agent/spine-item3-ledger-lifecycle`
+  (2026-10-15), awaiting human review; not on `main`, so production still has no delete
+  routes.** Tombstones + maintainer-only purge, migration m4 -> m5; usage in `docs/OPS.md`
+  ("Ledger cleanup"), gaps in OPEN-QUESTIONS 2026-10-15 "Ledger lifecycle". Original finding:
+  the Spec DO is append-only with no delete routes
   (2026-10-13 finding in OPEN-QUESTIONS.md: the only wipe is `wrangler delete beehive
   --force` + redeploy, which destroys all ledger data and worker secrets — fine for
   test data, unacceptable once real trials exist). Ship with M1: soft-delete/tombstones

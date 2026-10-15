@@ -13,12 +13,65 @@ import { DurableObject } from '@cloudflare/workers-types/experimental';
 import { createSqlStorage, SqlDb } from './sql-storage';
 
 // Schema SQL (inlined; esbuild has no ?raw loader for .sql in wrangler builds)
-import { SCHEMA_SQL, SERVICE_ACCOUNTS_SQL, PROMOTION_LEDGER_SQL } from './schema-inline';
+import {
+  SCHEMA_SQL,
+  SERVICE_ACCOUNTS_SQL,
+  PROMOTION_LEDGER_SQL,
+  LEDGER_LIFECYCLE_SQL,
+  LIFECYCLE_COLUMNS,
+} from './schema-inline';
 
 class ConflictError extends Error {}
+class NotFoundError extends Error {}
+class ForbiddenError extends Error {}
 
 // /promotion-states, /tournament-status, /merge-train-status, each with an optional /<id> segment
 const LEDGER_ROUTE = /^(\/promotion-states|\/tournament-status|\/merge-train-status)(?:\/([^\/]+))?$/;
+
+// Ledger lifecycle. Bound parameters per statement stay <= 100 (DO SQLite limit).
+const MAX_BOUND_PARAMS = 100;
+// Tables whose rows get an entity_history row on tombstone/purge. organizations and
+// repositories are missing from the entity_history CHECK (widening it needs a table
+// rebuild), so their audit trail is purge_log only.
+const HISTORY_TYPES: Partial<Record<string, 'spec' | 'candidate' | 'issue'>> = {
+  specs: 'spec',
+  candidates: 'candidate',
+  issues: 'issue',
+};
+// Row-id sets of one organization (each `?` binds the org id)
+const ORG_REPOS = 'SELECT id FROM repositories WHERE organization_id = ?';
+const ORG_SPECS = 'SELECT id FROM specs WHERE organization_id = ?';
+const ORG_CANDIDATES = `SELECT id FROM candidates WHERE spec_id IN (${ORG_SPECS}) OR repository_id IN (${ORG_REPOS})`;
+const ORG_ISSUES = `SELECT id FROM issues WHERE repository_id IN (${ORG_REPOS})`;
+// Hard-delete order for one organization: children before parents (FK order).
+// Dependent rows (comments, links, verdicts, trials, promotions) go with the
+// tombstoned rows they reference. entity_history, purge_log and the promotion
+// ledger tables have no FKs and are never purged.
+const ORG_PURGE_ORDER: [table: string, where: string][] = [
+  ['issue_comments', `issue_id IN (${ORG_ISSUES})`],
+  ['issue_candidate_links', `issue_id IN (${ORG_ISSUES}) OR candidate_id IN (${ORG_CANDIDATES})`],
+  ['issue_spec_links', `issue_id IN (${ORG_ISSUES}) OR spec_id IN (${ORG_SPECS})`],
+  ['gate_verdicts', `candidate_id IN (${ORG_CANDIDATES})`],
+  ['promotions', `candidate_id IN (${ORG_CANDIDATES})`],
+  [
+    'trials',
+    `spec_id IN (${ORG_SPECS}) OR candidate_a_id IN (${ORG_CANDIDATES}) OR candidate_b_id IN (${ORG_CANDIDATES}) OR winner_id IN (${ORG_CANDIDATES})`,
+  ],
+  ['issues', `id IN (${ORG_ISSUES})`],
+  ['candidates', `id IN (${ORG_CANDIDATES})`],
+  ['repositories', 'organization_id = ?'],
+  ['specs', 'organization_id = ?'],
+  ['organizations', 'id = ?'],
+];
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+const placeholders = (n: number) => Array(n).fill('?').join(', ');
+const bindCount = (sql: string) => (sql.match(/\?/g) || []).length;
 
 // Service binding type for Gate Workflow
 type Service = { fetch: (request: Request) => Promise<Response> };
@@ -45,6 +98,24 @@ import {
   type TournamentRecord,
   type MergeTrainRecord,
 } from '../shared/promotion-ledger';
+
+// Ledger lifecycle contract (tombstones, maintainer role, purge; shared with the edge)
+import {
+  TombstoneRequestSchema,
+  PurgeRequestSchema,
+  SetActorRoleRequestSchema,
+  LIFECYCLE_PATHS,
+  INCLUDE_DELETED_PARAM,
+  PURGE_BATCH_SIZE,
+  DEFAULT_PURGE_MIN_AGE_HOURS,
+  type TombstoneEntity,
+  type TombstoneResult,
+  type ParsedPurgeRequest,
+  type PurgeResult,
+  type PurgeSkipped,
+  type ActorRole,
+  type SetActorRoleResult,
+} from '../shared/ledger-lifecycle';
 
 // Types
 import type {
@@ -88,6 +159,16 @@ interface Env {
   API_AUTH_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  // Minimum tombstone age before purge may hard-delete (hours, default 24). Local e2e sets 0.
+  PURGE_MIN_AGE_HOURS?: string;
+}
+
+// Tombstone columns, present on organizations/repositories/specs/candidates/issues rows
+// only when the row is tombstoned (live rows serialize exactly as before m5)
+interface TombstoneFields {
+  deleted_at?: number;
+  deleted_by?: string;
+  delete_reason?: string;
 }
 
 interface ActorRow {
@@ -98,9 +179,10 @@ interface ActorRow {
   trust_score: number;
   promotion_authority: boolean;
   created_at: number;
+  role?: ActorRole;
 }
 
-interface SpecRow {
+interface SpecRow extends TombstoneFields {
   id: string;
   name: string;
   description?: string;
@@ -112,7 +194,7 @@ interface SpecRow {
   stage: 'draft' | 'proposed' | 'active' | 'deprecated' | 'archived';
 }
 
-interface CandidateRow {
+interface CandidateRow extends TombstoneFields {
   id: string;
   spec_id: string;
   repository_id: string;
@@ -154,7 +236,7 @@ interface TrialRow {
   stage: 'pending' | 'comparing' | 'decided';
 }
 
-interface IssueRow {
+interface IssueRow extends TombstoneFields {
   id: string;
   number: number;
   repository_id: string;
@@ -171,7 +253,7 @@ interface IssueRow {
   stage: 'reported' | 'spec_needed' | 'spec_defining' | 'spec_defined' | 'implementing' | 'validating' | 'merged' | 'closed';
 }
 
-interface OrganizationRow {
+interface OrganizationRow extends TombstoneFields {
   id: string;
   name: string;
   type: 'github' | 'gitlab' | 'artifacts';
@@ -179,7 +261,7 @@ interface OrganizationRow {
   created_at: number;
 }
 
-interface RepositoryRow {
+interface RepositoryRow extends TombstoneFields {
   id: string;
   name: string;
   organization_id: string;
@@ -252,6 +334,20 @@ function now(): number {
 }
 
 // SQL NULL -> absent key, for records whose optional fields are undefined, not null
+// WHERE fragment hiding tombstoned rows. Constant SQL, never user input.
+function liveFilter(includeDeleted: boolean): string {
+  return includeDeleted ? '1 = 1' : 'deleted_at IS NULL';
+}
+
+function tombstoneFieldsOf(row: Record<string, unknown>): TombstoneFields {
+  if (row.deleted_at == null) return {};
+  return {
+    deleted_at: row.deleted_at as number,
+    deleted_by: (row.deleted_by as string | null) ?? undefined,
+    delete_reason: (row.delete_reason as string | null) ?? undefined,
+  };
+}
+
 function dropNulls(o: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
 }
@@ -275,6 +371,8 @@ export class SpecDO {
     if (!initSql) {
       // Execute schema
       this.db.exec(SCHEMA_SQL);
+      // Tombstone columns + purge_log: a fresh ledger needs them before its first request
+      this.applyLedgerLifecycle();
       
       // Mark as initialized
       await this.state.storage.put('schema_init', 'true');
@@ -419,7 +517,7 @@ export class SpecDO {
     // tournaments, merge_trains). Additive only: CREATE TABLE/INDEX IF NOT EXISTS.
     // Runs on any pre-m4 version so the routes work on first init after deploy;
     // an m2 ledger reaches m3 in ensureServiceAccountTables() and m4 next init.
-    if (currentVersion !== 'm4') {
+    if (currentVersion !== 'm4' && currentVersion !== 'm5') {
       try {
         this.db.exec(PROMOTION_LEDGER_SQL);
         const updateVersion = this.db.prepare(
@@ -433,6 +531,37 @@ export class SpecDO {
         console.log('[SpecDO] Migration to m4 failed:', e instanceof Error ? e.message : String(e));
       }
     }
+
+    // Migration from m4 to m5: ledger lifecycle (tombstone columns, actors.role,
+    // purge_log). Additive only: ALTER TABLE ADD COLUMN behind a PRAGMA check,
+    // CREATE TABLE/INDEX IF NOT EXISTS. No table rebuild, no CHECK change.
+    // Runs on any pre-m5 version, like m4; the version only advances m4 -> m5.
+    if (currentVersion !== 'm5') {
+      try {
+        this.applyLedgerLifecycle();
+        const updateVersion = this.db.prepare(
+          "UPDATE metadata SET value = 'm5', updated_at = ? WHERE key = 'schema_version' AND value = 'm4'"
+        );
+        updateVersion.bind(now());
+        updateVersion.step();
+        updateVersion.free();
+      } catch (e) {
+        // Logged, not thrown (same as m4): tombstone-aware reads then 500
+        console.log('[SpecDO] Migration to m5 failed:', e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
+
+  /** Idempotent: adds only the lifecycle columns that are missing, then purge_log and indexes. */
+  private applyLedgerLifecycle(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    for (const [table, columns] of Object.entries(LIFECYCLE_COLUMNS)) {
+      const existing = new Set(this.queryAll(`PRAGMA table_info(${table})`).map((c) => c.name as string));
+      for (const column of columns) {
+        if (!existing.has(column.split(' ')[0])) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
+      }
+    }
+    this.db.exec(LEDGER_LIFECYCLE_SQL);
   }
 
   // ============================================================================
@@ -480,7 +609,8 @@ export class SpecDO {
 
     // The DO is single-threaded and this check + insert has no await between them,
     // so this is race-free. Not a UNIQUE index: existing ledgers already hold duplicates.
-    const dup = this.db.prepare(`SELECT id FROM organizations WHERE name = ? LIMIT 1`);
+    // A tombstoned org frees its name; purge only ever touches the tombstoned row.
+    const dup = this.db.prepare(`SELECT id FROM organizations WHERE name = ? AND deleted_at IS NULL LIMIT 1`);
     dup.bind(name);
     const exists = dup.step();
     dup.free();
@@ -504,11 +634,11 @@ export class SpecDO {
     };
   }
 
-  getOrganization(id: string): OrganizationRow | null {
+  getOrganization(id: string, includeDeleted = false): OrganizationRow | null {
     if (!this.db) throw new Error('Database not initialized');
     
     const stmt = this.db.prepare(
-      `SELECT * FROM organizations WHERE id = ?`
+      `SELECT * FROM organizations WHERE id = ? AND ${liveFilter(includeDeleted)}`
     );
     stmt.bind(id);
     const has = stmt.step();
@@ -628,11 +758,11 @@ export class SpecDO {
     };
   }
 
-  getSpec(id: string): SpecRow | null {
+  getSpec(id: string, includeDeleted = false): SpecRow | null {
     if (!this.db) throw new Error('Database not initialized');
     
     const stmt = this.db.prepare(
-      `SELECT * FROM specs WHERE id = ?`
+      `SELECT * FROM specs WHERE id = ? AND ${liveFilter(includeDeleted)}`
     );
     stmt.bind(id);
     const has = stmt.step();
@@ -701,11 +831,11 @@ export class SpecDO {
     };
   }
 
-  getCandidate(id: string): CandidateRow | null {
+  getCandidate(id: string, includeDeleted = false): CandidateRow | null {
     if (!this.db) throw new Error('Database not initialized');
     
     const stmt = this.db.prepare(
-      `SELECT * FROM candidates WHERE id = ?`
+      `SELECT * FROM candidates WHERE id = ? AND ${liveFilter(includeDeleted)}`
     );
     stmt.bind(id);
     const has = stmt.step();
@@ -1080,6 +1210,7 @@ export class SpecDO {
       type: row.type as 'github' | 'gitlab' | 'artifacts',
       external_id: row.external_id as string | undefined,
       created_at: row.created_at as number,
+      ...tombstoneFieldsOf(row),
     };
   }
 
@@ -1098,6 +1229,7 @@ export class SpecDO {
       namespace: row.namespace as string,
       default_branch: row.default_branch as string,
       created_at: row.created_at as number,
+      ...tombstoneFieldsOf(row),
     };
   }
 
@@ -1112,6 +1244,7 @@ export class SpecDO {
       trust_score: row.trust_score as number,
       promotion_authority: Boolean(row.promotion_authority),
       created_at: row.created_at as number,
+      ...(row.role ? { role: row.role as ActorRole } : {}),
     };
   }
 
@@ -1128,6 +1261,7 @@ export class SpecDO {
       created_by: row.created_by as string,
       created_at: row.created_at as number,
       stage: row.stage as 'draft' | 'proposed' | 'active' | 'deprecated' | 'archived',
+      ...tombstoneFieldsOf(row),
     };
   }
 
@@ -1149,6 +1283,7 @@ export class SpecDO {
       shadow_match: row.shadow_match as boolean | undefined,
       shadow_score: row.shadow_score as number | undefined,
       shadow_metrics: row.shadow_metrics as string | undefined,
+      ...tombstoneFieldsOf(row),
     };
   }
 
@@ -1171,6 +1306,9 @@ export class SpecDO {
       shadowMatch: row.shadow_match,
       shadowScore: row.shadow_score,
       shadowMetrics: row.shadow_metrics,
+      ...(row.deleted_at != null
+        ? { deletedAt: row.deleted_at, deletedBy: row.deleted_by, deleteReason: row.delete_reason }
+        : {}),
     };
   }
 
@@ -1238,6 +1376,7 @@ export class SpecDO {
       comment_policy: row.comment_policy as 'open' | 'maintainers_only' | 'locked',
       visibility: row.visibility as 'public' | 'internal' | 'private',
       stage: row.stage as 'reported' | 'spec_needed' | 'spec_defining' | 'spec_defined' | 'implementing' | 'validating' | 'merged' | 'closed',
+      ...tombstoneFieldsOf(row),
     };
   }
 
@@ -1283,6 +1422,9 @@ export class SpecDO {
   }
 
   private async handleInternal(request: Request, path: string, method: string): Promise<Response> {
+    const lifecycle = await this.handleLifecycle(request, path, method);
+    if (lifecycle) return lifecycle;
+
     const json = (data: unknown, status = 200) =>
       new Response(JSON.stringify({ success: status < 400, data, timestamp: Date.now() }), {
         status,
@@ -1336,6 +1478,350 @@ export class SpecDO {
       return principal ? json(principal) : fail('Not found', 404);
     }
     return fail('Not found', 404);
+  }
+
+  // ============================================================================
+  // LEDGER LIFECYCLE (tombstones, maintainer role, purge)
+  // Contract: workers/shared/ledger-lifecycle.ts. Each write runs in one
+  // transactionSync; purge runs one per batch. Audit rows go to purge_log, and to
+  // entity_history for the types its CHECK allows (spec, candidate, issue).
+  // ============================================================================
+
+  /** role='maintainer'. Service principals never reach here: the edge allows lifecycle routes for master only. */
+  isMaintainer(actorId: string): boolean {
+    return this.queryAll(`SELECT 1 AS ok FROM actors WHERE id = ? AND role = 'maintainer'`, actorId).length > 0;
+  }
+
+  private purgeMinAgeHours(): number {
+    const raw = this.env?.PURGE_MIN_AGE_HOURS;
+    if (raw === undefined || raw.trim() === '') return DEFAULT_PURGE_MIN_AGE_HOURS;
+    const hours = Number(raw);
+    return Number.isFinite(hours) && hours >= 0 ? hours : DEFAULT_PURGE_MIN_AGE_HOURS;
+  }
+
+  // The tombstoned entity first, then what cascades from it (logically downward)
+  private tombstoneScope(entityType: TombstoneEntity, id: string): { table: string; where: string; params: string[] }[] {
+    switch (entityType) {
+      case 'organization':
+        return [
+          { table: 'organizations', where: 'id = ?', params: [id] },
+          { table: 'repositories', where: 'organization_id = ?', params: [id] },
+          { table: 'specs', where: 'organization_id = ?', params: [id] },
+          { table: 'candidates', where: `id IN (${ORG_CANDIDATES})`, params: [id, id] },
+          { table: 'issues', where: `id IN (${ORG_ISSUES})`, params: [id] },
+        ];
+      case 'repository':
+        return [
+          { table: 'repositories', where: 'id = ?', params: [id] },
+          { table: 'candidates', where: 'repository_id = ?', params: [id] },
+          { table: 'issues', where: 'repository_id = ?', params: [id] },
+        ];
+      case 'spec':
+        return [
+          { table: 'specs', where: 'id = ?', params: [id] },
+          { table: 'candidates', where: 'spec_id = ?', params: [id] },
+        ];
+      case 'candidate':
+        return [{ table: 'candidates', where: 'id = ?', params: [id] }];
+    }
+  }
+
+  /** Of these candidates, the ones with an active promotion or an in-flight promotion state. */
+  private activePromotionsAmong(candidateIds: string[]): string[] {
+    const found = new Set<string>();
+    for (const ids of chunk(candidateIds, MAX_BOUND_PARAMS)) {
+      const marks = placeholders(ids.length);
+      const rows = [
+        ...this.queryAll(`SELECT candidate_id FROM promotions WHERE stage = 'active' AND candidate_id IN (${marks})`, ...ids),
+        ...this.queryAll(
+          `SELECT candidate_id FROM promotion_states WHERE status IN ('pending', 'in_progress') AND candidate_id IN (${marks})`,
+          ...ids
+        ),
+      ];
+      for (const r of rows) found.add(r.candidate_id as string);
+    }
+    return [...found].sort();
+  }
+
+  private logLifecycle(entry: {
+    id?: string;
+    action: 'tombstone' | 'purge' | 'role_change';
+    requestedBy: string;
+    selector: unknown;
+    dryRun?: boolean;
+    counts?: Record<string, number>;
+    outcome: 'completed' | 'dry_run' | 'refused' | 'running' | 'failed';
+    detail?: string;
+    startedAt: number;
+    finishedAt?: number;
+  }): string {
+    const id = entry.id ?? generateId();
+    this.run(
+      `INSERT INTO purge_log (id, action, requested_by, selector_json, dry_run, counts_json, outcome, detail, started_at, finished_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      entry.action,
+      entry.requestedBy,
+      JSON.stringify(entry.selector),
+      entry.dryRun ? 1 : 0,
+      entry.counts ? JSON.stringify(entry.counts) : null,
+      entry.outcome,
+      entry.detail ?? null,
+      entry.startedAt,
+      entry.finishedAt ?? null
+    );
+    return id;
+  }
+
+  private finishLifecycleLog(id: string, outcome: 'completed' | 'failed', detail: string | null): void {
+    this.run(`UPDATE purge_log SET outcome = ?, detail = ?, finished_at = ? WHERE id = ?`, outcome, detail, now(), id);
+  }
+
+  /**
+   * Soft delete with a logical cascade (org -> repos, specs, their candidates and
+   * issues; repo -> candidates, issues; spec -> candidates), one transaction.
+   * Refused while a candidate in scope has an active or in-flight promotion.
+   */
+  tombstone(entityType: TombstoneEntity, id: string, actorId: string, reason?: string): TombstoneResult {
+    const scope = this.tombstoneScope(entityType, id);
+    return this.state.storage.transactionSync(() => {
+      const root = this.queryAll(`SELECT deleted_at FROM ${scope[0].table} WHERE id = ?`, id)[0];
+      if (!root) throw new NotFoundError(`${entityType} ${id} not found`);
+      if (root.deleted_at != null) throw new ConflictError(`${entityType} ${id} is already tombstoned`);
+
+      const ids = scope.map(({ table, where, params }) =>
+        this.queryAll(`SELECT id FROM ${table} WHERE deleted_at IS NULL AND (${where})`, ...params).map((r) => r.id as string)
+      );
+      const active = this.activePromotionsAmong(ids[scope.findIndex((s) => s.table === 'candidates')]);
+      if (active.length) throw new ConflictError(`candidates with an active promotion: ${active.join(', ')}`);
+
+      const deletedAt = now();
+      const counts: Record<string, number> = {};
+      scope.forEach(({ table, where, params }, i) => {
+        this.run(
+          `UPDATE ${table} SET deleted_at = ?, deleted_by = ?, delete_reason = ? WHERE deleted_at IS NULL AND (${where})`,
+          deletedAt,
+          actorId,
+          reason ?? null,
+          ...params
+        );
+        counts[table] = ids[i].length;
+        const historyType = HISTORY_TYPES[table];
+        if (historyType) {
+          const metadata = JSON.stringify({ tombstoneRoot: { entityType, id } });
+          for (const rowId of ids[i]) this.recordHistory(historyType, rowId, 'tombstoned', actorId, reason, metadata);
+        }
+      });
+      this.logLifecycle({
+        action: 'tombstone',
+        requestedBy: actorId,
+        selector: { entityType, id, reason },
+        counts,
+        outcome: 'completed',
+        startedAt: deletedAt,
+        finishedAt: now(),
+      });
+      return { entityType, id, deletedAt, counts };
+    });
+  }
+
+  /** Why an organization matched by a purge selector cannot be purged, or null. */
+  private purgeBlocker(org: Record<string, unknown>, cutoff: number): PurgeSkipped['reason'] | null {
+    const orgId = org.id as string;
+    if (org.deleted_at == null) return 'not_tombstoned';
+    if ((org.deleted_at as number) > cutoff) return 'too_recent';
+    if (this.queryAll(`SELECT 1 AS x FROM service_accounts WHERE organization_id = ? LIMIT 1`, orgId).length) {
+      return 'service_accounts';
+    }
+    for (const { table, where, params } of this.tombstoneScope('organization', orgId).slice(1)) {
+      const live = this.queryAll(
+        `SELECT 1 AS x FROM ${table} WHERE (${where}) AND (deleted_at IS NULL OR deleted_at > ?) LIMIT 1`,
+        ...params,
+        cutoff
+      );
+      if (live.length) return 'live_descendants';
+    }
+    // A repository of another org that points at one of these specs would block the FK delete
+    const external = this.queryAll(
+      `SELECT 1 AS x FROM repositories WHERE spec_id IN (${ORG_SPECS}) AND organization_id != ? LIMIT 1`,
+      orgId,
+      orgId
+    );
+    return external.length ? 'live_descendants' : null;
+  }
+
+  private planPurge(req: ParsedPurgeRequest, cutoff: number) {
+    const orgs =
+      req.orgNamePrefix !== undefined
+        ? this.queryAll(
+            `SELECT id, name, deleted_at FROM organizations WHERE substr(name, 1, length(?)) = ? ORDER BY created_at`,
+            req.orgNamePrefix,
+            req.orgNamePrefix
+          )
+        : chunk([...new Set(req.orgIds ?? [])], MAX_BOUND_PARAMS).flatMap((ids) =>
+            this.queryAll(`SELECT id, name, deleted_at FROM organizations WHERE id IN (${placeholders(ids.length)})`, ...ids)
+          );
+
+    const orgIds: string[] = [];
+    const skipped: PurgeSkipped[] = [];
+    for (const org of orgs) {
+      const reason = this.purgeBlocker(org, cutoff);
+      if (reason) skipped.push({ orgId: org.id as string, name: org.name as string, reason });
+      else orgIds.push(org.id as string);
+    }
+
+    const ids = new Map<string, Set<string>>(ORG_PURGE_ORDER.map(([table]) => [table, new Set<string>()]));
+    for (const orgId of orgIds) {
+      for (const [table, where] of ORG_PURGE_ORDER) {
+        const rows = this.queryAll(`SELECT id FROM ${table} WHERE ${where}`, ...Array(bindCount(where)).fill(orgId));
+        for (const r of rows) ids.get(table)!.add(r.id as string);
+      }
+    }
+    const rows: [string, string][] = ORG_PURGE_ORDER.flatMap(([table]) => [...ids.get(table)!].map((id): [string, string] => [table, id]));
+    const counts = Object.fromEntries(ORG_PURGE_ORDER.map(([table]) => [table, ids.get(table)!.size]));
+    return { orgIds, skipped, rows, counts, total: rows.length, candidateIds: [...ids.get('candidates')!] };
+  }
+
+  /** One purge batch (<= PURGE_BATCH_SIZE rows, already in FK order). Runs inside transactionSync. */
+  private deleteBatch(batch: [string, string][], actorId: string, purgeId: string): void {
+    const active = this.activePromotionsAmong(batch.filter(([t]) => t === 'candidates').map(([, id]) => id));
+    if (active.length) throw new ConflictError(`candidates gained an active promotion: ${active.join(', ')}`);
+    const metadata = JSON.stringify({ purgeId });
+    let i = 0;
+    while (i < batch.length) {
+      const table = batch[i][0];
+      const ids: string[] = [];
+      while (i < batch.length && batch[i][0] === table) ids.push(batch[i++][1]);
+      for (const part of chunk(ids, MAX_BOUND_PARAMS)) {
+        this.run(`DELETE FROM ${table} WHERE id IN (${placeholders(part.length)})`, ...part);
+      }
+      const historyType = HISTORY_TYPES[table];
+      if (historyType) for (const id of ids) this.recordHistory(historyType, id, 'purged', actorId, undefined, metadata);
+    }
+  }
+
+  /**
+   * Hard delete of tombstoned organizations (and everything under them) older than
+   * PURGE_MIN_AGE_HOURS. Dry run by default; a real run needs confirm === the
+   * current dry-run total. Batches of <= PURGE_BATCH_SIZE rows, one transaction
+   * each, yielding between batches so promotion decisions can interleave.
+   */
+  async purge(req: ParsedPurgeRequest, actorId: string): Promise<PurgeResult> {
+    if (!this.isMaintainer(actorId)) throw new ForbiddenError('purge requires a maintainer actor (X-Actor-ID with role=maintainer)');
+
+    const startedAt = now();
+    const minAgeHours = this.purgeMinAgeHours();
+    const plan = this.planPurge(req, startedAt - minAgeHours * 3_600_000);
+    const purgeId = generateId();
+    const selector = req.orgNamePrefix !== undefined ? { orgNamePrefix: req.orgNamePrefix } : { orgIds: req.orgIds };
+    const log = { id: purgeId, action: 'purge' as const, requestedBy: actorId, selector, dryRun: req.dryRun, counts: plan.counts, startedAt };
+    const result = (batches: number): PurgeResult => ({
+      purgeId,
+      dryRun: req.dryRun,
+      minAgeHours,
+      orgIds: plan.orgIds,
+      skipped: plan.skipped,
+      counts: plan.counts,
+      total: plan.total,
+      batches,
+    });
+    const refuse = (detail: string) => {
+      this.logLifecycle({ ...log, outcome: 'refused', detail, finishedAt: now() });
+      return new ConflictError(detail);
+    };
+
+    const active = this.activePromotionsAmong(plan.candidateIds);
+    if (active.length) throw refuse(`refused: candidates with an active promotion: ${active.join(', ')}`);
+    if (req.dryRun) {
+      this.logLifecycle({ ...log, outcome: 'dry_run', finishedAt: now() });
+      return result(0);
+    }
+    if (req.confirm !== plan.total) {
+      throw refuse(`confirm ${req.confirm} does not match the current dry-run total ${plan.total}; rerun the dry run`);
+    }
+
+    this.logLifecycle({ ...log, outcome: 'running' });
+    const batches = chunk(plan.rows, PURGE_BATCH_SIZE);
+    let done = 0;
+    try {
+      for (const batch of batches) {
+        this.state.storage.transactionSync(() => this.deleteBatch(batch, actorId, purgeId));
+        done++;
+        if (done < batches.length) await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    } catch (e) {
+      const detail = `stopped after ${done} of ${batches.length} batches: ${e instanceof Error ? e.message : String(e)}`;
+      this.finishLifecycleLog(purgeId, 'failed', detail);
+      throw new ConflictError(`purge ${detail}; rerun the dry run`);
+    }
+    this.finishLifecycleLog(purgeId, 'completed', null);
+    return result(batches.length);
+  }
+
+  /**
+   * Grant or revoke the maintainer role. The caller must be a maintainer, except
+   * the bootstrap case: with no maintainer yet, an actor may grant it to itself.
+   */
+  setActorRole(targetId: string, role: ActorRole | null, callerId: string): SetActorRoleResult {
+    return this.state.storage.transactionSync(() => {
+      if (!this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, targetId).length) {
+        throw new NotFoundError(`actor ${targetId} not found`);
+      }
+      const maintainers = this.queryAll(`SELECT COUNT(*) AS n FROM actors WHERE role = 'maintainer'`)[0].n as number;
+      const bootstrap = maintainers === 0 && role === 'maintainer' && callerId === targetId;
+      if (!bootstrap && !this.isMaintainer(callerId)) {
+        throw new ForbiddenError('changing a role requires a maintainer actor (or self-grant while none exists)');
+      }
+      this.run(`UPDATE actors SET role = ? WHERE id = ?`, role, targetId);
+      const at = now();
+      this.logLifecycle({
+        action: 'role_change',
+        requestedBy: callerId,
+        selector: { actorId: targetId, role, bootstrap },
+        outcome: 'completed',
+        startedAt: at,
+        finishedAt: at,
+      });
+      return { actorId: targetId, role };
+    });
+  }
+
+  private async handleLifecycle(request: Request, path: string, method: string): Promise<Response | null> {
+    const roleRoute = path.match(/^\/internal\/actors\/([^\/]+)\/role$/);
+    if (method !== 'POST' || !(path === LIFECYCLE_PATHS.tombstone || path === LIFECYCLE_PATHS.purge || roleRoute)) {
+      return null;
+    }
+    const respond = (body: Record<string, unknown>, status: number) =>
+      new Response(JSON.stringify({ success: status < 400, ...body, timestamp: Date.now() }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return respond({ error: 'invalid JSON body' }, 400);
+    }
+    try {
+      if (path === LIFECYCLE_PATHS.tombstone) {
+        const body = TombstoneRequestSchema.safeParse(raw);
+        if (!body.success) return respond({ error: body.error.message }, 400);
+        return respond({ data: this.tombstone(body.data.entityType, body.data.id, actorId, body.data.reason) }, 200);
+      }
+      if (path === LIFECYCLE_PATHS.purge) {
+        const body = PurgeRequestSchema.safeParse(raw);
+        if (!body.success) return respond({ error: body.error.message }, 400);
+        return respond({ data: await this.purge(body.data, actorId) }, 200);
+      }
+      const body = SetActorRoleRequestSchema.safeParse(raw);
+      if (!body.success) return respond({ error: body.error.message }, 400);
+      return respond({ data: this.setActorRole(decodeURIComponent(roleRoute![1]), body.data.role, actorId) }, 200);
+    } catch (e) {
+      const status = e instanceof NotFoundError ? 404 : e instanceof ForbiddenError ? 403 : e instanceof ConflictError ? 409 : 500;
+      return respond({ error: e instanceof Error ? e.message : String(e) }, status);
+    }
   }
 
   // ============================================================================
@@ -1720,6 +2206,15 @@ export class SpecDO {
 
       // Extract actor ID from headers
       const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+
+      // Tombstoned rows are visible only to maintainers, and only on request
+      const includeDeleted = url.searchParams.get(INCLUDE_DELETED_PARAM) === '1';
+      if (includeDeleted && !this.isMaintainer(actorId)) {
+        return new Response(
+          JSON.stringify({ success: false, error: `${INCLUDE_DELETED_PARAM} requires a maintainer actor`, timestamp: Date.now() }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
       
       // ============================================================================
       // ORGANIZATIONS
@@ -1737,7 +2232,7 @@ export class SpecDO {
       if (path === '/api/organizations' && method === 'GET') {
         const limit = parseInt(url.searchParams.get('limit') || '50');
         const offset = parseInt(url.searchParams.get('offset') || '0');
-        const orgs = this.listOrganizations(limit, offset);
+        const orgs = this.listOrganizations(limit, offset, includeDeleted);
         return new Response(JSON.stringify({ success: true, data: orgs, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -1745,7 +2240,7 @@ export class SpecDO {
       
       if (path.match(/^\/api\/organizations\/[^\/]+$/) && method === 'GET') {
         const id = this.extractId(path);
-        const org = this.getOrganization(id);
+        const org = this.getOrganization(id, includeDeleted);
         if (!org) {
           return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
             status: 404,
@@ -1837,7 +2332,7 @@ export class SpecDO {
       if (path === '/api/repositories' && method === 'GET') {
         const limit = parseInt(url.searchParams.get('limit') || '50');
         const offset = parseInt(url.searchParams.get('offset') || '0');
-        const repos = this.listRepositories(limit, offset);
+        const repos = this.listRepositories(limit, offset, includeDeleted);
         return new Response(JSON.stringify({ success: true, data: repos, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -1845,7 +2340,7 @@ export class SpecDO {
       
       if (path.match(/^\/api\/repositories\/[^\/]+$/) && method === 'GET') {
         const id = this.extractId(path);
-        const repo = this.getRepository(id);
+        const repo = this.getRepository(id, includeDeleted);
         if (!repo) {
           return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
             status: 404,
@@ -1882,7 +2377,7 @@ export class SpecDO {
         const offset = parseInt(url.searchParams.get('offset') || '0');
         const organizationId = url.searchParams.get('organizationId') ?? undefined;
         const stage = url.searchParams.get('stage') ?? undefined;
-        const specs = this.listSpecs(limit, offset, organizationId, stage);
+        const specs = this.listSpecs(limit, offset, organizationId, stage, includeDeleted);
         return new Response(JSON.stringify({ success: true, data: specs, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -1890,7 +2385,7 @@ export class SpecDO {
       
       if (path.match(/^\/api\/specs\/[^\/]+$/) && method === 'GET') {
         const id = this.extractId(path);
-        const spec = this.getSpec(id);
+        const spec = this.getSpec(id, includeDeleted);
         if (!spec) {
           return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
             status: 404,
@@ -1956,7 +2451,7 @@ export class SpecDO {
         const specId = url.searchParams.get('specId') ?? undefined;
         const agentId = url.searchParams.get('agentId') ?? undefined;
         const stage = url.searchParams.get('stage') ?? undefined;
-        const candidates = this.listCandidates(limit, offset, specId, agentId, stage);
+        const candidates = this.listCandidates(limit, offset, specId, agentId, stage, includeDeleted);
         return new Response(JSON.stringify({ success: true, data: candidates.map(c => this.candidateRowToResponse(c)), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -1964,7 +2459,7 @@ export class SpecDO {
       
       if (path.match(/^\/api\/candidates\/[^\/]+$/) && method === 'GET') {
         const id = this.extractId(path);
-        const candidate = this.getCandidate(id);
+        const candidate = this.getCandidate(id, includeDeleted);
         if (!candidate) {
           return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
             status: 404,
@@ -2161,7 +2656,7 @@ export class SpecDO {
         const repositoryId = url.searchParams.get('repositoryId') ?? undefined;
         const stage = url.searchParams.get('stage') ?? undefined;
         const status = url.searchParams.get('status') ?? undefined;
-        const issues = this.listIssues(limit, offset, repositoryId, stage, status);
+        const issues = this.listIssues(limit, offset, repositoryId, stage, status, includeDeleted);
         return new Response(JSON.stringify({ success: true, data: issues, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -2169,7 +2664,7 @@ export class SpecDO {
       
       if (path.match(/^\/api\/issues\/[^\/]+$/) && method === 'GET') {
         const id = this.extractId(path);
-        const issue = this.getIssue(id);
+        const issue = this.getIssue(id, includeDeleted);
         if (!issue) {
           return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
             status: 404,
@@ -2564,10 +3059,10 @@ export class SpecDO {
   // LIST METHODS (for GET endpoints)
   // ============================================================================
 
-  listOrganizations(limit: number, offset: number): OrganizationRow[] {
+  listOrganizations(limit: number, offset: number, includeDeleted = false): OrganizationRow[] {
     if (!this.db) return [];
     const stmt = this.db.prepare(
-      `SELECT * FROM organizations ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      `SELECT * FROM organizations WHERE ${liveFilter(includeDeleted)} ORDER BY created_at DESC LIMIT ? OFFSET ?`
     );
     stmt.bind(limit, offset);
     const rows: OrganizationRow[] = [];
@@ -2594,10 +3089,10 @@ export class SpecDO {
     return rows;
   }
 
-  listRepositories(limit: number, offset: number): RepositoryRow[] {
+  listRepositories(limit: number, offset: number, includeDeleted = false): RepositoryRow[] {
     if (!this.db) return [];
     const stmt = this.db.prepare(
-      `SELECT * FROM repositories ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      `SELECT * FROM repositories WHERE ${liveFilter(includeDeleted)} ORDER BY created_at DESC LIMIT ? OFFSET ?`
     );
     stmt.bind(limit, offset);
     const rows: RepositoryRow[] = [];
@@ -2609,9 +3104,9 @@ export class SpecDO {
     return rows;
   }
 
-  getRepository(id: string): RepositoryRow | null {
+  getRepository(id: string, includeDeleted = false): RepositoryRow | null {
     if (!this.db) return null;
-    const stmt = this.db.prepare(`SELECT * FROM repositories WHERE id = ?`);
+    const stmt = this.db.prepare(`SELECT * FROM repositories WHERE id = ? AND ${liveFilter(includeDeleted)}`);
     stmt.bind(id);
     const has = stmt.step();
     const row = has ? this.rowToRepository(stmt) : null;
@@ -2619,22 +3114,18 @@ export class SpecDO {
     return row;
   }
 
-  listSpecs(limit: number, offset: number, organizationId?: string, stage?: string): SpecRow[] {
+  listSpecs(limit: number, offset: number, organizationId?: string, stage?: string, includeDeleted = false): SpecRow[] {
     if (!this.db) return [];
-    let query = `SELECT * FROM specs`;
+    let query = `SELECT * FROM specs WHERE ${liveFilter(includeDeleted)}`;
     const params: (string | number | null)[] = [];
     
-    if (organizationId || stage) {
-      query += ' WHERE';
-      if (organizationId) {
-        query += ' organization_id = ?';
-        params.push(organizationId);
-      }
-      if (stage) {
-        if (organizationId) query += ' AND';
-        query += ' stage = ?';
-        params.push(stage);
-      }
+    if (organizationId) {
+      query += ' AND organization_id = ?';
+      params.push(organizationId);
+    }
+    if (stage) {
+      query += ' AND stage = ?';
+      params.push(stage);
     }
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
@@ -2650,27 +3141,29 @@ export class SpecDO {
     return rows;
   }
 
-  listCandidates(limit: number, offset: number, specId?: string, agentId?: string, stage?: string): CandidateRow[] {
+  listCandidates(
+    limit: number,
+    offset: number,
+    specId?: string,
+    agentId?: string,
+    stage?: string,
+    includeDeleted = false
+  ): CandidateRow[] {
     if (!this.db) return [];
-    let query = `SELECT * FROM candidates`;
+    let query = `SELECT * FROM candidates WHERE ${liveFilter(includeDeleted)}`;
     const params: (string | number | null)[] = [];
     
-    if (specId || agentId || stage) {
-      query += ' WHERE';
-      if (specId) {
-        query += ' spec_id = ?';
-        params.push(specId);
-      }
-      if (agentId) {
-        if (specId) query += ' AND';
-        query += ' agent_id = ?';
-        params.push(agentId);
-      }
-      if (stage) {
-        if (specId || agentId) query += ' AND';
-        query += ' stage = ?';
-        params.push(stage);
-      }
+    if (specId) {
+      query += ' AND spec_id = ?';
+      params.push(specId);
+    }
+    if (agentId) {
+      query += ' AND agent_id = ?';
+      params.push(agentId);
+    }
+    if (stage) {
+      query += ' AND stage = ?';
+      params.push(stage);
     }
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
@@ -2789,27 +3282,29 @@ export class SpecDO {
     return rows;
   }
 
-  listIssues(limit: number, offset: number, repositoryId?: string, stage?: string, status?: string): IssueRow[] {
+  listIssues(
+    limit: number,
+    offset: number,
+    repositoryId?: string,
+    stage?: string,
+    status?: string,
+    includeDeleted = false
+  ): IssueRow[] {
     if (!this.db) return [];
-    let query = `SELECT * FROM issues`;
+    let query = `SELECT * FROM issues WHERE ${liveFilter(includeDeleted)}`;
     const params: (string | number | null)[] = [];
     
-    if (repositoryId || stage || status) {
-      query += ' WHERE';
-      if (repositoryId) {
-        query += ' repository_id = ?';
-        params.push(repositoryId);
-      }
-      if (stage) {
-        if (repositoryId) query += ' AND';
-        query += ' stage = ?';
-        params.push(stage);
-      }
-      if (status) {
-        if (repositoryId || stage) query += ' AND';
-        query += ' status = ?';
-        params.push(status);
-      }
+    if (repositoryId) {
+      query += ' AND repository_id = ?';
+      params.push(repositoryId);
+    }
+    if (stage) {
+      query += ' AND stage = ?';
+      params.push(stage);
+    }
+    if (status) {
+      query += ' AND status = ?';
+      params.push(status);
     }
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
@@ -2825,9 +3320,9 @@ export class SpecDO {
     return rows;
   }
 
-  getIssue(id: string): IssueRow | null {
+  getIssue(id: string, includeDeleted = false): IssueRow | null {
     if (!this.db) return null;
-    const stmt = this.db.prepare(`SELECT * FROM issues WHERE id = ?`);
+    const stmt = this.db.prepare(`SELECT * FROM issues WHERE id = ? AND ${liveFilter(includeDeleted)}`);
     stmt.bind(id);
     const has = stmt.step();
     const row = has ? this.rowToIssue(stmt) : null;
@@ -2927,7 +3422,7 @@ export class SpecDO {
     if (!this.db) throw new Error('Database not initialized');
 
     const dup = this.db.prepare(
-      `SELECT id FROM repositories WHERE organization_id = ? AND name = ? LIMIT 1`
+      `SELECT id FROM repositories WHERE organization_id = ? AND name = ? AND deleted_at IS NULL LIMIT 1`
     );
     dup.bind(organizationId, name);
     const exists = dup.step();

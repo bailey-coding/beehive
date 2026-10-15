@@ -18,6 +18,7 @@ interface Env {
 
 import { authenticate, authorize } from './principal';
 import { handleServiceAccountRoutes } from './service-accounts';
+import { handleLifecycleRoutes } from './lifecycle';
 import { handleUi } from './ui';
 
 
@@ -105,6 +106,10 @@ export default {
 
     const adminResponse = await handleServiceAccountRoutes(request, path, principal, specDoStub);
     if (adminResponse) return adminResponse;
+
+    // Ledger lifecycle: tombstones, purge, maintainer role, ?include_deleted=1 reads
+    const lifecycleResponse = await handleLifecycleRoutes(request, url, principal, specDoStub);
+    if (lifecycleResponse) return lifecycleResponse;
 
     // Health check
     if (path === '/health' || path === '/api/health') {

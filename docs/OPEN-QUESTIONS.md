@@ -102,7 +102,9 @@ tags:
 
 ## Spec DO ledger has no delete routes (2026-10-13)
 
-**Status**: Open. Cleanup possible only by deleting the Durable Object data out-of-band.
+**Status**: Resolved on branch `agent/spine-item3-ledger-lifecycle` (2026-10-15), pending human
+review and merge. Until it reaches `main`, production cleanup is still only possible by deleting
+the Durable Object data out-of-band. See "2026-10-15: Ledger lifecycle" below and `docs/OPS.md`.
 
 **Finding**: Neither the API worker (`workers/api`) nor the Spec DO (`workers/spec-do`) implements any delete route (no `DELETE` handlers, no `DELETE FROM`). E2E runs against production left 27 `test-org-e2e-*` organizations in the ledger with no way to remove them through the platform.
 
@@ -132,7 +134,8 @@ migrates once this reaches `main` (human approval). Open points:
   and the PATCH/rollback responses are ignored, so these fail silently. `/api/canary-deployments*`
   is item 2.
 - Ledger writes are not in `entity_history`: its `entity_type` CHECK has no promotion types and
-  widening it needs a CHECK rebuild.
+  widening it needs a CHECK rebuild. Still open; item 3 hit the same wall for organizations and
+  repositories and used a separate `purge_log` table (see "Ledger lifecycle" below).
 - `/promotion-mode` still answers before `init()` (KV only, no SQL); not renamed to `/internal/`.
 
 ## 2026-10-15: Cross-worker e2e failures (local) - root causes
@@ -169,3 +172,44 @@ Local run of `tests/e2e/cross-worker-flows.test.ts` after route fixes: 11 pass, 
 
 The two former `start` tests (`/promotion/merge-train/start`, `/promotion/tournament/start`) have
 no equivalent route by design (trains are joined via `POST /promote`); they were already removed.
+
+## 2026-10-15: Ledger lifecycle (spine item 3) - tombstones + purge
+
+Branch `agent/spine-item3-ledger-lifecycle` (on top of item 1). Migration m4 -> m5, additive only:
+`deleted_at`/`deleted_by`/`delete_reason` on organizations, repositories, specs, candidates, issues;
+`actors.role`; new `purge_log`. The columns are added behind a `PRAGMA table_info` check, because
+`ALTER TABLE ADD COLUMN` is not idempotent (the m1 -> m2 comment claiming it is is wrong). The live
+DO migrates only once this reaches `main`. Usage: `docs/OPS.md` "Ledger cleanup". Open points:
+
+- **entity_history gap (accepted, not fixed).** The `entity_type` CHECK has no `organization` or
+  `repository`, and no table rebuild was allowed. Tombstone/purge of specs, candidates and issues
+  writes `entity_history` rows (stage `tombstoned` / `purged`); orgs and repos are audited only in
+  `purge_log` (one row per tombstone, purge, role change, including refusals and dry runs).
+- **Service principals vs. maintainer.** `service_accounts` has no `actor_id` column, so the DO
+  cannot tell a service account's actor from a human one. "Service principals never purge" is
+  enforced at the edge (`principal.kind !== 'master'` -> 403 on every lifecycle route, including
+  `?include_deleted=1` reads). Related pre-existing defect: `verifyServiceTokenHash`
+  (`workers/spec-do/index.ts`) selects `sa.actor_id`, which does not exist in either schema, so
+  service-token verification cannot succeed. Not fixed (service-account semantics, not item 3).
+- **Maintainer bootstrap (inference, human call).** The first maintainer self-grants via
+  `POST /api/admin/actors/:id/role` while no maintainer exists; afterwards only maintainers grant.
+  Anyone holding the master token can pick any `X-Actor-ID`, so the role guards against
+  accidents, not against a master-token holder.
+- **Tombstone needs only the master token + an `X-Actor-ID`** (no maintainer role); purge and
+  `include_deleted` need the role. There is no undelete route (restore = manual SQL).
+- **Active promotion** = a `promotions` row with `stage='active'` or a `promotion_states` row with
+  `status` `pending`/`in_progress`. It blocks both tombstone and purge. `deploy_refs` (item 2) does
+  not exist yet; add it to `activePromotionsAmong` when it does.
+- **Purge scope.** Purge works on organizations (prefix or ids) and takes their whole tombstoned
+  tree plus dependent rows (issue comments/links, gate verdicts, trials, promotions), which are
+  not tombstoned themselves. An org is skipped if any descendant is live or tombstoned too
+  recently, if a repository of another org points at its specs, or if it owns service accounts.
+  Promotion ledger rows (`promotion_states`, `tournaments`, `merge_trains`) are kept: no FKs.
+- **Not filtered by tombstones:** trials, gate verdicts, promotions, issue comments and the
+  promotion ledger routes still return rows that reference tombstoned entities. Mutations
+  (`PATCH .../stage`) on a tombstoned row are not refused; claim of a tombstoned spec is (404).
+- **Pre-existing bug found by the tests:** `createTrial` binds `decided_at = null` into a
+  `NOT NULL` column, so `POST /api/trials` always fails. Not fixed (trial semantics).
+- **Local e2e environment:** `scripts/start-e2e-workers.sh` health checks use `curl -s` without
+  `-f`, so a worker answering 503 (missing `workers/<name>/.dev.vars`) is reported healthy. Each
+  of shadow-router, canary-worker and promotion-worker needs its own `.dev.vars`.

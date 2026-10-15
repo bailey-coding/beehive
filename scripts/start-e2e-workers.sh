@@ -24,7 +24,8 @@ echo ""
 # Start API worker (beehive) on port 8787 - MUST BE FIRST
 # This hosts the Spec DO which other workers need
 echo "[1/4] Starting API worker (beehive) on port 8787..."
-npx wrangler dev --config wrangler.toml --port 8787 &
+# PURGE_MIN_AGE_HOURS=0: tests/e2e/ledger-lifecycle.test.ts purges tombstones it just created
+npx wrangler dev --config wrangler.toml --port 8787 --var PURGE_MIN_AGE_HOURS:0 &
 API_PID=$!
 echo "      API worker PID: $API_PID"
 echo "      Waiting for Spec DO to initialize..."

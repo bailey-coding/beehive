@@ -365,3 +365,34 @@ CREATE TABLE IF NOT EXISTS merge_trains (
 );
 
 CREATE INDEX IF NOT EXISTS idx_merge_trains_spec ON merge_trains(spec_id, created_at);
+
+-- ============================================================================
+-- LEDGER LIFECYCLE (tombstones + purge; m4 -> m5, additive)
+-- Columns are added in code (SpecDO.applyLedgerLifecycle) behind a PRAGMA
+-- table_info check, because ALTER TABLE ADD COLUMN is not idempotent:
+--   organizations, repositories, specs, candidates, issues:
+--     deleted_at INTEGER, deleted_by TEXT, delete_reason TEXT
+--   actors: role TEXT  ('maintainer' or NULL)
+-- purge_log is the lifecycle audit trail (tombstone, purge, role_change). It has
+-- no foreign keys and is never purged, like entity_history.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS purge_log (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  requested_by TEXT NOT NULL,
+  selector_json TEXT NOT NULL,
+  dry_run INTEGER NOT NULL DEFAULT 0,
+  counts_json TEXT,
+  outcome TEXT NOT NULL,
+  detail TEXT,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_purge_log_time ON purge_log(started_at);
+CREATE INDEX IF NOT EXISTS idx_organizations_deleted ON organizations(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_repositories_deleted ON repositories(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_specs_deleted ON specs(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_candidates_deleted ON candidates(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_issues_deleted ON issues(deleted_at);

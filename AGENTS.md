@@ -115,7 +115,8 @@ own wrangler config and the worker `name` there is the source of truth for URLs.
 is served by the `beehive` worker (`workers/api/ui.ts`); the React app in `ui/` is **not**
 built or deployed. Topology, secrets, token scopes, ledger wipe: `docs/OPS.md`.
 
-**Never run e2e against production without human approval.** The Spec DO ledger has no
+**Never run e2e against production without human approval.** Until tombstone/purge
+(`docs/OPS.md`) reaches `main`, the Spec DO ledger has no
 delete routes; the only cleanup deletes the `beehive` worker (all ledger data and secrets).
 
 Config rules that bit this repo twice:

@@ -261,6 +261,10 @@ export interface CandidateResponse {
   shadowMatch?: boolean;
   shadowScore?: number;
   shadowMetrics?: string;
+  // Tombstone (present only on tombstoned rows, visible with ?include_deleted=1)
+  deletedAt?: number;
+  deletedBy?: string;
+  deleteReason?: string;
 }
 
 export interface UpdateCandidateStageRequest {

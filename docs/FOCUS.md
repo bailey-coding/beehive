@@ -60,9 +60,9 @@ Completed items are removed, not struck through; history lives in git.*
   (`canary-worker/slo.ts:67-78`); no producer for `canary-rollback-triggers` or
   `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
   config, not an SDK integration.
-- **M1 ledger lifecycle** (tombstones, admin purge route) is not built; this is why a wipe
-  means deleting the worker.
-- **OPEN-QUESTIONS.md** has no ledger-lifecycle finding, though MILESTONES cites one.
+- **M1 ledger lifecycle** (tombstones, admin purge route) is implemented on branch
+  `agent/spine-item3-ledger-lifecycle`, awaiting review; until it reaches `main`, a production
+  wipe still means deleting the worker (`docs/OPS.md`).
 - **Cross-worker e2e tests:** 9 failures remain: SpecDO RPC + relative-URL bug in promotion worker (spine) and missing preview-manager `/api/deploy`,`/api/rollback` routes. Human needed; see OPEN-QUESTIONS 2026-10-15.
 - **m3-features.test.ts** is now gated (local by default; production needs `E2E_ENVIRONMENT=production` AND `E2E_ALLOW_PRODUCTION=1`, human approval per AGENTS.md). Locally it has 22 failing tests that still call the old `/shadow/*`, `/canary/*`, `/promotion/*` routes (see route table in `docs/SETUP.md`); needs the same route/shape fixes as cross-worker-flows.
 
