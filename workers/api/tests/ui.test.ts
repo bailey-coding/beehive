@@ -606,6 +606,42 @@ describe('handleUi Authentication', () => {
       expect(body).toContain('price-calculator');
     });
 
+    describe('hierarchical repo routes', () => {
+      beforeEach(() => {
+        const jsonList = (data: unknown) => async () =>
+          new Response(JSON.stringify({ success: true, data }), { headers: { 'Content-Type': 'application/json' } });
+        const acme = { id: 'org-ns', name: 'acme', type: 'artifacts', created_at: Date.now() };
+        const repos = [
+          { id: 'repo-same', name: 'widgets', organization_id: 'org-ns', repo_type: 'baseline', namespace: 'acme', created_at: Date.now() },
+          { id: 'repo-custom', name: 'gadgets', organization_id: 'org-ns', repo_type: 'baseline', namespace: 'custom', created_at: Date.now() },
+        ];
+        mockStub.on('/api/organizations?limit=500&offset=0', jsonList([...fixtureOrgs, acme]));
+        mockStub.on('/api/repositories?limit=500&offset=0', jsonList([...fixtureRepos, ...repos]));
+        mockStub.on(`/api/organizations/${acme.id}`, jsonList(acme));
+        for (const r of repos) mockStub.on(`/api/repositories/${r.id}`, jsonList(r));
+      });
+
+      it('resolves 2-part /app/repos/{org}/{repo} when namespace equals org name', async () => {
+        const request = createRequest('/app/repos/acme/widgets', 'GET', sessionCookie);
+        const response = await handleUi(request, mockEnv, mockStub as any);
+        expect(response?.status).toBe(200);
+        expect(await response?.text()).toContain('widgets');
+      });
+
+      it('resolves 3-part /app/repos/{org}/{namespace}/{repo} for custom namespaces', async () => {
+        const request = createRequest('/app/repos/acme/custom/gadgets', 'GET', sessionCookie);
+        const response = await handleUi(request, mockEnv, mockStub as any);
+        expect(response?.status).toBe(200);
+        expect(await response?.text()).toContain('gadgets');
+      });
+
+      it('returns 404 for 2-part path when repo namespace differs from org name', async () => {
+        const request = createRequest('/app/repos/acme/gadgets', 'GET', sessionCookie);
+        const response = await handleUi(request, mockEnv, mockStub as any);
+        expect(response?.status).toBe(404);
+      });
+    });
+
     it('renders spec detail page', async () => {
       const request = createRequest('/app/specs/spec-001', 'GET', sessionCookie);
       const response = await handleUi(request, mockEnv, mockStub as any);
