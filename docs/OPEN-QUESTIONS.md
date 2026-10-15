@@ -213,3 +213,15 @@ DO migrates only once this reaches `main`. Usage: `docs/OPS.md` "Ledger cleanup"
 - **Local e2e environment:** `scripts/start-e2e-workers.sh` health checks use `curl -s` without
   `-f`, so a worker answering 503 (missing `workers/<name>/.dev.vars`) is reported healthy. Each
   of shadow-router, canary-worker and promotion-worker needs its own `.dev.vars`.
+
+---
+
+## Spec DO ledger lifecycle: tombstones and purge not built (2026-10-15)
+
+**Status**: Open on `main`; **superseded on branch `agent/spine-item3-ledger-lifecycle`**, which builds tombstones and purge (see "2026-10-15: Ledger lifecycle" above). The text below describes `main` as verified 2026-10-15: no tombstone, soft-delete, purge, or ledger `DELETE` code in `workers/` (the only `DELETE` calls are preview-manager's Cloudflare Builds API calls in `workers/preview-manager/builds.ts`).
+
+**Finding**: The ledger cannot be cleaned up through the platform. The root cause is in [Spec DO ledger has no delete routes (2026-10-13)](#spec-do-ledger-has-no-delete-routes-2026-10-13). This entry tracks the missing lifecycle work that would fix it. The M1 "Ledger lifecycle" item in `docs/MILESTONES.md` (tombstones for specs and candidates, plus an authenticated admin purge route) is still unbuilt. `docs/FOCUS.md` lists it as open.
+
+**Only cleanup today**: `wrangler delete --name beehive --force`, then push to `main` to redeploy and re-put the `beehive` secrets (`docs/OPS.md`, "Destructive and irreversible"). That destroys all ledger data and secrets on `beehive`, not only the test data. The one targeted cleanup so far, the 27 test orgs on 2026-10-13, was a manual out-of-band removal in the Cloudflare dashboard (see the linked entry), not a platform route.
+
+**Want**: tombstones (mark, never destroy) and a purge route scoped to test data, per the M1 item. Until then, any wipe is a `beehive` worker deletion and needs human approval.

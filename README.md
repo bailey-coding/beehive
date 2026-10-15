@@ -276,8 +276,8 @@ Trial/candidate dashboards are planned (see `docs/UI-DASHBOARD-PLAN.md`); the Re
 | **SPIKE** | ✅ Complete | 2026-10-11 | 3 forks, 3 pushes, 3 events, 0 manual steps |
 | **M1** | ✅ Complete | ~Oct 10 | Spec trials, no live traffic |
 | **M2** | ✅ Complete | 2026-10-12 | Empirical oracle (shadow mode) |
-| **M3** | ✅ Complete | 2026-10-13 | Promotion train + canary |
-| **M4** | 🚧 In Progress | 2026-10-14 | Submission package + Agent Autonomy Demo |
+| **M3** | 🚧 Partial | 2026-10-13 | Promotion train + canary |
+| **M4** | ✅ Submitted | 2026-10-14 | Submission package + Agent Autonomy Demo |
 
 **Recent Progress:**
 - ✅ All 10 workers deployed with fail-closed auth
