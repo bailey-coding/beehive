@@ -1295,6 +1295,26 @@ export class SpecDO {
 
   // Fetch from Durable Object
   async fetch(request: Request): Promise<Response> {
+    // Promotion mode is key-value state: answer before the SQL schema is touched
+    if (new URL(request.url).pathname === '/promotion-mode') {
+      const modeHeaders = { 'Content-Type': 'application/json' };
+      try {
+        if (request.method === 'GET') {
+          return new Response(JSON.stringify({ mode: await this.getPromotionMode() }), { headers: modeHeaders });
+        }
+        if (request.method === 'POST') {
+          const { mode } = (await request.json()) as { mode: 'tournament' | 'merge-train' };
+          return new Response(JSON.stringify({ mode: await this.setPromotionMode(mode) }), { headers: modeHeaders });
+        }
+        return new Response('Method not allowed', { status: 405 });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), {
+          status: 400,
+          headers: modeHeaders,
+        });
+      }
+    }
+
     if (!this.db) {
       await this.init();
     }

@@ -17,7 +17,7 @@ export interface UiEnv {
 }
 
 import { page, esc, str, table, tableHtml } from './ui-html';
-import { orgPage, repoPage, specPage, candidatePage, trialPage, type DoReader, type DoRow, type Session } from './ui-pages';
+import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, buildRepoUrl, type DoReader, type DoRow, type Session } from './ui-pages';
 
 // Re-export Session for use by tests
 export type { Session };
@@ -161,6 +161,146 @@ export async function handleUi(
       return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
     }
     
+    // NEW: Repo-level issue routes (like GitHub)
+    // /app/repos/{org}/{namespace}/{repo}/issues
+    // /app/repos/{org}/{repo}/issues (2-part)
+    // /app/repos/{repoId}/issues (UUID fallback)
+    const repoIssuesMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/issues$/);
+    if (repoIssuesMatch) {
+      if (method !== 'GET') {
+        return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const [, orgSlug, secondSlug, thirdSlug] = repoIssuesMatch;
+      const namespaceSlug = thirdSlug === undefined ? orgSlug : secondSlug;
+      const repoSlug = thirdSlug === undefined ? secondSlug : thirdSlug;
+      
+      const orgSlugDecoded = decodeURIComponent(orgSlug);
+      const namespaceSlugDecoded = decodeURIComponent(namespaceSlug);
+      const repoSlugDecoded = decodeURIComponent(repoSlug);
+      
+      const validComponent = /^[A-Za-z0-9_.-]{1,64}$/;
+      if (!validComponent.test(orgSlugDecoded) || 
+          !validComponent.test(namespaceSlugDecoded) || 
+          !validComponent.test(repoSlugDecoded)) {
+        return page('Not found', '<p>Invalid path format. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const [orgs, repos] = await Promise.all([
+        doReader.list('/api/organizations'),
+        doReader.list('/api/repositories')
+      ]);
+      
+      const org = orgs.find((o) => pick(o, 'name') === orgSlugDecoded);
+      if (!org) {
+        return page('Not found', '<p>Organization not found. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const repo = repos.find((r) =>
+        pick(r, 'organization_id', 'organizationId') === pick(org, 'id') &&
+        (pick(r, 'namespace') || 'default') === namespaceSlugDecoded &&
+        pick(r, 'name') === repoSlugDecoded
+      );
+      
+      if (!repo) {
+        return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      return repoIssuesPage(pick(repo, 'id'), url, session, doReader);
+    }
+    
+    // NEW: Create issue form for repo
+    const repoNewIssueMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/issues\/new$/);
+    if (repoNewIssueMatch) {
+      if (method !== 'GET') {
+        return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const [, orgSlug, secondSlug, thirdSlug] = repoNewIssueMatch;
+      const namespaceSlug = thirdSlug === undefined ? orgSlug : secondSlug;
+      const repoSlug = thirdSlug === undefined ? secondSlug : thirdSlug;
+      
+      const orgSlugDecoded = decodeURIComponent(orgSlug);
+      const namespaceSlugDecoded = decodeURIComponent(namespaceSlug);
+      const repoSlugDecoded = decodeURIComponent(repoSlug);
+      
+      const validComponent = /^[A-Za-z0-9_.-]{1,64}$/;
+      if (!validComponent.test(orgSlugDecoded) || 
+          !validComponent.test(namespaceSlugDecoded) || 
+          !validComponent.test(repoSlugDecoded)) {
+        return page('Not found', '<p>Invalid path format. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const [orgs, repos] = await Promise.all([
+        doReader.list('/api/organizations'),
+        doReader.list('/api/repositories')
+      ]);
+      
+      const org = orgs.find((o) => pick(o, 'name') === orgSlugDecoded);
+      if (!org) {
+        return page('Not found', '<p>Organization not found. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const repo = repos.find((r) =>
+        pick(r, 'organization_id', 'organizationId') === pick(org, 'id') &&
+        (pick(r, 'namespace') || 'default') === namespaceSlugDecoded &&
+        pick(r, 'name') === repoSlugDecoded
+      );
+      
+      if (!repo) {
+        return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      return newIssuePage(pick(repo, 'id'), url, session, doReader);
+    }
+    
+    // NEW: Single issue view
+    const repoIssueDetailMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/issues\/([^/]+)$/);
+    if (repoIssueDetailMatch) {
+      if (method !== 'GET') {
+        return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const [, orgSlug, secondSlug, thirdSlug, issueSlug] = repoIssueDetailMatch;
+      const namespaceSlug = thirdSlug === undefined ? orgSlug : secondSlug;
+      const repoSlug = thirdSlug === undefined ? secondSlug : thirdSlug;
+      
+      const orgSlugDecoded = decodeURIComponent(orgSlug);
+      const namespaceSlugDecoded = decodeURIComponent(namespaceSlug);
+      const repoSlugDecoded = decodeURIComponent(repoSlug);
+      const issueId = decodeURIComponent(issueSlug);
+      
+      const validComponent = /^[A-Za-z0-9_.-]{1,64}$/;
+      if (!validComponent.test(orgSlugDecoded) || 
+          !validComponent.test(namespaceSlugDecoded) || 
+          !validComponent.test(repoSlugDecoded) ||
+          !validComponent.test(issueId)) {
+        return page('Not found', '<p>Invalid path format. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const [orgs, repos] = await Promise.all([
+        doReader.list('/api/organizations'),
+        doReader.list('/api/repositories')
+      ]);
+      
+      const org = orgs.find((o) => pick(o, 'name') === orgSlugDecoded);
+      if (!org) {
+        return page('Not found', '<p>Organization not found. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      const repo = repos.find((r) =>
+        pick(r, 'organization_id', 'organizationId') === pick(org, 'id') &&
+        (pick(r, 'namespace') || 'default') === namespaceSlugDecoded &&
+        pick(r, 'name') === repoSlugDecoded
+      );
+      
+      if (!repo) {
+        return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+      
+      return issuePage(issueId, url, session, doReader);
+    }
+    
     // Render using UUID (all existing page code works unchanged)
     return repoPage(pick(repo, 'id'), url, session, doReader, env);
   }
@@ -205,6 +345,17 @@ export async function handleUi(
     if (path === '/app/organizations') return createOrganization(form, session, stub);
     if (path === '/app/repositories') return createRepository(form, session, stub);
     if (path === '/app/specs') return createSpec(form, session, stub);
+    
+    // NEW: Create issue for repo
+    const issueCreateMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/issues$/);
+    if (issueCreateMatch) {
+      return createIssue(form, session, stub, issueCreateMatch);
+    }
+    
+    // NEW: Create comment for issue
+    if (path === '/app/issue_comments') {
+      return createIssueComment(form, session, stub);
+    }
   }
 
   return page('Not found', '<p>This page does not exist. <a href="/app">Back to dashboard</a></p>', 404);
@@ -506,6 +657,108 @@ async function createSpec(form: FormData, session: Session, stub: DurableObjectS
   const payload: Row = { name, organizationId, contract, declaredDeltaSurface };
   if (description) payload.description = description;
   return submit(stub, '/api/specs', payload, session, `Created spec ${name}`);
+}
+
+/**
+ * Create an issue for a repository.
+ * Matches the repo path from the URL to find the repository ID.
+ */
+async function createIssue(
+  form: FormData,
+  session: Session,
+  stub: DurableObjectStub,
+  pathMatch: RegExpMatchArray
+): Promise<Response> {
+  const [, orgSlug, secondSlug, thirdSlug] = pathMatch;
+  const namespaceSlug = thirdSlug === undefined ? orgSlug : secondSlug;
+  const repoSlug = thirdSlug === undefined ? secondSlug : thirdSlug;
+  
+  const orgSlugDecoded = decodeURIComponent(orgSlug);
+  const namespaceSlugDecoded = decodeURIComponent(namespaceSlug);
+  const repoSlugDecoded = decodeURIComponent(repoSlug);
+  
+  const validComponent = /^[A-Za-z0-9_.-]{1,64}$/;
+  if (!validComponent.test(orgSlugDecoded) || 
+      !validComponent.test(namespaceSlugDecoded) || 
+      !validComponent.test(repoSlugDecoded)) {
+    return back('error', 'Invalid repository path.');
+  }
+  
+  const [orgs, repos] = await Promise.all([
+    callDo(stub, '/api/organizations?limit=500&offset=0', 'GET'),
+    callDo(stub, '/api/repositories?limit=500&offset=0', 'GET')
+  ]);
+  
+  const org = (orgs.data as Row[] | []).find((o) => pick(o, 'name') === orgSlugDecoded);
+  if (!org) {
+    return back('error', 'Organization not found.');
+  }
+  
+  const repo = (repos.data as Row[] | []).find((r) =>
+    pick(r, 'organization_id', 'organizationId') === pick(org, 'id') &&
+    (pick(r, 'namespace') || 'default') === namespaceSlugDecoded &&
+    pick(r, 'name') === repoSlugDecoded
+  );
+  
+  if (!repo) {
+    return back('error', 'Repository not found.');
+  }
+  
+  const title = field(form, 'title');
+  const body = field(form, 'body');
+  const labels = field(form, 'labels');
+  
+  if (!title) return back('error', 'Issue needs a title.');
+  
+  // Get next issue number for this repo
+  const issues = await callDo(stub, `/api/issues?repositoryId=${pick(repo, 'id')}&limit=500&offset=0`, 'GET');
+  const issueRows = Array.isArray(issues.data) ? (issues.data as Row[]) : [];
+  const maxNumber = issueRows.reduce((max, i) => Math.max(max, parseInt(pick(i, 'number')) || 0), 0);
+  const nextNumber = maxNumber + 1;
+  
+  const payload: Row = {
+    number: nextNumber,
+    repositoryId: pick(repo, 'id'),
+    title,
+    body: body || undefined,
+    labels: labels ? labels.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    createdBy: session.actorId,
+  };
+  
+  const result = await callDo(stub, '/api/issues', 'POST', payload, session.actorId);
+  if (result.success === false) return back('error', String(result.error || 'Failed to create issue.'));
+  
+  const issue = result.data as Row | undefined;
+  if (!issue) return back('error', 'Created issue but received no data.');
+  
+  // Redirect to the repo issues page
+  const repoUrl = buildRepoUrl(repo, (orgs.data as Row[]) || []);
+  return redirect(`${repoUrl}/issues?ok=Created issue #${nextNumber}`);
+}
+
+/**
+ * Create a comment on an issue.
+ */
+async function createIssueComment(
+  form: FormData,
+  session: Session,
+  stub: DurableObjectStub
+): Promise<Response> {
+  const issueId = field(form, 'issueId');
+  const body = field(form, 'body');
+  
+  if (!issueId || !body) return back('error', 'Comment needs an issue ID and body.');
+  
+  const payload: Row = {
+    issueId,
+    body,
+    createdBy: session.actorId,
+  };
+  
+  const result = await callDo(stub, '/api/issue_comments', 'POST', payload, session.actorId);
+  if (result.success === false) return back('error', String(result.error || 'Failed to create comment.'));
+  
+  return back('ok', 'Comment created');
 }
 
 async function submit(

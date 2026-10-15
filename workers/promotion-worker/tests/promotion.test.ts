@@ -27,19 +27,33 @@ import type {
 // Mock Environment
 // ============================================================================
 
-// Stands in for the SpecDO RPC surface; persistedMode models the DO storage value
-let persistedMode: PromotionMode | null = null;
-
 const mockSpecDoService = {
   fetch: vi.fn(),
-  getPromotionMode: async () => persistedMode,
-  setPromotionMode: async (mode: PromotionMode) => (persistedMode = mode),
+};
+
+// persistedMode models the SpecDO storage value behind GET/POST /promotion-mode.
+// Those calls are answered here so mockSpecDoService.fetch sees only promotion calls.
+let persistedMode: PromotionMode | null = null;
+
+const mockSpecDoStub = {
+  fetch: async (request: Request) => {
+    if (new URL(request.url).pathname !== '/promotion-mode') {
+      return mockSpecDoService.fetch(request);
+    }
+    if (request.method === 'POST') {
+      const { mode } = await request.json() as { mode: PromotionMode };
+      persistedMode = mode;
+    }
+    return new Response(JSON.stringify({ mode: persistedMode }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  },
 };
 
 // SPEC_DO is a DurableObjectNamespace: idFromName/get resolve to the stub above
 const mockSpecDoNamespace = {
   idFromName: () => 'spec-do-id',
-  get: () => mockSpecDoService,
+  get: () => mockSpecDoStub,
 };
 
 const mockPreviewManager = {

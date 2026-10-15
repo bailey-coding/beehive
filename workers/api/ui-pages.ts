@@ -175,6 +175,9 @@ function buildRepoUrl(repo: DoRow, orgs: DoRow[], repoIdFallback?: string): stri
   return `/app/repos/${esc(encodeURIComponent(orgName))}${namespacePart}/${esc(encodeURIComponent(repoName))}`;
 }
 
+// Export buildRepoUrl for use in ui.ts
+export { buildRepoUrl };
+
 // ============================================================================
 // Organization Page
 // ============================================================================
@@ -1099,3 +1102,310 @@ export async function trialPage(
   
   return page(`Trial ${getId(trial).slice(0, 8)}`, body);
 }
+
+// ============================================================================
+// Issue Pages (Repo-level, like GitHub)
+// ============================================================================
+
+/**
+ * Helper to get issue-specific fields from a row.
+ */
+function getIssueNumber(row: DoRow): string {
+  return str(pick(row, 'number'));
+}
+
+function getIssueTitle(row: DoRow): string {
+  return str(pick(row, 'title'));
+}
+
+function getIssueBody(row: DoRow): string {
+  return str(pick(row, 'body'));
+}
+
+function getIssueStatus(row: DoRow): string {
+  return str(pick(row, 'status'));
+}
+
+function getIssueStage(row: DoRow): string {
+  return str(pick(row, 'stage'));
+}
+
+function getIssueLabels(row: DoRow): string[] {
+  const labels = pick(row, 'labels');
+  if (!labels) return [];
+  if (Array.isArray(labels)) return labels.map(str);
+  if (typeof labels === 'string') return labels.split(',').map((s) => str(s).trim()).filter(Boolean);
+  return [];
+}
+
+function getIssueCommentPolicy(row: DoRow): string {
+  return str(pick(row, 'comment_policy', 'commentPolicy'));
+}
+
+function getIssueVisibility(row: DoRow): string {
+  return str(pick(row, 'visibility'));
+}
+
+function getClosedAt(row: DoRow): number | undefined {
+  const val = row.closed_at ?? row.closedAt;
+  return typeof val === 'number' ? val : undefined;
+}
+
+function getClosedBy(row: DoRow): string {
+  return str(pick(row, 'closed_by', 'closedBy'));
+}
+
+/**
+ * Render a single issue row for a table.
+ */
+function renderIssueRow(issue: DoRow, repoId?: string): string[] {
+  const issueId = getId(issue);
+  const repoIdFromIssue = getRepositoryId(issue);
+  const displayRepoId = repoId || repoIdFromIssue;
+  
+  return [
+    `<a href="/app/repos/${esc(encodeURIComponent(displayRepoId))}/issues/${esc(encodeURIComponent(issueId))}">#${esc(getIssueNumber(issue))}: ${esc(getIssueTitle(issue))}</a>`,
+    visibilityBadge(getIssueVisibility(issue) || 'public'),
+    stageBadge(getIssueStage(issue)),
+    getIssueLabels(issue).map((l) => `<span class="label">${esc(l)}</span>`).join(''),
+    esc(formatDate(getCreatedAt(issue))),
+  ];
+}
+
+/**
+ * List issues for a repository.
+ */
+export async function repoIssuesPage(
+  repoId: string,
+  url: URL,
+  session: Session,
+  doReader: DoReader
+): Promise<Response> {
+  if (!isValidId(repoId)) {
+    return page('Not found', '<p>Invalid repository ID.</p>', 404);
+  }
+  
+  const [repo, issues, orgs, specs] = await Promise.all([
+    doReader.get(`/api/repositories/${encodeURIComponent(repoId)}`),
+    doReader.list('/api/issues', 500),
+    doReader.list('/api/organizations', 500),
+    doReader.list('/api/specs', 500),
+  ]);
+  
+  if (!repo) {
+    return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+  }
+  
+  // Filter issues for this repo
+  const repoIssues = issues.filter((i) => getRepositoryId(i) === repoId);
+  const publicIssues = repoIssues.filter((i) => {
+    const visibility = getIssueVisibility(i);
+    return !visibility || visibility === 'public' || visibility === 'internal';
+  });
+  
+  // Build repo URL for navigation
+  const orgId = getOrganizationId(repo);
+  const org = orgs.find((o) => getId(o) === orgId);
+  const repoUrl = org ? buildRepoUrl(repo, orgs) : `/app/repos/${esc(encodeURIComponent(repoId))}`;
+  
+  // Get spec for this repo if any
+  const spec = specs.find((s) => getRepositoryId(s) === repoId);
+  
+  const issueRows = publicIssues.map((i) => renderIssueRow(i, repoId));
+  
+  const notice = url.searchParams.get('ok');
+  
+  const body = `
+    ${subHeader(`Issues for ${esc(getName(repo))}`, repoUrl)}
+    
+    ${notice ? `<p class="flash ok">${esc(notice)}</p>` : ''}
+    
+    <section class="action-bar">
+      <a href="${repoUrl}/issues/new" class="button">New Issue</a>
+    </section>
+    
+    <section>
+      <h2>Issues (${publicIssues.length} of ${repoIssues.length} total)</h2>
+      ${publicIssues.length > 0 ? tableHtml(
+        ['Issue', 'Visibility', 'Stage', 'Labels', 'Created'],
+        issueRows
+      ) : '<p class="empty">No issues found. <a href="' + repoUrl + '/issues/new">Create one</a></p>'}
+    </section>
+    
+    ${spec ? `
+    <section>
+      <h2>Linked Spec</h2>
+      <p><a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a> (${esc(getStage(spec))})</p>
+    </section>
+    ` : ''}
+    
+    <p><a href="${repoUrl}">Back to repository</a></p>
+  `;
+  
+  return page(`Issues - ${getName(repo)}`, body);
+}
+
+/**
+ * Form to create a new issue for a repository.
+ */
+export async function newIssuePage(
+  repoId: string,
+  url: URL,
+  session: Session,
+  doReader: DoReader
+): Promise<Response> {
+  if (!isValidId(repoId)) {
+    return page('Not found', '<p>Invalid repository ID.</p>', 404);
+  }
+  
+  const [repo, orgs] = await Promise.all([
+    doReader.get(`/api/repositories/${encodeURIComponent(repoId)}`),
+    doReader.list('/api/organizations', 500),
+  ]);
+  
+  if (!repo) {
+    return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+  }
+  
+  // Build repo URL
+  const orgId = getOrganizationId(repo);
+  const org = orgs.find((o) => getId(o) === orgId);
+  const repoUrl = org ? buildRepoUrl(repo, orgs) : `/app/repos/${esc(encodeURIComponent(repoId))}`;
+  
+  const error = url.searchParams.get('error');
+  
+  const body = `
+    ${subHeader(`New Issue for ${esc(getName(repo))}`, repoUrl)}
+    
+    ${error ? `<p class="flash err">${esc(error)}</p>` : ''}
+    
+    <form method="POST" action="${repoUrl}/issues" class="stack">
+      <div class="form-group">
+        <label for="title">Title *</label>
+        <input type="text" id="title" name="title" placeholder="Brief description of the issue" required>
+      </div>
+      
+      <div class="form-group">
+        <label for="body">Description</label>
+        <textarea id="body" name="body" rows="10" placeholder="Detailed description..."></textarea>
+      </div>
+      
+      <div class="form-group">
+        <label for="labels">Labels (comma-separated)</label>
+        <input type="text" id="labels" name="labels" placeholder="bug, enhancement, documentation">
+      </div>
+      
+      <div class="form-actions">
+        <button type="submit" class="button primary">Create Issue</button>
+        <a href="${repoUrl}/issues" class="button">Cancel</a>
+      </div>
+    </form>
+    
+    <p><a href="${repoUrl}">Back to repository</a></p>
+  `;
+  
+  return page(`New Issue - ${getName(repo)}`, body);
+}
+
+/**
+ * View a single issue.
+ */
+export async function issuePage(
+  issueId: string,
+  url: URL,
+  session: Session,
+  doReader: DoReader
+): Promise<Response> {
+  if (!isValidId(issueId)) {
+    return page('Not found', '<p>Invalid issue ID.</p>', 404);
+  }
+  
+  const [issue, repos, orgs, comments] = await Promise.all([
+    doReader.get(`/api/issues/${encodeURIComponent(issueId)}`),
+    doReader.list('/api/repositories', 500),
+    doReader.list('/api/organizations', 500),
+    doReader.list('/api/issue_comments', 500),
+  ]);
+  
+  if (!issue) {
+    return page('Not found', '<p>Issue not found. <a href="/app">Back to dashboard</a></p>', 404);
+  }
+  
+  // Find the repo this issue belongs to
+  const repoId = getRepositoryId(issue);
+  const repo = repos.find((r) => getId(r) === repoId);
+  const orgId = repo ? getOrganizationId(repo) : undefined;
+  const org = orgId ? orgs.find((o) => getId(o) === orgId) : undefined;
+  
+  // Get comments for this issue
+  const issueComments = comments.filter((c) => pick(c, 'issue_id', 'issueId') === issueId);
+  
+  // Get spec for this repo if any
+  const specs = await doReader.list('/api/specs', 500);
+  const spec = specs.find((s) => getRepositoryId(s) === repoId);
+  
+  // Build repo URL
+  const repoUrl = repo ? (org ? buildRepoUrl(repo, orgs) : `/app/repos/${esc(encodeURIComponent(repoId))}`) : null;
+  
+  const labels = getIssueLabels(issue);
+  const isOpen = getIssueStatus(issue) === 'open';
+  
+  const body = `
+    ${repoUrl ? subHeader(`Issue #${getIssueNumber(issue)}: ${esc(getIssueTitle(issue))}`, repoUrl + '/issues') : `<h1>Issue #${getIssueNumber(issue)}: ${esc(getIssueTitle(issue))}</h1>`}
+    
+    <section class="details-section">
+      <dl>
+        <dt>Status</dt><dd>${isOpen ? '<span class="badge open">Open</span>' : '<span class="badge closed">Closed</span>'}</dd>
+        <dt>Stage</dt><dd>${stageBadge(getIssueStage(issue))}</dd>
+        <dt>Visibility</dt><dd>${visibilityBadge(getIssueVisibility(issue) || 'public')}</dd>
+        <dt>Labels</dt><dd>${labels.length > 0 ? labels.map((l) => `<span class="label">${esc(l)}</span>`).join('') : '<span class="empty">none</span>'}</dd>
+        <dt>Repository</dt><dd>${repo ? `<a href="${esc(repoUrl || '')}">${esc(getName(repo))}</a>` : esc(repoId || 'Unknown')}</dd>
+        ${spec ? `<dt>Spec</dt><dd><a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a></dd>` : ''}
+        <dt>Created</dt><dd>${esc(formatDate(getCreatedAt(issue)))} by ${esc(getName(issue) || getId(issue))}</dt>
+        ${getClosedAt(issue) ? `<dt>Closed</dt><dd>${esc(formatDate(getClosedAt(issue)))} by ${esc(getClosedBy(issue))}</dd>` : ''}
+      </dl>
+    </section>
+    
+    ${getIssueBody(issue) ? `
+    <section>
+      <h2>Description</h2>
+      <div class="markdown">${esc(getIssueBody(issue))}</div>
+    </section>
+    ` : ''}
+    
+    <section>
+      <h2>Comments (${issueComments.length})</h2>
+      ${issueComments.length > 0 ? `
+        <div class="comments">
+          ${issueComments.map((c) => {
+            const commentBody = esc(str(pick(c, 'body')));
+            const commentCreatedAt = formatDate(getCreatedAt(c));
+            const commentCreatedBy = esc(str(pick(c, 'created_by', 'createdBy')) || getId(c));
+            return `
+              <article class="comment">
+                <header>
+                  <span class="comment-author">${commentCreatedBy}</span>
+                  <span class="comment-date">${commentCreatedAt}</span>
+                </header>
+                <div class="comment-body">${commentBody}</div>
+              </article>
+            `;
+          }).join('')}
+        </div>
+      ` : '<p class="empty">No comments yet</p>'}
+      
+      ${isOpen ? `
+        <form method="POST" action="/app/issue_comments" class="comment-form">
+          <input type="hidden" name="issueId" value="${esc(issueId)}">
+          <textarea name="body" placeholder="Add a comment..." rows="4" required></textarea>
+          <button type="submit">Comment</button>
+        </form>
+      ` : ''}
+    </section>
+    
+    <p><a href="${repoUrl ? repoUrl + '/issues' : '/app'}">Back to issues</a></p>
+  `;
+  
+  return page(`Issue #${getIssueNumber(issue)} - ${getIssueTitle(issue)}`, body);
+}
+
