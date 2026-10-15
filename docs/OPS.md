@@ -6,11 +6,27 @@ audience: human,agent
 
 # Deployment topology and ops (verified 2026-10-13)
 
+## Deploy flow (decided 2026-10-15)
+
+- GitHub `main` is a **source repo**. `.github/workflows/ci.yml` runs typecheck and unit tests on
+  pull requests and on pushes to any branch. Nothing deploys from GitHub and CI holds no
+  Cloudflare secrets.
+- Production deploys happen from the **Cloudflare Artifacts repo**: once a change is on GitHub,
+  the maintainer pulls it and pushes it to the Artifacts repo. This step is human-only; agents
+  never push to that repo and never run `wrangler deploy`.
+- TODO(maintainer): document the Artifacts deploy repo name/URL, the exact pull/push commands,
+  and what in the Artifacts repo triggers the deploy (a Workers Build per worker, or the
+  `npm run deploy:*` scripts run by hand).
+- TODO(maintainer): document where `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and
+  `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used), and
+  whether the `canary-rollback-triggers` / `promotion-events` queues are still created at deploy
+  time (the old workflow ran `wrangler queues create` for them).
+
 Moved out of `AGENTS.md` (2026-10-15). The config rules and the fail-closed auth rule stay
 in `AGENTS.md`; this file adds operational detail only.
 
-Ten Workers on `*.bz23711.workers.dev`, deployed by `.github/workflows/deploy.yml` on every push to
-`main` (it runs the `package.json` `deploy:*` scripts; each worker has its own wrangler config):
+Ten Workers on `*.bz23711.workers.dev`, deployed from the Cloudflare Artifacts repo
+(see "Deploy flow" below; each worker has its own wrangler config and a `package.json` `deploy:*` script):
 
 - `beehive` — edge router/API; hosts the `SpecDO` class (root `wrangler.toml`).
 - `beehive-gate-workflow`, `beehive-sandbox-runner`, `beehive-queue-consumer` — configs
@@ -68,11 +84,10 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
 
 **Destructive and irreversible; human approval required.** Prefer tombstone + purge above.
 This deletes every ledger row and the `beehive` worker secrets. To wipe it (done 2026-10-13 to clear 27 `test-org-e2e-*` orgs left by E2E runs against
-production; the maintainer cleared them in the Cloudflare dashboard, which also works): `wrangler delete --name beehive --force`, push to `main` to redeploy, then re-put
+production; the maintainer cleared them in the Cloudflare dashboard, which also works): `wrangler delete --name beehive --force`, then redeploy `beehive` through the maintainer's normal deploy flow (see "Deploy flow"), then re-put
 the secrets that live on `beehive`: `API_AUTH_TOKEN`, `CLOUDFLARE_API_TOKEN`,
 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`. Other workers keep their own secrets. A `1042`
-response means the worker is not deployed yet. When scripting the wait, watch the run for the
-new SHA (`gh run watch <id>`); `gh run list --limit 1` can still return the previous run.
+response means the worker is not deployed yet.
 The `KV namespaces ... Authentication error` printed by `wrangler delete` is harmless.
 
 Symptom lookup for deploy and auth failures: `docs/TROUBLESHOOTING.md`. First-time setup and

@@ -437,7 +437,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 **For production deployments:**
-Since GitHub auto-deploys on push, simply pushing the updated code to main will cause:
+Once the maintainer deploys the updated code (push to the Artifacts repo; GitHub `main` runs CI only), this will happen:
 1. Workers to redeploy with the new schema + migration logic
 2. Existing Spec DO instances will run migrations on their next request
 3. No data loss, no downtime
@@ -566,8 +566,7 @@ with an inspector port already in use.
 ### Deploy and ledger-wipe errors
 
 - **`1042`**: the worker is not deployed yet. After `wrangler delete --name beehive --force`,
-  push to `main` and wait for the run on the new SHA (`gh run watch <id>`); `gh run list
-  --limit 1` can still return the previous run.
+  ask the maintainer to redeploy `beehive` (deploy flow: `docs/OPS.md`). Agents never deploy.
 - **403 right after granting scopes**: propagation takes minutes; wait and retry.
 - **`KV namespaces ... Authentication error`** printed by `wrangler delete`: harmless.
 - Secrets that live on `beehive` only must be re-put after a wipe (`API_AUTH_TOKEN`,

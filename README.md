@@ -104,7 +104,7 @@ npm run dev:queue     # Queue Consumer
 
 ### Deployment
 
-Push to `main`; `.github/workflows/deploy.yml` deploys all 10 workers automatically.
+GitHub `main` runs CI only (`.github/workflows/ci.yml`); it does not deploy. The maintainer deploys all 10 workers by pushing to the Cloudflare Artifacts repo (see `docs/OPS.md`).
 
 Set `API_AUTH_TOKEN` on all 10 workers:
 ```bash

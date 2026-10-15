@@ -32,8 +32,9 @@ verdicts, and outcomes as first-class, linked artifacts.
 5. **The always-pushed invariant.** No agent task reaches done/failed without a final
    push. Intermediate states go to `scratch/*` refs. Nothing is ever local-only.
 6. **No external CI.** Validation = Sandboxes via Workflows (Cloudflare CI SDK pattern).
-   Deploys = Workers Builds (candidate pipeline; the platform's own workers deploy via
-   GitHub Actions `deploy.yml`, see `docs/OPS.md`).
+   Deploys = Workers Builds (candidate pipeline). The platform's own workers deploy only
+   when the maintainer pushes to the Cloudflare Artifacts repo (human-only, `docs/OPS.md`);
+   GitHub runs CI only (`.github/workflows/ci.yml`).
 7. **Rollback is a ref operation.** Promotion and demotion must remain equally cheap.
 
 ### The oracle ladder (memorize)
@@ -85,8 +86,8 @@ Worker: never use orchestrator spawning; run solo or use `tools.subagent`. Table
 ### Working patterns
 
 - **Fork-per-agent invariant.** Each agent works in its own fork. Never push to shared branches.
-- **Always-pushed invariant.** Every task ends with a push. Use `scratch/*` refs for intermediate states. Applies to candidate forks and `scratch/*`; pushing `main` deploys production, so only on explicit human approval.
-- **GitHub auto-deploy.** Never run `wrangler deploy` — pushing to GitHub automatically deploys all workers via GitHub Actions workflows. `wrangler deploy --dry-run` is fine for validation.
+- **Always-pushed invariant.** Every task ends with a push. Use `scratch/*` refs for intermediate states. Applies to candidate forks and `scratch/*` and agent branches on GitHub. A push to GitHub (including `main`) runs CI and does not deploy; only the maintainer's push to the Artifacts deploy repo does.
+- **No agent deploys.** Never run `wrangler deploy` (`--dry-run` is fine) and never push to the Cloudflare Artifacts deploy repo. GitHub `main` is a source repo running CI only; production deploy is a human-only step after a change lands there.
 - **Deterministic outputs.** Commit messages follow the format: `step: <desc> | task: <id> | spec: <clause> | confidence: <0-1>`.
 - **Document surprises immediately.** Any undocumented Artifacts behavior goes straight to `docs/OPEN-QUESTIONS.md`.
 - **Avoid duplicate work.** Before creating new agents, check if existing agents or subagents have already completed the task. Flag overlaps explicitly: "Agent X already delivered Y. Creating new agents will duplicate work. Confirm?"
@@ -110,14 +111,15 @@ See `docs/ARTIFACTS-SETUP.md` for verified setup patterns, CLI commands, authent
 
 ## Deployment Topology & Ops
 
-Ten Workers, deployed by `.github/workflows/deploy.yml` on every push to `main`; each has its
+Ten Workers. GitHub runs CI only (`ci.yml`: typecheck + unit tests); the maintainer deploys by
+pushing to the Cloudflare Artifacts repo (human-only). Each has its
 own wrangler config and the worker `name` there is the source of truth for URLs. The web UI
 is served by the `beehive` worker (`workers/api/ui.ts`); the React app in `ui/` is **not**
 built or deployed. Topology, secrets, token scopes, ledger wipe: `docs/OPS.md`.
 
-**Never run e2e against production without human approval.** Until tombstone/purge
-(`docs/OPS.md`) reaches `main`, the Spec DO ledger has no
-delete routes; the only cleanup deletes the `beehive` worker (all ledger data and secrets).
+**Never run e2e against production without human approval.** Cleanup of test data
+is tombstone + purge (`docs/OPS.md`); the last resort deletes the `beehive` worker (all ledger
+data and secrets) and is human-only.
 
 Config rules that bit this repo twice:
 - Service bindings take `binding = "..."`, never `name = "..."`.

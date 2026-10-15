@@ -13,10 +13,10 @@ Completed items are removed, not struck through; history lives in git.*
 ## Completed this session (Opus agent review)
 
 - ✅ Committed 46 docs (+22k lines) that were in working tree only
-- ✅ Pushed to origin/main (deploys all 10 workers)
+- ✅ Pushed to origin/main (at the time this deployed all 10 workers; GitHub no longer deploys, see `docs/OPS.md`)
 - ✅ Fixed canary worker: returns 404 for unknown routes (was 200 with HTML text)
 - ✅ Widened vitest include: worker tests now run (12 files, 20+ hidden failures exposed)
-- ✅ Added CI gates: typecheck + unit tests run before deploy in `deploy.yml`
+- ✅ Added CI gates: typecheck + unit tests run in `ci.yml` (formerly `deploy.yml`)
 - ✅ Updated cross-worker-flows tests: renamed routes to match workers, removed tests for non-existent routes
 - ✅ Updated MILESTONES.md: split M5 into M5a/M5b, deferred M6.5, merged M6.2 with M3 capability work
 - ✅ Removed fake handlers: deleted oracle-ladder.test.ts, cleaned m3-features.test.ts to use only real worker tests
@@ -46,9 +46,9 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Open work
 
-- **Typecheck:** All errors resolved. CI now runs typecheck (added to `deploy.yml`).
+- **Typecheck:** All errors resolved. CI runs typecheck (`ci.yml`).
 - **Self-hosting gaps** (details in `docs/SETUP.md` section 2):
-  - Workflow creates only 2 of 7 queues; add the other 5 to `deploy.yml` or document as-is.
+  - No workflow creates queues now; the 7 queues are created by hand (see `docs/SETUP.md`).
   - Account ID, `ALLOWED_GITHUB_USERS` and the `bz23711` subdomain are hardcoded across
     `wrangler.toml`, `cli/`, `shadow-router/config.ts`, `tests/e2e/config.ts`, `scripts/`.
   - First deploy to an empty account is unverified (`beehive` <-> `beehive-gate-workflow`

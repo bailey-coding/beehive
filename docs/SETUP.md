@@ -75,8 +75,10 @@ the two `start` tests need new routes or deletion. `m3-features.test.ts` and
 
 ## 2. Deploying your own copy
 
-Deploys run from `.github/workflows/deploy.yml` on every push to `main` (never run
-`wrangler deploy` by hand on the upstream account). To self-host in another account:
+GitHub `main` runs CI only (`.github/workflows/ci.yml`) and does not deploy. Upstream deploys
+come from the maintainer's push to the Cloudflare Artifacts repo (`docs/OPS.md`); never run
+`wrangler deploy` by hand on the upstream account. To self-host in another account, deploy with
+the `npm run deploy:*` scripts:
 
 ### a. Things hardcoded to the original account (change these)
 
@@ -90,14 +92,15 @@ Deploys run from `.github/workflows/deploy.yml` on every push to `main` (never r
 | `workers/shadow-router/tests/shadow.test.ts:216` | asserts the `bz23711` URL, so it breaks when `config.ts:145` changes |
 | `scripts/*.sh`, `scripts/test-workers-builds.ts` | `bz23711` subdomain |
 
-### b. GitHub Actions secrets
+### b. Deploy credentials
 
+The CI workflow needs none. For manual deploys set
 `CLOUDFLARE_ACCOUNT_ID`, `WORKERS_SUBDOMAIN`, `CLOUDFLARE_API_TOKEN`
 (scopes: Workers Scripts:Edit, Workers Queues:Edit; new scopes take minutes to propagate).
 
 ### c. Queues (create before first deploy)
 
-The workflow creates only `canary-rollback-triggers` and `promotion-events`. The configs also
+No workflow creates queues any more (the old deploy workflow created only `canary-rollback-triggers` and `promotion-events`; create them by hand with `wrangler queues create`). The configs also
 reference these five, which a fresh account must create by hand:
 
 ```bash
@@ -133,9 +136,9 @@ worker's URL, path `/auth/callback`.
 - Validated: all ten workers bundle with `wrangler deploy --dry-run`.
 - **UNVERIFIED**: a first deploy to an empty account. `beehive` has a service binding to
   `beehive-gate-workflow`, while the gate workflow binds the `SpecDO` class from `beehive`
-  via `script_name`. `deploy.yml` also deploys queue-consumer, canary-worker and
+  via `script_name`. The old `deploy.yml` order (and the `deploy:*` scripts) deploys queue-consumer, canary-worker and
   promotion-worker before preview-manager, though all three service-bind it. If Cloudflare
-  rejects bindings to Workers that do not exist yet, re-running the workflow cannot break the
+  rejects bindings to Workers that do not exist yet, re-running the deploy cannot break the
   cycle; a binding would have to be removed temporarily.
 - **UNVERIFIED**: Artifacts access and Workers Builds API use need an account with those
   products enabled (`docs/ARTIFACTS-SETUP.md`).
