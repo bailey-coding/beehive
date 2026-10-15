@@ -107,8 +107,8 @@ export interface ArtifactsContentsResponse {
   path: string;
 }
 
-function artifactsRepoBase(env: ArtifactsUiEnv, namespace: string, repoName: string): string {
-  return `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/artifacts/namespaces/${encodeURIComponent(namespace)}/repos/${encodeURIComponent(repoName)}`;
+function artifactsRepoBase(accountId: string, namespace: string, repoName: string): string {
+  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/artifacts/namespaces/${encodeURIComponent(namespace)}/repos/${encodeURIComponent(repoName)}`;
 }
 
 async function artifactsJson(env: ArtifactsUiEnv, url: string): Promise<any | null> {
@@ -139,17 +139,17 @@ async function artifactsJson(env: ArtifactsUiEnv, url: string): Promise<any | nu
  */
 export async function fetchArtifactsContents(
   env: ArtifactsUiEnv,
-  _accountId: string,
+  accountId: string,
   namespace: string,
   repoName: string,
   ref: string,
   _path: string = ''
 ): Promise<ArtifactsContentsResponse | null> {
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
-    console.log('[Artifacts] API token or account ID not configured, skipping real fetch');
+  if (!env.CLOUDFLARE_API_TOKEN || !accountId) {
+    console.log(`[Artifacts] skipping real fetch: CLOUDFLARE_API_TOKEN ${env.CLOUDFLARE_API_TOKEN ? 'set' : 'MISSING'}, accountId ${accountId ? 'set' : 'MISSING'}`);
     return null;
   }
-  const base = artifactsRepoBase(env, namespace, repoName);
+  const base = artifactsRepoBase(accountId, namespace, repoName);
 
   const log = await artifactsJson(env, `${base}/log?ref=${encodeURIComponent(ref)}&limit=1`);
   const commits = Array.isArray(log) ? log : log?.commits ?? log?.log ?? [];
@@ -195,17 +195,17 @@ export async function fetchArtifactsContents(
  */
 export async function fetchArtifactsFileContent(
   env: ArtifactsUiEnv,
-  _accountId: string,
+  accountId: string,
   namespace: string,
   repoName: string,
   ref: string,
   filePath: string
 ): Promise<string | null> {
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
+  if (!env.CLOUDFLARE_API_TOKEN || !accountId) {
     return null;
   }
   try {
-    const url = `${artifactsRepoBase(env, namespace, repoName)}/file?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(filePath)}`;
+    const url = `${artifactsRepoBase(accountId, namespace, repoName)}/file?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(filePath)}`;
     const response = await fetch(url, {
       headers: { 'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
     });
@@ -1008,7 +1008,7 @@ export async function renderFileTreeSection(
   if (env && remoteUrl && defaultBranch) {
     const parsed = parseArtifactsRemoteUrl(remoteUrl);
     if (parsed) {
-      const accountId = env.CLOUDFLARE_ACCOUNT_ID || parsed.accountId;
+      const accountId = parsed.accountId;
       const contents = await fetchArtifactsContents(env, accountId, parsed.namespace, parsed.repoName, defaultBranch, '');
       if (contents) {
         realTree = buildFileTreeFromArtifacts(contents.tree);
