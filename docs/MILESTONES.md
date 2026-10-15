@@ -7,7 +7,7 @@ audience: human,agent
 
 # Milestones
 
-**Current phase: M2 — Empirical oracle COMPLETE.** M2 completed 2026-10-12 with all 4 workers deployed and operational: shadow-router (traffic mirroring), scientist-comparator (declared delta surface validation), preview-manager (Workers Builds integration), candidate-service (preview operations). Analytics Engine capturing per-candidate metrics (10+ rows). All components health-checked and verified. SPIKE completed 2026-10-11 with exit criteria met: 3 forks, 3 pushes (first-writer-wins verified against real Artifacts), 3 events, zero manual steps — validated locally (Miniflare, 13/13) and remotely. Findings in `docs/OPEN-QUESTIONS.md`.
+**Current phase: post-submission (2026-10-15).** Competition entry and demo video submitted. Next: M5 hardening, then M7 (session provenance). Mocked semantic UI (M6) is in the API worker; real semantic layer (M6.5) is not built. M3 train/canary/promotion workers exist in `workers/`; the Varda-inspired spine items (DO facets, capability minting, ArtifactFS) have no implementation in the repo and remain open. M2 completed 2026-10-12 with all 4 workers deployed and operational: shadow-router (traffic mirroring), scientist-comparator (declared delta surface validation), preview-manager (Workers Builds integration), candidate-service (preview operations). Analytics Engine capturing per-candidate metrics (10+ rows). All components health-checked and verified. SPIKE completed 2026-10-11 with exit criteria met: 3 forks, 3 pushes (first-writer-wins verified against real Artifacts), 3 events, zero manual steps — validated locally (Miniflare, 13/13) and remotely. Findings in `docs/OPEN-QUESTIONS.md`.
 
 **Spike — prove the riskiest assumption.** Baseline repo → fork 3× via binding → sandbox
 runner clones one fork → hardcoded "agent" commits+pushes → push event via Queues →
@@ -37,9 +37,12 @@ complexity delta; trial UI showing candidate comparison.
 
 **Exit criteria met:** All M1 functionality preserved; end-to-end flow verified: spec → claim → develop → push → gate → preview → shadow → compare → metrics. Schema migration system added for existing Spec DO instances.
 
-**M3 — Promotion train + Architectural Foundation (2–3 days).** Statsig slicing,
-speculative projection forks, tournament vs merge-train modes, canary with auto-rollback.
-**Varda-inspired spine work:**
+**M3 — Promotion train + Architectural Foundation (2–3 days).** PARTIAL: `promotion-worker`
+(tournament and merge-train modes), `canary-worker` (rollback), and Statsig config in
+`shadow-router` exist. Facets, capability minting, and ArtifactFS below are not implemented.
+Statsig slicing, speculative projection forks, tournament vs merge-train modes, canary with
+auto-rollback.
+**Varda-inspired spine work (OPEN):**
 - **Durable Object Facets for per-candidate isolation** — Spec DO spawns a facet (with isolated SQLite) for each candidate; supervisor pattern controls access
 - **Basic capability minting** — Gate verdicts grant time-bound, scoped capabilities to agents (read-only trial access, merge permission)
 - **Shadow → Train transition via facets** — Each train car = isolated facet for safe concurrent promotion
@@ -48,7 +51,9 @@ speculative projection forks, tournament vs merge-train modes, canary with auto-
 - **Capability-scoped mounting** — Spec DO mints capabilities with path restrictions; ArtifactFS respects these scopes at mount time
 **Exit criteria:** Promotion pipeline operational with isolated candidate execution; capability-based access control between Spec DO and candidate grains; ArtifactFS lazy-loading verified for agent workspaces.
 
-**M4 — Submission package + Agent Autonomy Demo (1–2 days).** Demo video (one spec, three agents, live winner), MIT/Apache LICENSE, repo cleanup, 5–10 min video requirement.
+**M4 — Submission package + Agent Autonomy Demo (1–2 days).** SUBMITTED 2026-10-15
+(demo video recorded, LICENSE is MIT). Agent-autonomy items below were not verified in the
+repo; treat as open unless a commit says otherwise. Demo video (one spec, three agents, live winner), MIT/Apache LICENSE, repo cleanup, 5–10 min video requirement.
 **Agent autonomy:**
 - **Agent-created issues/specs** — When agents detect out-of-scope problems, they create new issues and optionally draft new spec candidates
 - **Change-type classification** — Agents tag meta/infra issues with appropriate change types for routing
@@ -59,6 +64,43 @@ speculative projection forks, tournament vs merge-train modes, canary with auto-
 
 **M5 — Trust & Governance Layer (post-submission, hardening phase).** Issue intake and
 merge governance as first-class platform mechanics with Varda-inspired enhancements:
+
+**Architecture of distrust principle:** "The agent cannot be trusted, so build so that its mistakes cannot matter." — Every agent starts with zero capabilities; authority flows only through explicit capability grants.
+
+- **Enriched issue intake.** Every reported issue carries, from creation:
+  - *Complexity estimate* (reuses the complexity-delta scoring components, applied
+    predictively to the change rather than post-hoc).
+  - *Change-type classification* with confidence (typo-fix / refactor / behavior-change /
+    security-sensitive / dependency-change / infra). Change type drives the gate policy:
+    which oracles are mandatory, which can be skipped.
+  - *Reporter trust level* and **cost attribution** — who foots the agent bill for
+    spec→candidate runs triggered by this issue (reporter, project budget, or
+    trusted-reporter waiver). A low-trust reporter requesting agent time on a
+    security-sensitive change type should route differently than a maintainer asking
+    for a typo fix, even with identical issue text.
+- **Actor trust registry.** Extends the M1 actor identity model: trust scores per
+  reporter/initiator, calibrated by measured outcomes (their past issues' promoted
+  candidates, SLO outcomes, near-miss rate). Trust gates: agent-budget authorization,
+  oracle-skipping privileges, and promotion authority (per ADR 0005).
+- **Two-person merge rule (supply-chain defense).** Merges of designated change types
+  (security-sensitive, dependency changes, anything touching auth/secrets/build
+  pipeline, or any promotion initiated by an actor below a trust threshold) require
+  approval from **two distinct maintainers** — the design lesson of recent supply-chain
+  compromises (xz-style lone-maintainer social engineering, hijacked dependencies): a
+  single trusted human is a single point of failure. The DO ledger records both
+  approvals on the promotion record; the two approvals must come from different actor
+  IDs (agents cannot hold maintainer approval authority — approvals are human-only
+  capabilities, per the OCAP principle).
+- **Bootstrap posture.** Until a second maintainer exists: the founder is sole
+  author+maintainer, but the ledger schema, change-type classification, and approval
+  fields ship from day one (populated with self-approvals marked as such) so governance
+  is retrofittable by policy change, not schema migration.
+- **Full object-capability model** — Cap'n Proto or similar for Spec DO ↔ grain communication, enforcing "only connectivity begets connectivity"
+- **Grain-level versioning and rollback** — Each candidate facet maintains state snapshots; rollback restores grain to previous version without affecting others
+- **Agent authorization for issue/spec creation** — Trust registry tracks which agents are authorized to create issues and specs (prevents runaway agent generation)
+- **Gatekeeper granular controls** — Repository scoping, field masking, rate limiting, human approval gates for side-effecting writes
+- **V8 isolate performance** — Leverage Workers/Durable Objects (V8 isolates) for 10x-100x faster cold starts vs containers, enabling per-agent isolation at scale
+- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees
 
 **M6 — Semantic Dashboard UI (post-submission, 1–2 days).** Bring the logged-in UI
 closer to the platform vision with semantic intelligence at its core, even if mocked initially.
@@ -109,43 +151,6 @@ addition is joining rationale to oracle-ladder outcomes.
 **Exit criteria:** Every new commit resolves to a trial and session record; no secret
 fixtures survive redaction in tests; intent search returns prior failures for a clause;
 one successor candidate demonstrably starts from a prior session.
-
-**Architecture of distrust principle:** "The agent cannot be trusted, so build so that its mistakes cannot matter." — Every agent starts with zero capabilities; authority flows only through explicit capability grants.
-
-- **Enriched issue intake.** Every reported issue carries, from creation:
-  - *Complexity estimate* (reuses the complexity-delta scoring components, applied
-    predictively to the change rather than post-hoc).
-  - *Change-type classification* with confidence (typo-fix / refactor / behavior-change /
-    security-sensitive / dependency-change / infra). Change type drives the gate policy:
-    which oracles are mandatory, which can be skipped.
-  - *Reporter trust level* and **cost attribution** — who foots the agent bill for
-    spec→candidate runs triggered by this issue (reporter, project budget, or
-    trusted-reporter waiver). A low-trust reporter requesting agent time on a
-    security-sensitive change type should route differently than a maintainer asking
-    for a typo fix, even with identical issue text.
-- **Actor trust registry.** Extends the M1 actor identity model: trust scores per
-  reporter/initiator, calibrated by measured outcomes (their past issues' promoted
-  candidates, SLO outcomes, near-miss rate). Trust gates: agent-budget authorization,
-  oracle-skipping privileges, and promotion authority (per ADR 0005).
-- **Two-person merge rule (supply-chain defense).** Merges of designated change types
-  (security-sensitive, dependency changes, anything touching auth/secrets/build
-  pipeline, or any promotion initiated by an actor below a trust threshold) require
-  approval from **two distinct maintainers** — the design lesson of recent supply-chain
-  compromises (xz-style lone-maintainer social engineering, hijacked dependencies): a
-  single trusted human is a single point of failure. The DO ledger records both
-  approvals on the promotion record; the two approvals must come from different actor
-  IDs (agents cannot hold maintainer approval authority — approvals are human-only
-  capabilities, per the OCAP principle).
-- **Bootstrap posture.** Until a second maintainer exists: the founder is sole
-  author+maintainer, but the ledger schema, change-type classification, and approval
-  fields ship from day one (populated with self-approvals marked as such) so governance
-  is retrofittable by policy change, not schema migration.
-- **Full object-capability model** — Cap'n Proto or similar for Spec DO ↔ grain communication, enforcing "only connectivity begets connectivity"
-- **Grain-level versioning and rollback** — Each candidate facet maintains state snapshots; rollback restores grain to previous version without affecting others
-- **Agent authorization for issue/spec creation** — Trust registry tracks which agents are authorized to create issues and specs (prevents runaway agent generation)
-- **Gatekeeper granular controls** — Repository scoping, field masking, rate limiting, human approval gates for side-effecting writes
-- **V8 isolate performance** — Leverage Workers/Durable Objects (V8 isolates) for 10x-100x faster cold starts vs containers, enabling per-agent isolation at scale
-- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees
 
 **Sequencing rule:** agents write candidates and glue; you write the orchestration spine.
 If a task touches the spec schema, DO ledger, or train logic, it belongs to a human or a
