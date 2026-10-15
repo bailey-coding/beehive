@@ -44,7 +44,7 @@ function seedOrg(name: string) {
   const issue = spec.createIssue(1, repo.id, 'bug', 'body', agent);
   spec.createIssueComment(issue.id, 'comment', agent);
   spec.createGateVerdict(c1.id, 'pre-merge', 'pass', 90, 0, agent);
-  // Raw insert: createTrial binds decided_at = null into a NOT NULL column (pre-existing bug)
+  // Raw insert so the trial is already decided (createTrial makes a pending one)
   store.raw
     .prepare(`INSERT INTO trials (id, spec_id, candidate_a_id, candidate_b_id, comparison_metrics, decided_at, decided_by)
               VALUES (?, ?, ?, ?, '{}', ?, ?)`)

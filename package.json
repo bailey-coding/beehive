@@ -30,7 +30,7 @@
     "tail": "wrangler tail",
     "typecheck": "tsc --noEmit",
     "lint": "eslint 'workers/**/*.ts'",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'tests/e2e/**'",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run tests/e2e",

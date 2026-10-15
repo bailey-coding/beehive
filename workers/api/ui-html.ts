@@ -140,7 +140,8 @@ export function badge(kind: string, text: string): SafeHtml {
  * Create a visibility badge.
  */
 export function visibilityBadge(visibility: string): SafeHtml {
-  return badge(`visibility ${visibility}`, visibility);
+  // badge() maps the bare visibility value (public/internal/private) to its CSS class
+  return badge(visibility, visibility);
 }
 
 /**

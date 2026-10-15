@@ -554,9 +554,11 @@ describe('Semantic Mock Generators', () => {
 
 describe('handleUi Authentication', () => {
   let mockStub: MockDurableObjectStub;
+  let sessionCookie: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockStub = createMockStub();
+    sessionCookie = await createTestSession();
   });
 
   describe('unauthenticated access', () => {
@@ -715,7 +717,7 @@ describe('handleUi Authentication', () => {
     it('blocks POST to /logout without same origin', async () => {
       const request = new Request('http://localhost/app/logout', {
         method: 'POST',
-        headers: { Origin: 'http://evil.com' },
+        headers: { Origin: 'http://evil.com', Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
       });
       const response = await handleUi(request, mockEnv, mockStub as any);
       expect(response?.status).toBe(403);
@@ -724,7 +726,7 @@ describe('handleUi Authentication', () => {
     it('blocks POST to create routes without same origin', async () => {
       const request = new Request('http://localhost/app/organizations', {
         method: 'POST',
-        headers: { Origin: 'http://evil.com' },
+        headers: { Origin: 'http://evil.com', Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
       });
       const response = await handleUi(request, mockEnv, mockStub as any);
       expect(response?.status).toBe(403);
@@ -866,7 +868,7 @@ describe('Mocked Data Labeling', () => {
   });
 
   it('search section has Mocked label', async () => {
-    const request = createRequest('/app/repos/repo-001?q=test', 'GET', sessionCookie);
+    const request = createRequest('/app/repos/repo-001?q=price', 'GET', sessionCookie);
     const response = await handleUi(request, mockEnv, mockStub as any);
     const body = await response?.text();
     expect(body).toContain('Mocked');
@@ -935,7 +937,8 @@ describe('XSS Protection (R6)', () => {
     const request = createRequest('/app/specs/spec-xss', 'GET', sessionCookie);
     const response = await handleUi(request, mockEnv, maliciousStub as any);
     const body = await response?.text();
-    expect(body).not.toContain('onerror=');
+    // The name is escaped text, so "onerror=" may appear; no raw <img> element may.
+    expect(body).not.toContain('<img');
     expect(body).toContain('&lt;img');
   });
 
@@ -976,7 +979,8 @@ describe('XSS Protection (R6)', () => {
         data: [{ id: 'repo-xss', name: 'XSS Repo', remote_url: 'javascript:alert(1)', organization_id: 'org-001' }]
       }), { headers: { 'Content-Type': 'application/json' } });
     });
-    maliciousStub.on('/api/repos/repo-xss', async () => {
+    // repoPage reads /api/repositories/:id
+    maliciousStub.on('/api/repositories/repo-xss', async () => {
       return new Response(JSON.stringify({
         success: true,
         data: { id: 'repo-xss', name: 'XSS Repo', remote_url: 'javascript:alert(1)', organization_id: 'org-001' }
@@ -1067,7 +1071,8 @@ describe('Repo Page Tabs', () => {
     const request = createRequest('/app/repos/repo-001?tab=invalid', 'GET', sessionCookie);
     const response = await handleUi(request, mockEnv, mockStub as any);
     const body = await response?.text();
-    expect(body).toContain('Overview');
+    // tab labels are rendered lowercase; the active tab carries the `active` class
+    expect(body).toContain('class="tab active">overview<');
   });
 });
 
@@ -1124,11 +1129,9 @@ describe('DoReader Filtered List Rejection (R1, R3)', () => {
     
     // Try to make a request that would use a filtered list
     // The DoReader in ui.ts should NOT do this
-    expect(() => {
-      // This is a direct test of the stub behavior
-      const req = new Request('http://localhost/api/specs?organizationId=org-001&limit=100&offset=0');
-      return mockStub.fetch(req);
-    }).toThrow();
+    // MockDurableObjectStub.fetch is async, so the block surfaces as a rejection
+    const req = new Request('http://localhost/api/specs?organizationId=org-001&limit=100&offset=0');
+    await expect(mockStub.fetch(req)).rejects.toThrow(/BLOCKED/);
   });
 });
 
@@ -1138,6 +1141,15 @@ describe('Regression Tests', () => {
 
   beforeEach(async () => {
     mockStub = createMockStub();
+    // The create forms POST to these DO routes; the mock has no default POST handlers
+    for (const path of ['/api/organizations', '/api/repositories', '/api/specs']) {
+      mockStub.on(path, async () =>
+        new Response(JSON.stringify({ success: true, data: { id: 'new-1' } }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+    }
     sessionCookie = await createTestSession();
   });
 
@@ -1151,7 +1163,6 @@ describe('Regression Tests', () => {
       headers: { 
         'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
         'Origin': 'http://localhost',
-        'Content-Type': 'multipart/form-data',
       },
       body: formData,
     });
@@ -1174,7 +1185,6 @@ describe('Regression Tests', () => {
       headers: { 
         'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
         'Origin': 'http://localhost',
-        'Content-Type': 'multipart/form-data',
       },
       body: formData,
     });
@@ -1195,7 +1205,6 @@ describe('Regression Tests', () => {
       headers: { 
         'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
         'Origin': 'http://localhost',
-        'Content-Type': 'multipart/form-data',
       },
       body: formData,
     });

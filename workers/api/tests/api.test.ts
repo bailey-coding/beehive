@@ -137,10 +137,11 @@ describe('API Handlers', () => {
       expect(response.status).toBe(200);
       expect(mockSpecDoStub.fetch).toHaveBeenCalled();
       
-      const callArgs = mockSpecDoStub.fetch.mock.calls[0];
-      const requestBody = JSON.parse(callArgs[0] as string);
-      expect(requestBody.method).toBe('POST');
-      expect(requestBody.headers['Content-Type']).toBe('application/json');
+      // sendToSpecDo forwards a Request object to the DO stub
+      const forwarded = mockSpecDoStub.fetch.mock.calls[0][0] as Request;
+      expect(forwarded.method).toBe('POST');
+      expect(new URL(forwarded.url).pathname).toBe('/api/organizations');
+      expect(forwarded.headers.get('Content-Type')).toBe('application/json');
     });
 
     it('should return 401 for missing auth', async () => {
@@ -602,7 +603,8 @@ describe('Shared Utilities', () => {
       mockSpecDoStub.fetch.mockResolvedValueOnce(
         new Response(JSON.stringify({ 
           success: false, 
-          error: 'Test error message' 
+          error: 'Test error message',
+          timestamp: Date.now()
         }), {
           status: 400,
           headers: { 'Content-Type': 'application/json' },

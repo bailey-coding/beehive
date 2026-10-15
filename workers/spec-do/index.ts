@@ -1049,7 +1049,8 @@ export class SpecDO {
        (id, spec_id, candidate_a_id, candidate_b_id, winner_id, comparison_metrics, decided_at, decided_by, stage) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    stmt.bind(id, specId, candidateAId, candidateBId, null, comparisonMetrics, null, decidedBy, 'pending');
+    // decided_at is NOT NULL; 0 = not decided yet (matches the returned row; decideTrial sets it)
+    stmt.bind(id, specId, candidateAId, candidateBId, null, comparisonMetrics, 0, decidedBy, 'pending');
     stmt.step();
     stmt.free();
     
