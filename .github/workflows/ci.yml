@@ -1,0 +1,62 @@
+name: CI
+
+# CI only. Nothing here deploys: production deploys happen from the Cloudflare
+# Artifacts repo, pushed by the maintainer (docs/OPS.md).
+on:
+  pull_request:
+  push:
+    branches: ['**']
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    name: Typecheck and unit tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install worker dependencies (scientist-comparator)
+        working-directory: workers/scientist-comparator
+        run: npm install
+
+      - name: Install worker dependencies (preview-manager)
+        working-directory: workers/preview-manager
+        run: npm install
+
+      - name: Install worker dependencies (candidate-service)
+        working-directory: workers/candidate-service
+        run: npm install
+
+      - name: Install worker dependencies (canary-worker)
+        working-directory: workers/canary-worker
+        run: npm install
+
+      - name: Install worker dependencies (promotion-worker)
+        working-directory: workers/promotion-worker
+        run: npm install
+
+      - name: Install worker dependencies (gate-workflow)
+        working-directory: workers/gate-workflow
+        run: npm install
+
+      - name: Install worker dependencies (queue-consumer)
+        working-directory: workers/queue-consumer
+        run: npm install
+
+      - name: Run typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
