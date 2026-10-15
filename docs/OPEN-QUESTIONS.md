@@ -97,3 +97,17 @@ tags:
 **Undocumented**: JSON `result` shapes for `log`, `commit`, `tree`. `fetchArtifactsContents` (`workers/api/ui-semantic.ts`) parses defensively and logs the raw snippet when a field is missing. Replace with typed parsing once confirmed.
 
 **Deploy gotcha**: `CLOUDFLARE_API_TOKEN` on `beehive` was present in `wrangler secret list` but empty at runtime, so the UI silently fell back to mock data. Re-putting it via `wrangler secret put` fixed it. The skip log now says which of token/accountId is missing.
+
+---
+
+## Spec DO ledger has no delete routes (2026-10-13)
+
+**Status**: Open. Cleanup possible only by deleting the Durable Object data out-of-band.
+
+**Finding**: Neither the API worker (`workers/api`) nor the Spec DO (`workers/spec-do`) implements any delete route (no `DELETE` handlers, no `DELETE FROM`). E2E runs against production left 27 `test-org-e2e-*` organizations in the ledger with no way to remove them through the platform.
+
+**What was done**: The maintainer removed them by hand in the Cloudflare dashboard on 2026-10-13 (the `wrangler delete --name beehive --force` + redeploy route is documented in `docs/OPS.md` and also removes everything, including worker secrets). Both paths destroy all ledger data, not just the test orgs, so neither is acceptable once real trials exist.
+
+**Want**: an authenticated admin purge route restricted to maintainer actor IDs, plus soft-delete/tombstones for specs and candidates (the M1 "Ledger lifecycle" item in `docs/MILESTONES.md`, not built as of 2026-10-15). A purge by org-name prefix would have cleared this incident with one API call.
+
+**Interim rule**: do not run e2e against production without human approval (`AGENTS.md`).

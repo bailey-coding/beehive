@@ -25,7 +25,7 @@ declared delta surface); orchestrator Worker (fork → sandbox → cheap-model a
 event → Queue → gate Workflow (tests only); DO ledger with scores + actor identity +
 complexity delta; trial UI showing candidate comparison.
 - **Ledger lifecycle (spine work) — OPEN, not built (verified 2026-10-15).** The Spec DO is append-only with no delete routes
-  (2026-10-11 finding in OPEN-QUESTIONS.md: the only wipe is `wrangler delete beehive
+  (2026-10-13 finding in OPEN-QUESTIONS.md: the only wipe is `wrangler delete beehive
   --force` + redeploy, which destroys all ledger data and worker secrets — fine for
   test data, unacceptable once real trials exist). Ship with M1: soft-delete/tombstones
   for specs and candidates (ledger records are never destroyed, only marked), plus one

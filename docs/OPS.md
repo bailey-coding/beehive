@@ -40,7 +40,7 @@ retry before debugging.
 
 **Destructive and irreversible; human approval required.** The Spec DO ledger has no delete
 routes. To wipe it (done 2026-10-13 to clear 27 `test-org-e2e-*` orgs left by E2E runs against
-production): `wrangler delete --name beehive --force`, push to `main` to redeploy, then re-put
+production; the maintainer cleared them in the Cloudflare dashboard, which also works): `wrangler delete --name beehive --force`, push to `main` to redeploy, then re-put
 the secrets that live on `beehive`: `API_AUTH_TOKEN`, `CLOUDFLARE_API_TOKEN`,
 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`. Other workers keep their own secrets. A `1042`
 response means the worker is not deployed yet. When scripting the wait, watch the run for the
