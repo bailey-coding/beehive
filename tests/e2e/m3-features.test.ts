@@ -70,34 +70,37 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       });
 
       expect(response.status).toBe(200);
-      const data = await readJson(response);
+      // /health wraps its payload: { success, data: { status, version, timestamp, checks } }
+      const body = await readJson(response);
+      expect(body.success).toBe(true);
+      const data = body.data as { status?: string; version?: string; timestamp?: number };
       expect(data.status).toBe('healthy');
       expect(data.version).toBeDefined();
       expect(data.timestamp).toBeDefined();
     }, 10000);
 
     it.skipIf(shouldSkip)('should verify shadow router worker is healthy', async () => {
-      const response = await fetch(`${WORKER_URLS.shadowRouter}/shadow/health`, {
+      // Route is /health (there is no /shadow/ prefix); body: { status, service, statsig: { enabled } }
+      const response = await fetch(`${WORKER_URLS.shadowRouter}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
       expect(data.status).toBe('healthy');
-      expect(data.statsigEnabled).toBe(true);
-      expect(data.timestamp).toBeDefined();
+      expect((data.statsig as { enabled?: boolean }).enabled).toBe(true);
     }, 10000);
 
     it.skipIf(shouldSkip)('should verify canary worker is healthy', async () => {
-      const response = await fetch(`${WORKER_URLS.canary}/canary/health`, {
+      // Route is /health; body: { status, timestamp }
+      const response = await fetch(`${WORKER_URLS.canary}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
       expect(data.status).toBe('healthy');
-      expect(data.activeDeployments).toBeDefined();
-      expect(data.sloConfig).toBeDefined();
+      expect(data.timestamp).toBeDefined();
     }, 10000);
 
     it.skipIf(shouldSkip)('should verify promotion worker is healthy', async () => {
@@ -194,7 +197,8 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
 
   describe('Cross-Worker Bindings', () => {
     it.skipIf(shouldSkip)('should verify service bindings work between workers', async () => {
-      const response = await fetch(`${WORKER_URLS.promotion}/promotion/mode`, {
+      // GET /mode reads the mode persisted in the Spec DO (a cross-worker binding)
+      const response = await fetch(`${WORKER_URLS.promotion}/mode`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
@@ -204,52 +208,52 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     }, 10000);
 
     it.skipIf(shouldSkip)('should test shadow router to scientist queue binding', async () => {
-      const response = await fetch(`${WORKER_URLS.shadowRouter}/shadow/config`, {
+      // /statsig/config answers the config object itself (no { success, config } wrapper)
+      const response = await fetch(`${WORKER_URLS.shadowRouter}/statsig/config`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect(data.config).toBeDefined();
+      expect(data.enabled).toBeDefined();
     }, 10000);
 
     it.skipIf(shouldSkip)('should test canary worker SLO configuration', async () => {
-      const response = await fetch(`${WORKER_URLS.canary}/canary/slo/config`, {
+      // There is no SLO *config* route; /slo-status answers { healthy, violations, currentMetrics }
+      const response = await fetch(`${WORKER_URLS.canary}/slo-status`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect(data.config.latencyP95).toBeGreaterThan(0);
-      expect(data.config.errorRate).toBeGreaterThanOrEqual(0);
+      expect(typeof data.healthy).toBe('boolean');
+      expect(Array.isArray(data.violations)).toBe(true);
+      expect(data.currentMetrics).toBeDefined();
     }, 10000);
   });
 
   describe('M3 Features - Statsig Traffic Splitting', () => {
     it.skipIf(shouldSkip)('should get Statsig-enabled shadow router config', async () => {
-      const response = await fetch(`${WORKER_URLS.shadowRouter}/shadow/config`, {
+      // GET /statsig/config answers { enabled, splits, defaultSplit }
+      const response = await fetch(`${WORKER_URLS.shadowRouter}/statsig/config`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect((data.config as { enabled?: boolean }).enabled).toBe(true);
-      expect((data.config as { statsig?: unknown }).statsig).toBeDefined();
-      expect((data.config as { statsig?: { enabled?: boolean } }).statsig?.enabled).toBe(true);
+      expect(data.enabled).toBe(true);
+      expect(data.splits).toBeDefined();
+      expect(data.defaultSplit).toBeDefined();
     }, 10000);
 
     it.skipIf(shouldSkip)('should get default traffic split configuration', async () => {
-      const response = await fetch(`${WORKER_URLS.shadowRouter}/shadow/config`, {
+      const response = await fetch(`${WORKER_URLS.shadowRouter}/statsig/config`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
-      expect(data.success).toBe(true);
-      const statsig = (data.config as { statsig?: { defaultSplit?: { canaryPercentage?: number; holdoutPercentage?: number; baselinePercentage?: number } } }).statsig?.defaultSplit;
+      const statsig = data.defaultSplit as { canaryPercentage?: number; holdoutPercentage?: number; baselinePercentage?: number } | undefined;
       expect(statsig).toBeDefined();
       expect(statsig?.canaryPercentage).toBeGreaterThanOrEqual(0);
       expect(statsig?.holdoutPercentage).toBeGreaterThanOrEqual(0);
@@ -264,7 +268,7 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         method: 'GET',
       };
 
-      const response = await fetch(`${WORKER_URLS.shadowRouter}/shadow/classify`, {
+      const response = await fetch(`${WORKER_URLS.shadowRouter}/statsig/classify`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -273,16 +277,17 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         body: JSON.stringify(requestBody),
       });
 
+      // Body is the classification itself: { type, weight }
       expect(response.status).toBe(200);
       const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect(data.classification).toBeDefined();
-      const classificationType = (data.classification as { type?: string }).type;
-      expect(classificationType).toBeDefined();
-      expect(['canary', 'holdout', 'baseline', 'shadow']).toContain(classificationType);
+      expect(data.type).toBeDefined();
+      expect(['canary', 'holdout', 'baseline', 'shadow']).toContain(data.type);
     }, 10000);
 
-    it.skipIf(shouldSkip)('should get traffic split metrics', async () => {
+    // No equivalent route: the shadow router has no traffic-split metrics endpoint
+    // (the old /shadow/splits). Skipped, not deleted; see docs/OPEN-QUESTIONS.md
+    // "2026-10-15: e2e test-side route drift".
+    it.skip('should get traffic split metrics', async () => {
       const requestBody = {
         candidateId: 'test-candidate',
         startTime: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
@@ -314,7 +319,9 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         holdoutPercentage: 5,
       };
 
-      const response = await fetch(`${WORKER_URLS.canary}/canary/deploy`, {
+      // Route is /deploy-canary. Locally this still fails with 500 until the
+      // preview-manager worker runs (canary deploy/rollback = spine item 2, out of scope).
+      const response = await fetch(`${WORKER_URLS.canary}/deploy-canary`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -334,20 +341,22 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     }, 15000);
 
     it.skipIf(shouldSkip)('should get canary SLO metrics', async () => {
-      const response = await fetch(`${WORKER_URLS.canary}/canary/slo/metrics`, {
+      // /slo-status answers { healthy, violations, currentMetrics }
+      const response = await fetch(`${WORKER_URLS.canary}/slo-status`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect((data as { metrics?: unknown }).metrics).toBeDefined();
-      const metrics = data.metrics as { requestCount?: number; errorRate?: number; latencyP95?: number } | undefined;
+      expect((data as { currentMetrics?: unknown }).currentMetrics).toBeDefined();
+      const metrics = data.currentMetrics as { requestCount?: number; errorRate?: number; latencyP95?: number } | undefined;
       expect(metrics?.requestCount).toBeGreaterThanOrEqual(0);
       expect(metrics?.errorRate).toBeGreaterThanOrEqual(0);
       expect(metrics?.latencyP95).toBeGreaterThanOrEqual(0);
     }, 10000);
 
+    // No auto-rollback config route exists on the canary worker (only POST /rollback,
+    // spine item 2). Left failing on purpose; documented in docs/OPEN-QUESTIONS.md.
     it.skipIf(shouldSkip)('should verify auto-rollback is configurable', async () => {
       const candidateId = `e2e-rollback-test-${Date.now()}`;
       const response = await fetch(`${WORKER_URLS.canary}/canary/${candidateId}/auto-rollback`, {
@@ -372,7 +381,7 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         trafficPercentage: 150, // Invalid: > 100
       };
 
-      const response = await fetch(`${WORKER_URLS.canary}/canary/deploy`, {
+      const response = await fetch(`${WORKER_URLS.canary}/deploy-canary`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -381,16 +390,16 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         body: JSON.stringify(requestBody),
       });
 
+      // The error body is { error } with no `success` field
       expect(response.status).toBe(400);
       const data = await readJson(response);
-      expect(data.success).toBe(false);
       expect(data.error).toBeDefined();
     }, 10000);
   });
 
   describe('M3 Features - Promotion', () => {
     it.skipIf(shouldSkip)('should get current promotion mode', async () => {
-      const response = await fetch(`${WORKER_URLS.promotion}/promotion/mode`, {
+      const response = await fetch(`${WORKER_URLS.promotion}/mode`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
@@ -401,13 +410,13 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     }, 10000);
 
     it.skipIf(shouldSkip)('should switch promotion mode', async () => {
-      const currentResponse = await fetch(`${WORKER_URLS.promotion}/promotion/mode`, {
+      const currentResponse = await fetch(`${WORKER_URLS.promotion}/mode`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
       const currentData = await readJson(currentResponse);
       const newMode = currentData.mode === 'tournament' ? 'merge-train' : 'tournament';
 
-      const switchResponse = await fetch(`${WORKER_URLS.promotion}/promotion/mode`, {
+      const switchResponse = await fetch(`${WORKER_URLS.promotion}/mode`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -419,10 +428,10 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       expect(switchResponse.status).toBe(200);
       const switchData = await readJson(switchResponse);
       expect(switchData.success).toBe(true);
-      expect(switchData.newMode).toBe(newMode);
+      expect(switchData.mode).toBe(newMode);
 
       // Switch back to original mode
-      await fetch(`${WORKER_URLS.promotion}/promotion/mode`, {
+      await fetch(`${WORKER_URLS.promotion}/mode`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -432,84 +441,118 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       });
     }, 15000);
 
+    // There is no /tournament/start route: a tournament is joined implicitly by
+    // POST /promote in tournament mode and read back with GET /tournament.
     it.skipIf(shouldSkip)('should start tournament with participants', async () => {
-      const requestBody = {
-        participants: [
-          { candidateId: `e2e-participant-1-${Date.now()}`, score: 0, position: 1 },
-          { candidateId: `e2e-participant-2-${Date.now()}`, score: 0, position: 2 },
-        ],
-      };
+      const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
+      const originalMode = (await readJson(await fetch(`${WORKER_URLS.promotion}/mode`, { headers: auth }))).mode;
+      const specId = `e2e-tournament-spec-${Date.now()}`;
+      const candidateIds = [`e2e-participant-1-${Date.now()}`, `e2e-participant-2-${Date.now()}`];
 
-      const response = await fetch(`${WORKER_URLS.promotion}/promotion/tournament/start`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
+      try {
+        const modeRes = await fetch(`${WORKER_URLS.promotion}/mode`, {
+          method: 'POST', headers: auth, body: JSON.stringify({ mode: 'tournament' }),
+        });
+        expect(modeRes.status).toBe(200);
 
-      expect(response.status).toBe(201);
-      const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect((data as { tournamentId?: string }).tournamentId).toBeDefined();
-      const participants = (data as { participants?: unknown }).participants || [];
-      expect(Array.isArray(participants)).toBe(true);
-      expect((participants as Array<unknown>).length).toBe(2);
-    }, 15000);
+        for (const candidateId of candidateIds) {
+          const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
+            method: 'POST',
+            headers: auth,
+            body: JSON.stringify({ candidateId, specId, fromRung: 'shadow', toRung: 'train', actorId: 'e2e-test-actor' }),
+          });
+          expect(response.status).toBe(200);
+          const data = await readJson(response);
+          expect(data.success).toBe(true);
+          expect(data.mode).toBe('tournament');
+        }
+
+        const listRes = await fetch(`${WORKER_URLS.promotion}/tournament`, { headers: auth });
+        expect(listRes.status).toBe(200);
+        const list = await readJson(listRes);
+        expect(list.success).toBe(true);
+        const tournament = (list.tournaments as Array<{ specId: string; candidates: Array<{ candidateId: string }> }>)
+          .find((t) => t.specId === specId);
+        expect(tournament).toBeDefined();
+        expect(tournament!.candidates.map((c) => c.candidateId).sort()).toEqual([...candidateIds].sort());
+      } finally {
+        await fetch(`${WORKER_URLS.promotion}/mode`, {
+          method: 'POST', headers: auth, body: JSON.stringify({ mode: originalMode }),
+        });
+      }
+    }, 30000);
 
     it.skipIf(shouldSkip)('should promote candidate through rungs', async () => {
       const requestBody = {
         candidateId: `e2e-promote-${Date.now()}`,
-        specId: 'test-spec',
+        // unique per run: a spec's tournament completes once it has two candidates
+        // and then refuses more, so a shared specId makes reruns fail with 500
+        specId: `e2e-promote-spec-${Date.now()}`,
         fromRung: 'shadow',
         toRung: 'train',
         actorId: 'e2e-test-actor',
       };
+      const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
 
-      const response = await fetch(`${WORKER_URLS.promotion}/promotion/candidates/promote`, {
+      const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
+        headers: auth,
         body: JSON.stringify(requestBody),
       });
 
-      expect(response.status).toBe(201);
+      // POST /promote answers 200 with { success, candidateId, fromRung, toRung, message, mode }
+      expect(response.status).toBe(200);
       const data = await readJson(response);
       expect(data.success).toBe(true);
-      expect((data as { promotionId?: string }).promotionId).toBeDefined();
-      expect((data as { fromRung?: string }).fromRung).toBe('shadow');
-      expect((data as { toRung?: string }).toRung).toBe('train');
+      expect(data.fromRung).toBe('shadow');
+      expect(data.toRung).toBe('train');
+
+      // The ledger state is nested under `state`; currentRung is the rung reached
+      const statusRes = await fetch(`${WORKER_URLS.promotion}/promote/${requestBody.candidateId}`, { headers: auth });
+      const status = (await readJson(statusRes)) as { state?: { status?: string; currentRung?: string; targetRung?: string } };
+      expect(status.state?.status).toBe('completed');
+      expect(status.state?.targetRung).toBe('train');
+      expect(status.state?.currentRung).toBe('train');
     }, 15000);
 
+    // There is no /merge-train/start route: cars board implicitly through POST /promote in
+    // merge-train mode and are read back with GET /merge-train.
     it.skipIf(shouldSkip)('should start merge-train', async () => {
-      const requestBody = {
-        cars: [
-          { candidateId: `e2e-car-1-${Date.now()}`, position: 1 },
-          { candidateId: `e2e-car-2-${Date.now()}`, position: 2 },
-        ],
-        projection: 100,
-      };
+      const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
+      const originalMode = (await readJson(await fetch(`${WORKER_URLS.promotion}/mode`, { headers: auth }))).mode;
+      const specId = `e2e-train-spec-${Date.now()}`;
+      const candidateIds = [`e2e-car-1-${Date.now()}`, `e2e-car-2-${Date.now()}`];
 
-      const response = await fetch(`${WORKER_URLS.promotion}/promotion/merge-train/start`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
+      try {
+        const modeRes = await fetch(`${WORKER_URLS.promotion}/mode`, {
+          method: 'POST', headers: auth, body: JSON.stringify({ mode: 'merge-train' }),
+        });
+        expect(modeRes.status).toBe(200);
 
-      expect(response.status).toBe(201);
-      const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect((data as { trainId?: string }).trainId).toBeDefined();
-      const cars = (data as { cars?: unknown }).cars || [];
-      expect(Array.isArray(cars)).toBe(true);
-      expect((cars as Array<unknown>).length).toBe(2);
-    }, 15000);
+        for (const candidateId of candidateIds) {
+          const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
+            method: 'POST',
+            headers: auth,
+            body: JSON.stringify({ candidateId, specId, fromRung: 'shadow', toRung: 'train', actorId: 'e2e-test-actor' }),
+          });
+          expect(response.status).toBe(200);
+          const data = await readJson(response);
+          expect(data.success).toBe(true);
+          expect(data.mode).toBe('merge-train');
+        }
+
+        const listRes = await fetch(`${WORKER_URLS.promotion}/merge-train`, { headers: auth });
+        expect(listRes.status).toBe(200);
+        const list = await readJson(listRes);
+        expect(list.success).toBe(true);
+        expect(Array.isArray(list.trains)).toBe(true);
+        expect((list.trains as unknown[]).length).toBeGreaterThan(0);
+      } finally {
+        await fetch(`${WORKER_URLS.promotion}/mode`, {
+          method: 'POST', headers: auth, body: JSON.stringify({ mode: originalMode }),
+        });
+      }
+    }, 30000);
 
     it.skipIf(shouldSkip)('should handle invalid rung transition', async () => {
       const requestBody = {
@@ -520,7 +563,7 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         actorId: 'e2e-test-actor',
       };
 
-      const response = await fetch(`${WORKER_URLS.promotion}/promotion/candidates/promote`, {
+      const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -539,18 +582,18 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
   describe('M3 Complete Workflow', () => {
     it.skipIf(shouldSkip)('should execute complete M3 workflow end-to-end', async () => {
       const candidateId = `e2e-workflow-${Date.now()}`;
-      const specId = 'e2e-spec';
+      const specId = `e2e-spec-${Date.now()}`; // unique per run (see tournament note above)
 
       // Step 1: Get Statsig config from shadow router
-      const shadowResponse = await fetch(`${WORKER_URLS.shadowRouter}/shadow/config`, {
+      const shadowResponse = await fetch(`${WORKER_URLS.shadowRouter}/statsig/config`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
       expect(shadowResponse.status).toBe(200);
       const shadowData = await readJson(shadowResponse);
-      expect((shadowData.config as { statsig?: { enabled?: boolean } }).statsig?.enabled).toBe(true);
+      expect(shadowData.enabled).toBe(true);
 
       // Step 2: Deploy canary
-      const canaryResponse = await fetch(`${WORKER_URLS.canary}/canary/deploy`, {
+      const canaryResponse = await fetch(`${WORKER_URLS.canary}/deploy-canary`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -568,15 +611,15 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       expect(canaryData.success).toBe(true);
 
       // Step 3: Get canary SLO metrics
-      const sloResponse = await fetch(`${WORKER_URLS.canary}/canary/slo/metrics`, {
+      const sloResponse = await fetch(`${WORKER_URLS.canary}/slo-status`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
       expect(sloResponse.status).toBe(200);
       const sloData = await readJson(sloResponse);
-      expect((sloData as { metrics?: unknown }).metrics).toBeDefined();
+      expect((sloData as { currentMetrics?: unknown }).currentMetrics).toBeDefined();
 
       // Step 4: Promote candidate
-      const promoResponse = await fetch(`${WORKER_URLS.promotion}/promotion/candidates/promote`, {
+      const promoResponse = await fetch(`${WORKER_URLS.promotion}/promote`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
@@ -590,12 +633,12 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
           actorId: 'e2e-test-actor',
         }),
       });
-      expect(promoResponse.status).toBe(201);
+      expect(promoResponse.status).toBe(200);
       const promoData = await readJson(promoResponse);
       expect(promoData.success).toBe(true);
 
       // Verify promotion mode
-      const modeResponse = await fetch(`${WORKER_URLS.promotion}/promotion/mode`, {
+      const modeResponse = await fetch(`${WORKER_URLS.promotion}/mode`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
       expect(modeResponse.status).toBe(200);

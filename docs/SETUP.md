@@ -16,9 +16,9 @@ checked without a fresh Cloudflare account.
 
 ```bash
 npm install        # package-lock.json is gitignored, so `npm ci` has nothing to use
-npm run typecheck        # 2 known errors in workers/api/ui-semantic.ts (see Known issues)
-npm test                 # tests/**, including tests/e2e: fails with ECONNREFUSED unless local workers run (below)
-npx vitest run workers   # per-worker unit tests are not covered by `npm test`
+npm run typecheck        # clean as of 2026-10-15; CI runs it
+npm test                 # unit tests (excludes tests/e2e, which need running workers); this is what CI runs
+npm run test:e2e:local   # e2e against local workers (start them first, below)
 ```
 
 Every worker fails closed without `API_AUTH_TOKEN` (`workers/shared/auth.ts`), including
@@ -48,30 +48,26 @@ not use mocks; with no workers running you get `ECONNREFUSED`.
 
 ### Local e2e status
 
-All four workers start and answer `/health`. `tests/e2e/helpers.ts` previously omitted the
-`Authorization` header for local runs (every call 401); fixed 2026-10-15.
+Verified 2026-10-15 with `scripts/start-e2e-workers.sh` and `npm run test:e2e:local`: 43 passed,
+7 skipped, **6 failed** (`ledger-lifecycle` passes). The 6 failures are all canary deploy /
+rollback (spine item 2, not built) and need the `preview-manager` worker, which the local
+script does not start:
 
-After that fix, `cross-worker-flows.test.ts` still has **22 failing tests**. They call routes
-the workers do not implement:
+- `cross-worker-flows`: canary deploy, canary deployment status, candidate-ID consistency
+- `m3-features`: canary deploy, auto-rollback config (no such route), complete workflow (deploys a canary)
 
-| Test calls | Worker actually routes |
+Worker routes the tests use (the old `/canary/*`, `/shadow/*`, `/promotion/*` prefixes do not exist):
+
+| Worker | Routes |
 |---|---|
-| `/canary/slo/config`, `/canary/slo/metrics` | `/slo-status` |
-| `/canary/deploy` | `/deploy-canary` |
-| `/canary/deployments/:id` | `/canary-deployments/:id` (keyed by **candidate** ID, tests pass a deployment ID) |
-| `/canary/deployments/:id/rollback` | `/rollback` |
-| `/shadow/config` | `/statsig/config`, `/statsig/presets` |
-| `/shadow/classify` | `/statsig/classify` |
-| `/promotion/health` | exists (`workers/promotion-worker/index.ts:49`); its body assertion failed in one local run and passed in another, so re-check |
-| `/promotion/mode` | `GET/POST /mode` |
-| `/promotion/candidates/promote` | `POST /promote`, `GET /promote/:id` |
-| `/promotion/merge-train/:id` | `/merge-train?specId=`, `/merge-train/status`, `/merge-train/list` |
-| `/promotion/merge-train/start`, `/promotion/tournament/start` | **no equivalent** |
+| api (8787) | `/health` and `/api/health` answer `{ success, data: { status, version, timestamp, checks } }` |
+| shadow-router (8788) | `/health`, `/statsig/config`, `/statsig/presets`, `/statsig/preset/:name`, `POST /statsig/classify` |
+| canary-worker (8789) | `/health`, `/slo-status`, `POST /deploy-canary`, `POST /rollback`, `GET /canary-deployments/:candidateId` (currently 500, see `docs/OPEN-QUESTIONS.md`) |
+| promotion-worker (8790) | `/health` (and `/promotion/health`), `GET/POST /mode` (answers `{ success, mode }`), `POST /promote`, `GET /promote/:candidateId` (ledger row under `state`), `/tournament[/status\|/list]`, `/merge-train[/status\|/list]`, `/merge/retry`, `/merge/rollback`, `/stats`, `/promote/:id/retry`, `/promote/:id/cancel` |
 
-Other real promotion routes: `/tournament[/status|/list]`, `/merge/retry`, `/merge/rollback`,
-`/stats`, `/promote/:id/retry`, `/promote/:id/cancel`. Most failures are test-side drift, but
-the two `start` tests need new routes or deletion. `m3-features.test.ts` and
-`oracle-ladder.test.ts` pass or skip.
+There is no `/tournament/start` or `/merge-train/start`: tournaments and trains are joined
+implicitly by `POST /promote` in the matching mode. A spec's tournament completes once it has
+two candidates and refuses more (500), so e2e tests use a unique `specId` per run.
 
 ## 2. Deploying your own copy
 
@@ -146,7 +142,5 @@ worker's URL, path `/auth/callback`.
 
 ## Known issues
 
-- `npm run typecheck`: `workers/api/ui-semantic.ts:1130,1135` `'root.children' is possibly
-  'undefined'`. CI does not run typecheck, so deploys are unaffected.
 - `workers/sandbox-runner` still has commented-out `env.ARTIFACTS` / `env.SANDBOX` calls; no
   worker config binds either.

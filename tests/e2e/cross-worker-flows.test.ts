@@ -151,10 +151,11 @@ async function getPromotionMode(): Promise<{ mode: 'tournament' | 'merge-train' 
   return readJson(response) as Promise<{ mode: 'tournament' | 'merge-train' }>;
 }
 
-async function setPromotionMode(mode: 'tournament' | 'merge-train'): Promise<{ success: boolean; newMode: string }> {
-  // Changed from /promotion/mode to /mode to match actual worker routes
+async function setPromotionMode(mode: 'tournament' | 'merge-train'): Promise<{ success: boolean; mode: string }> {
+  // Changed from /promotion/mode to /mode to match actual worker routes.
+  // The worker answers { success, mode, message }; there is no `newMode` field.
   const response = await fetchWorker('/mode', 'POST', { mode }, 'promotion');
-  return readJson(response) as Promise<{ success: boolean; newMode: string }>;
+  return readJson(response) as Promise<{ success: boolean; mode: string }>;
 }
 
 async function promoteCandidate(
@@ -181,9 +182,24 @@ async function getCandidateStatus(candidateId: string): Promise<{
   status: string;
   lastPromotion?: any;
 }> {
-  // Changed from /promotion/candidates/:id/status to /promote/:id to match actual worker routes
+  // Changed from /promotion/candidates/:id/status to /promote/:id to match actual worker routes.
+  // The worker nests the latest promotion under `state`; flatten it so tests read
+  // `currentRung` / `status` directly. A candidate with no promotion answers
+  // { status: 'not_started' } and no `state`.
   const response = await fetchWorker(`/promote/${candidateId}`, 'GET', undefined, 'promotion');
-  return readJson(response);
+  const body = (await readJson(response)) as {
+    success: boolean;
+    candidateId: string;
+    status?: string;
+    state?: { currentRung: string; status: string };
+  };
+  return {
+    success: body.success,
+    candidateId: body.candidateId,
+    currentRung: body.state?.currentRung as string,
+    status: (body.state?.status ?? body.status) as string,
+    lastPromotion: body.state,
+  };
 }
 
 // REMOVED: startMergeTrain - no equivalent route exists in promotion worker
@@ -743,7 +759,7 @@ describe('Cross-Worker Flow Tests', () => {
       const result = await setPromotionMode('merge-train');
       
       expect(result.success).toBe(true);
-      expect(result.newMode).toBe('merge-train');
+      expect(result.mode).toBe('merge-train');
 
       // Verify
       const modeResult = await getPromotionMode();
@@ -758,7 +774,7 @@ describe('Cross-Worker Flow Tests', () => {
       const result = await setPromotionMode('tournament');
       
       expect(result.success).toBe(true);
-      expect(result.newMode).toBe('tournament');
+      expect(result.mode).toBe('tournament');
 
       // Verify
       const modeResult = await getPromotionMode();

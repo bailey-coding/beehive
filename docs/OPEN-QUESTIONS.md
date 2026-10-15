@@ -276,3 +276,29 @@ validation, read-token authorization, spoofed `X-Actor-ID`, revocation, expiry, 
 **Want**: pick one design (a `service_tokens` table plus an actor per service account, as the
 tests assume, or the account-row design), then align schema, DO routes, `verifyServiceTokenHash`
 and the handler, and un-skip the tests. Until then, service tokens cannot authenticate.
+
+---
+
+## 2026-10-15: e2e test-side route drift, and what is left (branch `agent/ci-docs-tests`)
+
+`npm run test:e2e:local` before: 28 failed, 22 passed, 6 skipped. After: 6 failed, 43 passed,
+7 skipped. Route table: `docs/SETUP.md` "Local e2e status".
+
+- **Test-side fixes:** `m3-features.test.ts` used `/canary/*`, `/shadow/*`, `/promotion/*` routes
+  and response shapes that never existed (`/health` wrapping, `statsig`/`config` wrappers,
+  `newMode`, `201` for promote, `promotionId`). `cross-worker-flows.test.ts` read
+  `currentRung` at the top level (the worker nests it under `state`) and `newMode` (the
+  worker answers `mode`). Tournament and merge-train "start" tests now join via `POST /promote`.
+  Specs now use a unique `specId` per run (a completed tournament refuses more candidates with 500).
+- **Skipped (`it.skip`):** `should get traffic split metrics` (`/shadow/splits`): the shadow
+  router has no traffic-split metrics route. Needs a route or deletion.
+- **Source change (own commit, revertable):** promotion-worker `markAsCompleted` now sets
+  `currentRung = targetRung`. Before, a completed promotion kept `currentRung` at the rung it
+  started from, so `GET /promote/:id` could not report where a candidate is.
+- **Still failing, out of scope (spine item 2: canary deploy/rollback):**
+  - `POST /deploy-canary` returns 500 locally: `beehive-preview-manager` is not running
+    ("Make sure it is running locally"). `scripts/start-e2e-workers.sh` does not start it.
+  - `GET /canary-deployments/:candidateId` throws `DataCloneError: Could not serialize object of
+    type "RpcPromise"` (`workers/canary-worker/canary.ts:97`): an RPC stub result is returned
+    through another RPC/serialization boundary without awaiting.
+  - no auto-rollback config route (`/canary/:id/auto-rollback`) exists; only `POST /rollback`.
