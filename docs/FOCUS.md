@@ -10,14 +10,24 @@ Completed items are removed, not struck through; history lives in git.*
 
 **Last updated:** 2026-10-15
 
+## Completed this session (Opus agent review)
+
+- ✅ Committed 46 docs (+22k lines) that were in working tree only
+- ✅ Pushed to origin/main (deploys all 10 workers)
+- ✅ Fixed canary worker: returns 404 for unknown routes (was 200 with HTML text)
+- ✅ Widened vitest include: worker tests now run (12 files, 20+ hidden failures exposed)
+- ✅ Added CI gates: typecheck + unit tests run before deploy in `deploy.yml`
+- ✅ Updated cross-worker-flows tests: renamed routes to match workers, removed tests for non-existent routes
+- ✅ Updated MILESTONES.md: split M5 into M5a/M5b, deferred M6.5, merged M6.2 with M3 capability work
+
 ## Decide first
 
-1. **22 failing e2e tests** (`tests/e2e/cross-worker-flows.test.ts`) call routes the workers
-   don't implement. Most map to real routes (table in `docs/SETUP.md`); the merge-train and
-   tournament `start` tests have no equivalent and need new routes or deletion.
-2. **Docs bodies are uncommitted.** `docs/*.md` (ARCHITECTURE, TROUBLESHOOTING,
-   ARTIFACTS-SETUP, ...) are header-only stubs in HEAD since the public release (`bbccf9e`);
-   full bodies exist only in the working tree. Commit them or decide they stay private.
+1. **Fake handlers in oracle-ladder and m3-features tests** need deletion. These tests
+   pass by testing their own mocks, not the real workers. They give false confidence.
+   Keep only their real-worker health and auth tests.
+2. **Promotion mode bug:** Mode is stored in worker memory, not persisted. `POST /mode`
+   returns success but mode reverts on next request. Rule 4 violation: train state must
+   live in Spec DO. Fix by storing mode in Spec DO and fetching it on each request.
 3. **Public `/roadmap` page overstates status** (`workers/api/index.ts:646-661`): marks M3
    complete incl. facets/capabilities/ArtifactFS and "M7 Observability Layer" complete.
    `scripts/demo-multi-agent.sh` also prints hard-coded ArtifactFS numbers.
@@ -25,7 +35,7 @@ Completed items are removed, not struck through; history lives in git.*
 ## Open work
 
 - **Typecheck:** 2 errors in `workers/api/ui-semantic.ts:1130,1135` (`root.children`
-  possibly undefined). CI doesn't run typecheck, so deploys are unaffected.
+  possibly undefined). CI now runs typecheck (added to `deploy.yml`).
 - **Self-hosting gaps** (details in `docs/SETUP.md` section 2):
   - Workflow creates only 2 of 7 queues; add the other 5 to `deploy.yml` or document as-is.
   - Account ID, `ALLOWED_GITHUB_USERS` and the `bz23711` subdomain are hardcoded across
@@ -51,5 +61,11 @@ agent-autonomy items (agent-created issues/specs, change-type classification).
 
 ## Queued milestones
 
-M5 trust and governance, M6 semantic UI (mocked, in API worker), M6.2 OCAP CI, M6.5 semantic
-navigation, M7 session provenance and intent index. See `docs/MILESTONES.md`.
+**Recommended order (per Opus agent):**
+1. M5a (idempotency + bootstrap schema + change-type classification + two-person rule)
+2. M7 (session provenance)
+3. Capability minting (M3 core + M6.2 merged)
+4. M5b (trust registry calibration)
+5. M6.5 (semantic navigation - push back)
+
+See `docs/MILESTONES.md` for detailed breakdown.
