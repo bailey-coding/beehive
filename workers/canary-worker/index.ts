@@ -90,8 +90,11 @@ export default {
       });
     }
     
-    // Default response
-    return new Response('Canary Worker - Beehive Platform', { status: 200 });
+    // Default response - return 404 for unknown routes
+    return new Response(JSON.stringify({ error: 'Not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
   },
   
   // Queue consumer for rollback triggers

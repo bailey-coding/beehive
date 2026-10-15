@@ -58,6 +58,14 @@ jobs:
         working-directory: workers/queue-consumer
         run: npm install
 
+      # Run typecheck to catch TypeScript errors before deploying
+      - name: Run typecheck
+        run: npm run typecheck
+
+      # Run unit tests (including worker tests) to catch failures before deploying
+      - name: Run unit tests
+        run: npm test
+
       # Create queues required by M3 workers (must exist before consumer deployment)
       - name: Create canary-rollback-triggers queue
         run: npx wrangler queues create canary-rollback-triggers || true

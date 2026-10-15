@@ -7,7 +7,12 @@ audience: human,agent
 
 # Milestones
 
-**Current phase: post-submission (2026-10-15).** Competition entry and demo video submitted. Next: M5 hardening, then M7 (session provenance). Mocked semantic UI (M6) is in the API worker; real semantic layer (M6.5) is not built. M3 train/canary/promotion workers exist in `workers/`; the Varda-inspired spine items (DO facets, capability minting, ArtifactFS) have no implementation in the repo and remain open. M2 completed 2026-10-12 with all 4 workers deployed and operational: shadow-router (traffic mirroring), scientist-comparator (declared delta surface validation), preview-manager (Workers Builds integration), candidate-service (preview operations). Analytics Engine capturing per-candidate metrics (10+ rows). All components health-checked and verified. SPIKE completed 2026-10-11 with exit criteria met: 3 forks, 3 pushes (first-writer-wins verified against real Artifacts), 3 events, zero manual steps — validated locally (Miniflare, 13/13) and remotely. Findings in `docs/OPEN-QUESTIONS.md`.
+**Current phase: post-submission (2026-10-15).** Competition entry and demo video submitted.
+
+**Recommended execution order (Opus agent review 2026-10-15):**
+0. Stabilize (fix tests, CI gates, commit docs) → M5a (idempotency + bootstrap schema) → M7 (session provenance) → Capability minting (M3 + M6.2 merged) → M5b (trust registry calibration) → M6.5 (semantic navigation) → M6.2 items deferred
+
+Mocked semantic UI (M6) is in the API worker; real semantic layer (M6.5) is not built. M3 train/canary/promotion workers exist in `workers/`; the Varda-inspired spine items (DO facets, capability minting, ArtifactFS) have no implementation in the repo and remain open. M2 completed 2026-10-12 with all 4 workers deployed and operational: shadow-router (traffic mirroring), scientist-comparator (declared delta surface validation), preview-manager (Workers Builds integration), candidate-service (preview operations). Analytics Engine capturing per-candidate metrics (10+ rows). All components health-checked and verified. SPIKE completed 2026-10-11 with exit criteria met: 3 forks, 3 pushes (first-writer-wins verified against real Artifacts), 3 events, zero manual steps — validated locally (Miniflare, 13/13) and remotely. Findings in `docs/OPEN-QUESTIONS.md`.
 
 **Spike — prove the riskiest assumption.** Baseline repo → fork 3× via binding → sandbox
 runner clones one fork → hardcoded "agent" commits+pushes → push event via Queues →
@@ -65,45 +70,30 @@ repo; treat as open unless a commit says otherwise. Demo video (one spec, three 
 - **Demo script:** Show concurrent agent work, issue creation, candidate spawning, and lazy file access
 **Exit criteria:** Competition submission complete with video demonstrating multi-agent coordination, autonomous issue/spec generation, and ArtifactFS lazy-loading benefits (startup time <1s, minimal bandwidth usage).
 
-**M5 — Trust & Governance Layer (post-submission, hardening phase).** Issue intake and
-merge governance as first-class platform mechanics with Varda-inspired enhancements:
+**M5a — Trust & Governance Layer: Core Schema (post-submission, do next).** 
+Bootstrap governance with minimal viable ledger changes and change-type classification:
 
-**Architecture of distrust principle:** "The agent cannot be trusted, so build so that its mistakes cannot matter." — Every agent starts with zero capabilities; authority flows only through explicit capability grants.
+**Architecture of distrust principle:** "The agent cannot be trusted, so build so that its mistakes cannot matter." Every agent starts with zero capabilities; authority flows only through explicit capability grants.
 
-- **Enriched issue intake.** Every reported issue carries, from creation:
-  - *Complexity estimate* (reuses the complexity-delta scoring components, applied
-    predictively to the change rather than post-hoc).
-  - *Change-type classification* with confidence (typo-fix / refactor / behavior-change /
-    security-sensitive / dependency-change / infra). Change type drives the gate policy:
-    which oracles are mandatory, which can be skipped.
-  - *Reporter trust level* and **cost attribution** — who foots the agent bill for
-    spec→candidate runs triggered by this issue (reporter, project budget, or
-    trusted-reporter waiver). A low-trust reporter requesting agent time on a
-    security-sensitive change type should route differently than a maintainer asking
-    for a typo fix, even with identical issue text.
-- **Actor trust registry.** Extends the M1 actor identity model: trust scores per
-  reporter/initiator, calibrated by measured outcomes (their past issues' promoted
-  candidates, SLO outcomes, near-miss rate). Trust gates: agent-budget authorization,
-  oracle-skipping privileges, and promotion authority (per ADR 0005).
-- **Two-person merge rule (supply-chain defense).** Merges of designated change types
-  (security-sensitive, dependency changes, anything touching auth/secrets/build
-  pipeline, or any promotion initiated by an actor below a trust threshold) require
-  approval from **two distinct maintainers** — the design lesson of recent supply-chain
-  compromises (xz-style lone-maintainer social engineering, hijacked dependencies): a
-  single trusted human is a single point of failure. The DO ledger records both
-  approvals on the promotion record; the two approvals must come from different actor
-  IDs (agents cannot hold maintainer approval authority — approvals are human-only
-  capabilities, per the OCAP principle).
-- **Bootstrap posture.** Until a second maintainer exists: the founder is sole
-  author+maintainer, but the ledger schema, change-type classification, and approval
-  fields ship from day one (populated with self-approvals marked as such) so governance
-  is retrofittable by policy change, not schema migration.
-- **Full object-capability model** — Cap'n Proto or similar for Spec DO ↔ grain communication, enforcing "only connectivity begets connectivity"
+- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees. **CORRECTNESS BUG: Queue delivery is at-least-once and double-writes are possible today.**
+- **Bootstrap schema fields.** Ledger fields that ship from day one: change-type classification, approval records, self-approval markers, cost attribution. This stops later governance work from needing a migration.
+- **Change-type classification** with confidence (typo-fix / refactor / behavior-change / security-sensitive / dependency-change / infra). Change type drives the gate policy: which oracles are mandatory, which can be skipped. **Note: Also an open M4 agent-autonomy item; do once and count for both.**
+- **Two-person merge rule enforced at Spec DO promotion step.** Starting in bootstrap mode (self-approvals marked as such) so governance is retrofittable by policy change, not schema migration.
+**Exit criteria:** Idempotency keys prevent double-writes; bootstrap fields added to ledger; change-type classification operational; two-person rule logic in place (even if only self-approvals for now).
+
+---
+
+**M5b — Trust & Governance Layer: Calibration (deferred).** Trust registry and advanced features that need measured outcomes:
+
+- **Enriched issue intake.** Every reported issue carries, from creation: complexity estimate (reuses complexity-delta scoring), reporter trust level, and cost attribution.
+- **Actor trust registry.** Extends M1: trust scores per reporter/initiator, calibrated by measured outcomes (promoted candidates, SLO outcomes, near-miss rate). Trust gates: agent-budget authorization, oracle-skipping privileges, promotion authority (per ADR 0005).
+- **Full object-capability model** — Cap'n Proto or similar for Spec DO ↔ grain communication. **Note: Merged with M6.2 capability work and M3 capability minting into a single capability system.**
 - **Grain-level versioning and rollback** — Each candidate facet maintains state snapshots; rollback restores grain to previous version without affecting others
 - **Agent authorization for issue/spec creation** — Trust registry tracks which agents are authorized to create issues and specs (prevents runaway agent generation)
 - **Gatekeeper granular controls** — Repository scoping, field masking, rate limiting, human approval gates for side-effecting writes
 - **V8 isolate performance** — Leverage Workers/Durable Objects (V8 isolates) for 10x-100x faster cold starts vs containers, enabling per-agent isolation at scale
-- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees
+**Exit criteria:** Trust registry calibrated with real outcome data; OCAP model unified across M3/M5/M6.2; fine-grained access controls operational.
+**Defer until:** M7 provides outcome data for calibration, and capability minting (M3) is built.
 
 **M6 — Semantic Dashboard UI (post-submission, 1–2 days).** Bring the logged-in UI
 closer to the platform vision with semantic intelligence at its core, even if mocked initially.
@@ -120,21 +110,21 @@ closer to the platform vision with semantic intelligence at its core, even if mo
 **Exit criteria:** Semantic UI concepts visible and navigable; all existing `/app` functions
 (creating orgs/repos/specs) still work; mocked semantic sections clearly labeled as such.
 
-**M6.2 — OCAP CI Security (post-submission, 2–3 days).** Service-scoped object-capability model for CI workflows, supporting both polyrepo and monorepo patterns. See full plan in `docs/OCAP-CI-PLAN.md`.
+**M6.2 — OCAP CI Security (merged with M3 capability minting, do after M5a).** Service-scoped object-capability model for CI workflows. **NOTE: Capability validation and OCAP model merged with M3 capability minting and M5's OCAP items into a single capability system.** See full plan in `docs/OCAP-CI-PLAN.md`.
 - **Service registry** — Services as first-class entities in Spec DO, with path prefixes for monorepos
-- **Capability validation in gate workflow** — PRs can only modify services the actor has capabilities for
+- **Capability validation in gate workflow** — PRs can only modify services the actor has capabilities for. **Unified with M5 capability model.**
 - **Scoped token generation** — CI workflows receive tokens limited to specific services and resources
 - **Service-aware deployment** — Deployment requests validated against service capabilities before execution
 - **Migration path** — Auto-register services from existing repos, phase out repo-wide tokens
-**Exit criteria:** Services tracked in Spec DO; gate workflow enforces service capabilities; scoped tokens generated and validated; migration complete for existing repos; both polyrepo and monorepo patterns fully supported.
+**Exit criteria:** Services tracked in Spec DO; gate workflow enforces service capabilities; scoped tokens generated and validated; migration complete for existing repos; both polyrepo and monorepo patterns fully supported; **single unified capability system built (not two separate ones).**
 
-**M6.5 — Semantic Navigation & Change Intelligence (post-submission, 3–5 days).** Build the functional semantic layer for codebase navigation and change understanding. See full plan in `docs/SEMANTIC-NAVIGATION-PLAN.md`.
-- **Semantic Index** — Index codebase entities (functions, classes, endpoints, types) with vector embeddings for intelligent search and discovery
+**M6.5 — Semantic Navigation & Change Intelligence (push back, do last).** Build the functional semantic layer. **NOTE: Exit criteria cannot be checked without an evaluation setup. M6 mocked UI is enough for demos. If semantic search is needed now, M7's D1 intent index provides a cheaper alternative.** See full plan in `docs/SEMANTIC-NAVIGATION-PLAN.md`.
+- **Semantic Index** — Index codebase entities (functions, classes, endpoints, types) with vector embeddings
 - **Change Tracker** — Parse and semantically categorize commits, diffs, and builds (bug-fix, feature, refactor, config, dependency, test) with >90% accuracy
 - **Navigation Graph** — Build relationship graph between entities (calls, imports, inheritance) with sub-100ms query latency
 - **UI Integration** — Replace M6 mocked semantic features with real implementation: semantic search, semantic changelog, impact analysis
 - **Agent Integration** — Enable agents to use semantic navigation for file discovery and change tracing, reducing token usage by >20%
-**Exit criteria:** Semantic search operational with >80% recall and sub-500ms latency; change classification >90% accurate; navigation graph covers >95% of entities; all M6 mocked features use real data; agents successfully use semantic navigation.
+**Exit criteria:** Semantic search operational with >80% recall and sub-500ms latency; change classification >90% accurate; navigation graph covers >95% of entities; all M6 mocked features use real data; agents successfully use semantic navigation. **Note: Build eval set before index.**
 
 **M7 — Session Provenance & Intent Index (post-submission, 2–4 days).** Link every candidate
 and commit to the agent session that produced it, so review can use rationale as well as

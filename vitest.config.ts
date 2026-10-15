@@ -4,7 +4,12 @@ import path from 'path';
 export default defineConfig({
   test: {
     // Test directories
-    include: ['tests/**/*.test.ts', 'tests/**/*.spec.ts'],
+    include: [
+      'tests/**/*.test.ts',
+      'tests/**/*.spec.ts',
+      'workers/**/tests/**/*.test.ts',
+      'workers/**/tests/**/*.spec.ts',
+    ],
     exclude: ['node_modules', 'dist', '**/node_modules/**'],
     
     // Environment
