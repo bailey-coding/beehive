@@ -114,10 +114,13 @@ export async function handleUi(
   // Dashboard route
   if (path === '/app' && method === 'GET') return dashboard(url, session, stub, doReader);
 
-  // NEW: Hierarchical repo path: /app/repos/{org}/{namespace}/{repo}
-  const repoHierarchicalMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)\/([^/]+)$/);
+  // Hierarchical repo path: /app/repos/{org}/{namespace}/{repo}, or the 2-part
+  // /app/repos/{org}/{repo} form used when namespace === org name.
+  const repoHierarchicalMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/);
   if (repoHierarchicalMatch) {
-    const [, orgSlug, namespaceSlug, repoSlug] = repoHierarchicalMatch;
+    const [, orgSlug, secondSlug, thirdSlug] = repoHierarchicalMatch;
+    const namespaceSlug = thirdSlug === undefined ? orgSlug : secondSlug;
+    const repoSlug = thirdSlug === undefined ? secondSlug : thirdSlug;
     
     if (method !== 'GET') {
       return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
