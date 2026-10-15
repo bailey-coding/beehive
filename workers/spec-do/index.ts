@@ -14,6 +14,8 @@ import { createSqlStorage, SqlDb } from './sql-storage';
 // Schema SQL (inlined; esbuild has no ?raw loader for .sql in wrangler builds)
 import { SCHEMA_SQL, SERVICE_ACCOUNTS_SQL } from './schema-inline';
 
+class ConflictError extends Error {}
+
 // Service binding type for Gate Workflow
 type Service = { fetch: (request: Request) => Promise<Response> };
 
@@ -430,7 +432,15 @@ export class SpecDO {
     externalId?: string
   ): { id: string; name: string; type: string; externalId?: string; createdAt: number } {
     if (!this.db) throw new Error('Database not initialized');
-    
+
+    // The DO is single-threaded and this check + insert has no await between them,
+    // so this is race-free. Not a UNIQUE index: existing ledgers already hold duplicates.
+    const dup = this.db.prepare(`SELECT id FROM organizations WHERE name = ? LIMIT 1`);
+    dup.bind(name);
+    const exists = dup.step();
+    dup.free();
+    if (exists) throw new ConflictError(`Organization '${name}' already exists`);
+
     const id = generateId();
     const stmt = this.db.prepare(
       `INSERT INTO organizations (id, name, type, external_id, created_at) 
@@ -2112,7 +2122,7 @@ export class SpecDO {
       const message = error instanceof Error ? error.message : String(error);
       return new Response(
         JSON.stringify({ success: false, error: message, timestamp: Date.now() }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+        { status: error instanceof ConflictError ? 409 : 500, headers: { 'Content-Type': 'application/json' } }
       );
     }
   }
@@ -2496,6 +2506,15 @@ export class SpecDO {
     defaultBranch: string = 'main'
   ): RepositoryResponse {
     if (!this.db) throw new Error('Database not initialized');
+
+    const dup = this.db.prepare(
+      `SELECT id FROM repositories WHERE organization_id = ? AND name = ? LIMIT 1`
+    );
+    dup.bind(organizationId, name);
+    const exists = dup.step();
+    dup.free();
+    if (exists) throw new ConflictError(`Repository '${name}' already exists in this organization`);
+
     const id = generateId();
     const stmt = this.db.prepare(
       `INSERT INTO repositories (id, name, organization_id, repo_type, spec_id, agent_id, remote_url, namespace, default_branch, created_at) 
