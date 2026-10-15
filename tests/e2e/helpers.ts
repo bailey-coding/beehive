@@ -38,10 +38,9 @@ export function createRequest(
   const baseUrl = getWorkerUrl(workerType);
   const url = new URL(path, baseUrl);
   
-  const defaultHeaders = config.environment === 'local' 
-    ? { 'Content-Type': 'application/json' }
-    : getAuthHeaders();
-  
+  // Auth is fail-closed on every worker (workers/shared/auth.ts), including local dev.
+  const defaultHeaders = getAuthHeaders();
+
   return new Request(url.toString(), {
     method,
     headers: { ...defaultHeaders, ...headers },
