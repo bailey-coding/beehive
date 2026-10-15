@@ -11,7 +11,7 @@ import { TournamentManager } from './tournament';
 import { MergeTrainManager } from './merge-train';
 import { authGate, AuthEnv } from '../shared/auth';
 import { Env, PromotionMode, Rung } from './types';
-import { getSpecDo, resolvePromotionMode } from './spec-do';
+import { resolvePromotionMode, storePromotionMode } from './spec-do';
 
 // Extend Env with auth requirements
 export interface PromotionEnv extends Env, AuthEnv {}
@@ -164,7 +164,7 @@ async function handleFetch(
     }
 
     try {
-      const mode = await getSpecDo(env).setPromotionMode(requested as PromotionMode);
+      const mode = await storePromotionMode(env, requested as PromotionMode);
       return new Response(JSON.stringify({
         success: true,
         mode,
