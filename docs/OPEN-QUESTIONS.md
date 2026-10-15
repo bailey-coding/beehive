@@ -111,3 +111,38 @@ tags:
 **Want**: an authenticated admin purge route restricted to maintainer actor IDs, plus soft-delete/tombstones for specs and candidates (the M1 "Ledger lifecycle" item in `docs/MILESTONES.md`, not built as of 2026-10-15). A purge by org-name prefix would have cleared this incident with one API call.
 
 **Interim rule**: do not run e2e against production without human approval (`AGENTS.md`).
+
+## 2026-10-15: Cross-worker e2e failures (local) - root causes
+
+Local run of `tests/e2e/cross-worker-flows.test.ts` after route fixes: 11 pass, 9 fail, 2 skip
+(was 14 failing). Remaining failures are real worker defects, not test drift:
+
+1. **Promotion worker cannot talk to the Spec DO (spine; needs a human).** Two defects in
+   `workers/promotion-worker/spec-do.ts` / `workers/spec-do/index.ts`:
+   - `getSpecDo(env).getPromotionMode()` is an RPC call, but `SpecDO` (`workers/spec-do/index.ts:233`)
+     does not `extends DurableObject`, so workerd throws "The receiving Durable Object does not
+     support RPC" and `/mode`, `/promotion/health` return an HTML 500. Fix: `class SpecDO extends
+     DurableObject` (import from `cloudflare:workers`, call `super(state, env)`).
+   - `tournament.ts` / `merge-train.ts` call `getSpecDo(env).fetch('/promotion-states?...')` with a
+     relative URL; `DurableObjectStub.fetch` needs an absolute URL ("Invalid URL: /promotion-states").
+     Fix: prefix `https://spec-do.internal`, as every other caller does.
+   Not changed: SpecDO and promotion-train logic are spine. Affects 7 tests (mode, health,
+   promote x3, valid/invalid transitions, consistency).
+2. **Canary -> preview-manager routes do not exist.** `canary-worker/canary.ts` calls
+   `POST /api/deploy` and `rollback.ts` calls `POST /api/rollback`; `preview-manager` only serves
+   `/api/preview/deploy`. Canary deploy/rollback cannot work until a route is designed (it needs a
+   real Workers Builds deployment, not just wiring). Affects 2 tests + consistency test.
+3. **Canary -> preview-manager calls sent no bearer token** (fixed: `canary.ts`, `rollback.ts` now
+   send `Authorization: Bearer ${API_AUTH_TOKEN}`; queue-consumer already did). The 401 was
+   masked in local runs by (4).
+4. **Local service bindings only connect to running `wrangler dev` sessions.** wrangler reports
+   `[not connected]` and the call fails with `Worker "beehive-preview-manager" not found` unless that
+   worker is also running (e.g. `--config workers/preview-manager/wrangler.toml --port 8791
+   --inspector-port 9234`, with its own `.dev.vars`). `scripts/start-e2e-workers.sh` does not start it.
+5. `npm run test:e2e:local` runs `tests/e2e/m3-features.test.ts` too, which hard-codes production
+   URLs and, when `BEEHIVE_API_TOKEN` is set in the environment, **sends real requests to
+   production**. Run `npx vitest run tests/e2e/cross-worker-flows.test.ts` with
+   `E2E_ENVIRONMENT=local` instead until that file is gated.
+
+The two former `start` tests (`/promotion/merge-train/start`, `/promotion/tournament/start`) have
+no equivalent route by design (trains are joined via `POST /promote`); they were already removed.

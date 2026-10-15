@@ -27,7 +27,10 @@ export class CanaryWorker {
         'https://preview-manager.internal/api/deploy',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.env.API_AUTH_TOKEN || ''}`,
+          },
           body: JSON.stringify({
             candidateId: config.candidateId,
             specId: config.specId,

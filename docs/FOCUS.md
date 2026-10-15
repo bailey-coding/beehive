@@ -28,7 +28,7 @@ Completed items are removed, not struck through; history lives in git.*
 
 **E2E tests:**
 - `m3-features.test.ts`: 31 tests, all skipped (requires BEEHIVE_AUTH_TOKEN for production)
-- `cross-worker-flows.test.ts`: 22 tests, 15 failures, 2 skipped, 5 passing (local dev)
+- `cross-worker-flows.test.ts`: 22 tests, 9 failures, 2 skipped, 11 passing (local dev; 2026-10-15). Remaining failures are spine/worker defects, see OPEN-QUESTIONS 2026-10-15
 - Main issues: route mismatches between tests and workers, auth token issues, service binding connectivity
 
 **Infrastructure:**
@@ -63,7 +63,8 @@ Completed items are removed, not struck through; history lives in git.*
 - **M1 ledger lifecycle** (tombstones, admin purge route) is not built; this is why a wipe
   means deleting the worker.
 - **OPEN-QUESTIONS.md** has no ledger-lifecycle finding, though MILESTONES cites one.
-- **Cross-worker e2e tests:** 15 failures remain due to route mismatches and auth issues. Need triage.
+- **Cross-worker e2e tests:** 9 failures remain: SpecDO RPC + relative-URL bug in promotion worker (spine) and missing preview-manager `/api/deploy`,`/api/rollback` routes. Human needed; see OPEN-QUESTIONS 2026-10-15.
+- **`test:e2e:local` runs m3-features against production** when `BEEHIVE_API_TOKEN` is set; gate it.
 
 ## Next demo (post-submission)
 

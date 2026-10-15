@@ -73,7 +73,7 @@ async function getShadowConfig(): Promise<any> {
   return readJson(response);
 }
 
-async function classifyRequest(requestId: string, candidateId: string, specId: string): Promise<{ classification: RequestClassification }> {
+async function classifyRequest(requestId: string, candidateId: string, specId: string): Promise<RequestClassification> {
   // Changed from /shadow/classify to /statsig/classify to match actual worker routes
   const response = await fetchWorker(
     '/statsig/classify',
@@ -81,7 +81,8 @@ async function classifyRequest(requestId: string, candidateId: string, specId: s
     { requestId, candidateId, specId, path: '/test', method: 'GET' },
     'shadow'
   );
-  return readJson(response) as Promise<{ classification: RequestClassification }>;
+  // Worker returns the classification itself ({ type, weight, ... }), not wrapped
+  return readJson(response) as Promise<RequestClassification>;
 }
 
 /**
@@ -117,10 +118,16 @@ async function getDeployment(deploymentId: string): Promise<{ deployment: Canary
 // To properly test rollback, the test would need to construct a valid RollbackTrigger
 // with all required fields: candidateId, specId, reason, timestamp, metrics.
 
-async function getSloMetrics(): Promise<{ metrics: CanaryMetrics & { compliance: boolean } }> {
+type SloStatus = {
+  healthy: boolean;
+  violations: unknown[];
+  currentMetrics: { latencyP95: number; errorRate: number; requestCount: number };
+};
+
+async function getSloMetrics(): Promise<SloStatus> {
   // Changed from /canary/slo/metrics to /slo-status to match actual worker routes
   const response = await fetchWorker('/slo-status', 'GET', undefined, 'canary');
-  return readJson(response) as Promise<{ metrics: CanaryMetrics & { compliance: boolean } }>;
+  return readJson(response) as Promise<SloStatus>;
 }
 
 // REMOVED: getSloConfig - no equivalent route exists in canary worker
@@ -263,18 +270,13 @@ describe('Cross-Worker Flow Tests', () => {
         console.log('Note: Using mocks for local environment');
       }
 
-      const response = await getShadowConfig();
+      // /statsig/config returns the config object directly (no success/config wrapper)
+      const configData = await getShadowConfig();
       
-      expect(response.success).toBe(true);
-      expect(response.config).toBeDefined();
-      
-      const configData = response.config as any;
       expect(configData.enabled).toBe(true);
-      expect(configData.statsig).toBeDefined();
-      expect(configData.statsig.enabled).toBe(true);
       
       // Check default split
-      const defaultSplit = configData.statsig.defaultSplit;
+      const defaultSplit = configData.defaultSplit;
       expect(defaultSplit).toBeDefined();
       expect(defaultSplit.canaryPercentage).toBeDefined();
       expect(defaultSplit.holdoutPercentage).toBeDefined();
@@ -290,13 +292,7 @@ describe('Cross-Worker Flow Tests', () => {
     it('should classify requests with Statsig configuration', async () => {
       const response = await classifyRequest(ctx.candidateId, ctx.candidateId, ctx.specId);
       
-      expect(response.classification).toBeDefined();
-      expect(response.classification.type).toBeOneOf([
-        'canary',
-        'holdout',
-        'baseline',
-        'shadow'
-      ]);
+      expect(['canary', 'holdout', 'baseline', 'shadow']).toContain(response.type);
       
       // If Statsig is enabled, we should get a valid classification
       // Note: The actual classification depends on the worker's Statsig config
@@ -308,10 +304,8 @@ describe('Cross-Worker Flow Tests', () => {
       const config2 = await getShadowConfig();
       
       // Both should have the same structure
-      expect(config1.success).toBe(config2.success);
-      expect((config1.config as any)?.statsig?.enabled).toBe(
-        (config2.config as any)?.statsig?.enabled
-      );
+      expect(config1.enabled).toBe(config2.enabled);
+      expect(config1.defaultSplit).toEqual(config2.defaultSplit);
     });
   });
 
@@ -372,12 +366,11 @@ describe('Cross-Worker Flow Tests', () => {
       // Now uses /slo-status route (changed from /canary/slo/metrics)
       const result = await getSloMetrics();
       
-      expect(result.metrics).toBeDefined();
-      expect(result.metrics.requestCount).toBeDefined();
-      expect(result.metrics.errorCount).toBeDefined();
-      expect(result.metrics.latencyP95).toBeDefined();
-      expect(result.metrics.errorRate).toBeDefined();
-      expect(result.metrics.compliance).toBeDefined();
+      expect(result.healthy).toBeDefined();
+      expect(result.violations).toBeDefined();
+      expect(result.currentMetrics.requestCount).toBeDefined();
+      expect(result.currentMetrics.latencyP95).toBeDefined();
+      expect(result.currentMetrics.errorRate).toBeDefined();
     });
 
   // ==========================================================================
@@ -406,7 +399,7 @@ describe('Cross-Worker Flow Tests', () => {
       const result = await getPromotionMode();
       
       expect(result.mode).toBeDefined();
-      expect(result.mode).toBeOneOf(['tournament', 'merge-train']);
+      expect(['tournament', 'merge-train']).toContain(result.mode);
     });
 
     it('should get promotion worker health with mode info', async () => {
@@ -508,8 +501,7 @@ describe('Cross-Worker Flow Tests', () => {
 
       // Step 1: Verify Statsig configuration in shadow router
       const shadowConfig = await getShadowConfig();
-      expect(shadowConfig.success).toBe(true);
-      expect((shadowConfig.config as any)?.statsig?.enabled).toBe(true);
+      expect(shadowConfig.enabled).toBe(true);
 
       // Step 2: Classify a request
       const classification = await classifyRequest(
@@ -517,7 +509,7 @@ describe('Cross-Worker Flow Tests', () => {
         ctx.candidateId,
         ctx.specId
       );
-      expect(classification.classification).toBeDefined();
+      expect(classification.type).toBeDefined();
 
       // Step 3: Deploy canary
       const deployResult = await deployCanary(
@@ -534,7 +526,7 @@ describe('Cross-Worker Flow Tests', () => {
 
       // Step 5: Check SLO metrics
       const sloMetrics = await getSloMetrics();
-      expect(sloMetrics.metrics.compliance).toBeDefined();
+      expect(sloMetrics.healthy).toBeDefined();
 
       // Step 6: Promote through ladder
       // Shadow -> Train
@@ -676,7 +668,7 @@ describe('Cross-Worker Flow Tests', () => {
       // Should return 400 Bad Request
       expect(response.status).toBe(400);
       const data = await readJson(response);
-      expect(data.success).toBe(false);
+      expect(data.error).toBeDefined();
     });
 
     it('should handle invalid traffic percentage', async () => {
@@ -697,7 +689,7 @@ describe('Cross-Worker Flow Tests', () => {
       
       expect(response.status).toBe(400);
       const data = await readJson(response);
-      expect(data.success).toBe(false);
+      expect(data.error).toBeDefined();
     });
 
     it('should handle invalid promotion request', async () => {

@@ -42,7 +42,10 @@ export class RollbackManager {
         'https://preview-manager.internal/api/rollback',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.env.API_AUTH_TOKEN || ''}`,
+          },
           body: JSON.stringify({
             candidateId: trigger.candidateId,
             reason: trigger.reason
