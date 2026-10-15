@@ -4,7 +4,8 @@
  * Tests M3-specific features: Statsig traffic splitting, Canary deployments, 
  * Promotion worker (tournament and merge-train modes).
  * 
- * Production E2E tests for beehive.bz23711.workers.dev
+ * Runs against local workers by default; production only with E2E_ENVIRONMENT=production
+ * and E2E_ALLOW_PRODUCTION=1 (human approval required).
  * 
  * Phase: 4
  * Task: test-phase-4
@@ -13,6 +14,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { getConfig } from './config';
 
 // ============================================================================
 // Test Setup and Types
@@ -29,34 +31,37 @@ async function readJson(res: Response): Promise<JsonResponse> {
   return (await res.json()) as JsonResponse;
 }
 
-// Production base URL
-const PRODUCTION_BASE_URL = process.env.BEEHIVE_PRODUCTION_URL || 'https://beehive.bz23711.workers.dev';
+// Target selection comes from tests/e2e/config.ts (E2E_ENVIRONMENT, default local).
+// Production URLs below are only reachable when E2E_ENVIRONMENT=production AND
+// E2E_ALLOW_PRODUCTION=1 (human approval required, see AGENTS.md); getConfig() throws otherwise.
+const e2eConfig = getConfig();
+const IS_LOCAL = e2eConfig.environment === 'local';
 
-// Production auth token - set via BEEHIVE_API_TOKEN environment variable
-const PRODUCTION_AUTH_TOKEN = process.env.BEEHIVE_API_TOKEN;
+const PRODUCTION_BASE_URL = e2eConfig.baseUrl;
+const PRODUCTION_AUTH_TOKEN = e2eConfig.apiToken;
 
-// Worker URLs for production
+// Workers with no local dev port are '' locally; their tests are skipped.
 const WORKER_URLS = {
-  main: PRODUCTION_BASE_URL,
-  api: PRODUCTION_BASE_URL,
-  shadowRouter: 'https://beehive-shadow-router.bz23711.workers.dev',
-  canary: 'https://beehive-canary-worker.bz23711.workers.dev',
-  promotion: 'https://beehive-promotion-worker.bz23711.workers.dev',
-  gateWorkflow: 'https://beehive-gate-workflow.bz23711.workers.dev',
-  sandboxRunner: 'https://beehive-sandbox-runner.bz23711.workers.dev',
-  queueConsumer: 'https://beehive-queue-consumer.bz23711.workers.dev',
-  previewManager: 'https://beehive-preview-manager.bz23711.workers.dev',
-  candidateService: 'https://beehive-candidate-service.bz23711.workers.dev',
-  scientistComparator: 'https://beehive-scientist-comparator.bz23711.workers.dev',
+  main: e2eConfig.baseUrl,
+  api: e2eConfig.baseUrl,
+  shadowRouter: e2eConfig.shadowRouterUrl,
+  canary: e2eConfig.canaryWorkerUrl,
+  promotion: e2eConfig.promotionWorkerUrl,
+  gateWorkflow: IS_LOCAL ? '' : 'https://beehive-gate-workflow.bz23711.workers.dev',
+  sandboxRunner: IS_LOCAL ? '' : 'https://beehive-sandbox-runner.bz23711.workers.dev',
+  queueConsumer: IS_LOCAL ? '' : 'https://beehive-queue-consumer.bz23711.workers.dev',
+  previewManager: IS_LOCAL ? '' : 'https://beehive-preview-manager.bz23711.workers.dev',
+  candidateService: IS_LOCAL ? '' : 'https://beehive-candidate-service.bz23711.workers.dev',
+  scientistComparator: IS_LOCAL ? '' : 'https://beehive-scientist-comparator.bz23711.workers.dev',
 };
 
 // ============================================================================
 // Production E2E Tests - Worker Health and API Connectivity
 // ============================================================================
 
-describe('Production E2E Tests - beehive.bz23711.workers.dev', () => {
-  // Skip production tests if no auth token is provided
-  const shouldSkip = !PRODUCTION_AUTH_TOKEN || PRODUCTION_BASE_URL.includes('localhost');
+describe(`E2E Tests - ${e2eConfig.environment}`, () => {
+  // Skip when no auth token is available (production without BEEHIVE_API_TOKEN)
+  const shouldSkip = !PRODUCTION_AUTH_TOKEN;
 
   describe('Worker Health Endpoints', () => {
     it.skipIf(shouldSkip)('should verify main API worker is healthy', async () => {
@@ -107,7 +112,7 @@ describe('Production E2E Tests - beehive.bz23711.workers.dev', () => {
       expect(['tournament', 'merge-train']).toContain(data.mode);
     }, 10000);
 
-    it.skipIf(shouldSkip)('should verify gate workflow worker is healthy', async () => {
+    it.skipIf(shouldSkip || !WORKER_URLS.gateWorkflow)('should verify gate workflow worker is healthy', async () => {
       const response = await fetch(`${WORKER_URLS.gateWorkflow}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
@@ -115,7 +120,7 @@ describe('Production E2E Tests - beehive.bz23711.workers.dev', () => {
       expect([200, 404]).toContain(response.status);
     }, 10000);
 
-    it.skipIf(shouldSkip)('should verify sandbox runner worker is healthy', async () => {
+    it.skipIf(shouldSkip || !WORKER_URLS.sandboxRunner)('should verify sandbox runner worker is healthy', async () => {
       const response = await fetch(`${WORKER_URLS.sandboxRunner}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
@@ -123,7 +128,7 @@ describe('Production E2E Tests - beehive.bz23711.workers.dev', () => {
       expect([200, 404]).toContain(response.status);
     }, 10000);
 
-    it.skipIf(shouldSkip)('should verify queue consumer worker is healthy', async () => {
+    it.skipIf(shouldSkip || !WORKER_URLS.queueConsumer)('should verify queue consumer worker is healthy', async () => {
       const response = await fetch(`${WORKER_URLS.queueConsumer}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
@@ -131,7 +136,7 @@ describe('Production E2E Tests - beehive.bz23711.workers.dev', () => {
       expect([200, 404]).toContain(response.status);
     }, 10000);
 
-    it.skipIf(shouldSkip)('should verify preview manager worker is healthy', async () => {
+    it.skipIf(shouldSkip || !WORKER_URLS.previewManager)('should verify preview manager worker is healthy', async () => {
       const response = await fetch(`${WORKER_URLS.previewManager}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
@@ -139,7 +144,7 @@ describe('Production E2E Tests - beehive.bz23711.workers.dev', () => {
       expect([200, 404]).toContain(response.status);
     }, 10000);
 
-    it.skipIf(shouldSkip)('should verify candidate service worker is healthy', async () => {
+    it.skipIf(shouldSkip || !WORKER_URLS.candidateService)('should verify candidate service worker is healthy', async () => {
       const response = await fetch(`${WORKER_URLS.candidateService}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
@@ -147,7 +152,7 @@ describe('Production E2E Tests - beehive.bz23711.workers.dev', () => {
       expect([200, 404]).toContain(response.status);
     }, 10000);
 
-    it.skipIf(shouldSkip)('should verify scientist comparator worker is healthy', async () => {
+    it.skipIf(shouldSkip || !WORKER_URLS.scientistComparator)('should verify scientist comparator worker is healthy', async () => {
       const response = await fetch(`${WORKER_URLS.scientistComparator}/health`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });

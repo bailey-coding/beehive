@@ -64,7 +64,7 @@ Completed items are removed, not struck through; history lives in git.*
   means deleting the worker.
 - **OPEN-QUESTIONS.md** has no ledger-lifecycle finding, though MILESTONES cites one.
 - **Cross-worker e2e tests:** 9 failures remain: SpecDO RPC + relative-URL bug in promotion worker (spine) and missing preview-manager `/api/deploy`,`/api/rollback` routes. Human needed; see OPEN-QUESTIONS 2026-10-15.
-- **`test:e2e:local` runs m3-features against production** when `BEEHIVE_API_TOKEN` is set; gate it.
+- **m3-features.test.ts** is now gated (local by default; production needs `E2E_ENVIRONMENT=production` AND `E2E_ALLOW_PRODUCTION=1`, human approval per AGENTS.md). Locally it has 22 failing tests that still call the old `/shadow/*`, `/canary/*`, `/promotion/*` routes (see route table in `docs/SETUP.md`); needs the same route/shape fixes as cross-worker-flows.
 
 ## Next demo (post-submission)
 

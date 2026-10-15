@@ -70,7 +70,18 @@ function getConfig(environment?: TestEnvironment): TestConfig {
 function getEnvironmentFromEnv(): TestEnvironment {
   const env = (process.env.E2E_ENVIRONMENT || '').toLowerCase() as TestEnvironment;
   
-  if (env === 'local' || env === 'staging' || env === 'production') {
+  if (env === 'production') {
+    // Production is never reachable by accident: E2E_ENVIRONMENT alone is not enough.
+    // The ledger has no delete routes, so this requires explicit human approval (AGENTS.md).
+    if (process.env.E2E_ALLOW_PRODUCTION !== '1') {
+      throw new Error(
+        'Refusing to target production: set E2E_ALLOW_PRODUCTION=1 (requires human approval per AGENTS.md)'
+      );
+    }
+    return env;
+  }
+
+  if (env === 'local' || env === 'staging') {
     return env;
   }
   

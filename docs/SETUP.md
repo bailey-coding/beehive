@@ -43,7 +43,7 @@ The token must match `tests/e2e/config.ts` (`local.apiToken`).
 | promotion-worker | 8790 | `npx wrangler dev --config workers/promotion-worker/wrangler.toml --port 8790 --inspector-port 9232` |
 
 Give each its own `--inspector-port`, otherwise concurrent `wrangler dev` runs collide.
-Then `npm run test:e2e:local`. Despite older docs, local e2e makes real HTTP calls and does
+Then `npm run test:e2e:local`. Production is unreachable from tests unless `E2E_ENVIRONMENT=production` and `E2E_ALLOW_PRODUCTION=1` are both set (human approval required, AGENTS.md). Despite older docs, local e2e makes real HTTP calls and does
 not use mocks; with no workers running you get `ECONNREFUSED`.
 
 ### Local e2e status
