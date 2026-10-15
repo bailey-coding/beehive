@@ -122,7 +122,7 @@ worker's URL.
   via `script_name`; the cross-reference may need a two-pass first deploy.
 - **UNVERIFIED**: Artifacts access and Workers Builds API use need an account with those
   products enabled (`docs/ARTIFACTS-SETUP.md`).
-- Wiping the ledger: see "Deployment Topology & Ops" in `AGENTS.md`.
+- Wiping the ledger: see `docs/OPS.md`.
 
 ## Known issues
 

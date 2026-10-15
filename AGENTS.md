@@ -1,9 +1,6 @@
 # Beehive Code Agent Context Pack
 
-Four ready-to-commit files for bootstrapping the project repo. Commit each to the path
-shown in its header. The agent reads `AGENTS.md` first; the rest are its reference layer.
-
-**Current agent**: `Vibe Code` running on `mistral-medium-3-5` (previously `Vibe Nuage Agent`).
+Agents read this file first; `docs/` is the reference layer (see Pointers at the end).
 
 ---
 
@@ -78,18 +75,12 @@ serialization point for promotion decisions.
 - **Plan before multi-file changes.** For work touching more than 2–3 files (especially across workers or the spec DO schema), write a file-by-file plan and get it accepted before editing.
 - **Check usage.** Use `/cost` and `/context` (or your agent's equivalents) to see what is loaded before a long run.
 
-### Model routing (match model to task)
+### Model routing and delegation
 
-Applies to agents running `mistral-medium-3-5`. Tiers are conceptual; map each to whichever Mistral model is configured for the provider.
-
-| Tier | Use for | Model |
-|---|---|---|
-| Heavy | Hard debugging, wide cross-cutting refactors, spec/architecture decisions, promotion-train logic | `mistral-medium-3-5`, plan first; escalate to a larger model only if one is configured and the task justifies it |
-| Default | Features, tests, known-bug fixes, refactors within one worker | `mistral-medium-3-5` |
-| Light | Lookups, grep/search, simple edits, formatting, scripted or high-volume runs | `mistral-medium-3-5`, or a smaller Mistral model if one is configured; keep these prompts short |
-
-- Rule of thumb: spend heavy-tier effort on planning, not on re-running large diffs.
-- Do not spawn a heavy-tier agent for a light-tier task. Check which models are configured before assuming a cheaper model exists.
+Match model to task: heavy tier (hard debugging, spec/architecture, promotion-train logic)
+plan first; default tier for features and tests; light tier for lookups and edits. Spawn
+agents through the orchestrator API, never via Worker-side spawning. Details and the tier
+table: `docs/AGENT-ROUTING.md`.
 
 ### Working patterns
 
@@ -100,11 +91,6 @@ Applies to agents running `mistral-medium-3-5`. Tiers are conceptual; map each t
 - **Document surprises immediately.** Any undocumented Artifacts behavior goes straight to `docs/OPEN-QUESTIONS.md`.
 - **Avoid duplicate work.** Before creating new agents, check if existing agents or subagents have already completed the task. Flag overlaps explicitly: "Agent X already delivered Y. Creating new agents will duplicate work. Confirm?"
 - **Use isolated workspaces.** When running concurrent agents on the same repo, use separate worktrees (`--new-workspace worktree --worktree-slug <name>`) or branches (`--new-branch <name>`) to prevent merge conflicts and file contention.
-
-### Agent Delegation & Spawning
-
-- **In an agent orchestrator**: Spawn agents through the orchestrator's own API so they are tracked and visible in its UI. You can specify different models and thinking options.
-- **In Cloudflare Workers**: Do **not** use the orchestrator's agent spawning. Worker-based bees should either run solo or use Vibe's native `tools.subagent` namespace if parallelism is needed—these subagents are not visible in the orchestrator, and Workers lack its UI access anyway.
 
 ### State management
 
@@ -122,47 +108,25 @@ See `docs/ARTIFACTS-SETUP.md` for verified setup patterns, CLI commands, authent
 
 ---
 
-## Deployment Topology & Ops (verified 2026-10-13)
+## Deployment Topology & Ops
 
-Ten Workers on `*.bz23711.workers.dev`, deployed by `.github/workflows/deploy.yml` on every push to
-`main` (it runs the `package.json` `deploy:*` scripts; each worker has its own wrangler config):
-
-- `beehive` — edge router/API; hosts the `SpecDO` class (root `wrangler.toml`).
-- `beehive-gate-workflow`, `beehive-sandbox-runner`, `beehive-queue-consumer` — configs
-  at `workers/<name>/wrangler.toml`; the Spec DO is bound cross-script via
-  `script_name = "beehive"`.
-- M2/M3 workers: `beehive-shadow-router`, `beehive-scientist-comparator`,
-  `beehive-preview-manager`, `beehive-candidate-service`, `beehive-canary-worker`,
-  `beehive-promotion-worker`. Note the worker `name` in each `wrangler.toml` is the
-  source of truth for URLs (older docs used shortened names).
-
-**Web UI** (verified 2026-10-13): served by the `beehive` worker itself, not a separate
-app. `/about` is public; `/login` -> GitHub OAuth -> `/app` (create orgs, repos, specs).
-Code: `workers/api/ui.ts`. Access is limited to `ALLOWED_GITHUB_USERS` (var in root
-`wrangler.toml`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
-Sessions are HMAC-signed with `API_AUTH_TOKEN`. The React app in `ui/` is **not built or
-deployed** (no build config); don't assume it is live.
+Ten Workers, deployed by `.github/workflows/deploy.yml` on every push to `main`; each has its
+own wrangler config and the worker `name` there is the source of truth for URLs. The web UI
+is served by the `beehive` worker (`workers/api/ui.ts`); the React app in `ui/` is **not**
+built or deployed. Full topology, secrets, token scopes and the ledger-wipe procedure:
+`docs/OPS.md`. Symptoms: `docs/TROUBLESHOOTING.md`. Self-hosting and local dev: `docs/SETUP.md`.
 
 Config rules that bit this repo twice:
 - Service bindings take `binding = "..."`, never `name = "..."`.
 - Queue consumers attach via `[[queues.consumers]]`; `[[queues]]` is the producer form.
 
 Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missing
-`API_AUTH_TOKEN` → 503, wrong bearer → 401, including `/health`. Set the secret on each
-worker with `wrangler secret put API_AUTH_TOKEN`; local dev uses `.dev.vars` (gitignored);
-tooling reads `BEEHIVE_API_TOKEN` from `.env` (gitignored).
+`API_AUTH_TOKEN` → 503, wrong bearer → 401, including `/health`, local dev, and test
+helpers. Any new client or helper must send the bearer token (`.dev.vars` locally).
 
-Deploy token scopes: Workers Scripts:Edit + Workers Queues:Edit. Permission edits take
-minutes to propagate — a fresh 403 right after granting scopes is expected; wait and
-retry before debugging.
-
-The Spec DO ledger has no delete routes. To wipe it (done 2026-10-13 to clear 27 `test-org-e2e-*`
-orgs left by E2E runs against production): `wrangler delete --name beehive --force`, push to
-`main` to redeploy, then re-put the secrets that live on `beehive` only: `API_AUTH_TOKEN`,
-`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`. Other workers keep their own secrets. A `1042`
-response means the worker is not deployed yet. When scripting the wait, watch the run for the
-new SHA (`gh run watch <id>`); `gh run list --limit 1` can still return the previous run.
-The `KV namespaces ... Authentication error` printed by `wrangler delete` is harmless.
+Local e2e (`npm run test:e2e:local`) makes real HTTP calls: start the workers on ports
+8787–8790 first (see `docs/SETUP.md`). Before marking a milestone item done, grep for the
+implementation; docs have drifted from code before. Current focus: `docs/FOCUS.md`.
 
 See `docs/OPEN-QUESTIONS.md` for dated findings (Artifacts behavior, wrangler config
 gotchas, deploy learnings).
@@ -177,3 +141,7 @@ For implementation, see the canonical schema definitions:
 - **Storage Layers:** Spec DO (SQLite) for coordination, D1 for indexes, Analytics Engine for metrics, Git notes for provenance
 
 > Read `docs/ARCHITECTURE.md` next. Do not begin implementation before understanding both this file and the architecture document.
+
+**Pointers:** `docs/SETUP.md` (local dev, e2e, self-hosting) · `docs/OPS.md` (topology, secrets,
+ledger wipe) · `docs/TROUBLESHOOTING.md` (symptoms) · `docs/AGENT-ROUTING.md` (model tiers,
+spawning) · `docs/FOCUS.md` (current open items) · `docs/MILESTONES.md` (plan).
