@@ -77,7 +77,7 @@ export default {
     const method = request.method;
 
     // Public endpoints - no auth required
-    if (path === '/' || path === '/about') {
+    if (path === '/' || path === '/about' || path === '/roadmap') {
       return handlePublicPage(path);
     }
 

@@ -251,6 +251,49 @@ describe('API Handlers', () => {
   });
 
   // ========================================================================
+  // Public Pages (no auth required)
+  // ========================================================================
+
+  describe('GET / (root)', () => {
+    it('should return HTML for root path without auth', async () => {
+      const request = createRequest('/', 'GET');
+      const response = await worker.fetch(request, mockEnv, mockCtx);
+      
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toContain('text/html');
+      const html = await response.text();
+      expect(html).toContain('<!DOCTYPE html>');
+      expect(html).toContain('Beehive');
+    });
+  });
+
+  describe('GET /about', () => {
+    it('should return HTML for about page without auth', async () => {
+      const request = createRequest('/about', 'GET');
+      const response = await worker.fetch(request, mockEnv, mockCtx);
+      
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toContain('text/html');
+      const html = await response.text();
+      expect(html).toContain('<!DOCTYPE html>');
+      expect(html).toContain('About');
+    });
+  });
+
+  describe('GET /roadmap', () => {
+    it('should return HTML for roadmap page without auth', async () => {
+      const request = createRequest('/roadmap', 'GET');
+      const response = await worker.fetch(request, mockEnv, mockCtx);
+      
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toContain('text/html');
+      const html = await response.text();
+      expect(html).toContain('<!DOCTYPE html>');
+      expect(html).toContain('Roadmap');
+    });
+  });
+
+  // ========================================================================
   // Specs
   // ========================================================================
 
