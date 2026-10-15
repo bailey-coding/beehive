@@ -607,17 +607,17 @@ function getRoadmapPage(): string {
       <h1>Beehive Roadmap</h1>
       <p class="subtitle">From submission to production and beyond</p>
       <div class="badges">
-        <span class="badge">Competition Submission: Oct 14, 2026</span>
-        <span class="badge">M1-M3 Complete</span>
-        <span class="badge">M6 Complete</span>
-        <span class="badge">M7 Complete</span>
+        <span class="badge">Competition entry submitted</span>
+        <span class="badge">Spike, M1, M2 Complete</span>
+        <span class="badge">M3 Partial</span>
+        <span class="badge">M6 UI Mocked</span>
       </div>
     </header>
 
     <section class="section">
-      <h2>🚀 Completed Milestones</h2>
+      <h2>🚀 Milestone Status</h2>
       <p>
-        The following milestones are fully implemented and deployed:
+        What is implemented and deployed today, and what is still open:
       </p>
       <table class="milestone-table">
         <thead>
@@ -645,36 +645,30 @@ function getRoadmapPage(): string {
           <tr>
             <td><strong>M3 — Promotion Train</strong></td>
             <td>2-3 days</td>
-            <td><span class="status complete">Complete</span></td>
-            <td>Statsig slicing, speculative projection, tournament vs merge-train, canary with auto-rollback, DO Facets, capability minting, ArtifactFS integration</td>
+            <td><span class="status partial">Partial</span></td>
+            <td>Built: promotion worker (tournament and merge-train modes), canary worker, local traffic-split config. Not built: speculative projection forks, wired canary auto-rollback, DO Facets, capability minting, ArtifactFS</td>
           </tr>
           <tr>
             <td><strong>M6 — Semantic Dashboard UI</strong></td>
             <td>1-2 days</td>
-            <td><span class="status complete">Complete</span></td>
-            <td>Semantic search & changelog (mocked), repo detail pages, cross-linked navigation</td>
-          </tr>
-          <tr>
-            <td><strong>M7 — Observability Layer</strong></td>
-            <td>Complete</td>
-            <td><span class="status complete">Complete</span></td>
-            <td>Comprehensive observability and monitoring across all workers</td>
+            <td><span class="status partial">Mocked</span></td>
+            <td>Semantic search and changelog UI with clearly labelled mock data, repo detail pages, cross-linked navigation</td>
           </tr>
         </tbody>
       </table>
     </section>
 
     <section class="section">
-      <h2>📍 Current Focus (Submission Day)</h2>
+      <h2>📍 Current Focus (Post-Submission)</h2>
       <div class="timeline">
         <div class="timeline-item">
-          <div class="timeline-date">Today (Oct 14, 2026)</div>
-          <div class="timeline-title">M4 — Submission Package + Agent Autonomy Demo</div>
+          <div class="timeline-date">Now</div>
+          <div class="timeline-title">M3 completion and M4 agent autonomy</div>
           <div class="timeline-desc">
-            Demo video (one spec, three agents, live winner), MIT/Apache LICENSE, repo cleanup, semantic search integration for agents
+            Submission package is in (demo video, MIT license). Open work: wire canary auto-rollback, add speculative projection forks, and the agent-autonomy flow (agent-created issues and specs) for a live end-to-end demo.
           </div>
           <div class="timeline-tags">
-            <span class="badge">Priority: Critical</span>
+            <span class="badge">Priority: High</span>
             <span class="badge">Status: In Progress</span>
           </div>
         </div>
@@ -709,6 +703,17 @@ function getRoadmapPage(): string {
             <span class="badge">Status: Planned</span>
             <span class="badge">6 Phases</span>
             <span class="badge">10-15 days</span>
+          </div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-date">Post-Submission</div>
+          <div class="timeline-title">M7 — Session Provenance &amp; Intent Index</div>
+          <div class="timeline-desc">
+            Link every candidate and commit to the agent session that produced it: provenance trailer, redacted session records, a cross-spec intent index, and successor handoff from held candidates.
+          </div>
+          <div class="timeline-tags">
+            <span class="badge">Priority: Medium</span>
+            <span class="badge">Status: Planned</span>
           </div>
         </div>
         <div class="timeline-item">
