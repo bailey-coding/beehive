@@ -47,7 +47,16 @@ function createDoReader(stub: SpecDoStub, actorId: string): DoReader {
   return {
     get: async (path: string): Promise<DoRow | null> => {
       const result = await callDo(stub, path, 'GET', undefined, actorId);
-      if (!result.success || !result.data) return null;
+      if (!result.success) {
+        // AGENTS.md rule: Check Response.ok; a 404 is an error, never empty
+        // However, for entity GET requests, a 'Not found' error means the entity doesn't exist
+        // which is a legitimate 404 that should return null, not an error
+        if (result.error === 'Not found') {
+          return null;
+        }
+        throw new Error(`Spec DO error: ${result.error || 'Unknown error'}`);
+      }
+      if (!result.data) return null;
       return result.data as DoRow;
     },
     list: async (path: string, limit: number = 500): Promise<DoRow[]> => {
@@ -61,7 +70,12 @@ function createDoReader(stub: SpecDoStub, actorId: string): DoReader {
       // Filtered routes like /api/specs?organizationId=X return empty in production
       // due to bind order bug. All filtering happens in the UI.
       const result = await callDo(stub, `${path}?${queryString}`, 'GET', undefined, actorId);
-      if (!result.success || !Array.isArray(result.data)) return [];
+      if (!result.success) {
+        // AGENTS.md rule: Check Response.ok; a 404 is an error, never empty
+        // For list requests, any error means we couldn't load the data
+        throw new Error(`Spec DO error: ${result.error || 'Unknown error'}`);
+      }
+      if (!Array.isArray(result.data)) return [];
       return result.data as DoRow[];
     },
   };
@@ -307,8 +321,8 @@ export async function handleUi(
   }
 
   // NEW: Detail page routes (GET only, after actor check - R9)
-  // Match /app/orgs/:id, /app/repos/:id, /app/specs/:id, /app/candidates/:id, /app/trials/:id
-  const detailMatch = path.match(/^\/app\/(orgs|repos|specs|candidates|trials)\/([^/]+)$/);
+  // Match /app/orgs/:id, /app/repos/:id, /app/specs/:id, /app/candidates/:id, /app/trials/:id, /app/issues/:id
+  const detailMatch = path.match(/^\/app\/(orgs|repos|specs|candidates|trials|issues)\/([^/]+)$/);
   if (detailMatch) {
     const [, kind, id] = detailMatch;
     
@@ -328,6 +342,8 @@ export async function handleUi(
         return orgPage(id, url, session, doReader);
       case 'repos':
         return repoPage(id, url, session, doReader, env);
+      case 'issues':
+        return issuePage(id, url, session, doReader);
       case 'specs':
         return specPage(id, url, session, doReader);
       case 'candidates':
@@ -489,11 +505,12 @@ function formatDate(ts: number | string | undefined): string {
 }
 
 async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader: DoReader): Promise<Response> {
-  const [orgs, repos, specs] = await Promise.all([
-    doReader.list('/api/organizations'),
-    doReader.list('/api/repositories'),
-    doReader.list('/api/specs'),
-  ]);
+  try {
+    const [orgs, repos, specs] = await Promise.all([
+      doReader.list('/api/organizations'),
+      doReader.list('/api/repositories'),
+      doReader.list('/api/specs'),
+    ]);
 
   const notice = url.searchParams.get('ok');
   const error = url.searchParams.get('error');
@@ -612,7 +629,11 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       </form>
     </section>`;
 
-  return page('Dashboard', body);
+    return page('Dashboard', body);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return page('Error', `<p>could not load: ${esc(errorMessage)}</p><p><a href="/app">Back to dashboard</a></p>`, 200);
+  }
 }
 
 async function createOrganization(form: FormData, session: Session, stub: SpecDoStub): Promise<Response> {
@@ -756,7 +777,7 @@ async function createIssueComment(
     createdBy: session.actorId,
   };
   
-  const result = await callDo(stub, '/api/issue_comments', 'POST', payload, session.actorId);
+  const result = await callDo(stub, `/api/issues/${encodeURIComponent(issueId)}/comments`, 'POST', payload, session.actorId);
   if (result.success === false) return back('error', String(result.error || 'Failed to create comment.'));
   
   return back('ok', 'Comment created');

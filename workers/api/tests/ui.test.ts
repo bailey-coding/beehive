@@ -157,6 +157,11 @@ const fixtureIssues = [
   { id: 'issue-003', title: 'Private security issue', repository_id: 'repo-001', change_type: 'security-sensitive', stage: 'triage', visibility: 'private', created_at: Date.now() - 57600000 },
 ];
 
+const fixtureIssueComments = [
+  { id: 'comment-001', issue_id: 'issue-001', body: 'This looks good', created_by: 'actor-001', created_at: Date.now() - 86400000 },
+  { id: 'comment-002', issue_id: 'issue-001', body: 'Needs more tests', created_by: 'actor-002', created_at: Date.now() - 72000000 },
+];
+
 const fixtureActors = [
   { id: 'actor-001', type: 'human', name: 'testuser', github_user_id: '12345', trust_score: 0.5, promotion_authority: false, created_at: Date.now() },
   { id: 'actor-002', type: 'agent', name: 'agent-001', github_user_id: undefined, trust_score: 0.7, promotion_authority: true, created_at: Date.now() },
@@ -214,6 +219,33 @@ function createMockStub(): MockDurableObjectStub {
     });
   });
   
+  // Issue comments - correct route is /api/issues/:id/comments
+  stub.on('/api/issues/issue-001/comments', async (req) => {
+    if (req.method === 'GET') {
+      return new Response(JSON.stringify({ success: true, data: fixtureIssueComments.filter(c => c.issue_id === 'issue-001') }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (req.method === 'POST') {
+      const body = await req.json();
+      return new Response(JSON.stringify({ success: true, data: { id: 'new-comment', ...body } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ success: false, error: 'Method not allowed' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
+  
+  // Also handle with query params (doReader.list adds these)
+  stub.on('/api/issues/issue-001/comments?limit=500&offset=0', async () => {
+    return new Response(JSON.stringify({ success: true, data: fixtureIssueComments.filter(c => c.issue_id === 'issue-001') }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
+  
   // Actor lookup (required for auth - R3)
   stub.on('/api/actors?limit=500&offset=0', async () => {
     return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
@@ -241,6 +273,14 @@ function createMockStub(): MockDurableObjectStub {
   for (const spec of fixtureSpecs) {
     stub.on(`/api/specs/${spec.id}`, async () => {
       return new Response(JSON.stringify({ success: true, data: spec }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+  }
+  
+  for (const issue of fixtureIssues) {
+    stub.on(`/api/issues/${issue.id}`, async () => {
+      return new Response(JSON.stringify({ success: true, data: issue }), {
         headers: { 'Content-Type': 'application/json' },
       });
     });
@@ -1238,5 +1278,119 @@ describe('Regression Tests', () => {
     const response = await handleUi(request, mockEnv, mockStub as any);
     expect(response?.status).toBe(302);
     expect(response?.headers.get('Location')).toContain('github.com/login/oauth/authorize');
+  });
+
+  describe('Issue Comments Route Bug (Task 1)', () => {
+    it('FAILS: POST /app/issue_comments calls /api/issue_comments instead of /api/issues/:id/comments', async () => {
+      // This test verifies the bug exists: UI calls /api/issue_comments which doesn't exist
+      // After fix, it should call /api/issues/issue-001/comments
+      const formData = new FormData();
+      formData.append('issueId', 'issue-001');
+      formData.append('body', 'Test comment');
+
+      const request = new Request('http://localhost/app/issue_comments', {
+        method: 'POST',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+          'Origin': 'http://localhost',
+        },
+        body: formData,
+      });
+
+      const response = await handleUi(request, mockEnv, mockStub as any);
+      // Currently this fails because /api/issue_comments doesn't exist
+      // After fix, it should succeed
+      expect(response?.status).toBe(302);
+      expect(response?.headers.get('Location')).toContain('/app?ok=');
+    });
+
+    it('FAILS: GET /app/issues/:id shows empty comments because list uses /api/issue_comments', async () => {
+      // This test verifies the bug exists: UI calls /api/issue_comments for list which doesn't exist
+      // After fix, it should call /api/issues/issue-001/comments
+      const request = new Request('http://localhost/app/issues/issue-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, mockStub as any);
+      // Currently this returns empty comments because /api/issue_comments doesn't exist
+      // After fix, it should show the actual comments
+      expect(response?.status).toBe(200);
+      const body = await response?.text();
+      // Should show the comments, not "No comments yet"
+      expect(body).toContain('This looks good');
+    });
+  });
+
+  describe('DoReader Error Surfacing Bug (Task 2)', () => {
+    it('FAILS: doReader.list returns empty array for 404 instead of surfacing error', async () => {
+      // Create a stub that returns 404 for specs list
+      const errorStub = new MockDurableObjectStub();
+      errorStub.on('/api/actors?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      // Return 404 for repos list to trigger error
+      errorStub.on('/api/repositories?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      // Currently returns 200 with empty list, but should surface error
+      expect(response?.status).toBe(200);
+      const body = await response?.text();
+      // Should show error message, not empty list
+      expect(body).toContain('could not load');
+    });
+
+    it('FAILS: doReader.get returns null for 404 instead of surfacing error', async () => {
+      // Create a stub that returns 404 for a specific spec
+      const errorStub = new MockDurableObjectStub();
+      errorStub.on('/api/actors?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      errorStub.on('/api/specs?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: true, data: fixtureSpecs }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      errorStub.on('/api/specs/nonexistent', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/specs/nonexistent', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      // Currently returns 200 with "Not found" page, but should surface error
+      expect(response?.status).toBe(200);
+      const body = await response?.text();
+      // Should show error message, not "Not found" from the page function
+      expect(body).toContain('could not load');
+    });
   });
 });
