@@ -60,10 +60,6 @@ import type {
   GetHistoryRequest,
   ListFilter,
   HealthResponse,
-  CreateServiceAccountRequest,
-  ServiceAccountResponse,
-  ListServiceAccountsRequest,
-  RevokeServiceAccountRequest,
 } from './types';
 
 // Helper to generate ID for Spec DO lookup
@@ -303,17 +299,13 @@ export default {
     // SERVICE ACCOUNTS
     // ============================================================================
 
-    if (path === '/api/service-accounts' && method === 'POST') {
-      return handleCreateServiceAccount(request, specDoStub);
-    }
-    if (path === '/api/service-accounts' && method === 'GET') {
-      return handleListServiceAccounts(request, specDoStub);
-    }
-    if (path.match(/^\/api\/service-accounts\/[^\/]+$/) && method === 'GET') {
-      return handleGetServiceAccount(request, specDoStub);
-    }
-    if (path.match(/^\/api\/service-accounts\/[^\/]+\/revoke$/) && method === 'POST') {
-      return handleRevokeServiceAccount(request, specDoStub);
+    // Retired: the pre-m6 token scheme (hash on the account row). Its list exposed
+    // token_hash/token_salt to any read principal. Use /api/admin/service-accounts.
+    if (path === '/api/service-accounts' || path.startsWith('/api/service-accounts/')) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Gone: use /api/admin/service-accounts (master token)', timestamp: Date.now() }),
+        { status: 410, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     // ============================================================================
@@ -1846,55 +1838,6 @@ async function handleGetEntityHistory(
   const entityType = pathParts[pathParts.length - 3] as import('./types').GetHistoryRequest['entityType'];
   const entityId = pathParts[pathParts.length - 2];
   const response = await sendToSpecDo(stub, `/api/entities/${entityType}/${entityId}/history`, 'GET');
-  return response;
-}
-
-// ============================================================================
-// SERVICE ACCOUNTS
-// ============================================================================
-
-async function handleCreateServiceAccount(
-  request: Request,
-  stub: DurableObjectStub
-): Promise<Response> {
-  const body: import('./types').CreateServiceAccountRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
-  const response = await sendToSpecDo(stub, '/api/service-accounts', 'POST', body, actorId);
-  return response;
-}
-
-async function handleListServiceAccounts(
-  request: Request,
-  stub: DurableObjectStub
-): Promise<Response> {
-  const url = new URL(request.url);
-  const params = new URLSearchParams();
-  if (url.searchParams.get('organizationId')) params.set('organizationId', url.searchParams.get('organizationId')!);
-  if (url.searchParams.get('isActive')) params.set('isActive', url.searchParams.get('isActive')!);
-  if (url.searchParams.get('scope')) params.set('scope', url.searchParams.get('scope')!);
-  params.set('limit', url.searchParams.get('limit') || '100');
-  params.set('offset', url.searchParams.get('offset') || '0');
-  const response = await sendToSpecDo(stub, `/api/service-accounts?${params.toString()}`, 'GET');
-  return response;
-}
-
-async function handleGetServiceAccount(
-  request: Request,
-  stub: DurableObjectStub
-): Promise<Response> {
-  const id = extractId(request.url);
-  const response = await sendToSpecDo(stub, `/api/service-accounts/${id}`, 'GET');
-  return response;
-}
-
-async function handleRevokeServiceAccount(
-  request: Request,
-  stub: DurableObjectStub
-): Promise<Response> {
-  const id = extractParentId(request.url);
-  const body: import('./types').RevokeServiceAccountRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
-  const response = await sendToSpecDo(stub, `/api/service-accounts/${id}/revoke`, 'POST', body, actorId);
   return response;
 }
 

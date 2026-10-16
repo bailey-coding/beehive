@@ -141,8 +141,7 @@ describe('service account lifecycle', () => {
     ctx = setup();
   });
 
-  // SKIPPED pending maintainer decision: docs/OPEN-QUESTIONS.md, "Service accounts: API handler and Spec DO disagree (2026-10-15)"
-  it.skip('create returns plaintext once; only hash and prefix are stored; list never leaks', async () => {
+  it('create returns plaintext once; only hash and prefix are stored; list never leaks', async () => {
     const { res, json } = await mint(ctx.call);
     expect(res.status).toBe(201);
     expect(res.headers.get('Cache-Control')).toBe('no-store');
@@ -162,8 +161,7 @@ describe('service account lifecycle', () => {
     expect(text).toContain('monitor');
   });
 
-  // SKIPPED pending maintainer decision: docs/OPEN-QUESTIONS.md, "Service accounts: API handler and Spec DO disagree (2026-10-15)"
-  it.skip('rejects non-read scopes, bad names, duplicates', async () => {
+  it('rejects non-read scopes, bad names, duplicates', async () => {
     const bad = await ctx.call('/api/admin/service-accounts', 'POST', {
       token: MASTER, body: { name: 'e2e', scopes: ['read', 'write'] },
     });
@@ -176,8 +174,7 @@ describe('service account lifecycle', () => {
     expect((await mint(ctx.call)).res.status).toBe(409);
   });
 
-  // SKIPPED pending maintainer decision: docs/OPEN-QUESTIONS.md, "Service accounts: API handler and Spec DO disagree (2026-10-15)"
-  it.skip('read token: GET works, every write is 403, admin is 403, unknown route is 403', async () => {
+  it('read token: GET works, every write is 403, admin is 403, unknown route is 403', async () => {
     const { json } = await mint(ctx.call);
     const t = json.data.token.plaintext;
     expect((await ctx.call('/health', 'GET', { token: t })).status).toBe(200);
@@ -202,8 +199,7 @@ describe('service account lifecycle', () => {
     }
   });
 
-  // SKIPPED pending maintainer decision: docs/OPEN-QUESTIONS.md, "Service accounts: API handler and Spec DO disagree (2026-10-15)"
-  it.skip('spoofed X-Actor-ID is replaced with the service actor on reads', async () => {
+  it('spoofed X-Actor-ID is replaced with the service actor on reads', async () => {
     const { json } = await mint(ctx.call);
     const t = json.data.token.plaintext;
     ctx.calls.length = 0;
@@ -212,8 +208,7 @@ describe('service account lifecycle', () => {
     expect(((await who.json()) as any).data.actorId).toBe(json.data.account.actorId);
   });
 
-  // SKIPPED pending maintainer decision: docs/OPEN-QUESTIONS.md, "Service accounts: API handler and Spec DO disagree (2026-10-15)"
-  it.skip('revocation is immediate; unknown token is 401', async () => {
+  it('revocation is immediate; unknown token is 401', async () => {
     const { json } = await mint(ctx.call);
     const t = json.data.token.plaintext;
     expect((await ctx.call('/api/organizations', 'GET', { token: t })).status).toBe(200);
@@ -225,15 +220,13 @@ describe('service account lifecycle', () => {
     expect((await ctx.call('/api/admin/service-accounts/nope/revoke', 'POST', { token: MASTER })).status).toBe(404);
   });
 
-  // SKIPPED pending maintainer decision: docs/OPEN-QUESTIONS.md, "Service accounts: API handler and Spec DO disagree (2026-10-15)"
-  it.skip('expired token is 401', async () => {
+  it('expired token is 401', async () => {
     const { json } = await mint(ctx.call);
     ctx.db.prepare('UPDATE service_tokens SET expires_at = ?').run(Date.now() - 1000);
     expect((await ctx.call('/health', 'GET', { token: json.data.token.plaintext })).status).toBe(401);
   });
 
-  // SKIPPED pending maintainer decision: docs/OPEN-QUESTIONS.md, "Service accounts: API handler and Spec DO disagree (2026-10-15)"
-  it.skip('DO failure while verifying -> 503, never open', async () => {
+  it('DO failure while verifying -> 503, never open', async () => {
     const { json } = await mint(ctx.call);
     ctx.db.exec('DROP TABLE service_tokens');
     const res = await ctx.call('/health', 'GET', { token: json.data.token.plaintext });
@@ -290,5 +283,183 @@ describe('SQL adapter statement reuse', () => {
     expect(keys).toEqual(['initialized_at', 'schema_version']);
     const v = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as any;
     expect(v.value).toBe('m3');
+  });
+});
+
+describe('service token security properties (edge + real DO)', () => {
+  // Like setup(), but records every DO request body and lets a test replace the DO
+  function setupWithBodies() {
+    const { state, db } = fakeState();
+    const real = new SpecDO(state as never, {} as never);
+    const bodies: string[] = [];
+    const doHeaders: { path: string; actor: string | null }[] = [];
+    let override: ((req: Request) => Promise<Response>) | null = null;
+    const stub = {
+      fetch: async (req: Request) => {
+        bodies.push(await req.clone().text());
+        doHeaders.push({ path: new URL(req.url).pathname, actor: req.headers.get('X-Actor-ID') });
+        return override ? override(req) : real.fetch(req);
+      },
+    };
+    const env = { SPEC_DO: { idFromName: () => 'id', get: () => stub }, API_AUTH_TOKEN: MASTER };
+    const call = (path: string, method = 'GET', opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {}) =>
+      worker.fetch(
+        new Request(`http://localhost${path}`, {
+          method,
+          headers: {
+            ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+            ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+            ...opts.headers,
+          },
+          body: opts.body ? JSON.stringify(opts.body) : undefined,
+        }),
+        env as never,
+        {} as never
+      );
+    return { call, db, bodies, doHeaders, setOverride: (f: typeof override) => (override = f) };
+  }
+
+  it('plaintext never reaches the DO or any log line; the DO only sees the hash', async () => {
+    const logged: string[] = [];
+    const orig = { log: console.log, warn: console.warn, error: console.error, info: console.info, debug: console.debug };
+    for (const k of Object.keys(orig) as (keyof typeof orig)[]) {
+      console[k] = (...args: unknown[]) => void logged.push(args.map(String).join(' '));
+    }
+    try {
+      const ctx = setupWithBodies();
+      const created = await ctx.call('/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'monitor' } });
+      const json = (await created.json()) as any;
+      const t = json.data.token.plaintext as string;
+      const rotated = await ctx.call(`/api/admin/service-accounts/${json.data.account.id}/tokens`, 'POST', { token: MASTER });
+      const t2 = ((await rotated.json()) as any).data.token.plaintext as string;
+      await ctx.call('/api/organizations', 'GET', { token: t });
+      await ctx.call('/api/organizations', 'GET', { token: t2 });
+      await ctx.call(`/api/admin/service-accounts/${json.data.account.id}/revoke`, 'POST', { token: MASTER });
+      await ctx.call('/api/organizations', 'GET', { token: t });
+      ctx.db.exec('DROP TABLE service_tokens');
+      await ctx.call('/api/organizations', 'GET', { token: t2 });
+
+      const doTraffic = ctx.bodies.join('\n');
+      for (const secret of [t, t2]) {
+        expect(doTraffic).not.toContain(secret);
+        expect(doTraffic).not.toContain(secret.slice(12));
+        expect(logged.join('\n')).not.toContain(secret.slice(12));
+        expect(logged.join('\n')).not.toContain(await hashToken(secret));
+      }
+      expect(doTraffic).toContain(await hashToken(t));
+    } finally {
+      Object.assign(console, orig);
+    }
+  });
+
+  it('a service principal reaches the DO as its own actor whatever X-Actor-ID it sends', async () => {
+    const ctx = setupWithBodies();
+    const json = (await (await ctx.call('/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'monitor' } })).json()) as any;
+    const victim = 'some-human-actor';
+    ctx.doHeaders.length = 0;
+    for (const path of ['/api/specs', '/api/organizations', '/api/candidates', '/api/whoami']) {
+      expect((await ctx.call(path, 'GET', { token: json.data.token.plaintext, headers: { 'X-Actor-ID': victim } })).status).toBe(200);
+    }
+    // Read handlers forward no actor, or the rewritten one; the spoofed id never reaches the DO
+    expect(ctx.doHeaders.length).toBeGreaterThan(0);
+    for (const h of ctx.doHeaders) expect([null, json.data.account.actorId]).toContain(h.actor);
+    expect(ctx.bodies.join('\n')).not.toContain(victim);
+  });
+
+  it('service principals cannot purge, tombstone, grant roles, or read tombstones', async () => {
+    const ctx = setupWithBodies();
+    const json = (await (await ctx.call('/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'monitor' } })).json()) as any;
+    const t = json.data.token.plaintext;
+    ctx.doHeaders.length = 0;
+    for (const [method, path, body] of [
+      ['POST', '/api/admin/purge', { orgIds: ['x'], dryRun: true }],
+      ['DELETE', '/api/organizations/x', {}],
+      ['POST', `/api/admin/actors/${json.data.account.actorId}/role`, { role: 'maintainer' }],
+      ['GET', '/api/organizations?include_deleted=1', undefined],
+      ['POST', `/api/admin/service-accounts/${json.data.account.id}/tokens`, {}],
+      ['POST', `/api/admin/service-accounts/${json.data.account.id}/revoke`, {}],
+    ] as const) {
+      const res = await ctx.call(path, method, { token: t, body });
+      expect(res.status, `${method} ${path}`).toBe(403);
+    }
+    // Only the token verifications reached the DO
+    expect(ctx.doHeaders.every((h) => h.path === '/internal/service-tokens/verify')).toBe(true);
+  });
+
+  it('DO unreachable, erroring or answering a non-service principal -> 503, never master or anonymous', async () => {
+    const ctx = setupWithBodies();
+    const json = (await (await ctx.call('/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'monitor' } })).json()) as any;
+    const t = json.data.token.plaintext;
+    const answers: (() => Promise<Response>)[] = [
+      () => Promise.reject(new Error('DO down')),
+      async () => new Response('boom', { status: 500 }),
+      async () => new Response('not json', { status: 200 }),
+      async () => new Response(JSON.stringify({ success: true, data: { kind: 'master', actorId: 'x' } }), { status: 200 }),
+      async () => new Response(JSON.stringify({ success: true, data: { kind: 'service' } }), { status: 200 }),
+    ];
+    for (const answer of answers) {
+      ctx.setOverride(answer);
+      expect((await ctx.call('/api/organizations', 'GET', { token: t })).status).toBe(503);
+      expect((await ctx.call('/api/organizations', 'POST', { token: t, body: { name: 'x' } })).status).toBe(503);
+    }
+  });
+
+  it('rotation: a second token is shown once, both work, revoking one leaves the other', async () => {
+    const ctx = setupWithBodies();
+    const json = (await (await ctx.call('/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'monitor' } })).json()) as any;
+    const id = json.data.account.id;
+    const t1 = json.data.token.plaintext;
+    const rotated = await ctx.call(`/api/admin/service-accounts/${id}/tokens`, 'POST', { token: MASTER, body: { expiresInDays: 7 } });
+    expect(rotated.status).toBe(201);
+    expect(rotated.headers.get('Cache-Control')).toBe('no-store');
+    const token2 = ((await rotated.json()) as any).data.token;
+    expect(token2.plaintext.startsWith('bh_svc_')).toBe(true);
+    expect(token2.expiresAt - Date.now()).toBeLessThanOrEqual(7 * 24 * 3_600_000);
+
+    const list = await (await ctx.call('/api/admin/service-accounts', 'GET', { token: MASTER })).text();
+    expect(list).not.toContain(t1);
+    expect(list).not.toContain(token2.plaintext);
+    expect(list).toContain(token2.prefix);
+
+    const rev = await ctx.call(`/api/admin/service-accounts/${id}/tokens/${json.data.token.id}/revoke`, 'POST', { token: MASTER });
+    expect(rev.status).toBe(200);
+    expect((await ctx.call('/api/organizations', 'GET', { token: t1 })).status).toBe(401);
+    expect((await ctx.call('/api/organizations', 'GET', { token: token2.plaintext })).status).toBe(200);
+
+    expect((await ctx.call(`/api/admin/service-accounts/${id}/tokens`, 'POST', { token: MASTER, body: { expiresInDays: 0 } })).status).toBe(400);
+    expect((await ctx.call('/api/admin/service-accounts/nope/tokens', 'POST', { token: MASTER })).status).toBe(404);
+    await ctx.call(`/api/admin/service-accounts/${id}/revoke`, 'POST', { token: MASTER });
+    expect((await ctx.call(`/api/admin/service-accounts/${id}/tokens`, 'POST', { token: MASTER })).status).toBe(409);
+    expect((await ctx.call('/api/organizations', 'GET', { token: token2.plaintext })).status).toBe(401);
+  });
+
+  it('mint with an unknown X-Actor-ID -> 400; with a known one, it is recorded', async () => {
+    const ctx = setupWithBodies();
+    const bad = await ctx.call('/api/admin/service-accounts', 'POST', {
+      token: MASTER,
+      body: { name: 'monitor' },
+      headers: { 'X-Actor-ID': 'nobody' },
+    });
+    expect(bad.status).toBe(400);
+    const actor = (await (await ctx.call('/api/actors', 'POST', { token: MASTER, body: { type: 'human', name: 'alice' } })).json()) as any;
+    const ok = await ctx.call('/api/admin/service-accounts', 'POST', {
+      token: MASTER,
+      body: { name: 'monitor' },
+      headers: { 'X-Actor-ID': actor.data.id },
+    });
+    expect(ok.status).toBe(201);
+    expect(((await ok.json()) as any).data.account.createdBy).toBe(actor.data.id);
+  });
+
+  it('the retired /api/service-accounts routes answer 410 and never list hashes', async () => {
+    const ctx = setupWithBodies();
+    const json = (await (await ctx.call('/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'monitor' } })).json()) as any;
+    for (const token of [MASTER, json.data.token.plaintext]) {
+      const res = await ctx.call('/api/service-accounts', 'GET', { token });
+      expect(res.status).toBe(410);
+      expect(await res.text()).not.toContain('token_hash');
+      expect((await ctx.call(`/api/service-accounts/${json.data.account.id}`, 'GET', { token })).status).toBe(410);
+    }
+    expect((await ctx.call('/api/service-accounts', 'POST', { token: MASTER, body: { name: 'x', scopes: 'write' } })).status).toBe(410);
   });
 });

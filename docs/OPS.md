@@ -80,6 +80,37 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    500 rows, one transaction each. Refused (409) if a target candidate has an active
    promotion. `entity_history` and `purge_log` survive.
 
+### Service tokens: mint, rotate, revoke
+
+Live once the m5 -> m6 migration reaches the deploy flow (the Spec DO migrates on its next
+init). Read-only tokens (`bh_svc_...`) for monitors and scripts: `GET` on `/health`,
+`/api/whoami` and non-admin `/api/*`; every write, `/api/admin/*` and lifecycle route is 403.
+All admin calls need the master token; send `X-Actor-ID: <your actor id>` so the mint/revoke
+is attributed (without it, it is recorded as the reserved actor `master`; an unknown id is 400).
+
+1. **Mint.** `POST /api/admin/service-accounts {"name":"monitor","expiresInDays":90}`
+   (`name` `[a-z0-9-]`, unique for good, also after revocation; `scopes` may only be
+   `["read"]`; `expiresInDays` 1-365, default 90). The response carries
+   `data.token.plaintext` **exactly once** (`Cache-Control: no-store`). Store it in your
+   secret manager straight away; only its SHA-256 hash is kept and it cannot be shown
+   again. Each account gets its own actor (`svc:<name>`, type `agent`) and belongs to the
+   reserved organization `beehive-system` (never purged while it holds accounts).
+2. **List.** `GET /api/admin/service-accounts`: accounts with their tokens' `prefix`
+   (first 12 chars), `expiresAt`, `revokedAt` and `lastUsedAt` (updated at most once a
+   minute). Never plaintext or hashes. Check with `GET /api/whoami` using the token.
+3. **Rotate** (no downtime). `POST /api/admin/service-accounts/<accountId>/tokens
+   {"expiresInDays":90}` mints a second token for the same account (plaintext shown once).
+   Switch the client over, then revoke the old one:
+   `POST /api/admin/service-accounts/<accountId>/tokens/<tokenId>/revoke`.
+4. **Revoke.** `POST /api/admin/service-accounts/<accountId>/revoke` deactivates the
+   account and revokes all its tokens at once (401 on the next request; idempotent). A
+   revoked account cannot get new tokens: mint a new account under a new name.
+
+Expired tokens are 401. If the Spec DO cannot verify a token, the edge answers 503 (never
+anonymous, never master). Accounts from before m6 (if any) have no actor and no token rows,
+so they cannot authenticate: revoke them and mint new ones. The old `/api/service-accounts*`
+routes are retired (410).
+
 ### Last resort: wipe the whole ledger
 
 **Destructive and irreversible; human approval required.** Prefer tombstone + purge above.

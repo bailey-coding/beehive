@@ -48,8 +48,8 @@ not use mocks; with no workers running you get `ECONNREFUSED`.
 
 ### Local e2e status
 
-Verified 2026-10-15 with `scripts/start-e2e-workers.sh` and `npm run test:e2e:local`: 43 passed,
-7 skipped, **6 failed** (`ledger-lifecycle` passes). The 6 failures are all canary deploy /
+Verified 2026-10-16 with `scripts/start-e2e-workers.sh` and `npm run test:e2e:local`: 44 passed,
+7 skipped, **6 failed** (`ledger-lifecycle` and `service-tokens` pass). The 6 failures are all canary deploy /
 rollback (spine item 2, not built) and need the `preview-manager` worker, which the local
 script does not start:
 

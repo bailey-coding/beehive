@@ -68,9 +68,11 @@ export async function authenticate(
     try {
       const body = (await res.json()) as {
         success?: boolean;
-        data?: { actorId: string; serviceAccountId: string; promotionAuthority?: boolean };
+        data?: { kind?: string; actorId: string; serviceAccountId: string; promotionAuthority?: boolean };
       };
-      if (!body.success || !body.data?.actorId) return jsonError('Auth backend unavailable', 503);
+      if (!body.success || body.data?.kind !== 'service' || typeof body.data.actorId !== 'string' || !body.data.actorId) {
+        return jsonError('Auth backend unavailable', 503);
+      }
       return {
         kind: 'service',
         actorId: body.data.actorId,

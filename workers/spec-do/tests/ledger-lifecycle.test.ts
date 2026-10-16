@@ -107,13 +107,14 @@ describe('m4 -> m5 migration', () => {
 
     const restarted = makeSqliteState(raw, fresh.kv);
     await makeSpecDo(restarted).init();
-    expect(version(restarted)).toBe('m5');
+    // m5 -> m6 (service tokens) runs in the same pass
+    expect(version(restarted)).toBe('m6');
     expect(columns(restarted, 'organizations')).toEqual(expect.arrayContaining(['deleted_at', 'deleted_by', 'delete_reason']));
     expect(columns(restarted, 'actors')).toContain('role');
     expect(raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org' AND deleted_at IS NULL").get()).toEqual({ n: 1 });
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m5');
+    expect(version(restarted)).toBe('m6');
   });
 
   it('does not touch the entity_history CHECK', () => {

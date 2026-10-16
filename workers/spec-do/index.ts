@@ -19,11 +19,13 @@ import {
   PROMOTION_LEDGER_SQL,
   LEDGER_LIFECYCLE_SQL,
   LIFECYCLE_COLUMNS,
+  SERVICE_TOKENS_SQL,
 } from './schema-inline';
 
 class ConflictError extends Error {}
 class NotFoundError extends Error {}
 class ForbiddenError extends Error {}
+class BadRequestError extends Error {}
 
 // /promotion-states, /tournament-status, /merge-train-status, each with an optional /<id> segment
 const LEDGER_ROUTE = /^(\/promotion-states|\/tournament-status|\/merge-train-status)(?:\/([^\/]+))?$/;
@@ -71,6 +73,79 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 const placeholders = (n: number) => Array(n).fill('?').join(', ');
+
+// Service tokens. The edge validates the same rules; the DO re-checks them because
+// it is the store of record and is reachable from every worker with a SPEC_DO binding.
+const SERVICE_ACCOUNT_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const SERVICE_TOKEN_HASH = /^[0-9a-f]{64}$/;
+const SERVICE_TOKEN_PREFIX_SHAPE = /^bh_svc_[A-Za-z0-9_-]{5}$/;
+const MAX_SERVICE_TOKEN_LIFETIME_MS = 366 * 24 * 3_600_000;
+// last_used_at is a write on the read path; record it at most once per minute per token
+const LAST_USED_RESOLUTION_MS = 60_000;
+// Mints by the master token without X-Actor-ID are attributed to this reserved actor,
+// and accounts minted without an organization belong to this reserved org (both FK targets).
+const MASTER_ACTOR_ID = 'master';
+const SYSTEM_ORG_ID = 'beehive-system';
+
+// Explicit column lists: views never select token_hash or token_salt
+const SERVICE_ACCOUNT_COLUMNS =
+  'id, name, description, organization_id, actor_id, scopes, created_by, created_at, is_active, last_used_at';
+const SERVICE_TOKEN_COLUMNS =
+  'id, account_id, token_prefix, scopes, created_by, created_at, expires_at, revoked_at, last_used_at';
+
+interface ServiceTokenInput {
+  tokenHash: string;
+  tokenPrefix: string;
+  expiresAt: number;
+}
+
+function checkServiceTokenInput(body: Record<string, unknown>, at: number): ServiceTokenInput {
+  const { tokenHash, tokenPrefix, expiresAt } = body;
+  if (typeof tokenHash !== 'string' || !SERVICE_TOKEN_HASH.test(tokenHash)) {
+    throw new BadRequestError('tokenHash must be a lowercase SHA-256 hex digest');
+  }
+  if (typeof tokenPrefix !== 'string' || !SERVICE_TOKEN_PREFIX_SHAPE.test(tokenPrefix)) {
+    throw new BadRequestError('tokenPrefix must be the first 12 chars of a bh_svc_ token');
+  }
+  if (typeof expiresAt !== 'number' || !Number.isInteger(expiresAt) || expiresAt <= at || expiresAt > at + MAX_SERVICE_TOKEN_LIFETIME_MS) {
+    throw new BadRequestError('expiresAt must be a future epoch-ms time at most 366 days away');
+  }
+  return { tokenHash, tokenPrefix, expiresAt };
+}
+
+// Stored scope column -> scope list ('read_write' only on pre-m6 accounts)
+function scopesOf(stored: unknown): string[] {
+  return stored === 'read_write' ? ['read', 'write'] : [String(stored)];
+}
+
+function tokenView(t: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: t.id,
+    prefix: t.token_prefix,
+    scopes: scopesOf(t.scopes),
+    createdBy: t.created_by,
+    createdAt: t.created_at,
+    expiresAt: t.expires_at,
+    revokedAt: t.revoked_at ?? null,
+    lastUsedAt: t.last_used_at ?? null,
+  };
+}
+
+function accountView(r: Record<string, unknown>, tokens: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description ?? null,
+    actorId: r.actor_id ?? null,
+    organizationId: r.organization_id,
+    scopes: scopesOf(r.scopes),
+    isActive: r.is_active === 1,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+    lastUsedAt: r.last_used_at ?? null,
+    tokens: tokens.map(tokenView),
+  };
+}
 const bindCount = (sql: string) => (sql.match(/\?/g) || []).length;
 
 // Service binding type for Gate Workflow
@@ -150,7 +225,6 @@ import type {
   IssueCommentResponse,
   IssueSpecLinkResponse,
   IssueCandidateLinkResponse,
-  CreateServiceAccountRequest,
 } from '../api/types';
 
 interface Env {
@@ -307,22 +381,6 @@ interface EntityHistoryRow {
   metadata?: string;
 }
 
-// Service Account types
-interface ServiceAccountRow {
-  id: string;
-  name: string;
-  description?: string;
-  organization_id: string;
-  token_hash: string;
-  token_salt: string;
-  scopes: 'read' | 'write' | 'read_write';
-  created_by: string;
-  created_at: number;
-  expires_at?: number;
-  is_active: boolean;
-  last_used_at?: number;
-}
-
 // Helper to generate UUIDs
 function generateId(): string {
   return crypto.randomUUID();
@@ -373,6 +431,8 @@ export class SpecDO {
       this.db.exec(SCHEMA_SQL);
       // Tombstone columns + purge_log: a fresh ledger needs them before its first request
       this.applyLedgerLifecycle();
+      // service_accounts.actor_id + service_tokens: likewise
+      this.applyServiceTokens();
       
       // Mark as initialized
       await this.state.storage.put('schema_init', 'true');
@@ -450,27 +510,226 @@ export class SpecDO {
     stmt.free();
   }
 
-  /** Null when the token is unknown, revoked or expired. Reads promotion_authority live. */
+  /** True when the actor belongs to a service account (pre-m6 accounts have none). */
+  isServiceActor(actorId: string): boolean {
+    return this.queryAll(`SELECT 1 AS x FROM service_accounts WHERE actor_id = ? LIMIT 1`, actorId).length > 0;
+  }
+
+  /**
+   * Principal for a presented token's SHA-256 hash, or null when the token is
+   * unknown, revoked or expired, or its account is revoked, has no actor, or
+   * belongs to a tombstoned organization. Lookup is by hash (unique index); the
+   * DO never sees plaintext. Reads promotion_authority live; the edge ignores it.
+   */
   verifyServiceTokenHash(tokenHash: string): Record<string, unknown> | null {
-    const rows = this.queryAll(
-      `SELECT sa.expires_at AS token_expires, sa.is_active AS account_active,
-              sa.id AS account_id, sa.actor_id, sa.scopes, sa.organization_id,
-              ac.promotion_authority
-       FROM service_accounts sa
+    if (!SERVICE_TOKEN_HASH.test(tokenHash)) return null;
+    const at = now();
+    const r = this.queryAll(
+      `SELECT st.id AS token_id, st.scopes, st.last_used_at,
+              sa.id AS account_id, sa.actor_id, sa.organization_id, ac.promotion_authority
+       FROM service_tokens st
+       JOIN service_accounts sa ON sa.id = st.account_id
        JOIN actors ac ON ac.id = sa.actor_id
-       WHERE sa.token_hash = ? AND sa.is_active = 1`,
-      tokenHash
-    );
-    const r = rows[0];
+       JOIN organizations o ON o.id = sa.organization_id
+       WHERE st.token_hash = ? AND st.revoked_at IS NULL AND st.expires_at > ?
+         AND sa.is_active = 1 AND o.deleted_at IS NULL`,
+      tokenHash,
+      at
+    )[0];
     if (!r) return null;
-    if ((r.token_expires != null && (r.token_expires as number) <= now())) return null;
+    if (r.last_used_at == null || at - (r.last_used_at as number) >= LAST_USED_RESOLUTION_MS) {
+      this.state.storage.transactionSync(() => {
+        this.run(`UPDATE service_tokens SET last_used_at = ? WHERE id = ?`, at, r.token_id as string);
+        this.run(`UPDATE service_accounts SET last_used_at = ? WHERE id = ?`, at, r.account_id as string);
+      });
+    }
     return {
+      kind: 'service',
       actorId: r.actor_id,
       serviceAccountId: r.account_id,
-      scopes: r.scopes,
+      tokenId: r.token_id,
+      scopes: scopesOf(r.scopes),
       organizationId: r.organization_id,
       promotionAuthority: Boolean(r.promotion_authority),
     };
+  }
+
+  /** Account row plus its tokens (prefix and lifecycle only: never token_hash). */
+  private serviceAccountView(id: string): Record<string, unknown> | null {
+    const r = this.queryAll(`SELECT ${SERVICE_ACCOUNT_COLUMNS} FROM service_accounts WHERE id = ?`, id)[0];
+    if (!r) return null;
+    const tokens = this.queryAll(
+      `SELECT ${SERVICE_TOKEN_COLUMNS} FROM service_tokens WHERE account_id = ? ORDER BY created_at, id`,
+      id
+    );
+    return accountView(r, tokens);
+  }
+
+  listServiceAccounts(): Record<string, unknown>[] {
+    const tokens = new Map<string, Record<string, unknown>[]>();
+    for (const t of this.queryAll(`SELECT ${SERVICE_TOKEN_COLUMNS} FROM service_tokens ORDER BY created_at, id`)) {
+      const list = tokens.get(t.account_id as string) ?? [];
+      list.push(t);
+      tokens.set(t.account_id as string, list);
+    }
+    return this.queryAll(`SELECT ${SERVICE_ACCOUNT_COLUMNS} FROM service_accounts ORDER BY created_at DESC, id`).map((r) =>
+      accountView(r, tokens.get(r.id as string) ?? [])
+    );
+  }
+
+  /**
+   * FK-valid creator: an existing actor that is not a service account's, or the
+   * reserved master actor when the master token sent no X-Actor-ID. Runs inside
+   * the caller's transaction.
+   */
+  private resolveMinter(createdBy: unknown, at: number): string {
+    if (createdBy === undefined || createdBy === null || createdBy === 'unknown') {
+      this.run(
+        `INSERT OR IGNORE INTO actors (id, type, name, promotion_authority, created_at)
+         VALUES (?, 'human', 'master token (unattributed)', 0, ?)`,
+        MASTER_ACTOR_ID,
+        at
+      );
+      return MASTER_ACTOR_ID;
+    }
+    if (typeof createdBy !== 'string' || !this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, createdBy).length) {
+      throw new BadRequestError('createdBy (X-Actor-ID) must be an existing actor');
+    }
+    if (this.isServiceActor(createdBy)) throw new ForbiddenError('a service account cannot mint service tokens');
+    return createdBy;
+  }
+
+  /** A live organization; without one, the reserved system organization. Inside the caller's transaction. */
+  private resolveServiceOrganization(organizationId: unknown, at: number): string {
+    if (organizationId === undefined || organizationId === null) {
+      this.run(
+        `INSERT OR IGNORE INTO organizations (id, name, type, created_at) VALUES (?, ?, 'artifacts', ?)`,
+        SYSTEM_ORG_ID,
+        SYSTEM_ORG_ID,
+        at
+      );
+      organizationId = SYSTEM_ORG_ID;
+    }
+    if (typeof organizationId !== 'string') throw new BadRequestError('organizationId must be a string');
+    const org = this.queryAll(`SELECT deleted_at FROM organizations WHERE id = ?`, organizationId)[0];
+    if (!org) throw new BadRequestError(`organization ${organizationId} not found`);
+    if (org.deleted_at != null) throw new ConflictError(`organization ${organizationId} is tombstoned`);
+    return organizationId;
+  }
+
+  private insertServiceToken(accountId: string, token: ServiceTokenInput, createdBy: string, at: number): string {
+    const id = generateId();
+    this.run(
+      `INSERT INTO service_tokens (id, account_id, token_hash, token_prefix, scopes, created_by, created_at, expires_at)
+       VALUES (?, ?, ?, ?, 'read', ?, ?, ?)`,
+      id,
+      accountId,
+      token.tokenHash,
+      token.tokenPrefix,
+      createdBy,
+      at,
+      token.expiresAt
+    );
+    return id;
+  }
+
+  /**
+   * Actor + account + first token in one transaction. Read scope only. Returns
+   * the account and token views; the caller (edge) adds the plaintext it holds.
+   */
+  createServiceAccount(body: Record<string, unknown>): { account: Record<string, unknown>; token: Record<string, unknown> } {
+    const { name, description, scopes } = body;
+    if (typeof name !== 'string' || !SERVICE_ACCOUNT_NAME.test(name)) {
+      throw new BadRequestError('name must match [a-z0-9][a-z0-9-]{0,62}');
+    }
+    if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== 'read') {
+      throw new BadRequestError("Only scopes ['read'] are supported");
+    }
+    if (description !== undefined && description !== null && (typeof description !== 'string' || description.length > 200)) {
+      throw new BadRequestError('description must be a string of at most 200 chars');
+    }
+    const at = now();
+    const token = checkServiceTokenInput(body, at);
+    return this.state.storage.transactionSync(() => {
+      if (this.queryAll(`SELECT 1 AS x FROM service_accounts WHERE name = ?`, name).length) {
+        throw new ConflictError(`service account ${name} already exists`);
+      }
+      const createdBy = this.resolveMinter(body.createdBy, at);
+      const organizationId = this.resolveServiceOrganization(body.organizationId, at);
+      const accountId = generateId();
+      const actorId = generateId();
+      this.run(
+        `INSERT INTO actors (id, type, name, trust_score, promotion_authority, created_at) VALUES (?, 'agent', ?, 0, 0, ?)`,
+        actorId,
+        `svc:${name}`,
+        at
+      );
+      // token_hash/token_salt are legacy NOT NULL columns: tokens live in service_tokens
+      this.run(
+        `INSERT INTO service_accounts
+           (id, name, description, organization_id, token_hash, token_salt, scopes, created_by, created_at, is_active, actor_id)
+         VALUES (?, ?, ?, ?, '', '', 'read', ?, ?, 1, ?)`,
+        accountId,
+        name,
+        (description as string | undefined) ?? null,
+        organizationId,
+        createdBy,
+        at,
+        actorId
+      );
+      const tokenId = this.insertServiceToken(accountId, token, createdBy, at);
+      this.recordHistory('service_account', accountId, 'created', createdBy, undefined, JSON.stringify({ actorId, tokenId }));
+      const account = this.serviceAccountView(accountId)!;
+      const tokens = account.tokens as Record<string, unknown>[];
+      return { account, token: tokens[0] };
+    });
+  }
+
+  /** Another token for an active account (rotation). Read scope only. */
+  createServiceToken(accountId: string, body: Record<string, unknown>): Record<string, unknown> {
+    const at = now();
+    const token = checkServiceTokenInput(body, at);
+    return this.state.storage.transactionSync(() => {
+      const account = this.queryAll(`SELECT is_active, actor_id FROM service_accounts WHERE id = ?`, accountId)[0];
+      if (!account) throw new NotFoundError(`service account ${accountId} not found`);
+      if (account.is_active !== 1) throw new ConflictError(`service account ${accountId} is revoked`);
+      if (account.actor_id == null) {
+        throw new ConflictError(`service account ${accountId} predates service tokens (no actor); mint a new account`);
+      }
+      const createdBy = this.resolveMinter(body.createdBy, at);
+      const tokenId = this.insertServiceToken(accountId, token, createdBy, at);
+      this.recordHistory('service_account', accountId, 'token_created', createdBy, undefined, JSON.stringify({ tokenId }));
+      return tokenView(this.queryAll(`SELECT ${SERVICE_TOKEN_COLUMNS} FROM service_tokens WHERE id = ?`, tokenId)[0]);
+    });
+  }
+
+  /** Deactivates the account and revokes all its tokens. Idempotent; false when unknown. */
+  revokeServiceAccount(id: string, actorId: string): boolean {
+    return this.state.storage.transactionSync(() => {
+      const account = this.queryAll(`SELECT is_active FROM service_accounts WHERE id = ?`, id)[0];
+      if (!account) return false;
+      const at = now();
+      const live = this.queryAll(`SELECT id FROM service_tokens WHERE account_id = ? AND revoked_at IS NULL`, id);
+      if (account.is_active !== 0 || live.length) {
+        this.run(`UPDATE service_accounts SET is_active = 0 WHERE id = ?`, id);
+        this.run(`UPDATE service_tokens SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL`, at, id);
+        this.recordHistory('service_account', id, 'revoked', actorId, undefined, JSON.stringify({ tokenIds: live.map((t) => t.id) }));
+      }
+      return true;
+    });
+  }
+
+  /** Revokes one token of an account. Idempotent; false when the pair is unknown. */
+  revokeServiceToken(accountId: string, tokenId: string, actorId: string): boolean {
+    return this.state.storage.transactionSync(() => {
+      const token = this.queryAll(`SELECT revoked_at FROM service_tokens WHERE id = ? AND account_id = ?`, tokenId, accountId)[0];
+      if (!token) return false;
+      if (token.revoked_at == null) {
+        this.run(`UPDATE service_tokens SET revoked_at = ? WHERE id = ?`, now(), tokenId);
+        this.recordHistory('service_account', accountId, 'token_revoked', actorId, undefined, JSON.stringify({ tokenId }));
+      }
+      return true;
+    });
   }
 
   /**
@@ -517,7 +776,7 @@ export class SpecDO {
     // tournaments, merge_trains). Additive only: CREATE TABLE/INDEX IF NOT EXISTS.
     // Runs on any pre-m4 version so the routes work on first init after deploy;
     // an m2 ledger reaches m3 in ensureServiceAccountTables() and m4 next init.
-    if (currentVersion !== 'm4' && currentVersion !== 'm5') {
+    if (currentVersion !== 'm4' && currentVersion !== 'm5' && currentVersion !== 'm6') {
       try {
         this.db.exec(PROMOTION_LEDGER_SQL);
         const updateVersion = this.db.prepare(
@@ -536,7 +795,7 @@ export class SpecDO {
     // purge_log). Additive only: ALTER TABLE ADD COLUMN behind a PRAGMA check,
     // CREATE TABLE/INDEX IF NOT EXISTS. No table rebuild, no CHECK change.
     // Runs on any pre-m5 version, like m4; the version only advances m4 -> m5.
-    if (currentVersion !== 'm5') {
+    if (currentVersion !== 'm5' && currentVersion !== 'm6') {
       try {
         this.applyLedgerLifecycle();
         const updateVersion = this.db.prepare(
@@ -550,6 +809,39 @@ export class SpecDO {
         console.log('[SpecDO] Migration to m5 failed:', e instanceof Error ? e.message : String(e));
       }
     }
+
+    // Migration from m5 to m6: service tokens (service_accounts.actor_id behind a
+    // PRAGMA check, service_tokens table, indexes). Additive only, no table rebuild.
+    // Runs on any pre-m6 version, like m5; the version only advances m5 -> m6.
+    if (currentVersion !== 'm6') {
+      try {
+        this.applyServiceTokens();
+        const updateVersion = this.db.prepare(
+          "UPDATE metadata SET value = 'm6', updated_at = ? WHERE key = 'schema_version' AND value = 'm5'"
+        );
+        updateVersion.bind(now());
+        updateVersion.step();
+        updateVersion.free();
+      } catch (e) {
+        // Logged, not thrown: service-token verify then fails closed (DO 500 -> edge 503)
+        console.log('[SpecDO] Migration to m6 failed:', e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
+
+  /**
+   * Idempotent: service_accounts (an m2 ledger may not have it yet), its actor_id
+   * column if missing, then service_tokens and indexes. Pre-m6 accounts keep
+   * actor_id NULL and have no token rows, so they cannot authenticate (fail closed).
+   */
+  private applyServiceTokens(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.exec(SERVICE_ACCOUNTS_SQL);
+    const existing = new Set(this.queryAll(`PRAGMA table_info(service_accounts)`).map((c) => c.name as string));
+    if (!existing.has('actor_id')) {
+      this.db.exec(`ALTER TABLE service_accounts ADD COLUMN actor_id TEXT REFERENCES actors(id)`);
+    }
+    this.db.exec(SERVICE_TOKENS_SQL);
   }
 
   /** Idempotent: adds only the lifecycle columns that are missing, then purge_log and indexes. */
@@ -1437,44 +1729,55 @@ export class SpecDO {
         headers: { 'Content-Type': 'application/json' },
       });
 
-    if (path === '/internal/service-accounts' && method === 'POST') {
-      const body = (await request.json()) as {
-        name: string;
-        scopes: string[];
-        description?: string;
-        tokenHash: string;
-        tokenPrefix: string;
-        tokenSalt?: string;
-        expiresAt: number | null;
-        organizationId?: string;
-        createdBy?: string;
-      };
-      // Convert old format to new format
-      // Old: scopes as string[], tokenPrefix
-      // New: scopes as union type, tokenSalt
-      const scope = body.scopes?.[0] as 'read' | 'write' | 'read_write' | undefined;
-      const sa = this.createServiceAccount(
-        body.name,
-        body.description ?? '',
-        body.organizationId ?? 'default',
-        body.tokenHash,
-        body.tokenSalt ?? body.tokenPrefix, // Use tokenSalt if provided, otherwise fall back to tokenPrefix
-        scope ?? 'read',
-        body.createdBy ?? 'master',
-        body.expiresAt ?? undefined
-      );
-      return json(sa, 201);
-    }
-    if (path === '/internal/service-accounts' && method === 'GET') {
-      return json(this.listServiceAccounts());
-    }
-    const revoke = path.match(/^\/internal\/service-accounts\/([^\/]+)\/revoke$/);
-    if (revoke && method === 'POST') {
-      return this.revokeServiceAccount(revoke[1]) ? json({ revoked: true }) : fail('Not found', 404);
+    // Service accounts: master-only at the edge. X-Actor-ID is the minting/revoking actor (audit).
+    const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+    const accountRoute = path.match(/^\/internal\/service-accounts\/([^\/]+)\/(revoke|tokens)$/);
+    const tokenRevoke = path.match(/^\/internal\/service-accounts\/([^\/]+)\/tokens\/([^\/]+)\/revoke$/);
+    const readBody = async (): Promise<Record<string, unknown>> => {
+      try {
+        const body = await request.json();
+        if (body && typeof body === 'object' && !Array.isArray(body)) return body as Record<string, unknown>;
+      } catch {
+        // fall through
+      }
+      throw new BadRequestError('invalid JSON body');
+    };
+    try {
+      if (path === '/internal/service-accounts' && method === 'POST') {
+        const body = await readBody();
+        // The minting actor comes from the header, never from the body
+        return json(this.createServiceAccount({ ...body, createdBy: request.headers.get('X-Actor-ID') ?? undefined }), 201);
+      }
+      if (path === '/internal/service-accounts' && method === 'GET') {
+        return json(this.listServiceAccounts());
+      }
+      if (accountRoute && method === 'POST' && accountRoute[2] === 'revoke') {
+        return this.revokeServiceAccount(decodeURIComponent(accountRoute[1]), actorId)
+          ? json({ revoked: true })
+          : fail('Not found', 404);
+      }
+      if (accountRoute && method === 'POST' && accountRoute[2] === 'tokens') {
+        const body = await readBody();
+        const token = this.createServiceToken(decodeURIComponent(accountRoute[1]), {
+          ...body,
+          createdBy: request.headers.get('X-Actor-ID') ?? undefined,
+        });
+        return json({ token }, 201);
+      }
+      if (tokenRevoke && method === 'POST') {
+        return this.revokeServiceToken(decodeURIComponent(tokenRevoke[1]), decodeURIComponent(tokenRevoke[2]), actorId)
+          ? json({ revoked: true })
+          : fail('Not found', 404);
+      }
+    } catch (e) {
+      const status =
+        e instanceof BadRequestError ? 400 : e instanceof ForbiddenError ? 403 : e instanceof NotFoundError ? 404 : e instanceof ConflictError ? 409 : 0;
+      if (status) return fail(e instanceof Error ? e.message : String(e), status);
+      throw e;
     }
     if (path === '/internal/service-tokens/verify' && method === 'POST') {
-      const { tokenHash } = (await request.json()) as { tokenHash?: string };
-      if (!tokenHash) return fail('tokenHash required', 400);
+      const { tokenHash } = (await request.json()) as { tokenHash?: unknown };
+      if (typeof tokenHash !== 'string' || !SERVICE_TOKEN_HASH.test(tokenHash)) return fail('tokenHash must be a SHA-256 hex digest', 400);
       const principal = this.verifyServiceTokenHash(tokenHash);
       return principal ? json(principal) : fail('Not found', 404);
     }
@@ -1488,9 +1791,18 @@ export class SpecDO {
   // entity_history for the types its CHECK allows (spec, candidate, issue).
   // ============================================================================
 
-  /** role='maintainer'. Service principals never reach here: the edge allows lifecycle routes for master only. */
+  /**
+   * role='maintainer', and not a service account's actor. Service principals never
+   * reach the lifecycle routes (edge: master only); the DO refuses them as well.
+   */
   isMaintainer(actorId: string): boolean {
-    return this.queryAll(`SELECT 1 AS ok FROM actors WHERE id = ? AND role = 'maintainer'`, actorId).length > 0;
+    return (
+      this.queryAll(
+        `SELECT 1 AS ok FROM actors a WHERE a.id = ? AND a.role = 'maintainer'
+           AND NOT EXISTS (SELECT 1 FROM service_accounts sa WHERE sa.actor_id = a.id)`,
+        actorId
+      ).length > 0
+    );
   }
 
   private purgeMinAgeHours(): number {
@@ -1768,6 +2080,9 @@ export class SpecDO {
       if (!this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, targetId).length) {
         throw new NotFoundError(`actor ${targetId} not found`);
       }
+      if (role !== null && this.isServiceActor(targetId)) {
+        throw new ForbiddenError('a service account actor cannot hold a role');
+      }
       const maintainers = this.queryAll(`SELECT COUNT(*) AS n FROM actors WHERE role = 'maintainer'`)[0].n as number;
       const bootstrap = maintainers === 0 && role === 'maintainer' && callerId === targetId;
       if (!bootstrap && !this.isMaintainer(callerId)) {
@@ -1798,6 +2113,9 @@ export class SpecDO {
         headers: { 'Content-Type': 'application/json' },
       });
     const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+    // Defence in depth: the edge allows these routes for the master principal only.
+    // A service account's actor never tombstones, purges or changes a role.
+    if (this.isServiceActor(actorId)) return respond({ error: 'service account actors cannot use lifecycle routes' }, 403);
 
     let raw: unknown;
     try {
@@ -2929,103 +3247,6 @@ export class SpecDO {
       }
 
       // ============================================================================
-      // SERVICE ACCOUNTS
-      // ============================================================================
-      
-      if (path === '/api/service-accounts' && method === 'POST') {
-        const body: CreateServiceAccountRequest = await request.json();
-        const { generateTokenSet } = await import('../shared/auth');
-        const { token, hash, salt } = await generateTokenSet();
-        const sa = this.createServiceAccount(
-          body.name,
-          body.description || '',
-          body.organizationId,
-          hash,
-          salt,
-          body.scopes,
-          actorId,
-          body.expiresAt
-        );
-        return new Response(JSON.stringify({
-          success: true,
-          data: { ...sa, token },
-          timestamp: Date.now()
-        }), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      
-      if (path === '/api/service-accounts' && method === 'GET') {
-        const organizationId = url.searchParams.get('organizationId') ?? undefined;
-        const isActive = url.searchParams.get('isActive');
-        const scope = url.searchParams.get('scope') as 'read' | 'write' | 'read_write' | undefined;
-        const limit = parseInt(url.searchParams.get('limit') || '100');
-        const offset = parseInt(url.searchParams.get('offset') || '0');
-        const sas = this.listServiceAccounts(
-          organizationId,
-          isActive ? isActive === 'true' : undefined,
-          scope,
-          limit,
-          offset
-        );
-        return new Response(JSON.stringify({ success: true, data: sas, timestamp: Date.now() }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      
-      if (path.match(/^\/api\/service-accounts\/[^\/]+$/) && method === 'GET') {
-        const id = this.extractId(path);
-        const sa = this.getServiceAccount(id);
-        if (!sa) {
-          return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        return new Response(JSON.stringify({ success: true, data: sa, timestamp: Date.now() }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      
-      if (path.match(/^\/api\/service-accounts\/[^\/]+\/revoke$/) && method === 'POST') {
-        const id = this.extractParentId(path);
-        const body: { reason?: string } = await request.json();
-        const success = this.revokeServiceAccount(id, body.reason);
-        if (!success) {
-          return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        return new Response(JSON.stringify({ success: true, timestamp: Date.now() }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      
-      if (path.match(/^\/api\/service-accounts\/[^\/]+\/verify$/) && method === 'POST') {
-        const id = this.extractParentId(path);
-        const body: { token: string } = await request.json();
-        const isValid = await this.verifyServiceAccountToken(id, body.token);
-        if (!isValid) {
-          return new Response(JSON.stringify({ success: false, isValid: false, error: 'Invalid token', timestamp: Date.now() }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        const sa = this.getServiceAccount(id);
-        if (!sa) {
-          return new Response(JSON.stringify({ success: false, isValid: false, error: 'Not found', timestamp: Date.now() }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        return new Response(JSON.stringify({ success: true, isValid: true, scopes: sa.scopes, timestamp: Date.now() }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-
-      // ============================================================================
       // 404
       // ============================================================================
       
@@ -3551,172 +3772,6 @@ export class SpecDO {
   /**
    * Poll for task result with timeout
    */
-
-  // ============================================================================
-  // SERVICE ACCOUNTS
-  // ============================================================================
-
-  createServiceAccount(
-    name: string,
-    description: string,
-    organizationId: string,
-    tokenHash: string,
-    tokenSalt: string,
-    scopes: 'read' | 'write' | 'read_write',
-    createdBy: string,
-    expiresAt?: number
-  ): ServiceAccountRow {
-    if (!this.db) throw new Error('Database not initialized');
-
-    const id = generateId();
-    const stmt = this.db.prepare(
-      `INSERT INTO service_accounts 
-        (id, name, description, organization_id, token_hash, token_salt, scopes, created_by, created_at, expires_at, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    stmt.bind(
-      id,
-      name,
-      description || null,
-      organizationId,
-      tokenHash,
-      tokenSalt,
-      scopes,
-      createdBy,
-      now(),
-      expiresAt || null,
-      1
-    );
-    stmt.step();
-    stmt.free();
-
-    return {
-      id,
-      name,
-      description,
-      organization_id: organizationId,
-      token_hash: tokenHash,
-      token_salt: tokenSalt,
-      scopes,
-      created_by: createdBy,
-      created_at: now(),
-      expires_at: expiresAt,
-      is_active: true,
-    };
-  }
-
-  getServiceAccount(id: string): ServiceAccountRow | null {
-    if (!this.db) throw new Error('Database not initialized');
-
-    const stmt = this.db.prepare(
-      `SELECT * FROM service_accounts WHERE id = ?`
-    );
-    stmt.bind(id);
-    const has = stmt.step();
-    const row = has ? this.rowToServiceAccount(stmt) : null;
-    stmt.free();
-
-    return row;
-  }
-
-  listServiceAccounts(
-    organizationId?: string,
-    isActive?: boolean,
-    scope?: 'read' | 'write' | 'read_write',
-    limit: number = 100,
-    offset: number = 0
-  ): ServiceAccountRow[] {
-    if (!this.db) throw new Error('Database not initialized');
-
-    let sql = `
-      SELECT * FROM service_accounts
-      WHERE 1=1
-    `;
-    const params: (string | number | null)[] = [];
-
-    if (organizationId) {
-      sql += ` AND organization_id = ?`;
-      params.push(organizationId);
-    }
-    if (isActive !== undefined) {
-      sql += ` AND is_active = ?`;
-      params.push(isActive ? 1 : 0);
-    }
-    if (scope) {
-      sql += ` AND scopes = ?`;
-      params.push(scope);
-    }
-
-    sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-
-    const stmt = this.db.prepare(sql);
-    params.forEach((param, index) => stmt.bind(index + 1, param));
-
-    const rows: ServiceAccountRow[] = [];
-    while (stmt.step()) {
-      rows.push(this.rowToServiceAccount(stmt));
-    }
-    stmt.free();
-
-    return rows;
-  }
-
-  revokeServiceAccount(id: string, reason?: string): boolean {
-    if (!this.db) throw new Error('Database not initialized');
-
-    const stmt = this.db.prepare(
-      `UPDATE service_accounts SET is_active = 0 WHERE id = ?`
-    );
-    stmt.bind(id);
-    stmt.step();
-    stmt.free();
-
-    this.recordHistory(
-      'service_account',
-      id,
-      'revoked',
-      'system',
-      reason || 'Revoked by admin'
-    );
-    return true;
-  }
-
-  async verifyServiceAccountToken(
-    serviceAccountId: string,
-    token: string
-  ): Promise<boolean> {
-    const sa = this.getServiceAccount(serviceAccountId);
-    if (!sa || !sa.is_active) {
-      return false;
-    }
-
-    if (sa.expires_at && sa.expires_at < Date.now()) {
-      return false;
-    }
-
-    const { verifyToken } = await import('../shared/auth');
-    return verifyToken(token, sa.token_hash, sa.token_salt);
-  }
-
-  // Helper to convert SQLite row to ServiceAccountRow
-  private rowToServiceAccount(stmt: any): ServiceAccountRow {
-    return {
-      id: stmt.get(0) as string,
-      name: stmt.get(1) as string,
-      description: stmt.get(2) as string | undefined,
-      organization_id: stmt.get(3) as string,
-      token_hash: stmt.get(4) as string,
-      token_salt: stmt.get(5) as string,
-      scopes: stmt.get(6) as 'read' | 'write' | 'read_write',
-      created_by: stmt.get(7) as string,
-      created_at: stmt.get(8) as number,
-      expires_at: stmt.get(9) as number | undefined,
-      is_active: (stmt.get(10) as number) === 1,
-      last_used_at: stmt.get(11) as number | undefined,
-    };
-  }
-
 
   private async pollForResult(
     sandboxRunnerUrl: string,

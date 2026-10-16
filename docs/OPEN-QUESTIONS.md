@@ -185,7 +185,9 @@ DO migrates only once this reaches `main`. Usage: `docs/OPS.md` "Ledger cleanup"
   `repository`, and no table rebuild was allowed. Tombstone/purge of specs, candidates and issues
   writes `entity_history` rows (stage `tombstoned` / `purged`); orgs and repos are audited only in
   `purge_log` (one row per tombstone, purge, role change, including refusals and dry runs).
-- **Service principals vs. maintainer.** `service_accounts` has no `actor_id` column, so the DO
+- **Service principals vs. maintainer.** (Resolved on `agent/service-accounts`, m6: accounts
+  have `actor_id`, and the DO refuses service actors on tombstone, purge and role routes.)
+  `service_accounts` has no `actor_id` column, so the DO
   cannot tell a service account's actor from a human one. "Service principals never purge" is
   enforced at the edge (`principal.kind !== 'master'` -> 403 on every lifecycle route, including
   `?include_deleted=1` reads). Related pre-existing defect: `verifyServiceTokenHash`
@@ -256,7 +258,11 @@ service-accounts 7, ui 11) plus 43 e2e failures when no workers run. After this 
 
 ### Service accounts: API handler and Spec DO disagree (2026-10-15)
 
-**Status**: Open. Needs a maintainer decision; auth logic, so not changed by this branch. 7 tests
+**Status**: **Resolved on branch `agent/service-accounts`** (2026-10-16): the maintainer chose
+the `service_tokens` + actor-per-account design; see "2026-10-16: Service tokens (m5 -> m6)"
+below. The 7 tests are un-skipped there. Text below is the finding as it stood.
+
+Was: open, needing a maintainer decision. 7 tests
 in `workers/api/tests/service-accounts.test.ts` are `it.skip` (create/list, scope and name
 validation, read-token authorization, spoofed `X-Actor-ID`, revocation, expiry, DO failure -> 503).
 
@@ -276,6 +282,35 @@ validation, read-token authorization, spoofed `X-Actor-ID`, revocation, expiry, 
 **Want**: pick one design (a `service_tokens` table plus an actor per service account, as the
 tests assume, or the account-row design), then align schema, DO routes, `verifyServiceTokenHash`
 and the handler, and un-skip the tests. Until then, service tokens cannot authenticate.
+
+---
+
+## 2026-10-16: Service tokens (m5 -> m6) (branch `agent/service-accounts`)
+
+Resolves "Service accounts: API handler and Spec DO disagree" above. Usage: `docs/OPS.md`
+"Service tokens". Reaches the live DO only through the maintainer's deploy flow.
+
+- **Migration m5 -> m6, additive:** `service_accounts.actor_id` (PRAGMA-guarded `ALTER TABLE ADD
+  COLUMN`), new `service_tokens` (unique index on `token_hash`), indexes. No rebuild. Verified
+  locally on a real workerd m3 ledger (m3 -> m6 in one restart) and in node:sqlite from m5.
+- **Pre-m6 accounts fail closed:** no actor, no token rows, so they never authenticate; they list
+  with `actorId: null` and can be revoked, not given new tokens. Their legacy `token_hash`/
+  `token_salt` columns are never read; new rows write `''` there (NOT NULL, no rebuild).
+- **Service actor type is `agent`:** the `actors.type` CHECK has no `service` and widening it
+  needs a rebuild. A service actor is identified by `service_accounts.actor_id`, not by type.
+- **Reserved rows (inference, human call):** master mints without `X-Actor-ID` are attributed to
+  a reserved actor `master` (type `human`); accounts belong to a reserved org `beehive-system`
+  (both FK targets; created on first mint). An unknown `X-Actor-ID` on mint is 400. The org shows
+  in org lists and is never purged while it holds accounts (purge skips such orgs).
+- **Retired `/api/service-accounts*` (410):** a third, older token scheme. Its `GET` was open to
+  any read principal and listed `token_hash`/`token_salt`. The DO routes behind it are removed.
+- **Defence in depth in the DO:** lifecycle routes (tombstone, purge, role) refuse a service
+  actor as caller (403); a role cannot be granted to a service actor; `isMaintainer` is false for
+  service actors even with `role` set out of band. Tokens of a tombstoned org stop verifying.
+- **Not changed:** `PATCH /api/actors/:id/promotion-authority` can still set the flag on a service
+  actor (master only); the edge always gives service principals `promotionAuthority: false`.
+- **Open:** if the m6 step fails, `isServiceActor` throws, so lifecycle routes answer 500 for
+  the master token too (fail closed) until the migration succeeds.
 
 ---
 

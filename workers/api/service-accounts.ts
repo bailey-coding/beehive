@@ -24,14 +24,33 @@ function err(error: string, status: number): Response {
   });
 }
 
-function toDo(stub: DurableObjectStub, path: string, method: string, body?: unknown): Promise<Response> {
+// X-Actor-ID is the master principal's actor ('unknown' without the header): the DO
+// records it as the minting/revoking actor. Fresh headers, never the client's.
+function toDo(stub: DurableObjectStub, path: string, method: string, actorId: string, body?: unknown): Promise<Response> {
   return stub.fetch(
     new Request(`https://spec-do.internal${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Actor-ID': actorId },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   );
+}
+
+async function doError(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    return typeof body.error === 'string' ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function expiresAtFrom(days: unknown): number | Response {
+  const d = days ?? DEFAULT_EXPIRES_IN_DAYS;
+  if (typeof d !== 'number' || !Number.isInteger(d) || d < 1 || d > MAX_EXPIRES_IN_DAYS) {
+    return err(`expiresInDays must be an integer 1-${MAX_EXPIRES_IN_DAYS}`, 400);
+  }
+  return Date.now() + d * 24 * 60 * 60 * 1000;
 }
 
 /** Returns a Response for /api/admin/service-accounts* and /api/whoami, else null. */
@@ -74,16 +93,13 @@ export async function handleServiceAccountRoutes(
     if (body.description !== undefined && (typeof body.description !== 'string' || body.description.length > 200)) {
       return err('description must be a string of at most 200 chars', 400);
     }
-    const days = body.expiresInDays ?? DEFAULT_EXPIRES_IN_DAYS;
-    if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > MAX_EXPIRES_IN_DAYS) {
-      return err(`expiresInDays must be an integer 1-${MAX_EXPIRES_IN_DAYS}`, 400);
-    }
+    const expiresAt = expiresAtFrom(body.expiresInDays);
+    if (expiresAt instanceof Response) return expiresAt;
 
     const plaintext = generateServiceToken();
-    const expiresAt = Date.now() + days * 24 * 60 * 60 * 1000;
     let res: Response;
     try {
-      res = await toDo(stub, '/internal/service-accounts', 'POST', {
+      res = await toDo(stub, '/internal/service-accounts', 'POST', principal.actorId, {
         name: body.name,
         scopes: ['read'],
         description: body.description,
@@ -91,12 +107,12 @@ export async function handleServiceAccountRoutes(
         tokenPrefix: tokenPrefix(plaintext),
         expiresAt,
         organizationId: principal.organizationId,
-        createdBy: principal.actorId,
       });
     } catch {
       return err('Auth backend unavailable', 503);
     }
     if (res.status === 409) return err('Service account name already exists', 409);
+    if (res.status === 400) return err(await doError(res, 'Invalid request'), 400);
     if (res.status !== 201) return err('Failed to create service account', 502);
     const created = ((await res.json()) as { data: { account: unknown; token: Record<string, unknown> } }).data;
     return json(
@@ -108,7 +124,7 @@ export async function handleServiceAccountRoutes(
 
   if (path === '/api/admin/service-accounts' && method === 'GET') {
     try {
-      const res = await toDo(stub, '/internal/service-accounts', 'GET');
+      const res = await toDo(stub, '/internal/service-accounts', 'GET', principal.actorId);
       if (res.status !== 200) return err('Auth backend unavailable', 503);
       return json(((await res.json()) as { data: unknown }).data);
     } catch {
@@ -119,7 +135,55 @@ export async function handleServiceAccountRoutes(
   const revoke = path.match(/^\/api\/admin\/service-accounts\/([^/]+)\/revoke$/);
   if (revoke && method === 'POST') {
     try {
-      const res = await toDo(stub, `/internal/service-accounts/${encodeURIComponent(revoke[1])}/revoke`, 'POST');
+      const res = await toDo(stub, `/internal/service-accounts/${encodeURIComponent(revoke[1])}/revoke`, 'POST', principal.actorId);
+      if (res.status === 404) return err('Not found', 404);
+      if (res.status !== 200) return err('Auth backend unavailable', 503);
+      return json({ revoked: true });
+    } catch {
+      return err('Auth backend unavailable', 503);
+    }
+  }
+
+  // Rotation: mint another token for an active account; plaintext returned once.
+  const mintToken = path.match(/^\/api\/admin\/service-accounts\/([^/]+)\/tokens$/);
+  if (mintToken && method === 'POST') {
+    // Body is optional ({ expiresInDays })
+    let body: { expiresInDays?: unknown } | null;
+    try {
+      const text = await request.text();
+      body = text ? (JSON.parse(text) as typeof body) : {};
+    } catch {
+      return err('Invalid JSON body', 400);
+    }
+    const expiresAt = expiresAtFrom(body?.expiresInDays);
+    if (expiresAt instanceof Response) return expiresAt;
+    const plaintext = generateServiceToken();
+    let res: Response;
+    try {
+      res = await toDo(stub, `/internal/service-accounts/${encodeURIComponent(mintToken[1])}/tokens`, 'POST', principal.actorId, {
+        tokenHash: await hashToken(plaintext),
+        tokenPrefix: tokenPrefix(plaintext),
+        expiresAt,
+      });
+    } catch {
+      return err('Auth backend unavailable', 503);
+    }
+    if (res.status === 404) return err('Not found', 404);
+    if (res.status === 400 || res.status === 409) return err(await doError(res, 'Invalid request'), res.status);
+    if (res.status !== 201) return err('Failed to create service token', 502);
+    const created = ((await res.json()) as { data: { token: Record<string, unknown> } }).data;
+    return json({ token: { ...created.token, plaintext } }, 201, { 'Cache-Control': 'no-store' });
+  }
+
+  const revokeToken = path.match(/^\/api\/admin\/service-accounts\/([^/]+)\/tokens\/([^/]+)\/revoke$/);
+  if (revokeToken && method === 'POST') {
+    try {
+      const res = await toDo(
+        stub,
+        `/internal/service-accounts/${encodeURIComponent(revokeToken[1])}/tokens/${encodeURIComponent(revokeToken[2])}/revoke`,
+        'POST',
+        principal.actorId
+      );
       if (res.status === 404) return err('Not found', 404);
       if (res.status !== 200) return err('Auth backend unavailable', 503);
       return json({ revoked: true });

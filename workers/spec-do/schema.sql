@@ -396,3 +396,35 @@ CREATE INDEX IF NOT EXISTS idx_repositories_deleted ON repositories(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_specs_deleted ON specs(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_candidates_deleted ON candidates(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_issues_deleted ON issues(deleted_at);
+
+-- ============================================================================
+-- SERVICE TOKENS (m5 -> m6, additive)
+-- service_accounts.actor_id (TEXT REFERENCES actors(id)) is added in code
+-- (SpecDO.applyServiceTokens) behind a PRAGMA table_info check, because
+-- ALTER TABLE ADD COLUMN is not idempotent. Each account owns one actor row
+-- (type 'agent': the actors.type CHECK has no 'service'). A token row stores the
+-- SHA-256 hex of the plaintext and a display prefix, never the plaintext.
+-- service_accounts.token_hash/token_salt are legacy NOT NULL columns, written as
+-- '' and never read. Accounts without actor_id, or without a service_tokens
+-- row, cannot authenticate.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS service_tokens (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  token_prefix TEXT NOT NULL,
+  scopes TEXT NOT NULL CHECK(scopes IN ('read', 'write', 'read_write')),
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  last_used_at INTEGER,
+  FOREIGN KEY (account_id) REFERENCES service_accounts(id),
+  FOREIGN KEY (created_by) REFERENCES actors(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_service_tokens_hash ON service_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_service_tokens_account ON service_tokens(account_id);
+CREATE INDEX IF NOT EXISTS idx_service_accounts_actor ON service_accounts(actor_id);
+CREATE INDEX IF NOT EXISTS idx_service_accounts_name ON service_accounts(name);
