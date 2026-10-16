@@ -37,7 +37,9 @@ A Request for Observation (RFO) is a retrospective document that captures learni
 
 | Number | Title | Status | Date | Severity |
 |--------|-------|--------|------|----------|
-| [RFO-2026-10-14](./2026-10-14-promotion-routes-fix.md) | Promotion Routes Fix - Missing Spec DO Route Calls | Actioned | 2026-10-14 | SEV-2 |
+| [RFO-2026-10-13-ledger-lifecycle-finding](./2026-10-13-ledger-lifecycle-finding.md) | Ledger Lifecycle Finding - Spec DO Append-Only Gap | Actioned | 2026-10-13 | Near-Miss |
+| [RFO-2026-10-14-promotion-routes-fix](./2026-10-14-promotion-routes-fix.md) | Promotion Routes Fix - Missing Spec DO Route Calls | Actioned | 2026-10-14 | SEV-2 |
+| [RFO-2026-10-14-zod-build-failure](./2026-10-14-zod-build-failure.md) | Zod Dependency Resolution Failure in Worker Builds | Actioned | 2026-10-14 | SEV-2 |
 
 ---
 
