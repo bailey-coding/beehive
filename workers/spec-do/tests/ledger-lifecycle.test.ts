@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 import type { PurgeResult, TombstoneResult } from '../../shared/ledger-lifecycle';
 
 let store: SqliteState;
@@ -411,5 +412,52 @@ describe('purge', () => {
     expect(store.transactions.count - before).toBe(2);
     expect(count('SELECT COUNT(*) AS n FROM candidates')).toBe(0);
     expect(count('SELECT COUNT(*) AS n FROM organizations')).toBe(0);
+  });
+});
+
+describe('reserved organization', () => {
+  const purge = (body: unknown) => call('/internal/purge', 'POST', body, maintainer);
+  // No organizationId: attributed to the reserved org
+  const mintUnscoped = async (name: string) => {
+    const plaintext = generateServiceToken();
+    return call(
+      '/internal/service-accounts',
+      'POST',
+      { name, scopes: ['read'], tokenHash: await hashToken(plaintext), tokenPrefix: tokenPrefix(plaintext), expiresAt: Date.now() + 86_400_000 },
+      maintainer
+    );
+  };
+
+  async function ensureReserved() {
+    // An unscoped mint creates the reserved org lazily
+    const res = await mintUnscoped('unscoped-svc');
+    expect(res.status).toBe(201);
+    expect(count(`SELECT COUNT(*) AS n FROM organizations WHERE id = 'beehive-system'`)).toBe(1);
+  }
+
+  it('cannot be tombstoned (403), and unscoped mints keep working', async () => {
+    await ensureReserved();
+    const res = await tombstone('/api/organizations/beehive-system');
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toContain('reserved');
+    expect(count(`SELECT COUNT(*) AS n FROM organizations WHERE id = 'beehive-system' AND deleted_at IS NULL`)).toBe(1);
+    expect((await mintUnscoped('second-svc')).status).toBe(201);
+  });
+
+  it('cannot be purged by id (403)', async () => {
+    await ensureReserved();
+    const res = await purge({ orgIds: ['beehive-system'] });
+    expect(res.status).toBe(403);
+    expect(count(`SELECT COUNT(*) AS n FROM organizations WHERE id = 'beehive-system'`)).toBe(1);
+  });
+
+  it('is skipped as reserved when a name prefix matches it, even if already tombstoned', async () => {
+    await ensureReserved();
+    // Damage from before the guard: the reserved org was tombstoned long ago
+    store.raw.prepare(`UPDATE organizations SET deleted_at = 1 WHERE id = 'beehive-system'`).run();
+    const result = await data<PurgeResult>(await purge({ orgNamePrefix: 'beehive-', dryRun: false, confirm: 0 }));
+    expect(result.orgIds).toEqual([]);
+    expect(result.skipped).toEqual([{ orgId: 'beehive-system', name: 'beehive-system', reason: 'reserved' }]);
+    expect(count(`SELECT COUNT(*) AS n FROM organizations WHERE id = 'beehive-system'`)).toBe(1);
   });
 });

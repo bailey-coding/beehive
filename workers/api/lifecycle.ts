@@ -18,6 +18,7 @@ import {
   SetActorRoleRequestSchema,
   TOMBSTONE_ROUTE,
   TOMBSTONE_SEGMENTS,
+  RESERVED_ORGANIZATION_ID,
   INCLUDE_DELETED_ROUTE,
   INCLUDE_DELETED_PARAM,
   type LifecycleResult,
@@ -96,11 +97,18 @@ export async function handleLifecycleRoutes(
     const body = TombstoneBodySchema.strict().safeParse(read.body);
     if (!body.success) return err(body.error.message, 400);
     const entityType = TOMBSTONE_SEGMENTS[tombstone[1]];
-    return relay(await client.tombstone({ entityType, id: decodeURIComponent(tombstone[2]), reason: body.data.reason }, actorId));
+    const id = decodeURIComponent(tombstone[2]);
+    if (entityType === 'organization' && id === RESERVED_ORGANIZATION_ID) {
+      return err(`organization ${id} is reserved and cannot be tombstoned`, 403);
+    }
+    return relay(await client.tombstone({ entityType, id, reason: body.data.reason }, actorId));
   }
   if (purge) {
     const body = PurgeRequestSchema.safeParse(read.body);
     if (!body.success) return err(body.error.message, 400);
+    if (body.data.orgIds?.includes(RESERVED_ORGANIZATION_ID)) {
+      return err(`organization ${RESERVED_ORGANIZATION_ID} is reserved and cannot be purged`, 403);
+    }
     return relay(await client.purge(body.data, actorId));
   }
   const body = SetActorRoleRequestSchema.safeParse(read.body);

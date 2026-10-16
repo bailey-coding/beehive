@@ -91,8 +91,8 @@ const MAX_SERVICE_TOKEN_LIFETIME_MS = 366 * 24 * 3_600_000;
 const LAST_USED_RESOLUTION_MS = 60_000;
 // Mints by the master token without X-Actor-ID are attributed to this reserved actor,
 // and accounts minted without an organization belong to this reserved org (both FK targets).
-const MASTER_ACTOR_ID = 'master';
-const SYSTEM_ORG_ID = 'beehive-system';
+const MASTER_ACTOR_ID = RESERVED_ACTOR_ID;
+const SYSTEM_ORG_ID = RESERVED_ORGANIZATION_ID;
 
 // Explicit column lists: views never select token_hash or token_salt
 const SERVICE_ACCOUNT_COLUMNS =
@@ -184,6 +184,8 @@ import {
 // Ledger lifecycle contract (tombstones, maintainer role, purge; shared with the edge)
 import {
   TombstoneRequestSchema,
+  RESERVED_ORGANIZATION_ID,
+  RESERVED_ACTOR_ID,
   PurgeRequestSchema,
   SetActorRoleRequestSchema,
   LIFECYCLE_PATHS,
@@ -1897,6 +1899,9 @@ export class SpecDO {
    * Refused while a candidate in scope has an active or in-flight promotion.
    */
   tombstone(entityType: TombstoneEntity, id: string, actorId: string, reason?: string): TombstoneResult {
+    if (entityType === 'organization' && id === RESERVED_ORGANIZATION_ID) {
+      throw new ForbiddenError(`organization ${id} is reserved (service-account mints depend on it) and cannot be tombstoned`);
+    }
     const scope = this.tombstoneScope(entityType, id);
     return this.state.storage.transactionSync(() => {
       const root = this.queryAll(`SELECT deleted_at FROM ${scope[0].table} WHERE id = ?`, id)[0];
@@ -1942,6 +1947,7 @@ export class SpecDO {
   /** Why an organization matched by a purge selector cannot be purged, or null. */
   private purgeBlocker(org: Record<string, unknown>, cutoff: number): PurgeSkipped['reason'] | null {
     const orgId = org.id as string;
+    if (orgId === RESERVED_ORGANIZATION_ID) return 'reserved';
     if (org.deleted_at == null) return 'not_tombstoned';
     if ((org.deleted_at as number) > cutoff) return 'too_recent';
     if (this.queryAll(`SELECT 1 AS x FROM service_accounts WHERE organization_id = ? LIMIT 1`, orgId).length) {
@@ -2022,6 +2028,10 @@ export class SpecDO {
    */
   async purge(req: ParsedPurgeRequest, actorId: string): Promise<PurgeResult> {
     if (!this.isMaintainer(actorId)) throw new ForbiddenError('purge requires a maintainer actor (X-Actor-ID with role=maintainer)');
+    // Named explicitly: refuse outright. A name-prefix match skips it instead (purgeBlocker 'reserved').
+    if (req.orgIds?.includes(RESERVED_ORGANIZATION_ID)) {
+      throw new ForbiddenError(`organization ${RESERVED_ORGANIZATION_ID} is reserved and cannot be purged`);
+    }
 
     const startedAt = now();
     const minAgeHours = this.purgeMinAgeHours();

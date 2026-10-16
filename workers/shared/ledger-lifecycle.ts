@@ -13,6 +13,11 @@ import { z } from 'zod';
 // SCHEMAS
 // ============================================================================
 
+// Reserved rows the service-account mint depends on (FK targets for unscoped mints).
+// Never tombstoned or purged: tombstoning the org would 409 every unscoped mint forever.
+export const RESERVED_ORGANIZATION_ID = 'beehive-system';
+export const RESERVED_ACTOR_ID = 'master';
+
 // Entities that carry deleted_at / deleted_by / delete_reason. Issues are only
 // tombstoned by cascade (no DELETE route of their own).
 export const TombstoneEntitySchema = z.enum(['organization', 'repository', 'spec', 'candidate']);
@@ -57,7 +62,7 @@ export const PurgeSkippedSchema = z
   .object({
     orgId: z.string(),
     name: z.string(),
-    reason: z.enum(['not_tombstoned', 'too_recent', 'live_descendants', 'service_accounts']),
+    reason: z.enum(['not_tombstoned', 'too_recent', 'live_descendants', 'service_accounts', 'reserved']),
   })
   .strict();
 

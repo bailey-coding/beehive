@@ -83,4 +83,13 @@ describe('handleLifecycleRoutes', () => {
     expect(seen[0].url).toBe('https://spec-do.internal/api/candidates?include_deleted=1&specId=s1');
     expect(seen[0].headers.get('X-Actor-ID')).toBe('maint-1');
   });
+
+  it('refuses to tombstone or purge the reserved beehive-system org at the edge, without calling the DO', async () => {
+    const t = await run(master, 'DELETE', '/api/organizations/beehive-system');
+    expect(t.res?.status).toBe(403);
+    expect(t.seen).toHaveLength(0);
+    const p = await run(master, 'POST', '/api/admin/purge', { orgIds: ['o1', 'beehive-system'] });
+    expect(p.res?.status).toBe(403);
+    expect(p.seen).toHaveLength(0);
+  });
 });
