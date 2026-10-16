@@ -277,12 +277,12 @@ describe('SQL adapter statement reuse', () => {
   it('SpecDO.init persists both schema_version and initialized_at', async () => {
     const { call, db } = setup();
     await call('/health', 'GET', { token: MASTER });
-    // init runs lazily on the first DO request
+    // init runs lazily on the first DO request; a fresh ledger starts at the latest version
     await call('/api/organizations', 'GET', { token: MASTER });
     const keys = (db.prepare('SELECT key, value FROM metadata').all() as any[]).map((r) => r.key).sort();
     expect(keys).toEqual(['initialized_at', 'schema_version']);
     const v = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as any;
-    expect(v.value).toBe('m3');
+    expect(v.value).toBe('m7');
   });
 });
 

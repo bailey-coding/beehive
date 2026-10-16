@@ -23,6 +23,9 @@ import {
   DEPLOY_REFS_SQL,
 } from './schema-inline';
 
+// The version runMigrations() must end at; bump with each new migration step
+const LATEST_SCHEMA_VERSION = 'm7';
+
 class ConflictError extends Error {}
 class NotFoundError extends Error {}
 class ForbiddenError extends Error {}
@@ -443,25 +446,44 @@ export class SpecDO {
   }
 
   async init() {
-    // Initialize SQLite database
-    this.db = createSqlStorage(this.state);
-    
+    // this.db stays unset until every schema step has succeeded: a failure propagates
+    // out of init() (requests fail visibly) and the next request retries from scratch,
+    // instead of serving on a half-migrated schema.
+    const db = createSqlStorage(this.state);
+    this.db = db;
+    try {
+      await this.initSchema();
+    } catch (e) {
+      this.db = null;
+      console.error('[SpecDO] init failed:', e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+
+    // Seed database in development if not already seeded
+    // This only runs in local development (Miniflare)
+    if ('DEV' in this.env && (this.env as { DEV?: string }).DEV === 'local' && !isSeeded(db)) {
+      seedDatabase(db);
+    }
+  }
+
+  private async initSchema(): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
     // Check if we need to initialize the schema
     const initSql = await this.state.storage.get<string>('schema_init');
     if (!initSql) {
       // Execute schema
       this.db.exec(SCHEMA_SQL);
-      // Tombstone columns + purge_log: a fresh ledger needs them before its first request
+      // service_accounts: a fresh ledger needs them before its first request
+      this.db.exec(SERVICE_ACCOUNTS_SQL);
+      // Tombstone columns + purge_log: likewise
       this.applyLedgerLifecycle();
       // service_accounts.actor_id + service_tokens: likewise
       this.applyServiceTokens();
       // deploy_refs + canary_deployments: likewise
       this.db.exec(DEPLOY_REFS_SQL);
-      
-      // Mark as initialized
-      await this.state.storage.put('schema_init', 'true');
-      
-      // Initialize metadata
+
+      // Initialize metadata. A fresh ledger has every section applied, so it starts at the
+      // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
       // Fresh statement per write: the adapter does not re-execute a reused
       // statement after its first step(), which silently dropped the second row.
       const insertMeta = (key: string, value: string) => {
@@ -472,41 +494,16 @@ export class SpecDO {
         stmt.step();
         stmt.free();
       };
-      insertMeta('schema_version', 'm2');
+      insertMeta('schema_version', LATEST_SCHEMA_VERSION);
       insertMeta('initialized_at', String(now()));
-    } else {
-      // Run schema migrations for existing databases
-      await this.runMigrations();
+
+      // Last: if anything above threw, the next init() takes this branch again (all idempotent)
+      await this.state.storage.put('schema_init', 'true');
     }
 
-    this.ensureServiceAccountTables();
-    
-    // Seed database in development if not already seeded
-    // This only runs in local development (Miniflare)
-    if ('DEV' in this.env && (this.env as { DEV?: string }).DEV === 'local' && !isSeeded(this.db)) {
-      seedDatabase(this.db);
-    }
-  }
-
-  /**
-   * Additive, idempotent. Errors are logged, never thrown: init() runs outside
-   * fetch's try, and the master-token path must survive a DDL failure.
-   * Service-token verify then fails closed (503) because the tables are missing.
-   */
-  private ensureServiceAccountTables(): void {
-    if (!this.db) return;
-    try {
-      this.db.exec(SERVICE_ACCOUNTS_SQL);
-      // Only advance m2 -> m3; never mask a stuck m1.
-      const stmt = this.db.prepare(
-        "UPDATE metadata SET value = 'm3', updated_at = ? WHERE key = 'schema_version' AND value = 'm2'"
-      );
-      stmt.bind(now());
-      stmt.step();
-      stmt.free();
-    } catch (e) {
-      console.log('[SpecDO] service account tables unavailable:', e instanceof Error ? e.message : String(e));
-    }
+    // Also after a fresh init: a retry that got past the metadata insert on an older
+    // version, or a ledger whose version row predates this code, converges here.
+    await this.runMigrations();
   }
 
   // ============================================================================
@@ -757,117 +754,75 @@ export class SpecDO {
   }
 
   /**
-   * Run schema migrations for existing databases
-   * This ensures that ALTER TABLE statements are executed even for DOs
-   * that were created before certain columns were added to the schema.
+   * Run schema migrations for existing databases, one step per version, in order.
+   * Every step is additive and idempotent (IF NOT EXISTS, or an ALTER behind a PRAGMA
+   * check), so a step that failed halfway is safe to retry. A failing step is logged and
+   * rethrown: init() then fails and leaves this.db unset, so the next request retries.
+   * Ends with an assertion that the ledger is at LATEST_SCHEMA_VERSION.
    */
   async runMigrations(): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
-    
-    // Get current schema version
-    const getVersion = this.db.prepare('SELECT value FROM metadata WHERE key = ?');
-    getVersion.bind('schema_version');
-    let currentVersion = 'm1';
-    if (getVersion.step()) {
-      currentVersion = getVersion.get(0) as string;
+
+    const steps: [version: string, apply: () => void][] = [
+      // m1 -> m2: preview columns on candidates
+      ['m2', () => this.addColumnsIfMissing('candidates', [
+        'preview_url TEXT',
+        'preview_worker_name TEXT',
+        'preview_created_at INTEGER',
+      ])],
+      // m2 -> m3: service accounts (read-only token slice)
+      ['m3', () => this.db!.exec(SERVICE_ACCOUNTS_SQL)],
+      // m3 -> m4: promotion ledger tables (promotion_states, tournaments, merge_trains)
+      ['m4', () => this.db!.exec(PROMOTION_LEDGER_SQL)],
+      // m4 -> m5: ledger lifecycle (tombstone columns, actors.role, purge_log)
+      ['m5', () => this.applyLedgerLifecycle()],
+      // m5 -> m6: service tokens (service_accounts.actor_id, service_tokens)
+      ['m6', () => this.applyServiceTokens()],
+      // m6 -> m7: deploy refs + canary deployments
+      ['m7', () => this.db!.exec(DEPLOY_REFS_SQL)],
+    ];
+    if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
+      throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
     }
-    getVersion.free();
-    
-    // Migration from m1 to m2: Add preview columns to candidates table
-    // SQLite's ALTER TABLE ADD COLUMN is idempotent, so we can run it safely
-    if (currentVersion === 'm1') {
+    const order = ['m1', ...steps.map(([v]) => v)];
+
+    for (const [target, apply] of steps) {
+      const current = this.readSchemaVersion();
+      const at = order.indexOf(current);
+      if (at < 0) throw new Error(`Unknown schema_version '${current}'`);
+      if (at >= order.indexOf(target)) continue;
       try {
-        this.db.exec(`
-          ALTER TABLE candidates ADD COLUMN preview_url TEXT;
-          ALTER TABLE candidates ADD COLUMN preview_worker_name TEXT;
-          ALTER TABLE candidates ADD COLUMN preview_created_at INTEGER;
-        `);
-        
-        // Update schema version
-        const updateVersion = this.db.prepare(
-          'INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)'
-        );
-        updateVersion.bind('schema_version', 'm2', now());
-        updateVersion.step();
-        updateVersion.free();
+        apply();
+        this.writeSchemaVersion(target);
       } catch (e) {
-        // If migration fails (e.g., columns already exist), that's okay
-        console.log('[SpecDO] Migration to m2: columns may already exist, continuing');
+        console.error(`[SpecDO] Migration to ${target} failed:`, e instanceof Error ? e.message : String(e));
+        throw e;
       }
     }
 
-    // Migration from m3 to m4: promotion ledger tables (promotion_states,
-    // tournaments, merge_trains). Additive only: CREATE TABLE/INDEX IF NOT EXISTS.
-    // Runs on any pre-m4 version so the routes work on first init after deploy;
-    // an m2 ledger reaches m3 in ensureServiceAccountTables() and m4 next init.
-    if (currentVersion !== 'm4' && currentVersion !== 'm5' && currentVersion !== 'm6' && currentVersion !== 'm7') {
-      try {
-        this.db.exec(PROMOTION_LEDGER_SQL);
-        const updateVersion = this.db.prepare(
-          "UPDATE metadata SET value = 'm4', updated_at = ? WHERE key = 'schema_version' AND value = 'm3'"
-        );
-        updateVersion.bind(now());
-        updateVersion.step();
-        updateVersion.free();
-      } catch (e) {
-        // Logged, not thrown (same as ensureServiceAccountTables): ledger routes then 500
-        console.log('[SpecDO] Migration to m4 failed:', e instanceof Error ? e.message : String(e));
-      }
+    const final = this.readSchemaVersion();
+    if (final !== LATEST_SCHEMA_VERSION) {
+      const msg = `schema_version is '${final}' after migrations, expected '${LATEST_SCHEMA_VERSION}'`;
+      console.error(`[SpecDO] ${msg}`);
+      throw new Error(msg);
     }
+  }
 
-    // Migration from m4 to m5: ledger lifecycle (tombstone columns, actors.role,
-    // purge_log). Additive only: ALTER TABLE ADD COLUMN behind a PRAGMA check,
-    // CREATE TABLE/INDEX IF NOT EXISTS. No table rebuild, no CHECK change.
-    // Runs on any pre-m5 version, like m4; the version only advances m4 -> m5.
-    if (currentVersion !== 'm5' && currentVersion !== 'm6' && currentVersion !== 'm7') {
-      try {
-        this.applyLedgerLifecycle();
-        const updateVersion = this.db.prepare(
-          "UPDATE metadata SET value = 'm5', updated_at = ? WHERE key = 'schema_version' AND value = 'm4'"
-        );
-        updateVersion.bind(now());
-        updateVersion.step();
-        updateVersion.free();
-      } catch (e) {
-        // Logged, not thrown (same as m4): tombstone-aware reads then 500
-        console.log('[SpecDO] Migration to m5 failed:', e instanceof Error ? e.message : String(e));
-      }
-    }
+  /** A ledger with no schema_version row predates versioning: treated as m1. */
+  private readSchemaVersion(): string {
+    const rows = this.queryAll('SELECT value FROM metadata WHERE key = ?', 'schema_version');
+    return rows.length ? (rows[0].value as string) : 'm1';
+  }
 
-    // Migration from m5 to m6: service tokens (service_accounts.actor_id behind a
-    // PRAGMA check, service_tokens table, indexes). Additive only, no table rebuild.
-    // Runs on any pre-m6 version, like m5; the version only advances m5 -> m6.
-    if (currentVersion !== 'm6' && currentVersion !== 'm7') {
-      try {
-        this.applyServiceTokens();
-        const updateVersion = this.db.prepare(
-          "UPDATE metadata SET value = 'm6', updated_at = ? WHERE key = 'schema_version' AND value = 'm5'"
-        );
-        updateVersion.bind(now());
-        updateVersion.step();
-        updateVersion.free();
-      } catch (e) {
-        // Logged, not thrown: service-token verify then fails closed (DO 500 -> edge 503)
-        console.log('[SpecDO] Migration to m6 failed:', e instanceof Error ? e.message : String(e));
-      }
-    }
+  private writeSchemaVersion(version: string): void {
+    this.run('INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)', 'schema_version', version, now());
+  }
 
-    // Migration from m6 to m7: deploy refs + canary deployments. Additive only:
-    // CREATE TABLE/INDEX IF NOT EXISTS, no table rebuild, no ALTER.
-    // Runs on any pre-m7 version, like m6; the version only advances m6 -> m7.
-    if (currentVersion !== 'm7') {
-      try {
-        this.db.exec(DEPLOY_REFS_SQL);
-        const updateVersion = this.db.prepare(
-          "UPDATE metadata SET value = 'm7', updated_at = ? WHERE key = 'schema_version' AND value = 'm6'"
-        );
-        updateVersion.bind(now());
-        updateVersion.step();
-        updateVersion.free();
-      } catch (e) {
-        // Logged, not thrown: deploy-ref and canary routes then 500 (no pointer, no canary traffic)
-        console.log('[SpecDO] Migration to m7 failed:', e instanceof Error ? e.message : String(e));
-      }
+  private addColumnsIfMissing(table: string, columns: string[]): void {
+    if (!this.db) throw new Error('Database not initialized');
+    const existing = new Set(this.queryAll(`PRAGMA table_info(${table})`).map((c) => c.name as string));
+    for (const column of columns) {
+      if (!existing.has(column.split(' ')[0])) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`);
     }
   }
 
