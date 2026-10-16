@@ -14,9 +14,11 @@ audience: human,agent
 - Production deploys happen from the **Cloudflare Artifacts repo**: once a change is on GitHub,
   the maintainer pulls it and pushes it to the Artifacts repo. This step is human-only; agents
   never push to that repo and never run `wrangler deploy`.
-- TODO(maintainer): document the Artifacts deploy repo name/URL, the exact pull/push commands,
-  and what in the Artifacts repo triggers the deploy (a Workers Build per worker, or the
-  `npm run deploy:*` scripts run by hand).
+- The commands, run on the maintainer's host (stated 2026-10-16): `git pull origin main && git push cf main`.
+  `origin` is the GitHub repo; `cf` is the Artifacts repo `default/beehive` in the maintainer's
+  Cloudflare account. Never add a `cf` push to an agent's workflow.
+- TODO(maintainer): document what in the Artifacts repo triggers the deploy after that push (a
+  Workers Build per worker, or the `npm run deploy:*` scripts run by hand).
 - TODO(maintainer): document where `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and
   `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used).
 - Queues: nothing creates them at deploy time any more. The maintainer confirmed on 2026-10-16
