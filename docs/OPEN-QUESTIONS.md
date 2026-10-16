@@ -437,8 +437,8 @@ purge, role grant and tombstone. Usage and secrets: `docs/OPS.md` "Spec DO inter
   per-worker identities (one shared tier-1 value). `sandbox-runner` declares the binding but never
   calls the DO, so it gets no token.
 - **Constant-time:** `timingSafeEqual` loops over the longer input; only length can leak.
-- **Rollout window:** deploying `beehive` first (checklist step 4) makes not-yet-redeployed callers
-  answer 401 until they deploy.
+- **Rollout window:** all ten workers deploy at once (no order control), so a caller still on old
+  code answers 401 on DO calls until its own deploy lands (`docs/OPS.md` checklist step 5).
 - **Public edge unchanged:** `API_AUTH_TOKEN` handling in `workers/api` is as before; the API worker
   now adds the tokens on its own DO calls.
 - **Local e2e:** `scripts/start-e2e-workers.sh` generates both tokens per run and starts

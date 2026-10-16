@@ -19,23 +19,23 @@ audience: human,agent
   Cloudflare account. Never add a `cf` push to an agent's workflow.
 - The deploy trigger is Cloudflare Workers' native Artifacts integration (stated 2026-10-16): the
   push to `cf` deploys, with no `npm run deploy:*` script run by hand.
-- TODO(maintainer): the deploy-order checklist below (`beehive` first, then `beehive-promotion-worker`,
-  `beehive-preview-manager` before `beehive-canary-worker`) assumes you control the order. Record how the
-  integration orders or parallelises the ten workers' deploys, and what to do when a deploy is out of order.
+- **There is no deploy-order control** (stated 2026-10-16): one push deploys all ten workers at once.
+  You cannot deploy `beehive` alone first and check its migration before the others go out. The checklist
+  below is written for that: secrets first, one push, a short window of mixed versions, then verification.
 - TODO(maintainer): document where `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and
   `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used).
 - Queues: nothing creates them at deploy time any more. The maintainer confirmed on 2026-10-16
   that the four queues of the checklist's step 2 exist (created by hand).
 
-### Deploy-order checklist (m3 -> m8 ledger migration and everything after it)
+### Deploy checklist (m3 -> m8 ledger migration and everything after it)
 
 0. **Hard prerequisite: put the Spec DO internal tokens before deploying anything** (section
    "Spec DO internal tokens" below). The new Spec DO check fails closed: deploy `beehive` without
    `SPEC_DO_INTERNAL_TOKEN` and every DO route answers 503; deploy a caller without it and its DO
-   calls answer 401. Because step 4 deploys `beehive` first, each not-yet-redeployed caller's DO
-   calls answer 401 until its own deploy (old code sends no header): redeploy the callers
-   promptly, or accept that window. `wrangler secret put` on a worker that is already deployed takes effect on its
-   next request, so put them on all workers (nine tier-1, one admin) first, then deploy.
+   calls answer 401. All ten deploy at once (no order control), so a caller still on old code answers
+   401 on its DO calls (old code sends no header) until its own deploy lands: a short window.
+   `wrangler secret put` on a worker that is already deployed takes effect on its next request, so
+   put them on all workers (nine tier-1, one admin) first, then push.
 
 The live Spec DO is on schema m3; the first `beehive` deploy runs m3 -> m8 on its next init.
 A failed migration step now throws out of `init()` (every request fails, the next request
@@ -53,15 +53,23 @@ retries), so a bad deploy is loud rather than half-migrated.
    by hand (`wrangler queues create <name>`).
 3. Confirm `API_AUTH_TOKEN` is identical on every worker. Keep `WORKER_VERSIONS_MODE` (and
    `BEEHIVE_LOCAL_DEV`) unset in production.
-4. Deploy `beehive` first. Check its logs for `Migration to m[4-8] failed`; any hit means the
-   ledger stopped at the previous version and requests are failing until it is fixed.
+4. Push: `git pull origin main && git push cf main` deploys all ten workers at once. The Spec DO
+   migrates on its first init after `beehive` deploys, not at deploy time, so make one authenticated
+   request to `beehive` (`GET /health`) and check its logs for `Migration to m[4-8] failed`; any hit
+   means the ledger stopped at the previous version and requests are failing until it is fixed.
    `service_accounts has an unexpected shape`: that table is not this design's; if it is empty,
    `DROP TABLE service_accounts` (the next request recreates it), otherwise migrate its rows first.
-5. Deploy `beehive-preview-manager` before `beehive-canary-worker`, then the remaining workers
-   (shadow-router, promotion-worker, scientist-comparator, candidate-service, gate-workflow,
-   queue-consumer, sandbox-runner). Deploy `beehive-promotion-worker` right after `beehive`:
-   the new Spec DO answers 409 `version_required` to an old promotion worker that replaces an
-   existing tournament or merge train (see "Promotion ledger concurrency").
+5. Expect a short window of mixed versions while the ten builds finish, and re-run anything that
+   failed in it:
+   - old caller -> new `beehive`: 401 on DO calls (old code sends no header).
+   - new caller -> old `beehive`: the extra headers are ignored, but routes added since m3 answer 404
+     (promotion ledger, deploy refs, service tokens) until `beehive` is deployed and migrated.
+   - old `beehive-promotion-worker` -> new `beehive`: 409 `version_required` when it replaces an
+     existing tournament or merge train (see "Promotion ledger concurrency").
+   - new `beehive-canary-worker` -> old `beehive-preview-manager`: the canary route answers 404.
+   - `beehive-shadow-router` falls back to its static config while the DO read fails.
+   Migrations are additive and not undone by rolling a worker back, so old code would then run against
+   the newer schema; that combination is untested here.
 6. After deploy: `GET /health` on each worker (with the bearer token) answers 200;
    `GET /api/service-accounts` answers 410; mint a service token
    (`POST /api/admin/service-accounts`) and confirm a write with it answers 403; then grant the
@@ -230,8 +238,9 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
   `WORKER_VERSIONS_MODE` is unset on `beehive-preview-manager`, and the stub (`stub`) is for
   local dev only: it also needs `BEEHIVE_LOCAL_DEV=1`, which only `scripts/start-e2e-workers.sh` sets,
   so a stray `WORKER_VERSIONS_MODE=stub` in production still answers 501. Keep both unset.
-- **Deploy order:** `beehive-shadow-router` now binds `SpecDO` from `beehive` (`script_name`),
-  like canary-worker and preview-manager, so deploy `beehive` first.
+- **Deploy dependency:** `beehive-shadow-router` now binds `SpecDO` from `beehive` (`script_name`),
+  like canary-worker and preview-manager. All ten deploy at once, so until `beehive` has deployed its
+  DO reads fail and the router uses its static config.
 - A candidate a live ref points at cannot be tombstoned or purged (409), like an active promotion.
 - **Shadow-router caches the live pointers** (in-isolate, `LIVE_REFS_CACHE_TTL_MS`, default
   5000 ms, `0` disables, max 60000). A rollback (or promotion) reaches the router within one TTL;
@@ -261,8 +270,9 @@ binding (the promotion worker); no edge route exposes them.
   `failed -> pending` resets `attempts` to 0, so a stuck tournament is recovered by a
   `PATCH /tournament-status/<id> {"status":"pending"}` through the DO binding, by a human.
   A tournament left `in_progress` by a crashed worker is resumed by the next request.
-- **Deploy pairing.** An old promotion worker replacing an existing tournament or train
-  answers 409 `version_required`: deploy `beehive-promotion-worker` immediately after `beehive`.
+- **Deploy window.** An old promotion worker replacing an existing tournament or train answers
+  409 `version_required` until its own deploy lands; all ten deploy at once, so that is a short window
+  (the request can be retried).
 - Not covered: two requests creating a tournament for the same spec at the same moment still
   make two rows (ids are random); readers take the newest.
 
