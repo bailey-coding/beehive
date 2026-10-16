@@ -22,6 +22,32 @@ audience: human,agent
   whether the `canary-rollback-triggers` / `promotion-events` queues are still created at deploy
   time (the old workflow ran `wrangler queues create` for them).
 
+### Deploy-order checklist (m3 -> m7 ledger migration and everything after it)
+
+The live Spec DO is on schema m3; the first `beehive` deploy runs m3 -> m7 on its next init.
+A failed migration step now throws out of `init()` (every request fails, the next request
+retries), so a bad deploy is loud rather than half-migrated.
+
+1. Before deploying: confirm `schema_version` is `m3` on the live DO (a read-only
+   `SELECT value FROM metadata WHERE key = 'schema_version'` through the maintainer's usual
+   access; do not guess).
+2. Confirm these queues exist, because nothing creates them any more (the old GitHub
+   workflow did): `canary-rollback-triggers`, `promotion-events`,
+   `preview-scientist-comparisons`, `beehive-scientist-comparisons`. Create any missing one
+   by hand (`wrangler queues create <name>`).
+3. Confirm `API_AUTH_TOKEN` is identical on every worker. Keep `WORKER_VERSIONS_MODE` (and
+   `BEEHIVE_LOCAL_DEV`) unset in production.
+4. Deploy `beehive` first. Check its logs for `Migration to m[4-7] failed`; any hit means the
+   ledger stopped at the previous version and requests are failing until it is fixed.
+5. Deploy `beehive-preview-manager` before `beehive-canary-worker`, then the remaining workers
+   (shadow-router, promotion-worker, scientist-comparator, candidate-service, gate-workflow,
+   queue-consumer, sandbox-runner).
+6. After deploy: `GET /health` on each worker (with the bearer token) answers 200;
+   `GET /api/service-accounts` answers 410; mint a service token
+   (`POST /api/admin/service-accounts`) and confirm a write with it answers 403; then grant the
+   first maintainer deliberately with `POST /api/admin/actors/<id>/role {"role":"maintainer"}`
+   (while none exists an actor may grant itself, so do this before anyone else can).
+
 Moved out of `AGENTS.md` (2026-10-15). The config rules and the fail-closed auth rule stay
 in `AGENTS.md`; this file adds operational detail only.
 

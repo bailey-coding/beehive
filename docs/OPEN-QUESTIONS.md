@@ -329,9 +329,9 @@ Resolves "Service accounts: API handler and Spec DO disagree" above. Usage: `doc
   `currentRung` at the top level (the worker nests it under `state`) and `newMode` (the
   worker answers `mode`). Tournament and merge-train "start" tests now join via `POST /promote`.
   Specs now use a unique `specId` per run (a completed tournament refuses more candidates with 500).
-- **Skipped (`it.skip`):** `should get traffic split metrics` (`/shadow/splits`): the shadow
-  router has no traffic-split metrics route. Needs a route or deletion. (Deleted on
-  `agent/canary-rollback`; see "2026-10-16: Canary deploy and rollback".)
+- **Deleted, not skipped:** `should get traffic split metrics` (`/shadow/splits`): the shadow
+  router has no traffic-split metrics route, so the test was removed on `agent/canary-rollback`
+  (see "2026-10-16: Canary deploy and rollback"); it is not an `it.skip`.
 - **Source change (own commit, revertable):** promotion-worker `markAsCompleted` now sets
   `currentRung = targetRung`. Before, a completed promotion kept `currentRung` at the rung it
   started from, so `GET /promote/:id` could not report where a candidate is.
