@@ -28,6 +28,7 @@ This directory contains all Beehive project documentation, organized for **human
 
 All artifacts follow the workflow: **RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO**
 
+- [GOVERNANCE-SUMMARY.md](./GOVERNANCE-SUMMARY.md) - *Overview of the complete version control system*
 - [decisions/README.md](./decisions/README.md) - *ADR (Architecture Decision Records) process and index*
   - [ADR-0001: VCS Client Model](./decisions/0001-vcs-client-model.md)
   - [ADR-0002: Coordination State Storage](./decisions/0002-coordination-state.md)
