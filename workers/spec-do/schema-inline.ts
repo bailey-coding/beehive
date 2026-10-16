@@ -472,6 +472,11 @@ export const LIFECYCLE_COLUMNS: Record<string, string[]> = {
 export const LEDGER_LIFECYCLE_SQL = `
 -- ============================================================================
 -- LEDGER LIFECYCLE (tombstones + purge; m4 -> m5, additive)
+-- Columns are added in code (SpecDO.applyLedgerLifecycle) behind a PRAGMA
+-- table_info check, because ALTER TABLE ADD COLUMN is not idempotent:
+--   organizations, repositories, specs, candidates, issues:
+--     deleted_at INTEGER, deleted_by TEXT, delete_reason TEXT
+--   actors: role TEXT  ('maintainer' or NULL)
 -- purge_log is the lifecycle audit trail (tombstone, purge, role_change). It has
 -- no foreign keys and is never purged, like entity_history.
 -- ============================================================================
