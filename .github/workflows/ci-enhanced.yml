@@ -89,6 +89,7 @@ jobs:
         run: |
           # After per-worker install, verify that each worker's node_modules has what it needs
           # This is a sanity check that the installs completed
+          # Only check workers that have package.json files
           WORKERS=(
             "api"
             "scientist-comparator"
@@ -105,11 +106,16 @@ jobs:
           )
           
           for worker in "${WORKERS[@]}"; do
-            if [ -d "workers/$worker/node_modules" ]; then
-              echo "✓ workers/$worker/node_modules exists"
+            # Only verify node_modules for workers that have package.json
+            if [ -f "workers/$worker/package.json" ]; then
+              if [ -d "workers/$worker/node_modules" ]; then
+                echo "✓ workers/$worker/node_modules exists"
+              else
+                echo "✗ workers/$worker/node_modules MISSING"
+                exit 1
+              fi
             else
-              echo "✗ workers/$worker/node_modules MISSING"
-              exit 1
+              echo "⊘ workers/$worker has no package.json (skipping node_modules check)"
             fi
           done
 
