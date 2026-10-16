@@ -286,13 +286,16 @@ export async function enforceServiceCapability(
 3. **Capability inheritance**: None. Capabilities are explicit only.
 4. **Cross-service dependencies**: Service A's token includes a capability to invoke Service B.
    Deferred until a resource-naming scheme exists; nothing in the repo needs it yet.
+5. **Path scoping (`path_prefix`)**: Enforced by Beehive, not by Artifacts. Artifacts tokens are
+   per repo with a read/write scope and a TTL; there is no path-scoped token and no documented
+   ArtifactFS path scoping. Prefix ACLs therefore never block an Artifacts push. They block
+   processing and merging: gate-workflow and the promotion path reject or drop changes that
+   touch paths outside the actor's `path_prefix`, and the Spec DO records the verdict. Prefix
+   ACLs themselves are a later addition; today only the token field is defined.
 
 ## Open Questions
 
-1. **Path scoping enforcement**: Artifacts tokens are per repo with a read/write scope and a TTL;
-   there is no path-scoped token and no documented ArtifactFS path scoping. `path_prefix` in the
-   token structure above would have to be enforced by Beehive (for example gate-workflow
-   rejecting diffs outside the prefix). Not yet confirmed by the maintainer.
+None outstanding.
 
 ---
 
