@@ -218,6 +218,12 @@ export interface GateVerdictResponse {
 // TRIALS
 // ============================================================================
 
+export interface ComparisonMetrics {
+  conformance_score?: { a: number; b: number };
+  complexity_delta?: { a: number; b: number };
+  performance?: { a: number; b: number };
+}
+
 export interface CreateTrialRequest {
   candidateAId: string;
   candidateBId: string;
@@ -231,7 +237,8 @@ export interface TrialResponse {
   candidateBId: string;
   specId: string;
   decidedBy: string;
-  winner?: string;
+  winnerId?: string;
+  comparisonMetrics?: ComparisonMetrics;
   status: 'pending' | 'decided' | 'active';
   createdAt: number;
   decidedAt?: number;
@@ -239,16 +246,21 @@ export interface TrialResponse {
 }
 
 export interface DecideTrialRequest {
-  winner: string;
-  notes?: string;
+  winnerId: string;
+  comparisonMetrics?: ComparisonMetrics;
+  decidedBy?: string;
 }
 
 // ============================================================================
 // PROMOTIONS
 // ============================================================================
 
+export type PromotionRung = 'pre-merge' | 'shadow' | 'train' | 'canary' | 'full';
+
 export interface CreatePromotionRequest {
   candidateId: string;
+  fromRung: PromotionRung;
+  toRung: PromotionRung;
   promotedBy?: string;
   notes?: string;
 }
@@ -256,6 +268,8 @@ export interface CreatePromotionRequest {
 export interface PromotionResponse {
   id: string;
   candidateId: string;
+  fromRung: PromotionRung;
+  toRung: PromotionRung;
   promotedBy: string;
   notes?: string;
   createdAt: number;

@@ -178,7 +178,7 @@ export class BeehiveClient {
   }
 
   async getHealthExtended(): Promise<HealthResponse> {
-    return this.request<HealthResponse>('GET', '/api/health');
+    return this.request<HealthResponse>('GET', '/health');
   }
 
   // ============================================================================
@@ -514,9 +514,7 @@ export class BeehiveClient {
     );
   }
 
-  async getPromotion(id: string): Promise<PromotionResponse> {
-    return this.request<PromotionResponse>('GET', `/promotions/${id}`);
-  }
+
 
   // ============================================================================
   // ISSUES

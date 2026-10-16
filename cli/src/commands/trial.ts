@@ -34,13 +34,26 @@ export function registerTrialCommands(
     printOutput(t, { format: state.outputFormat, pretty: true });
   }));
 
-  trial.command('decide <trial-id> <winner-id>').description('Decide trial').action(createHandler(async (state, ..._args) => {
+  trial.command('decide <trial-id> <winner-id>').description('Decide trial').option('--comparison-metrics <json>', 'Comparison metrics as JSON string').option('--decided-by <id>', 'Actor ID who decided').option('--notes <notes>', 'Trial notes').action(createHandler(async (state, ..._args) => {
     const trialId = _args[0] as string;
-    const winner = _args[1] as string;
-    const opts = _args[2] as { notes?: string } || {};
-    const notes = opts.notes;
+    const winnerId = _args[1] as string;
+    const opts = _args[2] as { comparisonMetrics?: string; decidedBy?: string; notes?: string } || {};
     
-    const result = await state.client.decideTrial(trialId, { winner, notes }, {});
+    let comparisonMetrics = undefined;
+    if (opts.comparisonMetrics) {
+      try {
+        comparisonMetrics = JSON.parse(opts.comparisonMetrics);
+      } catch (e) {
+        console.error(formatError('Invalid JSON for comparisonMetrics'));
+        process.exit(1);
+      }
+    }
+    
+    const result = await state.client.decideTrial(trialId, {
+      winnerId,
+      comparisonMetrics,
+      decidedBy: opts.decidedBy
+    });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 }
