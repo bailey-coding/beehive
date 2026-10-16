@@ -30,10 +30,9 @@ Completed items are removed, not struck through; history lives in git.*
 2. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys, and how to roll back when all ten
    workers deploy at once.
-3. Heads-up (promotion-routes-fix): tournament mode now records the winner on a real candidate and fails the
-   tournament when that is rejected, so a request naming a candidate the Spec DO does not know ends `failed`.
-   That is intended. The branch is merged but not yet deployed: push, then `git push cf main`, then check
-   `wrangler deployments list` shows a code deployment newer than the push for all ten.
+3. Heads-up (promotion-routes-fix, deployed 2026-10-16 22:08 UTC, all ten workers verified): tournament mode now
+   records the winner on a real candidate and fails the tournament when that is rejected, so a request naming a
+   candidate the Spec DO does not know ends `failed`. That is intended. Not yet exercised in production.
 
 ## Decide first
 
