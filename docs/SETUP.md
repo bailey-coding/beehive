@@ -69,8 +69,10 @@ not use mocks; with no workers running you get `ECONNREFUSED`.
 
 ### Local e2e status
 
-Verified 2026-10-16 (branch `agent/canary-rollback`) with `scripts/start-e2e-workers.sh` and
-`npm run test:e2e:local`: **52 passed, 5 skipped, 0 failed**. The 5 skips are the m3 health
+Verified 2026-10-16 (`main` after the ledger CAS change, schema m8) with `scripts/start-e2e-workers.sh`
+and `npm run test:e2e:local`: **56 passed, 5 skipped, 0 failed**. (`workers/preview-manager/.dev.vars`,
+gitignored, must hold `API_AUTH_TOKEN=test-auth-token-12345` like the other workers', or the start
+script stops at preview-manager with a 503.) The 5 skips are the m3 health
 checks for workers with no local port (gate-workflow, sandbox-runner, queue-consumer,
 candidate-service, scientist-comparator). Before canary deploy/rollback
 (spine item 2) it was 44 passed, 7 skipped, 6 failed.

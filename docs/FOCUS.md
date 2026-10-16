@@ -62,9 +62,9 @@ Completed items are removed, not struck through; history lives in git.*
 - **M1 ledger lifecycle** (tombstones, admin purge route) is merged to `main`; until the
   maintainer deploys `beehive` (the live Spec DO is on m3), a production wipe still means
   deleting the worker (`docs/OPS.md`).
-- **Local e2e:** 0 failures when last run on `agent/canary-rollback` (canary deploy/rollback as
-  Spec DO deploy refs, m6 -> m7); not re-run since the ledger CAS change (m8). See
-  `docs/SETUP.md` "Local e2e status".
+- **Local e2e:** 0 failures on `main` at m8 (56 passed, 5 skipped); see `docs/SETUP.md` "Local e2e status".
+- **Promotion worker calls Spec DO routes that do not exist** (`/candidates/:id`, `.../rollback`):
+  winners and rollbacks are never recorded on the candidate; spine decision, `docs/OPEN-QUESTIONS.md` 2026-10-16.
   Production canary deploys answer 501 until a real Workers Versions client exists
   (OPEN-QUESTIONS 2026-10-16).
 

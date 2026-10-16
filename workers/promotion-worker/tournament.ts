@@ -510,7 +510,11 @@ export class TournamentManager {
       }
     );
     if (!promoted.ok) {
-      throw new Error(`Failed to promote ${winner.candidateId}: ${promoted.status} ${await promoted.text()}`);
+      // Known defect, not made fatal here: the Spec DO serves no PATCH /candidates/:id (its routes are
+      // /api/candidates/...), so this has always answered 404 and the winner is never recorded on the
+      // candidate. Failing the tournament would break tournament mode end to end, and the fix (route and
+      // semantics) is spine work. docs/OPEN-QUESTIONS.md 2026-10-16 "Promotion worker calls Spec DO routes".
+      console.warn(`[Tournament] Winner ${winner.candidateId} not recorded on the candidate: ${promoted.status}`);
     }
 
     const updatedCandidates = tournament.candidates.map(c =>

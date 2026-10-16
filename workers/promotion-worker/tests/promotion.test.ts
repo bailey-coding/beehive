@@ -586,13 +586,7 @@ describe('Spec DO promotion ledger wiring', () => {
       PROMOTION_MODE: mode,
       SPEC_DO: {
         idFromName: () => 'main',
-        get: () => ({
-          // The candidate rows the winner PATCH targets are outside this fixture: acknowledge them
-          fetch: (request: Request) =>
-            request.method === 'PATCH' && new URL(request.url).pathname.startsWith('/candidates/')
-              ? Promise.resolve(new Response('{}', { status: 200 }))
-              : spec.fetch(request),
-        }),
+        get: () => ({ fetch: (request: Request) => spec.fetch(request) }),
       } as unknown as DurableObjectNamespace,
     };
     return { spec, env };

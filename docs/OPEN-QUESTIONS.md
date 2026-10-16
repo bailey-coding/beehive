@@ -499,3 +499,23 @@ Regression test: `workers/spec-do/tests/migrations.test.ts`.
 may have carried an earlier design, or the table was created by hand. Unverified. Other tables on a
 ledger that predates this repo's history may differ the same way; `docs/OPS.md` step 1 now asks to
 list `sqlite_master` before deploying.
+
+---
+
+## Promotion worker calls Spec DO routes that do not exist (2026-10-16)
+
+**Status**: Open, found by the local e2e rerun after the ledger CAS change. Pre-existing; spine work.
+
+**Finding**: `workers/promotion-worker` calls `GET /candidates/:id` (tournament metrics,
+`tournament.ts`), `PATCH /candidates/:id` (promote the winner: `current_rung`, `status: promoted`,
+`promoted_at`) and `POST /candidates/:id/rollback` (`merge-train.ts`). The Spec DO serves none of
+them: its candidate routes are `/api/candidates`, `/api/candidates/:id`, `.../stage`, `.../preview`,
+`.../gate-verdicts`, `.../execute`. Every call answers 404. Consequences: tournament metrics always
+fall back to defaults, a tournament winner and a rolled-back merge-train car are never recorded on the
+candidate, and none of it failed visibly because the responses were not checked.
+
+**Not fixed here**: making the winner PATCH fatal (tried, reverted) fails every tournament at the last
+step. The fix is a decision for the maintainer: which DO route and fields carry a rung change
+(`/api/candidates/:id/stage` exists), what a rollback writes, and whether the DO should own the
+`current_rung` bookkeeping the ledger already has in `promotion_states`. Until then the winner PATCH
+only logs a warning.
