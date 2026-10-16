@@ -18,9 +18,9 @@ audience: human,agent
   and what in the Artifacts repo triggers the deploy (a Workers Build per worker, or the
   `npm run deploy:*` scripts run by hand).
 - TODO(maintainer): document where `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and
-  `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used), and
-  whether the `canary-rollback-triggers` / `promotion-events` queues are still created at deploy
-  time (the old workflow ran `wrangler queues create` for them).
+  `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used).
+- Queues: nothing creates them at deploy time any more. The maintainer confirmed on 2026-10-16
+  that the four queues of the checklist's step 2 exist (created by hand).
 
 ### Deploy-order checklist (m3 -> m8 ledger migration and everything after it)
 
