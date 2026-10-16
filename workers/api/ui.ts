@@ -221,7 +221,12 @@ export async function handleUi(
         return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
       }
       
-      return repoIssuesPage(pick(repo, 'id'), url, session, doReader);
+      try {
+        return await repoIssuesPage(pick(repo, 'id'), url, session, doReader);
+      } catch (error) {
+        console.error('Repo issues page error:', error);
+        return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+      }
     }
     
     // NEW: Create issue form for repo
@@ -266,7 +271,12 @@ export async function handleUi(
         return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
       }
       
-      return newIssuePage(pick(repo, 'id'), url, session, doReader);
+      try {
+        return await newIssuePage(pick(repo, 'id'), url, session, doReader);
+      } catch (error) {
+        console.error('New issue page error:', error);
+        return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+      }
     }
     
     // NEW: Single issue view
@@ -313,11 +323,21 @@ export async function handleUi(
         return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
       }
       
-      return issuePage(issueId, url, session, doReader);
+      try {
+        return await issuePage(issueId, url, session, doReader);
+      } catch (error) {
+        console.error('Issue page error:', error);
+        return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+      }
     }
     
     // Render using UUID (all existing page code works unchanged)
-    return repoPage(pick(repo, 'id'), url, session, doReader, env);
+    try {
+      return await repoPage(pick(repo, 'id'), url, session, doReader, env);
+    } catch (error) {
+      console.error('Repo page error:', error);
+      return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+    }
   }
 
   // NEW: Detail page routes (GET only, after actor check - R9)
@@ -337,21 +357,26 @@ export async function handleUi(
       return page('Not found', '<p>Invalid ID format. <a href="/app">Back to dashboard</a></p>', 404);
     }
     
-    switch (kind) {
-      case 'orgs':
-        return orgPage(id, url, session, doReader);
-      case 'repos':
-        return repoPage(id, url, session, doReader, env);
-      case 'issues':
-        return issuePage(id, url, session, doReader);
-      case 'specs':
-        return specPage(id, url, session, doReader);
-      case 'candidates':
-        return candidatePage(id, url, session, doReader);
-      case 'trials':
-        return trialPage(id, url, session, doReader);
-      default:
-        return page('Not found', '<p>Unknown entity type. <a href="/app">Back to dashboard</a></p>', 404);
+    try {
+      switch (kind) {
+        case 'orgs':
+          return await orgPage(id, url, session, doReader);
+        case 'repos':
+          return await repoPage(id, url, session, doReader, env);
+        case 'issues':
+          return await issuePage(id, url, session, doReader);
+        case 'specs':
+          return await specPage(id, url, session, doReader);
+        case 'candidates':
+          return await candidatePage(id, url, session, doReader);
+        case 'trials':
+          return await trialPage(id, url, session, doReader);
+        default:
+          return page('Not found', '<p>Unknown entity type. <a href="/app">Back to dashboard</a></p>', 404);
+      }
+    } catch (error) {
+      console.error('Detail page error:', error);
+      return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
     }
   }
 
@@ -631,8 +656,8 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
 
     return page('Dashboard', body);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return page('Error', `<p>could not load: ${esc(errorMessage)}</p><p><a href="/app">Back to dashboard</a></p>`, 200);
+    console.error('Dashboard error:', error);
+    return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
   }
 }
 

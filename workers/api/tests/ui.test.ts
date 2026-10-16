@@ -1325,18 +1325,13 @@ describe('Regression Tests', () => {
   });
 
   describe('DoReader Error Surfacing Bug (Task 2)', () => {
-    it('FAILS: doReader.list returns empty array for 404 instead of surfacing error', async () => {
-      // Create a stub that returns 404 for specs list
-      const errorStub = new MockDurableObjectStub();
-      errorStub.on('/api/actors?limit=500&offset=0', async () => {
-        return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      });
-      // Return 404 for repos list to trigger error
+    it('Spec DO 500 returns 502 page with could not load message', async () => {
+      // Create a stub that returns 500 for repos list to trigger error
+      const errorStub = createMockStub();
+      // Override repos list to return 500
       errorStub.on('/api/repositories?limit=500&offset=0', async () => {
-        return new Response(JSON.stringify({ success: false, error: 'Not found' }), {
-          status: 404,
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
           headers: { 'Content-Type': 'application/json' },
         });
       });
@@ -1350,27 +1345,20 @@ describe('Regression Tests', () => {
       });
 
       const response = await handleUi(request, mockEnv, errorStub as any);
-      // Currently returns 200 with empty list, but should surface error
-      expect(response?.status).toBe(200);
+      // Should surface error with 502 status
+      expect(response?.status).toBe(502);
       const body = await response?.text();
-      // Should show error message, not empty list
-      expect(body).toContain('could not load');
+      // Should show generic error message, not empty list
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
     });
 
-    it('FAILS: doReader.get returns null for 404 instead of surfacing error', async () => {
-      // Create a stub that returns 404 for a specific spec
-      const errorStub = new MockDurableObjectStub();
-      errorStub.on('/api/actors?limit=500&offset=0', async () => {
-        return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      });
-      errorStub.on('/api/specs?limit=500&offset=0', async () => {
-        return new Response(JSON.stringify({ success: true, data: fixtureSpecs }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      });
+    it('Genuine Not found on get yields existing not-found page', async () => {
+      // Use createMockStub which has all list endpoints mocked
+      const errorStub = createMockStub();
+      // Override specific spec get to return 'Not found'
       errorStub.on('/api/specs/nonexistent', async () => {
+        // DO returns 'Not found' error for missing entity
         return new Response(JSON.stringify({ success: false, error: 'Not found' }), {
           status: 404,
           headers: { 'Content-Type': 'application/json' },
@@ -1386,11 +1374,147 @@ describe('Regression Tests', () => {
       });
 
       const response = await handleUi(request, mockEnv, errorStub as any);
-      // Currently returns 200 with "Not found" page, but should surface error
-      expect(response?.status).toBe(200);
+      // Should return 404 with "Not found" page for genuine entity not found
+      expect(response?.status).toBe(404);
       const body = await response?.text();
-      // Should show error message, not "Not found" from the page function
-      expect(body).toContain('could not load');
+      expect(body).toContain('not found');
+      expect(body).not.toContain('could not load');
+    });
+
+    it('Spec DO 500 on get returns 502 page with could not load message', async () => {
+      // Create a stub that returns 500 for a specific spec
+      const errorStub = new MockDurableObjectStub();
+      errorStub.on('/api/actors?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      errorStub.on('/api/specs?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: true, data: fixtureSpecs }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      errorStub.on('/api/specs/nonexistent', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/specs/nonexistent', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      // Should return 502 with error page for DO errors
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('orgPage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific org get to return 500
+      errorStub.on('/api/organizations/org-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/orgs/org-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('repoPage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific repo get to return 500
+      errorStub.on('/api/repositories/repo-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/repos/repo-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('candidatePage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific candidate get to return 500
+      errorStub.on('/api/candidates/cand-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/candidates/cand-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('trialPage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific trial get to return 500
+      errorStub.on('/api/trials/trial-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/trials/trial-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
     });
   });
 });
