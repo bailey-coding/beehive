@@ -62,6 +62,16 @@ retries), so a bad deploy is loud rather than half-migrated.
    (`POST /api/admin/service-accounts`) and confirm a write with it answers 403; then grant the
    first maintainer deliberately with `POST /api/admin/actors/<id>/role {"role":"maintainer"}`
    (while none exists an actor may grant itself, so do this before anyone else can).
+7. Read-only verification (changes nothing; an agent may run these with a read-only API token, and
+   narrow the output, e.g. `| head -30` or `--json`, since results stay in its context):
+   - `wrangler secret list --name <worker>`: the nine tier-1 workers hold `SPEC_DO_INTERNAL_TOKEN`,
+     `beehive` also `SPEC_DO_ADMIN_TOKEN`, `beehive-sandbox-runner` neither (names only, no values).
+   - `wrangler deployments list --name <worker>` (or `wrangler versions list`): each worker runs the
+     commit you meant to deploy; `beehive-promotion-worker` must be the one deployed after `beehive`.
+   - `wrangler queues list`: the four queues of step 2 exist.
+   - `wrangler tail <worker> --format json` right after the first `beehive` request, to read
+     `Migration to m[4-8] failed` or `service_accounts has an unexpected shape` directly.
+   Never `wrangler deploy` and never write to the Artifacts repo (AGENTS.md).
 
 Moved out of `AGENTS.md` (2026-10-15). The config rules and the fail-closed auth rule stay
 in `AGENTS.md`; this file adds operational detail only.
