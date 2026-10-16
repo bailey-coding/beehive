@@ -8,65 +8,73 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-16
 
-## Completed this session (Opus agent review)
+## Where we are
 
-- ✅ Committed 46 docs (+22k lines) that were in working tree only
-- ✅ Pushed to origin/main (at the time this deployed all 10 workers; GitHub no longer deploys, see `docs/OPS.md`)
-- ✅ Fixed canary worker: returns 404 for unknown routes (was 200 with HTML text)
-- ✅ Widened vitest include: worker tests now run (12 files, 20+ hidden failures exposed)
-- ✅ Added CI gates: typecheck + unit tests run in `ci.yml` (formerly `deploy.yml`)
-- ✅ Updated cross-worker-flows tests: renamed routes to match workers, removed tests for non-existent routes
-- ✅ Updated MILESTONES.md: split M5 into M5a/M5b, deferred M6.5, merged M6.2 with M3 capability work
-- ✅ Removed fake handlers: deleted oracle-ladder.test.ts, cleaned m3-features.test.ts to use only real worker tests
-- ✅ Fixed promotion mode bug: mode now persists in Spec DO storage (not worker memory), survives worker restarts
-- ✅ Fixed typecheck errors: ui-semantic.ts root.children errors resolved
-- ✅ Added spec-do.ts to promotion-worker for Spec DO access via fetch router
+- The agent stack is merged and on `origin/main`: spine items 1 and 3 (promotion ledger routes,
+  ledger lifecycle), CI-only workflow, service tokens, canary deploy/rollback as Spec DO refs, review
+  fixes, Spec DO internal auth, shadow-router ref cache, and the ledger compare-and-swap with the
+  tournament state machine (schema m8).
+- The maintainer pushed to the Artifacts repo; the live Spec DO reached m8 after the empty legacy
+  `service_accounts` table was dropped (`docs/OPEN-QUESTIONS.md` 2026-10-16).
+- Local checks on `main`: 552 unit tests pass, typecheck clean, local e2e 56 passed / 5 skipped / 0 failed.
 
-## Current state
+## Next session, first (needs the maintainer)
 
-**E2E tests:**
-- `m3-features.test.ts`: 31 tests, all skipped (requires BEEHIVE_AUTH_TOKEN for production)
-- `cross-worker-flows.test.ts`: 22 tests, 9 failures, 2 skipped, 11 passing (local dev; 2026-10-15). Remaining failures are spine/worker defects, see OPEN-QUESTIONS 2026-10-15
-- Main issues: route mismatches between tests and workers, auth token issues, service binding connectivity
-
-**Infrastructure:**
-- All 10 workers deployed to Cloudflare
-- CI now runs typecheck and unit tests before deploy
-- Promotion mode persists across worker restarts via Spec DO
+1. `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh` passes all 11 checks; skim the `beehive` logs for
+   `Migration to m[4-8] failed`.
+2. Grant a first maintainer: `POST /api/admin/actors/<id>/role {"role":"maintainer"}`. Until one exists any
+   actor can grant itself the role.
+3. Confirm `beehive-promotion-worker` runs commit `00a1f52` or later (the tolerant winner PATCH). Older
+   builds end every tournament `failed` at the last step.
+4. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
+   command output); switch that remote to a credential helper.
+5. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
+   `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys, and how to roll back when all ten
+   workers deploy at once.
 
 ## Decide first
 
-1. **`scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers** (ArtifactFS is not built).
-   The public `/roadmap` page now says M3 is Partial.
-2. **Update test routes:** Some cross-worker-flows tests still use incorrect routes or expect wrong status codes
-3. **Service binding connectivity:** Local dev tests need all workers running with proper service bindings
+1. **Promotion worker calls Spec DO routes that do not exist** (`GET`/`PATCH /candidates/:id`,
+   `POST /candidates/:id/rollback`; the DO serves `/api/candidates/...`). Tournament metrics always fall
+   back to defaults, and winners and rollbacks are never recorded on the candidate. Spine decision: which
+   route and fields carry a rung change (`/api/candidates/:id/stage` exists), what a rollback writes, and
+   whether the DO owns `current_rung` (`docs/OPEN-QUESTIONS.md` 2026-10-16).
+2. **Edge `/health` on `beehive` answers `durableObject: ok` without calling the DO.** Make it call the DO
+   and return 503 on failure, so monitors see a stuck ledger (`docs/OPEN-QUESTIONS.md` 2026-10-16).
+3. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
+
+## Cleanup
+
+- `agent/ocap-answers` (two docs commits recording the OCAP-CI decisions) is on `origin` but not in `main`:
+  cherry-pick, then archive its workspace.
+- Ten merged local `agent/*` branches (and their `origin` copies) can be deleted once nothing needs them.
+- `scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers (ArtifactFS is not built).
+- The 5 skipped local e2e tests are m3 health checks for workers with no local port.
 
 ## Open work
 
-- **Typecheck:** All errors resolved. CI runs typecheck (`ci.yml`).
+- **Tournament creation race:** two requests creating a tournament for the same spec at the same moment make
+  two rows (ids are random); readers take the newest. The CAS covers replacing a record, not creating one.
+- **Migration tests only see this repo's own SQL.** A ledger carrying a table of another design passed every
+  test and broke the live deploy; consider a test that seeds legacy shapes from the production schema dump.
 - **Self-hosting gaps** (details in `docs/SETUP.md` section 2):
-  - No workflow creates queues now; the 7 queues are created by hand (see `docs/SETUP.md`).
+  - No workflow creates queues; the queues are created by hand (see `docs/SETUP.md`).
   - Account ID, `ALLOWED_GITHUB_USERS` and the `bz23711` subdomain are hardcoded across
     `wrangler.toml`, `cli/`, `shadow-router/config.ts`, `tests/e2e/config.ts`, `scripts/`.
   - First deploy to an empty account is unverified (`beehive` <-> `beehive-gate-workflow`
     binding cycle may need two passes).
-- **README drift:** says local e2e uses mocks (it makes real HTTP calls) and points to
-  `docs/SETUP.md` as complete; update `README.md` and `tests/e2e/README.md`.
+- **README drift:** `tests/e2e/README.md` still says local e2e uses mocks (it makes real HTTP calls) and
+  `docs/SETUP.md` is the accurate reference; update `tests/e2e/README.md`.
 - **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; canary
   `SLOMonitor.monitorAndTriggerRollback` is never called and `getMetric` returns 0
   (`canary-worker/slo.ts:67-78`); no producer for `canary-rollback-triggers` or
   `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
-  config, not an SDK integration.
-- **M1 ledger lifecycle** (tombstones, admin purge route) is merged to `main`; until the
-  maintainer deploys `beehive` (the live Spec DO is on m3), a production wipe still means
-  deleting the worker (`docs/OPS.md`).
-- **Local e2e:** 0 failures on `main` at m8 (56 passed, 5 skipped); see `docs/SETUP.md` "Local e2e status".
-- **Promotion worker calls Spec DO routes that do not exist** (`/candidates/:id`, `.../rollback`):
-  winners and rollbacks are never recorded on the candidate; spine decision, `docs/OPEN-QUESTIONS.md` 2026-10-16.
-  Production canary deploys answer 501 until a real Workers Versions client exists
-  (OPEN-QUESTIONS 2026-10-16).
+  config, not an SDK integration. Production canary deploys answer 501 until a real Workers Versions
+  client exists (OPEN-QUESTIONS 2026-10-16).
+- **M1 ledger lifecycle** is deployed with m8; the production purge is untested against real data. Use
+  tombstone then purge (`docs/OPS.md` "Ledger cleanup"), never delete the worker.
 
 ## Next demo (post-submission)
 

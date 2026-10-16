@@ -572,6 +572,16 @@ with an inspector port already in use.
 
 - **`1042`**: the worker is not deployed yet. After `wrangler delete --name beehive --force`,
   ask the maintainer to redeploy `beehive` (deploy flow: `docs/OPS.md`). Agents never deploy.
+- **Every Spec DO request fails right after a deploy** (`init failed`, 500s) while `beehive`'s
+  `/health` still answers 200: the ledger stopped at the previous schema version because a migration
+  step threw (by design: init fails loudly, the next request retries). The edge `/health` is static and
+  never calls the DO, so use `./scripts/prod-health.sh` and read the `beehive` logs for
+  `Migration to mN failed`. Seen: `service_accounts has an unexpected shape` (a table of another design
+  was on the live ledger): if it is empty, `DROP TABLE service_accounts` and the next request
+  recreates it, otherwise migrate its rows first (`docs/OPEN-QUESTIONS.md` 2026-10-16).
+- **409 `version_required` / `version_conflict` from the Spec DO** on a tournament or merge train: an old
+  promotion worker is still running, or a concurrent writer won; both clear on retry once every worker
+  has deployed (`docs/OPS.md` "Promotion ledger concurrency").
 - **403 right after granting scopes**: propagation takes minutes; wait and retry.
 - **`KV namespaces ... Authentication error`** printed by `wrangler delete`: harmless.
 - Secrets that live on `beehive` only must be re-put after a wipe (`API_AUTH_TOKEN`,
@@ -598,7 +608,9 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8789/queue/health
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8790/health
 ```
 
-Use `./scripts/health-check.sh` for automated health checks.
+Use `./scripts/health-check.sh` for the local dev workers. For the deployed ones use
+`BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh`: `/health` on `beehive` is static and passes even when the
+Spec DO is broken, so the script also makes a request that reaches the DO.
 
 ---
 

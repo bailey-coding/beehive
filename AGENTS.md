@@ -57,6 +57,12 @@ serialization point for promotion decisions.
   a silent workaround.
 - Candidate services stay small and stateless (price calculator / URL shortener shape).
 - Every module must be reachable from a Workflow, Queue consumer, or the edge router.
+- Check `Response.ok` on every fetch to the Spec DO or another worker: a 404 is an error, never
+  "empty" (the promotion worker called three DO routes that do not exist, unnoticed;
+  `docs/OPEN-QUESTIONS.md` 2026-10-16).
+- One push deploys all ten workers at once, in no controllable order (`docs/OPS.md`). Every change
+  must tolerate a mixed-version window: additive migrations, callers that cope with an old or new
+  peer, no "deploy X first" dependency.
 - Commit messages: `step: <desc> | task: <id> | spec: <clause> | confidence: <0-1>`.
 
 ---
