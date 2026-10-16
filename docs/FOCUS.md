@@ -22,8 +22,12 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Next session, first (needs the maintainer)
 
-1. Confirm `beehive-promotion-worker` runs commit `00a1f52` or later (the tolerant winner PATCH). Older
-   builds end every tournament `failed` at the last step.
+1. **Three workers did not redeploy on the 2026-10-16 push** (`wrangler deployments list`): `beehive-promotion-worker`,
+   `beehive-canary-worker` and `beehive-shadow-router` still run 2026-10-15 code; their newest deployment is a
+   20:29 UTC secret change. The other seven deployed at 21:32 and 21:37. `wrangler deploy --dry-run` builds all
+   three, so look at their Workers Builds in the dashboard (is the Artifacts repo connected, branch, build log).
+   Meanwhile the old promotion worker sends no `X-Beehive-Internal` header, so its Spec DO calls answer 401.
+   `prod-health.sh` cannot see this (it only checks reachability). Details: `docs/OPEN-QUESTIONS.md` 2026-10-16.
 2. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
    command output); switch that remote to a credential helper.
 3. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,

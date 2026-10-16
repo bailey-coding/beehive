@@ -535,3 +535,25 @@ check is `GET /api/organizations?limit=1`.
 
 **Want**: have `handleHealth` make a cheap DO call (the DO's own `/health` answers `OK` after `init()`)
 and report `durableObject: 'error'` with a 503 when it fails, so monitors see a stuck ledger.
+
+---
+
+## Three workers did not redeploy on the Artifacts push (2026-10-16)
+
+**Status**: Open; cause not found. Seen with `wrangler deployments list --name <worker>` after the push to `cf`.
+
+**Finding**: seven workers (`beehive`, `-gate-workflow`, `-queue-consumer`, `-scientist-comparator`,
+`-preview-manager`, `-candidate-service`, `-sandbox-runner`) each have two new deployments at 21:32 and 21:37 UTC.
+`beehive-shadow-router`, `beehive-canary-worker` and `beehive-promotion-worker` have none: their newest
+deployment is the 20:29 UTC secret change, and the code deployment before it is from 2026-10-15. `wrangler deploy
+--dry-run` builds all three, so the config is not the cause. Workers Builds status is not visible through wrangler.
+
+**Impact**: the old promotion worker sends no `X-Beehive-Internal`, so every call to the new Spec DO answers 401
+(ledger, promotion mode); the old canary worker lacks deploy-ref canary logic; the old shadow-router does not follow
+live canary refs. `scripts/prod-health.sh` passes anyway, because `/health` on each worker answers 200.
+
+**Want**: see each of the three workers' Workers Build in the dashboard (connected repo and branch, trigger, build
+log, root directory and watch paths), fix or connect it, then push or deploy. After the fix, check
+`wrangler deployments list` shows a code deployment newer than the push for all ten. The check could join
+`scripts/prod-health.sh` (compare each worker's newest deployment time with the push).
+
