@@ -1,0 +1,228 @@
+name: CI Enhanced
+
+# Enhanced CI with clean per-worker builds to catch dependency resolution issues.
+# This complements ci.yml which runs typecheck and unit tests.
+#
+# Rationale: Workers Builds installs per-worker. Modules that import from workers/shared
+# must have their dependencies resolvable. The zod failure (f847f75) happened because
+# workers/shared imports zod but workers that import from shared didn't have a way
+# to install shared's dependencies. This workflow catches such issues.
+#
+# Note: CI only. Nothing here deploys (docs/OPS.md).
+on:
+  pull_request:
+  push:
+    branches: ['**']
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  clean-install-build:
+    runs-on: ubuntu-latest
+    name: Clean install and build verification
+    
+    strategy:
+      # Run separately from main CI so a failure here doesn't block PRs unnecessarily
+      # but still provides valuable feedback
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install root dependencies
+        run: npm install
+
+      # ============================================================================
+      # PER-WORKER CLEAN INSTALL AND DRY-RUN BUILD
+      # ============================================================================
+      # This simulates what Workers Builds does: installs each worker in isolation.
+      # A clean git archive means no shared node_modules, so each worker must
+      # be able to resolve all its dependencies including those from workers/shared.
+
+      - name: Install and build all workers
+        run: |
+          # List of all workers that need to be built
+          WORKERS=(
+            "api"
+            "scientist-comparator"
+            "preview-manager"
+            "candidate-service"
+            "canary-worker"
+            "promotion-worker"
+            "gate-workflow"
+            "queue-consumer"
+            "sandbox-runner"
+            "shadow-router"
+            "spec-do"
+          )
+          
+          FAILED=0
+          for worker in "${WORKERS[@]}"; do
+            echo "=== Installing $worker ==="
+            if [ -f "workers/$worker/package.json" ]; then
+              (cd "workers/$worker" && npm install) || FAILED=1
+            fi
+          done
+          
+          # Also install shared dependencies
+          echo "=== Installing shared ==="
+          (cd "workers/shared" && npm install) || FAILED=1
+          
+          # Now try a dry-run build for workers that have wrangler.toml
+          for worker in "${WORKERS[@]}"; do
+            if [ -f "workers/$worker/wrangler.toml" ]; then
+              echo "=== Dry-run build for $worker ==="
+              (cd "workers/$worker" && npx wrangler deploy --dry-run --outdir /tmp/wrangler-output-$worker) || FAILED=1
+            fi
+          done
+          
+          exit $FAILED
+
+      - name: Verify all worker node_modules exist
+        run: |
+          # After per-worker install, verify that each worker's node_modules has what it needs
+          # This is a sanity check that the installs completed
+          WORKERS=(
+            "api"
+            "scientist-comparator"
+            "preview-manager"
+            "candidate-service"
+            "canary-worker"
+            "promotion-worker"
+            "gate-workflow"
+            "queue-consumer"
+            "sandbox-runner"
+            "shadow-router"
+            "spec-do"
+            "shared"
+          )
+          
+          for worker in "${WORKERS[@]}"; do
+            if [ -d "workers/$worker/node_modules" ]; then
+              echo "✓ workers/$worker/node_modules exists"
+            else
+              echo "✗ workers/$worker/node_modules MISSING"
+              exit 1
+            fi
+          done
+
+  typecheck:
+    runs-on: ubuntu-latest
+    name: Typecheck
+    needs: clean-install-build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install all worker dependencies
+        run: |
+          for dir in workers/*/; do
+            if [ -f "$dir/package.json" ]; then
+              (cd "$dir" && npm install) || exit 1
+            fi
+          done
+
+      - name: Run typecheck
+        run: npm run typecheck
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    name: Unit tests
+    needs: clean-install-build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install all worker dependencies
+        run: |
+          for dir in workers/*/; do
+            if [ -f "$dir/package.json" ]; then
+              (cd "$dir" && npm install) || exit 1
+            fi
+          done
+
+      - name: Run unit tests
+        run: npm test
+
+  migration-tests:
+    runs-on: ubuntu-latest
+    name: Migration and schema tests
+    needs: clean-install-build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install worker dependencies
+        run: |
+          for dir in workers/*/; do
+            if [ -f "$dir/package.json" ]; then
+              (cd "$dir" && npm install) || exit 1
+            fi
+          done
+
+      - name: Run migration tests
+        run: npm test -- --testNamePattern="migration|schema"
+
+  e2e-tests-local:
+    runs-on: ubuntu-latest
+    name: E2E tests (local mode)
+    needs: clean-install-build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install worker dependencies
+        run: |
+          for dir in workers/*/; do
+            if [ -f "$dir/package.json" ]; then
+              (cd "$dir" && npm install) || exit 1
+            fi
+          done
+
+      - name: Run local E2E tests
+        run: npm run test:e2e:local
+        env:
+          E2E_ENVIRONMENT: local
