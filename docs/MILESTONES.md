@@ -149,6 +149,25 @@ addition is joining rationale to oracle-ladder outcomes.
 fixtures survive redaction in tests; intent search returns prior failures for a clause;
 one successor candidate demonstrably starts from a prior session.
 
+**M8 — Surface parity and route correctness (proposed 2026-10-16, not started).** Make the
+API, CLI and UI agree, and remove calls to routes that do not exist. Source of truth:
+`docs/FEATURE-PARITY.md` (read from code only; confirm each "broken" claim at runtime first).
+- **Route correctness (spine, human sign-off):** the promotion worker's calls to nonexistent
+  Spec DO routes (`GET`/`PATCH /candidates/:id`, `POST /candidates/:id/rollback`).
+- **UI:** issue comments route (`/api/issues/:id/comments`); `doReader` surfaces errors
+  instead of turning 404/500 into empty lists.
+- **CLI fixes:** `promotion create`/`trial decide` bodies, `health extended` path, `promotion get`;
+  register missing options and implement the create stubs; delete dead `workflow`,
+  `deployment`, `environment` groups.
+- **CLI additions:** commands for existing API routes (comments, stage, links, execute);
+  `service-account` group.
+- **Out of scope:** UI extras (parity task 8); read-only ledger/canary view and `rollback`
+  wrapper (parity task 9, needs sign-off); edge `/health` fix; tournament creation race.
+- **Exit criteria:** every CLI command parses with its flags (smoke test); no UI page maps an
+  error to an empty list; no client calls a missing route; local e2e green.
+- **Sequencing:** CLI tasks share `cli/src/utils/api-client.ts` and `cli/src/index.ts`; run
+  them serially, each branch cut from `main`.
+
 ---
 
 ## Future / Optional
