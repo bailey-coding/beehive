@@ -10,13 +10,20 @@ export function registerRepoCommands(
   createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
 ): void {
   const repo = program.command('repo').description('Repository management');
-  repo.command('create <name>').description('Create a new repository').action(createHandler(async (state, ..._args) => {
-    const args = _args as [{ remoteUrl?: string; namespace?: string; organization?: string; type?: string }];
-    if (!args[0]?.remoteUrl || !args[0]?.namespace) {
-      console.error(formatError('Remote URL and namespace are required'));
-      process.exit(1);
-    }
-    console.log(formatError('Repository creation not fully implemented'));
+  repo.command('create <name>').description('Create a new repository').option('--organization <id>', 'Organization ID', { required: true }).option('--remote-url <url>', 'Remote URL', { required: true }).option('--namespace <ns>', 'Namespace', { required: true }).option('--type <type>', 'Repository type (baseline|candidate)', { required: true }).option('--spec <id>', 'Spec ID').option('--agent <id>', 'Agent ID').option('--default-branch <branch>', 'Default branch').action(createHandler(async (state, ..._args) => {
+    const name = _args[0] as string;
+    const opts = _args[1] as { organization: string; remoteUrl: string; namespace: string; type: 'baseline' | 'candidate'; spec?: string; agent?: string; defaultBranch?: string };
+    const result = await state.client.createRepository({
+      name,
+      organizationId: opts.organization,
+      repoType: opts.type,
+      specId: opts.spec,
+      agentId: opts.agent,
+      remoteUrl: opts.remoteUrl,
+      namespace: opts.namespace,
+      defaultBranch: opts.defaultBranch,
+    });
+    printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 
   repo.command('list').description('List repositories').action(createHandler(async (state) => {

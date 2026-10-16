@@ -11,12 +11,18 @@ export function registerGateCommands(
 ): void {
   const gate = program.command('gate').description('Gate workflow operations');
 
-  gate.command('run <candidate-id>').description('Run gate for candidate').action(createHandler(async (state, ..._args) => {
+  gate.command('run <candidate-id>').description('Run gate for candidate').option('--gate <type>', 'Gate type (pre-merge, shadow, train, canary, full)', { required: true }).action(createHandler(async (state, ..._args) => {
     const candidateId = _args[0] as string;
-    const opts = _args[1] as { gate?: string } || {};
-    const gateType = opts.gate || 'pre-merge';
+    const opts = _args[1] as { gate: string };
+    const gateType = opts.gate as 'pre-merge' | 'shadow' | 'train' | 'canary' | 'full';
     
-    const result = await state.client.runPreMergeGate(candidateId);
+    let result;
+    if (gateType === 'pre-merge') {
+      result = await state.client.runPreMergeGate(candidateId);
+    } else {
+      console.error(formatError(`Gate type '${gateType}' is not yet implemented in the CLI. Only 'pre-merge' is currently supported.`));
+      process.exit(1);
+    }
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 

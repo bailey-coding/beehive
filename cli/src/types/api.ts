@@ -114,7 +114,7 @@ export interface RepositoryResponse {
 export interface CreateSpecRequest {
   name: string;
   description?: string;
-  contract: string | object; // JSON string or object
+  contract: string; // JSON string
   declaredDeltaSurface: string[];
   organizationId: string;
 }
@@ -285,12 +285,12 @@ export type IssueStatus = 'open' | 'in-progress' | 'resolved' | 'closed';
 export type IssueStage = 'triage' | 'specified' | 'implemented' | 'verified' | 'merged';
 
 export interface CreateIssueRequest {
-  title: string;
+  number: number;
   repositoryId: string;
-  description?: string;
-  changeType?: ChangeType;
-  complexityEstimate?: number;
-  reporterTrust?: number;
+  title: string;
+  body?: string;
+  labels?: string[];
+  createdBy?: string;
 }
 
 export interface IssueResponse {

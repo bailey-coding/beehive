@@ -11,18 +11,14 @@ export function registerCandidateCommands(
 ): void {
   const candidate = program.command('candidate').description('Candidate management');
 
-  candidate.command('create').description('Create candidate').action(createHandler(async (state, ..._args) => {
-    const args = _args[0] as { spec?: string; repository?: string; commit?: string; baseCommit?: string; agent?: string };
-    if (!args.spec || !args.repository || !args.commit || !args.baseCommit) {
-      console.error(formatError('Spec, repository, commit, and base-commit are required'));
-      process.exit(1);
-    }
+  candidate.command('create').description('Create candidate').option('--spec <id>', 'Spec ID', { required: true }).option('--repository <id>', 'Repository ID', { required: true }).option('--commit <sha>', 'Commit SHA', { required: true }).option('--base-commit <sha>', 'Base commit SHA', { required: true }).option('--agent <id>', 'Agent ID').action(createHandler(async (state, ..._args) => {
+    const opts = _args[0] as { spec: string; repository: string; commit: string; baseCommit: string; agent?: string };
     const result = await state.client.createCandidate({
-      specId: args.spec,
-      repositoryId: args.repository,
-      commitSha: args.commit,
-      baseCommitSha: args.baseCommit,
-      agentId: args.agent,
+      specId: opts.spec,
+      repositoryId: opts.repository,
+      commitSha: opts.commit,
+      baseCommitSha: opts.baseCommit,
+      agentId: opts.agent,
     });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));

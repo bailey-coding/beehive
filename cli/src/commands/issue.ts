@@ -11,14 +11,20 @@ export function registerIssueCommands(
 ): void {
   const issue = program.command('issue').description('Issue management');
 
-  issue.command('create <title>').description('Create issue').action(createHandler(async (state, ..._args) => {
+  issue.command('create <title>').description('Create issue').option('--repository <id>', 'Repository ID', { required: true }).option('--body <text>', 'Issue body').option('--labels <labels>', 'Comma-separated labels').option('--number <num>', 'Issue number', { required: true }).action(createHandler(async (state, ..._args) => {
     const title = _args[0] as string;
-    const args = _args[1] as { repository?: string };
-    if (!args.repository) {
-      console.error(formatError('Repository ID is required'));
-      process.exit(1);
-    }
-    console.log(formatError('Issue creation not fully implemented'));
+    const opts = _args[1] as { repository: string; body?: string; labels?: string; number: number };
+    
+    const labels = opts.labels ? opts.labels.split(',').map(l => l.trim()) : undefined;
+    
+    const result = await state.client.createIssue({
+      number: opts.number,
+      repositoryId: opts.repository,
+      title,
+      body: opts.body,
+      labels,
+    });
+    printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 
   issue.command('list').description('List issues').action(createHandler(async (state) => {

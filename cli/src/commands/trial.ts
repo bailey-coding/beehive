@@ -11,13 +11,15 @@ export function registerTrialCommands(
 ): void {
   const trial = program.command('trial').description('Trial operations');
 
-  trial.command('create').description('Create a trial').action(createHandler(async (state, ..._args) => {
-    const args = _args as [{ candidateA?: string; candidateB?: string; spec?: string }];
-    if (!args[0]?.candidateA || !args[0]?.candidateB || !args[0]?.spec) {
-      console.error(formatError('candidateA, candidateB, and spec are required'));
-      process.exit(1);
-    }
-    console.log(formatError('Trial creation not fully implemented'));
+  trial.command('create').description('Create a trial').option('--candidate-a <id>', 'Candidate A ID', { required: true }).option('--candidate-b <id>', 'Candidate B ID', { required: true }).option('--spec <id>', 'Spec ID', { required: true }).option('--decided-by <id>', 'Decided by actor ID').action(createHandler(async (state, ..._args) => {
+    const opts = _args[0] as { candidateA: string; candidateB: string; spec: string; decidedBy?: string };
+    const result = await state.client.createTrial({
+      candidateAId: opts.candidateA,
+      candidateBId: opts.candidateB,
+      specId: opts.spec,
+      decidedBy: opts.decidedBy,
+    });
+    printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 
   trial.command('list').description('List trials').action(createHandler(async (state) => {
