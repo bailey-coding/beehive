@@ -22,7 +22,7 @@ audience: human,agent
   whether the `canary-rollback-triggers` / `promotion-events` queues are still created at deploy
   time (the old workflow ran `wrangler queues create` for them).
 
-### Deploy-order checklist (m3 -> m7 ledger migration and everything after it)
+### Deploy-order checklist (m3 -> m8 ledger migration and everything after it)
 
 0. **Hard prerequisite: put the Spec DO internal tokens before deploying anything** (section
    "Spec DO internal tokens" below). The new Spec DO check fails closed: deploy `beehive` without
@@ -32,7 +32,7 @@ audience: human,agent
    promptly, or accept that window. `wrangler secret put` on a worker that is already deployed takes effect on its
    next request, so put them on all workers (nine tier-1, one admin) first, then deploy.
 
-The live Spec DO is on schema m3; the first `beehive` deploy runs m3 -> m7 on its next init.
+The live Spec DO is on schema m3; the first `beehive` deploy runs m3 -> m8 on its next init.
 A failed migration step now throws out of `init()` (every request fails, the next request
 retries), so a bad deploy is loud rather than half-migrated.
 
@@ -45,11 +45,13 @@ retries), so a bad deploy is loud rather than half-migrated.
    by hand (`wrangler queues create <name>`).
 3. Confirm `API_AUTH_TOKEN` is identical on every worker. Keep `WORKER_VERSIONS_MODE` (and
    `BEEHIVE_LOCAL_DEV`) unset in production.
-4. Deploy `beehive` first. Check its logs for `Migration to m[4-7] failed`; any hit means the
+4. Deploy `beehive` first. Check its logs for `Migration to m[4-8] failed`; any hit means the
    ledger stopped at the previous version and requests are failing until it is fixed.
 5. Deploy `beehive-preview-manager` before `beehive-canary-worker`, then the remaining workers
    (shadow-router, promotion-worker, scientist-comparator, candidate-service, gate-workflow,
-   queue-consumer, sandbox-runner).
+   queue-consumer, sandbox-runner). Deploy `beehive-promotion-worker` right after `beehive`:
+   the new Spec DO answers 409 `version_required` to an old promotion worker that replaces an
+   existing tournament or merge train (see "Promotion ledger concurrency").
 6. After deploy: `GET /health` on each worker (with the bearer token) answers 200;
    `GET /api/service-accounts` answers 410; mint a service token
    (`POST /api/admin/service-accounts`) and confirm a write with it answers 403; then grant the
@@ -216,6 +218,33 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
   if the Spec DO read fails the last value is served for at most one more TTL (worst case 2 x TTL =
   10s by default), then the router falls back to the static config. Errors are never cached and
   concurrent requests share one read. Details: `docs/OPEN-QUESTIONS.md` "Shadow-router live-ref cache".
+
+### Promotion ledger concurrency (m7 -> m8)
+
+Live once the m7 -> m8 migration reaches the deploy flow (additive: `version` on `tournaments`
+and `merge_trains`; `failure_reason`, `failed_at`, `attempts` on `tournaments`). Contract:
+`workers/shared/ledger-state-machine.ts`. These routes are reached only through the Spec DO
+binding (the promotion worker); no edge route exposes them.
+
+- **Compare-and-swap.** Every write bumps the row's `version`. A `POST` over an existing id
+  needs `X-Expected-Version` (the version last read) and answers 409 `version_conflict` (stale) or
+  409 `version_required` (header missing); `PATCH` merges server-side and checks the header only
+  when sent. The check and the write share one transaction. The promotion worker re-reads and
+  re-applies up to 3 times (`modifyTournament` / `modifyMergeTrain`), then surfaces the conflict.
+- **Tournament status machine** (409 `invalid_transition`): `pending -> in_progress` (needs 2
+  competing candidates), `in_progress -> completed` (needs a winner from the candidates and
+  `completedAt`) or `failed` (needs `failureReason`), `failed -> in_progress` (retry),
+  `failed -> pending` (reset); `completed` is terminal. A new tournament starts `pending`.
+- **Failures and retries.** A tournament that errors while `in_progress` is written `failed`
+  with the reason (no winner determined, winner promotion rejected, Spec DO errors). Each entry
+  into `failed` counts in `attempts`; after 3 the next retry answers 409 `retries_exhausted`.
+  `failed -> pending` resets `attempts` to 0, so a stuck tournament is recovered by a
+  `PATCH /tournament-status/<id> {"status":"pending"}` through the DO binding, by a human.
+  A tournament left `in_progress` by a crashed worker is resumed by the next request.
+- **Deploy pairing.** An old promotion worker replacing an existing tournament or train
+  answers 409 `version_required`: deploy `beehive-promotion-worker` immediately after `beehive`.
+- Not covered: two requests creating a tournament for the same spec at the same moment still
+  make two rows (ids are random); readers take the newest.
 
 ### Last resort: wipe the whole ledger
 

@@ -1287,17 +1287,17 @@ $ ./scripts/demo-end-to-end.sh --local
         <span class="badge" style="background: #28a745; color: #fff;">✅ SPIKE Complete</span>
         <span class="badge" style="background: #28a745; color: #fff;">✅ M1 Complete</span>
         <span class="badge" style="background: #28a745; color: #fff;">✅ M2 Complete</span>
-        <span class="badge" style="background: #28a745; color: #fff;">✅ M3 Complete</span>
+        <span class="badge" style="background: #d29922; color: #fff;">🚧 M3 Partial</span>
         <span class="badge">📦 M4 Submission: Oct 14</span>
       </div>
       <p>
         All 10 workers are deployed on Cloudflare's global network and fail closed on
-        auth. 173+ unit tests and 156+ integration/E2E tests cover every worker.
+        auth. 550+ unit tests and a local cross-worker E2E suite cover every worker.
       </p>
       <ul>
         <li>✅ Core: API + Spec DO, gate workflow, sandbox runner, queue consumer</li>
         <li>✅ Empirical oracle (M2): shadow router, scientist comparator, preview manager, candidate service</li>
-        <li>✅ Promotion train (M3): canary worker with auto-rollback, promotion worker (tournament and merge-train modes), Statsig integration</li>
+        <li>🚧 Promotion train (M3): promotion worker (tournament and merge-train modes) and canary worker with a local traffic-split config; canary rollback is a Spec DO ref move, but the SLO trigger is not wired and there is no Statsig SDK integration</li>
         <li>✅ Spec DO with SQLite storage working</li>
         <li>✅ Artifacts integration validated</li>
         <li>✅ End-to-end demo flow working</li>

@@ -38,9 +38,8 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Decide first
 
-1. **Public `/roadmap` page overstates status** (`workers/api/index.ts:646-661`): marks M3
-   complete incl. facets/capabilities/ArtifactFS and "M7 Observability Layer" complete.
-   `scripts/demo-multi-agent.sh` also prints hard-coded ArtifactFS numbers.
+1. **`scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers** (ArtifactFS is not built).
+   The public `/roadmap` page now says M3 is Partial.
 2. **Update test routes:** Some cross-worker-flows tests still use incorrect routes or expect wrong status codes
 3. **Service binding connectivity:** Local dev tests need all workers running with proper service bindings
 
@@ -60,11 +59,12 @@ Completed items are removed, not struck through; history lives in git.*
   (`canary-worker/slo.ts:67-78`); no producer for `canary-rollback-triggers` or
   `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
   config, not an SDK integration.
-- **M1 ledger lifecycle** (tombstones, admin purge route) is implemented on branch
-  `agent/spine-item3-ledger-lifecycle`, awaiting review; until it reaches `main`, a production
-  wipe still means deleting the worker (`docs/OPS.md`).
-- **Local e2e:** 0 failures on branch `agent/canary-rollback` (canary deploy/rollback as
-  Spec DO deploy refs, m6 -> m7), awaiting review; see `docs/SETUP.md` "Local e2e status".
+- **M1 ledger lifecycle** (tombstones, admin purge route) is merged to `main`; until the
+  maintainer deploys `beehive` (the live Spec DO is on m3), a production wipe still means
+  deleting the worker (`docs/OPS.md`).
+- **Local e2e:** 0 failures when last run on `agent/canary-rollback` (canary deploy/rollback as
+  Spec DO deploy refs, m6 -> m7); not re-run since the ledger CAS change (m8). See
+  `docs/SETUP.md` "Local e2e status".
   Production canary deploys answer 501 until a real Workers Versions client exists
   (OPEN-QUESTIONS 2026-10-16).
 

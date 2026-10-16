@@ -288,7 +288,7 @@ Trial/candidate dashboards are planned (see `docs/UI-DASHBOARD-PLAN.md`); the Re
 - ✅ M2 COMPLETE: Shadow Router, Scientist Comparator, Preview Manager, Candidate Service
 - ✅ Analytics Engine capturing per-candidate metrics (10+ rows)
 - ✅ All components health-checked and verified
-- 🚧 M4: LICENSE added, repo cleanup in progress, demo script created
+- ✅ M4: submitted (LICENSE, repo cleanup, demo script)
 
 ---
 
