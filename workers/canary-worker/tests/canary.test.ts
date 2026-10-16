@@ -37,11 +37,18 @@ const mockEnv: Env = {
   PREVIEW_MANAGER: mockPreviewManager as unknown as Service,
   ANALYTICS: mockAnalytics,
   API_AUTH_TOKEN: 'test-auth-token',
+  SPEC_DO_INTERNAL_TOKEN: 'test-do-internal-token',
   CANARY_SLO_LATENCY_P95: '1000',
   CANARY_SLO_ERROR_RATE: '0.01',
 };
 
 const mockCtx = {};
+
+// The Spec DO stub receives the Request the shared authed stub built (tokens attached)
+async function doCall(index: number) {
+  const request = mockSpecDoStub.fetch.mock.calls[index][0] as Request;
+  return { url: request.url, method: request.method, headers: request.headers, body: await request.clone().text() };
+}
 
 // Helper to create mock requests
 function createRequest(
@@ -352,9 +359,9 @@ describe('Rollback Logic', () => {
 
       expect(response.status).toBe(200);
       expect(await readJson(response)).toMatchObject({ success: true, deployment: { status: 'rolled_back' }, deployRef: { action: 'rollback' } });
-      const [url, init] = mockSpecDoStub.fetch.mock.calls[1];
-      expect(url).toBe('https://spec-do.internal/canary-deployments/deployment-001/rollback');
-      expect(JSON.parse(init.body)).toEqual({ reason: 'manual' });
+      const rollback = await doCall(1);
+      expect(rollback.url).toBe('https://spec-do.internal/canary-deployments/deployment-001/rollback');
+      expect(JSON.parse(rollback.body)).toEqual({ reason: 'manual' });
       expect(mockPreviewManager.fetch).not.toHaveBeenCalled();
     });
 
@@ -490,9 +497,11 @@ describe('Canary Deployment', () => {
     expect(pmUrl).toBe('https://preview-manager.internal/api/preview/canary');
     expect(JSON.parse(pmInit.body)).toEqual({ candidateId: 'candidate-001', specId: 'spec-001' });
     expect(pmInit.headers.Authorization).toBe('Bearer test-auth-token');
-    const [doUrl, doInit] = mockSpecDoStub.fetch.mock.calls[0];
-    expect(doUrl).toBe('https://spec-do.internal/canary-deployments');
-    expect(JSON.parse(doInit.body)).toMatchObject({ url: 'https://abc-beehive-candidate-candidate-001.workers.dev', workerVersionId: 'stub-1', commitSha: 'sha1', trafficPercentage: 25, holdoutPercentage: 10 });
+    const deploy = await doCall(0);
+    expect(deploy.url).toBe('https://spec-do.internal/canary-deployments');
+    expect(deploy.headers.get('X-Beehive-Internal')).toBe('test-do-internal-token');
+    expect(deploy.headers.has('X-Beehive-Admin')).toBe(false);
+    expect(JSON.parse(deploy.body)).toMatchObject({ url: 'https://abc-beehive-candidate-candidate-001.workers.dev', workerVersionId: 'stub-1', commitSha: 'sha1', trafficPercentage: 25, holdoutPercentage: 10 });
   });
 
   it('should return 400 for invalid config', async () => {
@@ -521,7 +530,7 @@ describe('Canary Deployment', () => {
     const response = await callHandler('/canary-deployments/deployment-001');
     expect(response.status).toBe(200);
     expect(await readJson(response)).toMatchObject({ success: true, deployment: { id: 'deployment-001' } });
-    expect(mockSpecDoStub.fetch.mock.calls[0][0]).toBe('https://spec-do.internal/canary-deployments/deployment-001');
+    expect((await doCall(0)).url).toBe('https://spec-do.internal/canary-deployments/deployment-001');
   });
 
   it('GET /canary-deployments/:id never puts a DO stub where the namespace belongs (DataCloneError regression)', async () => {
@@ -570,9 +579,9 @@ describe('Auto-rollback switch', () => {
     const response = await callHandler('/canary/candidate-001/auto-rollback', 'POST', { enabled: false });
     expect(response.status).toBe(200);
     expect(await readJson(response)).toEqual({ success: true, candidateId: 'candidate-001', deploymentId: 'deployment-001', enabled: false });
-    const [url, init] = mockSpecDoStub.fetch.mock.calls[1];
-    expect(url).toBe('https://spec-do.internal/canary-deployments/deployment-001');
-    expect(init.method).toBe('PATCH');
+    const patch = await doCall(1);
+    expect(patch.url).toBe('https://spec-do.internal/canary-deployments/deployment-001');
+    expect(patch.method).toBe('PATCH');
   });
 
   it('answers 404 without a live canary and 400 without a boolean', async () => {

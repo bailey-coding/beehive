@@ -81,6 +81,8 @@ export interface ShadowConfig {
  */
 export interface ShadowRouterEnv {
   SPEC_DO?: any;
+  // Tier-1 secret for Spec DO calls (workers/shared/spec-do-auth.ts); no admin token on this worker
+  SPEC_DO_INTERNAL_TOKEN?: string;
   ANALYTICS?: AnalyticsEngine;
   SCIENTIST_QUEUE?: Queue;
   PREVIEW_SCIENTIST_QUEUE?: Queue;

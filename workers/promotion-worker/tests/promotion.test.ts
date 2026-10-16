@@ -25,6 +25,7 @@ import type {
 import { PromotionStateManager } from '../state';
 import { PromotionLedgerClient, RECORD_NOT_FOUND } from '../../shared/promotion-ledger';
 import { makeSpecDo } from '../../spec-do/tests/sqlite-state';
+import { TEST_INTERNAL_ONLY } from '../../spec-do/tests/do-tokens';
 
 // ============================================================================
 // Mock Environment
@@ -576,10 +577,12 @@ describe('Promotion Operations', () => {
 
 describe('Spec DO promotion ledger wiring', () => {
   async function ledgerEnv(mode: PromotionMode) {
-    const spec = makeSpecDo();
+    // Raw DO: the promotion worker's own client must carry the tier-1 token
+    const spec = makeSpecDo(undefined, false);
     await spec.init();
     const env: Env = {
       ...mockEnv,
+      ...TEST_INTERNAL_ONLY,
       PROMOTION_MODE: mode,
       SPEC_DO: {
         idFromName: () => 'main',

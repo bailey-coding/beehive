@@ -9,6 +9,8 @@
  * (`wrangler secret put API_AUTH_TOKEN`) and in `.dev.vars` for local dev.
  */
 
+import { getSpecDoStub, type SpecDoCallerEnv } from './spec-do-auth';
+
 export interface AuthEnv {
   API_AUTH_TOKEN?: string;
 }
@@ -124,8 +126,7 @@ export async function generateTokenSet(): Promise<{ token: string; hash: string;
 
 export type ServiceAccountScope = 'read' | 'write' | 'read_write';
 
-export interface ServiceAccountAuthEnv {
-  SPEC_DO: DurableObjectNamespace;
+export interface ServiceAccountAuthEnv extends SpecDoCallerEnv {
   API_AUTH_TOKEN?: string;
 }
 
@@ -173,8 +174,7 @@ export async function serviceAccountAuth(
   
   try {
     // Get Spec DO to verify the token
-    const specDoId = env.SPEC_DO.idFromName('main');
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env);
     
     const verifyUrl = `/api/service-accounts/${serviceAccountId}/verify`;
     const verifyResponse = await specDoStub.fetch(

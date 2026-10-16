@@ -5,6 +5,7 @@
 
 import { generateServiceToken, hashToken, tokenPrefix } from '../shared/service-tokens';
 import type { Principal } from '../shared/principal';
+import type { SpecDoStub } from '../shared/spec-do-auth';
 
 const DEFAULT_EXPIRES_IN_DAYS = 90;
 const MAX_EXPIRES_IN_DAYS = 365;
@@ -26,7 +27,7 @@ function err(error: string, status: number): Response {
 
 // X-Actor-ID is the master principal's actor ('unknown' without the header): the DO
 // records it as the minting/revoking actor. Fresh headers, never the client's.
-function toDo(stub: DurableObjectStub, path: string, method: string, actorId: string, body?: unknown): Promise<Response> {
+function toDo(stub: SpecDoStub, path: string, method: string, actorId: string, body?: unknown): Promise<Response> {
   return stub.fetch(
     new Request(`https://spec-do.internal${path}`, {
       method,
@@ -58,7 +59,7 @@ export async function handleServiceAccountRoutes(
   request: Request,
   path: string,
   principal: Principal,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response | null> {
   const method = request.method;
 

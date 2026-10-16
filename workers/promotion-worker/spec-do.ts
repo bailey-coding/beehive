@@ -5,10 +5,10 @@
  */
 
 import type { Env, PromotionMode } from './types';
+import { getSpecDoStub } from '../shared/spec-do-auth';
 import { PromotionLedgerClient } from '../shared/promotion-ledger';
 
 const DEFAULT_SPEC_DO_NAME = 'main';
-const SPEC_DO_ORIGIN = 'https://spec-do.internal';
 
 export interface SpecDOClient {
   fetch(input: string | Request, init?: RequestInit): Promise<Response>;
@@ -19,11 +19,10 @@ export interface SpecDOClient {
  * the internal origin, since DO stubs require absolute URLs.
  */
 export function getSpecDo(env: Env): SpecDOClient {
-  const id = env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME);
-  const stub = env.SPEC_DO.get(id);
+  // The authed stub resolves relative paths and attaches this worker's internal token
+  const stub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
   return {
-    fetch: (input, init) =>
-      stub.fetch(typeof input === 'string' ? new Request(new URL(input, SPEC_DO_ORIGIN), init) : input),
+    fetch: (input, init) => stub.fetch(input, init),
   };
 }
 

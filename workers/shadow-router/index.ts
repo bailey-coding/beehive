@@ -11,6 +11,7 @@
  */
 
 import { authGate } from '../shared/auth';
+import { getSpecDoStub } from '../shared/spec-do-auth';
 import { MetricsCollector } from '../shared/analytics';
 import type { Queue } from '../scientist-comparator/types';
 import type { AnalyticsEngine } from '../shared/analytics';
@@ -56,9 +57,9 @@ async function getShadowConfig(env: any): Promise<ShadowConfig> {
   return applyCanaryRefs(base, specDoFetcher(env));
 }
 
-function specDoFetcher(env: any): SpecDoFetcher | null {
+export function specDoFetcher(env: any): SpecDoFetcher | null {
   if (typeof env.SPEC_DO?.idFromName !== 'function') return null;
-  const stub = env.SPEC_DO.get(env.SPEC_DO.idFromName('main'));
+  const stub = getSpecDoStub(env);
   return { fetch: (path, init) => stub.fetch(`https://spec-do.internal${path}`, init) };
 }
 

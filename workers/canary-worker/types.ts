@@ -65,6 +65,8 @@ export interface QueueMessage {
 // Environment interface
 export interface Env {
   SPEC_DO: DurableObjectNamespace;
+  // Tier-1 secret for Spec DO calls (workers/shared/spec-do-auth.ts); no admin token on this worker
+  SPEC_DO_INTERNAL_TOKEN?: string;
   PREVIEW_MANAGER: Service;
   ANALYTICS: AnalyticsEngine;
   API_AUTH_TOKEN?: string;

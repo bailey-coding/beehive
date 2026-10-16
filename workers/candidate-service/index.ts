@@ -29,6 +29,7 @@ import {
   DeployPreviewRequestSchema,
   UpdatePreviewRequestSchema,
 } from './types';
+import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 // ============================================================================
 // Constants
@@ -78,8 +79,7 @@ const candidateServiceHandler = {
     }
 
     // Get Spec DO stub
-    const specDoId = env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME);
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
 
     // ==========================================================================
     // Deploy Preview: POST /api/candidates/{candidateId}/preview
@@ -173,7 +173,7 @@ function handleHealthCheck(): Response {
  * Handle deploy preview request
  */
 async function handleDeployPreview(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidateId: string,
   requestBody: DeployPreviewRequest,
   env: CandidateServiceEnv
@@ -282,7 +282,7 @@ async function handleDeployPreview(
  * Handle get preview request
  */
 async function handleGetPreview(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidateId: string
 ): Promise<Response> {
   try {
@@ -331,7 +331,7 @@ async function handleGetPreview(
  * Handle update preview request
  */
 async function handleUpdatePreview(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidateId: string,
   requestBody: UpdatePreviewRequest
 ): Promise<Response> {
@@ -402,7 +402,7 @@ async function handleUpdatePreview(
  * Handle health check for a candidate
  */
 async function handleHealthCheckCandidate(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   queryParams: HealthCheckRequest
 ): Promise<Response> {
   const startTime = Date.now();
@@ -472,7 +472,7 @@ async function handleHealthCheckCandidate(
  * Handle get candidate request
  */
 async function handleGetCandidate(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidateId: string
 ): Promise<Response> {
   try {
@@ -511,7 +511,7 @@ async function handleGetCandidate(
  * Get candidate by ID from Spec DO
  */
 async function getCandidateById(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidateId: string
 ): Promise<Candidate | null> {
   try {

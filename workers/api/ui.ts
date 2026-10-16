@@ -18,6 +18,7 @@ export interface UiEnv {
 
 import { page, esc, str, table, tableHtml } from './ui-html';
 import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, buildRepoUrl, type DoReader, type DoRow, type Session } from './ui-pages';
+import type { SpecDoStub } from '../shared/spec-do-auth';
 
 // Re-export Session for use by tests
 export type { Session };
@@ -42,7 +43,7 @@ interface Row {
  * Note: Only uses UNFILTERED list routes per R1 (filtered routes return empty).
  * Filtering is done in the UI code.
  */
-function createDoReader(stub: DurableObjectStub, actorId: string): DoReader {
+function createDoReader(stub: SpecDoStub, actorId: string): DoReader {
   return {
     get: async (path: string): Promise<DoRow | null> => {
       const result = await callDo(stub, path, 'GET', undefined, actorId);
@@ -74,7 +75,7 @@ function createDoReader(stub: DurableObjectStub, actorId: string): DoReader {
 export async function handleUi(
   request: Request,
   env: UiEnv,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -379,7 +380,7 @@ async function finishLogin(
   request: Request,
   url: URL,
   env: UiEnv,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
@@ -452,7 +453,7 @@ async function finishLogin(
   return redirect('/app', [cookie(SESSION_COOKIE, token, SESSION_TTL_SECONDS), clearCookie(STATE_COOKIE)]);
 }
 
-async function ensureActor(stub: DurableObjectStub, login: string, githubId: string): Promise<string | null> {
+async function ensureActor(stub: SpecDoStub, login: string, githubId: string): Promise<string | null> {
   const list = await callDo(stub, '/api/actors?limit=500&offset=0', 'GET');
   const rows = Array.isArray(list.data) ? (list.data as Row[]) : [];
   const existing = rows.find((a) => a.github_user_id === githubId || a.githubUserId === githubId);
@@ -487,7 +488,7 @@ function formatDate(ts: number | string | undefined): string {
   return new Date(num).toLocaleString();
 }
 
-async function dashboard(url: URL, session: Session, stub: DurableObjectStub, doReader: DoReader): Promise<Response> {
+async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader: DoReader): Promise<Response> {
   const [orgs, repos, specs] = await Promise.all([
     doReader.list('/api/organizations'),
     doReader.list('/api/repositories'),
@@ -614,7 +615,7 @@ async function dashboard(url: URL, session: Session, stub: DurableObjectStub, do
   return page('Dashboard', body);
 }
 
-async function createOrganization(form: FormData, session: Session, stub: DurableObjectStub): Promise<Response> {
+async function createOrganization(form: FormData, session: Session, stub: SpecDoStub): Promise<Response> {
   const name = field(form, 'name');
   const type = field(form, 'type');
   const externalId = field(form, 'externalId');
@@ -624,7 +625,7 @@ async function createOrganization(form: FormData, session: Session, stub: Durabl
   return submit(stub, '/api/organizations', payload, session, `Created organization ${name}`);
 }
 
-async function createRepository(form: FormData, session: Session, stub: DurableObjectStub): Promise<Response> {
+async function createRepository(form: FormData, session: Session, stub: SpecDoStub): Promise<Response> {
   const name = field(form, 'name');
   const organizationId = field(form, 'organizationId');
   const repoType = field(form, 'repoType');
@@ -639,7 +640,7 @@ async function createRepository(form: FormData, session: Session, stub: DurableO
   return submit(stub, '/api/repositories', payload, session, `Created repository ${name}`);
 }
 
-async function createSpec(form: FormData, session: Session, stub: DurableObjectStub): Promise<Response> {
+async function createSpec(form: FormData, session: Session, stub: SpecDoStub): Promise<Response> {
   const name = field(form, 'name');
   const organizationId = field(form, 'organizationId');
   const description = field(form, 'description');
@@ -666,7 +667,7 @@ async function createSpec(form: FormData, session: Session, stub: DurableObjectS
 async function createIssue(
   form: FormData,
   session: Session,
-  stub: DurableObjectStub,
+  stub: SpecDoStub,
   pathMatch: RegExpMatchArray
 ): Promise<Response> {
   const [, orgSlug, secondSlug, thirdSlug] = pathMatch;
@@ -742,7 +743,7 @@ async function createIssue(
 async function createIssueComment(
   form: FormData,
   session: Session,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const issueId = field(form, 'issueId');
   const body = field(form, 'body');
@@ -762,7 +763,7 @@ async function createIssueComment(
 }
 
 async function submit(
-  stub: DurableObjectStub,
+  stub: SpecDoStub,
   path: string,
   payload: Row,
   session: Session,
@@ -778,7 +779,7 @@ async function submit(
 // ============================================================================
 
 async function callDo(
-  stub: DurableObjectStub,
+  stub: SpecDoStub,
   path: string,
   method: string,
   body?: unknown,

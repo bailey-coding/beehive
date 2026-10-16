@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import worker from '../index';
 import { SpecDO } from '../../spec-do/index';
+import { TEST_DO_TOKENS } from '../../spec-do/tests/do-tokens';
 import { createSqlStorage } from '../../spec-do/sql-storage';
 import { generateServiceToken, hashToken, SERVICE_TOKEN_PREFIX } from '../../shared/service-tokens';
 
@@ -62,7 +63,7 @@ function fakeState() {
 function setup() {
   const { state, db } = fakeState();
   const calls: { path: string; method: string; headers: Headers }[] = [];
-  const real = new SpecDO(state as never, {} as never);
+  const real = new SpecDO(state as never, { ...TEST_DO_TOKENS } as never);
   const stub = {
     fetch: (req: Request) => {
       calls.push({ path: new URL(req.url).pathname, method: req.method, headers: req.headers });
@@ -72,6 +73,7 @@ function setup() {
   const env = {
     SPEC_DO: { idFromName: () => 'id', get: () => stub },
     API_AUTH_TOKEN: MASTER,
+    ...TEST_DO_TOKENS,
   };
   const call = (path: string, method = 'GET', opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {}) =>
     worker.fetch(
@@ -290,7 +292,7 @@ describe('service token security properties (edge + real DO)', () => {
   // Like setup(), but records every DO request body and lets a test replace the DO
   function setupWithBodies() {
     const { state, db } = fakeState();
-    const real = new SpecDO(state as never, {} as never);
+    const real = new SpecDO(state as never, { ...TEST_DO_TOKENS } as never);
     const bodies: string[] = [];
     const doHeaders: { path: string; actor: string | null }[] = [];
     let override: ((req: Request) => Promise<Response>) | null = null;
@@ -301,7 +303,7 @@ describe('service token security properties (edge + real DO)', () => {
         return override ? override(req) : real.fetch(req);
       },
     };
-    const env = { SPEC_DO: { idFromName: () => 'id', get: () => stub }, API_AUTH_TOKEN: MASTER };
+    const env = { SPEC_DO: { idFromName: () => 'id', get: () => stub }, API_AUTH_TOKEN: MASTER, ...TEST_DO_TOKENS };
     const call = (path: string, method = 'GET', opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {}) =>
       worker.fetch(
         new Request(`http://localhost${path}`, {

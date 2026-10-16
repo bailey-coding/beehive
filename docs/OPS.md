@@ -24,6 +24,14 @@ audience: human,agent
 
 ### Deploy-order checklist (m3 -> m7 ledger migration and everything after it)
 
+0. **Hard prerequisite: put the Spec DO internal tokens before deploying anything** (section
+   "Spec DO internal tokens" below). The new Spec DO check fails closed: deploy `beehive` without
+   `SPEC_DO_INTERNAL_TOKEN` and every DO route answers 503; deploy a caller without it and its DO
+   calls answer 401. Because step 4 deploys `beehive` first, each not-yet-redeployed caller's DO
+   calls answer 401 until its own deploy (old code sends no header): redeploy the callers
+   promptly, or accept that window. `wrangler secret put` on a worker that is already deployed takes effect on its
+   next request, so put them on all workers (nine tier-1, one admin) first, then deploy.
+
 The live Spec DO is on schema m3; the first `beehive` deploy runs m3 -> m7 on its next init.
 A failed migration step now throws out of `init()` (every request fails, the next request
 retries), so a bad deploy is loud rather than half-migrated.
@@ -69,6 +77,51 @@ Code: `workers/api/ui.ts`. Access is limited to `ALLOWED_GITHUB_USERS` (var in r
 `wrangler.toml`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
 Sessions are HMAC-signed with `API_AUTH_TOKEN`. The React app in `ui/` is **not built or
 deployed** (no build config); don't assume it is live.
+
+### Spec DO internal tokens (two-tier, 2026-10-16)
+
+Any worker holding the cross-script `SPEC_DO` binding can call the Spec DO directly, so the DO
+checks tokens of its own (`workers/shared/spec-do-auth.ts`), independent of `API_AUTH_TOKEN`:
+
+| Secret | Header | Required on | Held by |
+|---|---|---|---|
+| `SPEC_DO_INTERNAL_TOKEN` (tier 1) | `X-Beehive-Internal` | every DO route, including `/health` | `beehive` (DO host and caller) + the eight callers below |
+| `SPEC_DO_ADMIN_TOKEN` (tier 2) | `X-Beehive-Admin` | privileged routes, in addition to tier 1 | `beehive` **only** |
+
+Privileged routes (`isAdminRoute`): `POST /internal/tombstone`, `/internal/purge`,
+`/internal/actors/:id/role`; every `/internal/service-accounts*` route (list, mint, revoke, token
+mint/rotate/revoke); `PATCH /api/actors/:id/promotion-authority`. Not privileged:
+`/internal/service-tokens/verify` (the edge's per-request token check), `/promotion-mode` (the
+promotion worker writes it), and the rest.
+
+Answers: DO's own secret unset -> **503** (also for an admin route when only the admin secret is
+unset); missing or wrong tier-1 token -> **401**; valid tier-1 token without the admin token on a
+privileged route -> **403**. Comparison is constant-time (length is the only thing it can leak);
+token values are never logged or put in a response.
+
+Distribution (the same tier-1 value on every worker; secrets are per worker):
+
+- `beehive`: `SPEC_DO_INTERNAL_TOKEN` + `SPEC_DO_ADMIN_TOKEN`.
+- Tier 1 only: `beehive-gate-workflow`, `beehive-queue-consumer`, `beehive-shadow-router`,
+  `beehive-scientist-comparator`, `beehive-preview-manager`, `beehive-candidate-service`,
+  `beehive-canary-worker`, `beehive-promotion-worker`.
+- None: `beehive-sandbox-runner` (declares the binding, never calls the DO). Do not give it one.
+
+```bash
+# value: e.g. `openssl rand -hex 32`; use a different value for each of the two secrets
+for w in beehive beehive-gate-workflow beehive-queue-consumer beehive-shadow-router \
+         beehive-scientist-comparator beehive-preview-manager beehive-candidate-service \
+         beehive-canary-worker beehive-promotion-worker; do
+  wrangler secret put SPEC_DO_INTERNAL_TOKEN --name $w
+done
+wrangler secret put SPEC_DO_ADMIN_TOKEN --name beehive
+```
+
+Callers never set the headers by hand: `getSpecDoStub(env)` (`workers/shared/spec-do-auth.ts`)
+attaches whatever tokens that worker's env holds, the admin token only on privileged routes.
+Rotation: put the new tier-1 value on all nine workers; calls in between answer 401 and retry on
+the next request, so do it in one sitting. Locally: `scripts/start-e2e-workers.sh` generates both
+per run (`docs/SETUP.md`).
 
 Auth: set the secret on each worker with `wrangler secret put API_AUTH_TOKEN --name <worker>`.
 `beehive` itself enforces it in `workers/api/principal.ts` (same 503/401 behaviour, plus
@@ -164,7 +217,7 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
 **Destructive and irreversible; human approval required.** Prefer tombstone + purge above.
 This deletes every ledger row and the `beehive` worker secrets. To wipe it (done 2026-10-13 to clear 27 `test-org-e2e-*` orgs left by E2E runs against
 production; the maintainer cleared them in the Cloudflare dashboard, which also works): `wrangler delete --name beehive --force`, then redeploy `beehive` through the maintainer's normal deploy flow (see "Deploy flow"), then re-put
-the secrets that live on `beehive`: `API_AUTH_TOKEN`, `CLOUDFLARE_API_TOKEN`,
+the secrets that live on `beehive`: `API_AUTH_TOKEN`, `SPEC_DO_INTERNAL_TOKEN`, `SPEC_DO_ADMIN_TOKEN`, `CLOUDFLARE_API_TOKEN`,
 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`. Other workers keep their own secrets. A `1042`
 response means the worker is not deployed yet.
 The `KV namespaces ... Authentication error` printed by `wrangler delete` is harmless.

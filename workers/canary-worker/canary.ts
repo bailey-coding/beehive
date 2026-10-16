@@ -1,3 +1,4 @@
+import { getSpecDoStub } from '../shared/spec-do-auth';
 import { DeployRefsClient, type CanaryDeployment } from '../shared/deploy-refs';
 import { CanaryConfig, Env } from './types';
 
@@ -14,7 +15,7 @@ interface CanaryVersionResponse {
 
 /** Typed Spec DO client over the env's SPEC_DO namespace (never a stub in env). */
 export function deployRefsClient(env: Env): DeployRefsClient {
-  const stub = env.SPEC_DO.get(env.SPEC_DO.idFromName('main'));
+  const stub = getSpecDoStub(env);
   return new DeployRefsClient({
     fetch: (path, init) => stub.fetch(`https://spec-do.internal${path}`, init),
   });

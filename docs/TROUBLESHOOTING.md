@@ -562,6 +562,11 @@ with an inspector port already in use.
   next to each wrangler config; clients must send `Authorization: Bearer <token>`.
 - Run concurrent `wrangler dev` processes with distinct `--inspector-port` values.
 - Commands and ports: `docs/SETUP.md`.
+- Spec DO answers 503 `SPEC_DO_INTERNAL_TOKEN not configured` (or `SPEC_DO_ADMIN_TOKEN ...` on a
+  privileged route): the DO host (`beehive`) lacks the secret; locally, start through
+  `scripts/start-e2e-workers.sh`. 401 from the DO: the calling worker has no `SPEC_DO_INTERNAL_TOKEN`
+  or a different value. 403 on purge/tombstone/role/service-account routes: the caller holds only the
+  tier-1 token (only `beehive` has the admin token). `docs/OPS.md` "Spec DO internal tokens".
 
 ### Deploy and ledger-wipe errors
 
@@ -570,7 +575,7 @@ with an inspector port already in use.
 - **403 right after granting scopes**: propagation takes minutes; wait and retry.
 - **`KV namespaces ... Authentication error`** printed by `wrangler delete`: harmless.
 - Secrets that live on `beehive` only must be re-put after a wipe (`API_AUTH_TOKEN`,
-  `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`). Procedure: `docs/OPS.md`.
+  `SPEC_DO_INTERNAL_TOKEN`, `SPEC_DO_ADMIN_TOKEN`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`). Procedure: `docs/OPS.md`.
 
 ---
 

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 import type { PurgeResult, TombstoneResult } from '../../shared/ledger-lifecycle';
 
@@ -359,7 +360,7 @@ describe('purge', () => {
   });
 
   it('PURGE_MIN_AGE_HOURS overrides the minimum age', async () => {
-    spec = new SpecDO(store.state as never, { PURGE_MIN_AGE_HOURS: '0' } as never);
+    spec = authedDo(new SpecDO(store.state as never, { ...TEST_DO_TOKENS, PURGE_MIN_AGE_HOURS: '0' } as never));
     await spec.init();
     const a = seedOrg('org-a');
     await tombstone(`/api/organizations/${a.org.id}`);

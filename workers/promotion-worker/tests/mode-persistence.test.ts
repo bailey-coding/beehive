@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { SpecDO } from '../../spec-do/index';
+import { TEST_DO_TOKENS, TEST_INTERNAL_ONLY } from '../../spec-do/tests/do-tokens';
 import handler from '../index';
 import { resolvePromotionMode } from '../spec-do';
 import type { Env } from '../types';
@@ -27,7 +28,7 @@ function makeStorage() {
 
 // A SpecDO instance over the given storage (a fresh one models a restarted isolate)
 function openSpecDo(storage: ReturnType<typeof makeStorage>): SpecDO {
-  return new SpecDO(storage as never, {} as never);
+  return new SpecDO(storage as never, { ...TEST_DO_TOKENS } as never);
 }
 
 function makeEnv(spec: SpecDO, promotionMode = 'tournament'): Env {
@@ -38,6 +39,7 @@ function makeEnv(spec: SpecDO, promotionMode = 'tournament'): Env {
     } as unknown as DurableObjectNamespace,
     PROMOTION_MODE: promotionMode,
     API_AUTH_TOKEN: 'test-auth-token',
+    ...TEST_INTERNAL_ONLY,
   } as unknown as Env;
 }
 

@@ -10,9 +10,12 @@
 
 import { z } from 'zod';
 import { authGate } from '../shared/auth';
+import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
+  // Tier-1 secret for Spec DO calls (workers/shared/spec-do-auth.ts); no admin token on this worker
+  SPEC_DO_INTERNAL_TOKEN?: string;
   ARTIFACTS: unknown; // Cloudflare Artifacts binding
   SANDBOX_RUNNER: Service; // Binding to Sandbox Runner Worker
   API_AUTH_TOKEN?: string;
@@ -224,8 +227,7 @@ async function handleStartPreMergeGate(
     // For now, we'll execute synchronously
 
     // Get spec contract from Spec DO
-    const specDoId = env.SPEC_DO.idFromName('main');
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env);
     
     const specResponse = await specDoStub.fetch(
       new Request(`https://spec-do.internal/api/specs/${specId}`, {
@@ -440,8 +442,7 @@ async function handleRunTests(
     const { candidateId, specId = '' } = workflow.result;
     
     // Get spec contract
-    const specDoId = env.SPEC_DO.idFromName('main');
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env);
     
     const specResponse = await specDoStub.fetch(
       new Request(`https://spec-do.internal/api/specs/${specId}`, {
@@ -565,8 +566,7 @@ async function handleValidateConformance(
     const { candidateId, specId = '' } = workflow.result;
     
     // Get spec contract
-    const specDoId = env.SPEC_DO.idFromName('main');
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env);
     
     const specResponse = await specDoStub.fetch(
       new Request(`https://spec-do.internal/api/specs/${specId}`, {
@@ -686,8 +686,7 @@ async function calculateComplexityDelta(
   // This provides consistent, testable results
   
   // Get candidate and spec info from Spec DO
-  const specDoId = env.SPEC_DO.idFromName('main');
-  const specDoStub = env.SPEC_DO.get(specDoId);
+  const specDoStub = getSpecDoStub(env);
   
   // Fetch candidate to get spec_id and repository
   const candidateResponse = await specDoStub.fetch(
@@ -851,8 +850,7 @@ async function recordGateVerdict(
   actorId: string
 ): Promise<void> {
   // Record the verdict in the Spec DO
-  const specDoId = env.SPEC_DO.idFromName('main');
-  const specDoStub = env.SPEC_DO.get(specDoId);
+  const specDoStub = getSpecDoStub(env);
   
   const verdictData = {
     candidateId: result.candidateId,

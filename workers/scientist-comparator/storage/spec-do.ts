@@ -11,6 +11,7 @@ import type {
   CandidateShadowUpdate,
   ShadowMetrics,
 } from '../types';
+import { getSpecDoStub, type SpecDoCallerEnv, type SpecDoStub } from '../../shared/spec-do-auth';
 
 // ============================================================================
 // Spec DO Client
@@ -20,19 +21,18 @@ import type {
  * Client for interacting with Spec DO
  */
 export class SpecDOClient {
-  private readonly specDo: DurableObjectNamespace;
+  private readonly env: SpecDoCallerEnv;
 
-  constructor(specDo: DurableObjectNamespace) {
-    this.specDo = specDo;
+  constructor(env: SpecDoCallerEnv) {
+    this.env = env;
   }
 
   /**
    * Get the Spec DO stub for the main namespace
    */
-  private async getStub(): Promise<DurableObjectStub> {
-    // The Spec DO is namespaced by the main branch
-    const id = this.specDo.idFromName('main');
-    return this.specDo.get(id);
+  private async getStub(): Promise<SpecDoStub> {
+    // The Spec DO is namespaced by the main branch; calls carry this worker's internal token
+    return getSpecDoStub(this.env);
   }
 
   /**

@@ -16,6 +16,8 @@ export interface TestConfig {
   shadowRouterUrl: string;
   canaryWorkerUrl: string;
   promotionWorkerUrl: string;
+  // Local only: tests/e2e/probe, a worker holding just the Spec DO tier-1 token (port 8792)
+  probeUrl?: string;
   apiToken: string;
   timeout: number;
   retries: number;
@@ -29,6 +31,7 @@ const configs: Record<TestEnvironment, Omit<TestConfig, 'environment'>> = {
     shadowRouterUrl: 'http://localhost:8788',
     canaryWorkerUrl: 'http://localhost:8789',
     promotionWorkerUrl: 'http://localhost:8790',
+    probeUrl: 'http://localhost:8792',
     apiToken: 'test-auth-token-12345',
     timeout: 5000,
     retries: 0, // No retries for local (fast feedback)

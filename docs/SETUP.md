@@ -34,6 +34,16 @@ printf 'API_AUTH_TOKEN=test-auth-token-12345\n' > workers/preview-manager/.dev.v
 
 The token must match `tests/e2e/config.ts` (`local.apiToken`).
 
+The Spec DO also checks its own two-tier internal tokens (`workers/shared/spec-do-auth.ts`;
+secrets and per-worker distribution: `docs/OPS.md` "Spec DO internal tokens"). `scripts/start-e2e-workers.sh`
+generates fresh random values on every start and passes them with `--var`, so nothing goes in
+`.dev.vars` and nothing is committed: the `beehive` worker gets `SPEC_DO_INTERNAL_TOKEN` and
+`SPEC_DO_ADMIN_TOKEN`, every other worker only `SPEC_DO_INTERNAL_TOKEN`. Starting workers by hand
+(the commands below) needs the same, e.g. `--var SPEC_DO_INTERNAL_TOKEN:local-internal
+--var SPEC_DO_ADMIN_TOKEN:local-admin` on beehive and `--var SPEC_DO_INTERNAL_TOKEN:local-internal`
+on the others (same value); without them every Spec DO call answers 503/401. Export either variable
+before running the script to pin a value.
+
 ### Ports the local e2e tests expect
 
 | Worker | Port | Command |
@@ -43,11 +53,12 @@ The token must match `tests/e2e/config.ts` (`local.apiToken`).
 | canary-worker | 8789 | `npx wrangler dev --config workers/canary-worker/wrangler.toml --port 8789 --inspector-port 9231` |
 | promotion-worker | 8790 | `npx wrangler dev --config workers/promotion-worker/wrangler.toml --port 8790 --inspector-port 9232` |
 | preview-manager | 8791 | `npx wrangler dev --config workers/preview-manager/wrangler.toml --port 8791 --inspector-port 9234 --var WORKER_VERSIONS_MODE:stub --var BEEHIVE_LOCAL_DEV:1` |
+| e2e probe (local only, never deployed) | 8792 | started by the script from `tests/e2e/probe/wrangler.toml`: a worker holding only the tier-1 token, used by `tests/e2e/spec-do-auth.test.ts` |
 
 Give each its own `--inspector-port`, otherwise concurrent `wrangler dev` runs collide.
-`scripts/start-e2e-workers.sh` starts all five in order (beehive first: it hosts the Spec DO,
+`scripts/start-e2e-workers.sh` starts all five (and the probe) in order (beehive first: it hosts the Spec DO,
 and local bindings only connect to running `wrangler dev` sessions). It refuses to start if
-any of 8787-8791 is taken, and a worker counts as healthy only on a 2xx (`curl -f`; a missing
+any of 8787-8792 is taken, and a worker counts as healthy only on a 2xx (`curl -f`; a missing
 `.dev.vars` answers 503). PIDs go to `.e2e-workers.pids`; `scripts/stop-e2e-workers.sh` stops
 only those processes and their children. `WORKER_VERSIONS_MODE=stub` together with
 `BEEHIVE_LOCAL_DEV=1` (the local-only signal, set only by the start script) makes preview-manager's
@@ -124,6 +135,16 @@ for w in beehive beehive-gate-workflow beehive-sandbox-runner beehive-queue-cons
          beehive-candidate-service beehive-canary-worker beehive-promotion-worker; do
   wrangler secret put API_AUTH_TOKEN --name $w
 done
+# Spec DO internal tokens (docs/OPS.md "Spec DO internal tokens"): a HARD prerequisite, put them
+# BEFORE the first deploy that contains the check, or every Spec DO call fails closed.
+# Tier 1 (same value everywhere): the DO host and every worker that calls the DO.
+for w in beehive beehive-gate-workflow beehive-queue-consumer beehive-shadow-router \
+         beehive-scientist-comparator beehive-preview-manager beehive-candidate-service \
+         beehive-canary-worker beehive-promotion-worker; do
+  wrangler secret put SPEC_DO_INTERNAL_TOKEN --name $w
+done
+# Tier 2: beehive ONLY
+wrangler secret put SPEC_DO_ADMIN_TOKEN --name beehive
 # Artifacts token: beehive AND beehive-preview-manager (previews are simulated without it)
 wrangler secret put CLOUDFLARE_API_TOKEN --name beehive
 wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-preview-manager

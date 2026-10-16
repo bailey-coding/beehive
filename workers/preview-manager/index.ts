@@ -24,6 +24,7 @@ import type {
   ExportedHandler,
   DeployPreviewRequestBody,
 } from './types';
+import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 // ============================================================================
 // Constants
@@ -90,8 +91,7 @@ const previewManagerHandler = {
     logger.info(`Processing batch of ${batch.messages.length} messages from queue ${batch.queue}`);
 
     // Get Spec DO stub for persistence
-    const specDoId = env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME);
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
 
     // Process each message in the batch
     const processingPromises = batch.messages.map(async (message) => {
@@ -197,8 +197,7 @@ async function handleDeployPreviewRequest(
     };
 
     // Get Spec DO stub for persistence
-    const specDoId = env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME);
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
 
     // Find candidate by ID from Spec DO
     const candidate = await findCandidateById(specDoStub, candidateId);
@@ -284,7 +283,7 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
   }
 
   try {
-    const stub = env.SPEC_DO.get(env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME));
+    const stub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
     const res = await stub.fetch(
       new Request(`https://spec-do.internal/api/candidates/${encodeURIComponent(candidateId)}`, {
         headers: { 'X-Actor-ID': 'preview-manager' },
@@ -326,7 +325,7 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
  * Find candidate by ID from Spec DO
  */
 async function findCandidateById(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidateId: string
 ): Promise<Candidate | null> {
   try {
@@ -353,7 +352,7 @@ async function findCandidateById(
  * Find candidate by repository URL from Spec DO
  */
 async function findCandidateByRepo(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   repoFullName: string
 ): Promise<Candidate | null> {
   try {
@@ -392,7 +391,7 @@ async function findCandidateByRepo(
  * Note: Falls back to simulated preview URL if Workers Builds API is unavailable.
  */
 async function deployPreview(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidate: Candidate,
   event: ArtifactsPushEvent,
   env: PreviewManagerEnv,
@@ -527,7 +526,7 @@ async function deployPreview(
  * This is used for local development and testing.
  */
 async function createSimulatedPreview(
-  specDoStub: DurableObjectStub,
+  specDoStub: SpecDoStub,
   candidate: Candidate,
   event: ArtifactsPushEvent,
   workerName: string,

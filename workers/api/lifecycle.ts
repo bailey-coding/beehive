@@ -23,6 +23,7 @@ import {
   INCLUDE_DELETED_PARAM,
   type LifecycleResult,
 } from '../shared/ledger-lifecycle';
+import type { SpecDoStub } from '../shared/spec-do-auth';
 
 const ROLE_ROUTE = /^\/api\/admin\/actors\/([^\/]+)\/role$/;
 const TombstoneBodySchema = TombstoneRequestSchema.pick({ reason: true });
@@ -60,7 +61,7 @@ export async function handleLifecycleRoutes(
   request: Request,
   url: URL,
   principal: Principal,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response | null> {
   const path = url.pathname;
   const method = request.method;

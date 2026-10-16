@@ -10,6 +10,9 @@
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
+  // Spec DO tokens (workers/shared/spec-do-auth.ts); this is the only worker holding the admin token
+  SPEC_DO_INTERNAL_TOKEN?: string;
+  SPEC_DO_ADMIN_TOKEN?: string;
   API_AUTH_TOKEN?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
@@ -61,6 +64,7 @@ import type {
   ListFilter,
   HealthResponse,
 } from './types';
+import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 // Helper to generate ID for Spec DO lookup
 const DEFAULT_SPEC_DO_NAME = 'main';
@@ -82,13 +86,13 @@ export default {
     const uiResponse = await handleUi(
       request,
       env,
-      env.SPEC_DO.get(env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME))
+      getSpecDoStub(env, DEFAULT_SPEC_DO_NAME)
     );
     if (uiResponse) return uiResponse;
 
     // Auth - fail closed, applies to every other route including /health.
     // Master token keeps full access; service tokens are read-only (deny by default).
-    const specDoStub = env.SPEC_DO.get(env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME));
+    const specDoStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
     const principal = await authenticate(request, env, specDoStub);
     if (principal instanceof Response) return principal;
     const forbidden = authorize(principal, method, path);
@@ -389,7 +393,7 @@ function makeErrorResponse(error: string, status = 400): Response {
 }
 
 async function sendToSpecDo(
-  stub: DurableObjectStub,
+  stub: SpecDoStub,
   path: string,
   method: string,
   body?: unknown,
@@ -1369,7 +1373,7 @@ async function handleHealth(_request: Request): Promise<Response> {
 
 async function handleCreateOrganization(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateOrganizationRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1379,7 +1383,7 @@ async function handleCreateOrganization(
 
 async function handleListOrganizations(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const limit = parseInt(url.searchParams.get('limit') || '50');
@@ -1390,7 +1394,7 @@ async function handleListOrganizations(
 
 async function handleGetOrganization(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/organizations/${id}`, 'GET');
@@ -1403,7 +1407,7 @@ async function handleGetOrganization(
 
 async function handleCreateActor(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateActorRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1413,7 +1417,7 @@ async function handleCreateActor(
 
 async function handleListActors(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const limit = parseInt(url.searchParams.get('limit') || '50');
@@ -1424,7 +1428,7 @@ async function handleListActors(
 
 async function handleGetActor(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/actors/${id}`, 'GET');
@@ -1433,7 +1437,7 @@ async function handleGetActor(
 
 async function handleUpdateActorTrust(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateActorTrustRequest = await request.json();
@@ -1444,7 +1448,7 @@ async function handleUpdateActorTrust(
 
 async function handleGrantPromotionAuthority(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1458,7 +1462,7 @@ async function handleGrantPromotionAuthority(
 
 async function handleCreateRepository(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateRepositoryRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1468,7 +1472,7 @@ async function handleCreateRepository(
 
 async function handleListRepositories(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const limit = parseInt(url.searchParams.get('limit') || '50');
@@ -1479,7 +1483,7 @@ async function handleListRepositories(
 
 async function handleGetRepository(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/repositories/${id}`, 'GET');
@@ -1492,7 +1496,7 @@ async function handleGetRepository(
 
 async function handleCreateSpec(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateSpecRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1502,7 +1506,7 @@ async function handleCreateSpec(
 
 async function handleListSpecs(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = new URLSearchParams();
@@ -1516,7 +1520,7 @@ async function handleListSpecs(
 
 async function handleGetSpec(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/specs/${id}`, 'GET');
@@ -1525,7 +1529,7 @@ async function handleGetSpec(
 
 async function handleUpdateSpecStage(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateSpecStageRequest = await request.json();
@@ -1540,7 +1544,7 @@ async function handleUpdateSpecStage(
 
 async function handleClaimSpec(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const specId = extractParentId(request.url);
   const body: import('./types').ClaimSpecRequest = await request.json();
@@ -1562,7 +1566,7 @@ async function handleClaimSpec(
 
 async function handleCreateCandidate(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateCandidateRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1572,7 +1576,7 @@ async function handleCreateCandidate(
 
 async function handleListCandidates(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = new URLSearchParams();
@@ -1587,7 +1591,7 @@ async function handleListCandidates(
 
 async function handleGetCandidate(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/candidates/${id}`, 'GET');
@@ -1596,7 +1600,7 @@ async function handleGetCandidate(
 
 async function handleUpdateCandidateStage(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateCandidateStageRequest = await request.json();
@@ -1611,7 +1615,7 @@ async function handleUpdateCandidateStage(
 
 async function handleCreateGateVerdict(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateGateVerdictRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1621,7 +1625,7 @@ async function handleCreateGateVerdict(
 
 async function handleListGateVerdicts(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = new URLSearchParams();
@@ -1636,7 +1640,7 @@ async function handleListGateVerdicts(
 
 async function handleGetGateVerdictsForCandidate(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/gate-verdicts`, 'GET');
@@ -1649,7 +1653,7 @@ async function handleGetGateVerdictsForCandidate(
 
 async function handleCreateTrial(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateTrialRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1659,7 +1663,7 @@ async function handleCreateTrial(
 
 async function handleListTrials(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = new URLSearchParams();
@@ -1673,7 +1677,7 @@ async function handleListTrials(
 
 async function handleGetTrial(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/trials/${id}`, 'GET');
@@ -1682,7 +1686,7 @@ async function handleGetTrial(
 
 async function handleDecideTrial(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').DecideTrialRequest = await request.json();
@@ -1697,7 +1701,7 @@ async function handleDecideTrial(
 
 async function handleCreatePromotion(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreatePromotionRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1707,7 +1711,7 @@ async function handleCreatePromotion(
 
 async function handleListPromotions(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = new URLSearchParams();
@@ -1724,7 +1728,7 @@ async function handleListPromotions(
 
 async function handleCreateIssue(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1734,7 +1738,7 @@ async function handleCreateIssue(
 
 async function handleListIssues(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = new URLSearchParams();
@@ -1749,7 +1753,7 @@ async function handleListIssues(
 
 async function handleGetIssue(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/issues/${id}`, 'GET');
@@ -1758,7 +1762,7 @@ async function handleGetIssue(
 
 async function handleUpdateIssueStage(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueStageRequest = await request.json();
@@ -1769,7 +1773,7 @@ async function handleUpdateIssueStage(
 
 async function handleUpdateIssueCommentPolicy(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueCommentPolicyRequest = await request.json();
@@ -1784,7 +1788,7 @@ async function handleUpdateIssueCommentPolicy(
 
 async function handleCreateIssueComment(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').CreateIssueCommentRequest = await request.json();
@@ -1795,7 +1799,7 @@ async function handleCreateIssueComment(
 
 async function handleListIssueComments(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const response = await sendToSpecDo(stub, `/api/issues/${id}/comments`, 'GET');
@@ -1808,7 +1812,7 @@ async function handleListIssueComments(
 
 async function handleCreateIssueSpecLink(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueSpecLinkRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1818,7 +1822,7 @@ async function handleCreateIssueSpecLink(
 
 async function handleCreateIssueCandidateLink(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueCandidateLinkRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
@@ -1832,7 +1836,7 @@ async function handleCreateIssueCandidateLink(
 
 async function handleGetEntityHistory(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const pathParts = pathnameOf(request.url).split('/');
   const entityType = pathParts[pathParts.length - 3] as import('./types').GetHistoryRequest['entityType'];
@@ -1847,7 +1851,7 @@ async function handleGetEntityHistory(
 
 async function handleExecuteCandidate(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body = await request.json() as { sandboxRunnerUrl?: string };
@@ -1869,7 +1873,7 @@ async function handleExecuteCandidate(
 
 async function handleRunPreMergeGate(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body = await request.json() as unknown;
@@ -1880,7 +1884,7 @@ async function handleRunPreMergeGate(
 
 async function handleGetGateVerdict(
   request: Request,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
   const response = await sendToSpecDo(stub, `/api/gate-verdicts/${id}`, 'GET');

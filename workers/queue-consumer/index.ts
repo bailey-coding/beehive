@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import type { CandidateResponse } from '../api/types';
 import { authGate } from '../shared/auth';
+import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 export interface Queue {
   send: (message: any) => Promise<void>;
@@ -17,6 +18,8 @@ export interface Queue {
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
+  // Tier-1 secret for Spec DO calls (workers/shared/spec-do-auth.ts); no admin token on this worker
+  SPEC_DO_INTERNAL_TOKEN?: string;
   GATE_WORKFLOW: Service;
   PREVIEW_MANAGER: Service;
   API_AUTH_TOKEN?: string;
@@ -122,7 +125,7 @@ const PreviewManagerDeployRequestSchema = z.object({
 /**
  * Triggers preview deployment for candidate code via Preview Manager service
  */
-async function triggerPreviewDeployment(event: ArtifactsPushEvent, env: Env, specDoStub: DurableObjectStub): Promise<void> {
+async function triggerPreviewDeployment(event: ArtifactsPushEvent, env: Env, specDoStub: SpecDoStub): Promise<void> {
   console.log(`[QueueConsumer] Triggering preview deployment for ${event.repository.full_name}@${event.commit.sha}`);
 
   // First, fetch all repositories to find the one matching the event
@@ -233,8 +236,7 @@ export default {
 
   async queue(batch: MessageBatch<QueueMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
     // Get Spec DO stub for persistence
-    const specDoId = env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME);
-    const specDoStub = env.SPEC_DO.get(specDoId);
+    const specDoStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
 
     // Determine which queue this batch came from
     const queueName = batch.queue;

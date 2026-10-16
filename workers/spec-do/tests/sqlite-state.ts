@@ -6,6 +6,7 @@
 import { createRequire } from 'node:module';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { SpecDO } from '../index';
+import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 
 // vite strips the `node:` prefix from sqlite; load via require instead.
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
@@ -64,8 +65,10 @@ export function makeSqliteState(
   return { raw, kv, transactions, state };
 }
 
-export function makeSpecDo(s: SqliteState = makeSqliteState()): SpecDO {
-  return new SpecDO(s.state as never, {} as never);
+/** A real DO built with the test tokens; `authed` (default) adds them to every fetch, like the API worker */
+export function makeSpecDo(s: SqliteState = makeSqliteState(), authed = true): SpecDO {
+  const spec = new SpecDO(s.state as never, { ...TEST_DO_TOKENS } as never);
+  return authed ? authedDo(spec) : spec;
 }
 
 export function newDatabase(): DatabaseSyncType {

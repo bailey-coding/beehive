@@ -103,7 +103,7 @@ const scientistHandler = {
     logger.info(`[${queueName}] Processing batch of ${batch.messages.length} messages, isPreview=${isPreview}`);
 
     // Initialize clients
-    const specDoClient = new SpecDOClient(env.SPEC_DO);
+    const specDoClient = new SpecDOClient(env);
     const analyticsClient = new AnalyticsClient(
       env.ANALYTICS,
       BATCH_SIZE,

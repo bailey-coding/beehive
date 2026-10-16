@@ -11,6 +11,7 @@
 import { jsonError } from '../shared/auth';
 import type { Principal, Scope } from '../shared/principal';
 import { SERVICE_TOKEN_PREFIX, constantTimeEqual, hashToken, looksLikeServiceToken } from '../shared/service-tokens';
+import type { SpecDoStub } from '../shared/spec-do-auth';
 
 export interface AuthEnv {
   API_AUTH_TOKEN?: string;
@@ -25,7 +26,7 @@ function bearerOf(request: Request): string | null {
 export async function authenticate(
   request: Request,
   env: AuthEnv,
-  stub: DurableObjectStub
+  stub: SpecDoStub
 ): Promise<Principal | Response> {
   const master = env.API_AUTH_TOKEN;
   if (!master) return jsonError('API_AUTH_TOKEN not configured', 503);

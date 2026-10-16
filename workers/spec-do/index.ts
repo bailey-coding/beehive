@@ -163,6 +163,7 @@ import { seedDatabase, isSeeded } from './seed';
 
 // Artifacts client
 import { createFork, createRepoToken, type ArtifactsConfig } from '../shared/artifacts';
+import { specDoAuthGate } from '../shared/spec-do-auth';
 
 // Promotion ledger contract (shared with the promotion worker)
 import type { ZodType } from 'zod';
@@ -258,6 +259,9 @@ interface Env {
   SPEC_DO: DurableObjectNamespace;
   GATE_WORKFLOW: Service;
   API_AUTH_TOKEN?: string;
+  // Two-tier internal auth for the DO's own fetch router (workers/shared/spec-do-auth.ts)
+  SPEC_DO_INTERNAL_TOKEN?: string;
+  SPEC_DO_ADMIN_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
   // Minimum tombstone age before purge may hard-delete (hours, default 24). Local e2e sets 0.
@@ -2824,6 +2828,10 @@ export class SpecDO {
 
   // Fetch from Durable Object
   async fetch(request: Request): Promise<Response> {
+    // Internal token check first: before routing, before the schema is touched
+    const denied = specDoAuthGate(request, this.env);
+    if (denied) return denied;
+
     // Promotion mode is key-value state: answer before the SQL schema is touched
     if (new URL(request.url).pathname === '/promotion-mode') {
       const modeHeaders = { 'Content-Type': 'application/json' };

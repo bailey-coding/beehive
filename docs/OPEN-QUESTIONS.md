@@ -410,3 +410,37 @@ live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 fail
   in Analytics Engine, which the router only writes; serving them would mean new read semantics.
 - **Not fixed:** the canary worker's `ANALYTICS.writeDataPoint` payload puts objects in `blobs`
   (pre-existing). It is now wrapped so a metrics failure cannot fail a deploy after the ref moved.
+
+---
+
+## 2026-10-16: Spec DO internal auth, two tiers (branch `agent/do-auth-and-cache`)
+
+Resolves the review follow-up "no auth on Spec DO routes": any worker with the cross-script
+`SPEC_DO` binding (now including shadow-router and preview-manager) had full control, including
+purge, role grant and tombstone. Usage and secrets: `docs/OPS.md` "Spec DO internal tokens".
+
+- **Changes the deploy requirements:** two new secrets. `SPEC_DO_INTERNAL_TOKEN` on `beehive` and
+  the eight DO-calling workers, `SPEC_DO_ADMIN_TOKEN` on `beehive` only. They must be put before the
+  first deploy that has the check (deploy checklist step 0); the DO fails closed (503) without its own.
+- **Where:** one gate at the top of `SpecDO.fetch` (`workers/shared/spec-do-auth.ts`), before the
+  `/promotion-mode` shortcut and before the schema is touched. Callers get their stub from
+  `getSpecDoStub(env)`; a guard test fails if any worker builds one from `env.SPEC_DO` by hand.
+- **Privileged set (my call, human review):** tombstone, purge, role grant, every service-account
+  route (including the list), and `PATCH .../promotion-authority`. The last two were not in the
+  brief's list; both are master-only at the edge and have no non-API caller. `/promotion-mode` stays
+  tier 1 because the promotion worker writes it (a tier-1 holder can still change the mode; moving it
+  to admin would need the promotion worker to hold the admin token).
+- **Residual risk, unchanged:** a tier-1 holder can still read and write all ordinary ledger rows and
+  can set any `X-Actor-ID`, so `?include_deleted=1` (maintainer check by actor id) is only as strong as
+  the tier-1 token. The tokens bound the blast radius of a compromised non-API worker; they are not
+  per-worker identities (one shared tier-1 value). `sandbox-runner` declares the binding but never
+  calls the DO, so it gets no token.
+- **Constant-time:** `timingSafeEqual` loops over the longer input; only length can leak.
+- **Rollout window:** deploying `beehive` first (checklist step 4) makes not-yet-redeployed callers
+  answer 401 until they deploy.
+- **Public edge unchanged:** `API_AUTH_TOKEN` handling in `workers/api` is as before; the API worker
+  now adds the tokens on its own DO calls.
+- **Local e2e:** `scripts/start-e2e-workers.sh` generates both tokens per run and starts
+  `tests/e2e/probe` (port 8792, local-only, 404 unless `BEEHIVE_LOCAL_DEV=1`, never deployed): a
+  worker with only the tier-1 token, used by `tests/e2e/spec-do-auth.test.ts`. The script now checks
+  port 8792 as well.

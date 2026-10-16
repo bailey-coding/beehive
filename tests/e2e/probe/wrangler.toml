@@ -1,0 +1,14 @@
+# LOCAL E2E ONLY. Never deployed: no deploy script, no CI step, and it answers 404 unless
+# BEEHIVE_LOCAL_DEV=1 (set only by scripts/start-e2e-workers.sh, on port 8792).
+# A stand-in for "any non-API worker holding the cross-script SPEC_DO binding and only the
+# tier-1 token": tests/e2e/spec-do-auth.test.ts uses it to show such a worker cannot purge,
+# tombstone, grant roles or mint service accounts.
+
+name = "beehive-e2e-probe"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"

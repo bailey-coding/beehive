@@ -455,6 +455,8 @@ export interface ScientistEnv {
   
   // Durable Objects
   SPEC_DO: DurableObjectNamespace;
+  // Tier-1 secret for Spec DO calls (workers/shared/spec-do-auth.ts); no admin token on this worker
+  SPEC_DO_INTERNAL_TOKEN?: string;
   
   // Analytics Engine
   ANALYTICS: AnalyticsEngine;

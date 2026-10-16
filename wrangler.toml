@@ -18,6 +18,7 @@ compatibility_date = "2026-10-09"
 
 # Cloudflare Artifacts configuration
 # Set CLOUDFLARE_API_TOKEN as a secret: wrangler secret put CLOUDFLARE_API_TOKEN
+# Spec DO internal auth (hard prerequisite, docs/OPS.md): wrangler secret put SPEC_DO_INTERNAL_TOKEN and SPEC_DO_ADMIN_TOKEN (this worker is the only holder of the admin token)
 [vars]
 CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
 ALLOWED_GITHUB_USERS = "bailey-coding, OliverVermeulen"
