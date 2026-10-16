@@ -519,3 +519,19 @@ step. The fix is a decision for the maintainer: which DO route and fields carry 
 (`/api/candidates/:id/stage` exists), what a rollback writes, and whether the DO should own the
 `current_rung` bookkeeping the ledger already has in `promotion_states`. Until then the winner PATCH
 only logs a warning.
+
+---
+
+## Edge `/health` on `beehive` reports the Spec DO as ok without calling it (2026-10-16)
+
+**Status**: Open, not fixed.
+
+**Finding**: `handleHealth` (`workers/api/index.ts`) returns a fixed body with `database: 'ok'` and
+`durableObject: 'ok'` and never touches the Spec DO. During the m3 -> m8 deploy the ledger was stuck at
+m5 and every DO request failed, yet `GET /health` on `beehive` still answered 200 `healthy`. It also does
+not trigger the DO's lazy init, so it does not run the migrations either (an earlier version of the
+deploy checklist said it did). `docs/OPS.md` step 4 now points at `scripts/prod-health.sh`, whose last
+check is `GET /api/organizations?limit=1`.
+
+**Want**: have `handleHealth` make a cheap DO call (the DO's own `/health` answers `OK` after `init()`)
+and report `durableObject: 'error'` with a 503 when it fails, so monitors see a stuck ledger.

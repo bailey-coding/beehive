@@ -55,8 +55,11 @@ retries), so a bad deploy is loud rather than half-migrated.
    `BEEHIVE_LOCAL_DEV`) unset in production.
 4. Push: `git pull origin main && git push cf main` deploys all ten workers at once. The Spec DO
    migrates on its first init after `beehive` deploys, not at deploy time, so make one authenticated
-   request to `beehive` (`GET /health`) and check its logs for `Migration to m[4-8] failed`; any hit
-   means the ledger stopped at the previous version and requests are failing until it is fixed.
+   request that reaches the DO: `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh` (its last check is
+   `GET /api/organizations?limit=1`). **Not `/health`**: the edge `/health` is static and answers
+   `durableObject: ok` without calling the DO, so it passes while the ledger is stuck. Then check the
+   `beehive` logs for `Migration to m[4-8] failed`; any hit, or a 500 from the script, means the ledger
+   stopped at the previous version and requests are failing until it is fixed.
    `service_accounts has an unexpected shape`: that table is not this design's; if it is empty,
    `DROP TABLE service_accounts` (the next request recreates it), otherwise migrate its rows first.
 5. Expect a short window of mixed versions while the ten builds finish, and re-run anything that
@@ -70,7 +73,8 @@ retries), so a bad deploy is loud rather than half-migrated.
    - `beehive-shadow-router` falls back to its static config while the DO read fails.
    Migrations are additive and not undone by rolling a worker back, so old code would then run against
    the newer schema; that combination is untested here.
-6. After deploy: `GET /health` on each worker (with the bearer token) answers 200;
+6. After deploy: `./scripts/prod-health.sh` passes (`GET /health` answers 200 on each worker with the
+   bearer token, and the Spec DO check answers 200);
    `GET /api/service-accounts` answers 410; mint a service token
    (`POST /api/admin/service-accounts`) and confirm a write with it answers 403; then grant the
    first maintainer deliberately with `POST /api/admin/actors/<id>/role {"role":"maintainer"}`
