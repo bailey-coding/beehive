@@ -11,7 +11,7 @@ export function registerSpecCommands(
 ): void {
   const spec = program.command('spec').description('Spec management');
 
-  spec.command('create <name>').description('Create a new spec').option('--organization <id>', 'Organization ID', { required: true }).option('--contract <path>', 'Contract file path or JSON string', { required: true }).option('--declared-delta-surface <surface>', 'Declared delta surface (comma-separated)', { required: true }).option('--description <desc>', 'Spec description').action(createHandler(async (state, ..._args) => {
+  spec.command('create <name>').description('Create a new spec').requiredOption('--organization <id>', 'Organization ID').requiredOption('--contract <path>', 'Contract file path or JSON string').requiredOption('--declared-delta-surface <surface>', 'Declared delta surface (comma-separated)').option('--description <desc>', 'Spec description').action(createHandler(async (state, ..._args) => {
     const name = _args[0] as string;
     const opts = _args[1] as { organization: string; contract: string; declaredDeltaSurface: string; description?: string };
     

@@ -11,7 +11,7 @@ export function registerGateCommands(
 ): void {
   const gate = program.command('gate').description('Gate workflow operations');
 
-  gate.command('run <candidate-id>').description('Run gate for candidate').option('--gate <type>', 'Gate type (pre-merge, shadow, train, canary, full)', { required: true }).action(createHandler(async (state, ..._args) => {
+  gate.command('run <candidate-id>').description('Run gate for candidate').requiredOption('--gate <type>', 'Gate type (pre-merge, shadow, train, canary, full)').action(createHandler(async (state, ..._args) => {
     const candidateId = _args[0] as string;
     const opts = _args[1] as { gate: string };
     const gateType = opts.gate as 'pre-merge' | 'shadow' | 'train' | 'canary' | 'full';

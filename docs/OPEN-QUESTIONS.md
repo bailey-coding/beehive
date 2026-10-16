@@ -542,47 +542,13 @@ and report `durableObject: 'error'` with a 503 when it fails, so monitors see a 
 
 **Status**: Resolved in `agent/parity-cli-fixes` branch
 
-**Finding 1: Promotion get route does not exist**
-- The CLI `promotion get <id>` command called `GET /api/promotions/:id`
-- **Confirmed absent**: No such route exists in edge (`workers/api/index.ts`) or DO (`workers/spec-do/index.ts`)
-- **Action taken**: Removed the `promotion get` command from CLI
-- **Workaround**: Users must use `promotion list` and filter locally
-
-**Finding 2: Health extended path issue**
-- CLI `health extended` called `GET /api/health` via `api-client.ts`
-- **Issue**: Base URL construction in `api-client.ts` automatically appends `/api`, resulting in `/api/api/health` (404)
-- **Confirmed**: Edge has `/health` and `/api/health` routes (`workers/api/index.ts:115`)
-- **Action taken**: Changed `getHealthExtended()` to call `/health` instead of `/api/health`
-
-**Finding 3: Trial decide body mismatch**
-- CLI sent `{ winner, notes }` for `decideTrial`
-- **Confirmed**: API expects `{ winnerId, comparisonMetrics, decidedBy? }` (`workers/api/types.ts:446-448`)
-- **Action taken**: Updated CLI to send correct fields with `--comparison-metrics` and `--decided-by` options
-
-**Finding 4: Promotion create body mismatch**
-- CLI sent `{ candidateId, notes }` for `createPromotion`
-- **Confirmed**: API requires `{ candidateId, fromRung, toRung, promotedBy? }` (`workers/api/types.ts:522-523`)
-- **Action taken**: Added `--from-rung` and `--to-rung` required options to CLI
-
-**Finding 5: Dead CLI groups**
-- `workflow`, `deployment`, `environment` command groups were auto-registered from ENTITIES
-- **Confirmed absent**: No `/api/workflows`, `/api/deployments`, `/api/environments` routes exist
-- **Action taken**: Removed from ENTITIES and command registration
-
-**Finding 6: Debug client methods**
-- API client had methods: `getStateDump`, `getQueueStatus`, `listQueues`, `getArtifactsStatus`, `listArtifactsRepos`, `testClaimWorkflow`
-- **Confirmed absent**: No `/api/debug/*` routes in API worker (`workers/api/index.ts`)
-- **Action taken**: Removed all debug methods from api-client.ts
-
-**Finding 7: Create stubs were incomplete**
-- Multiple create commands (`candidate`, `repo`, `spec`, `issue`, `trial`) had stub implementations
-- **Issue**: Options were never registered with commander, causing parse errors
-- **Action taken**: Registered all required options for each create command
-
-**Finding 8: Type mismatches between CLI and API**
-- Various type interfaces in `cli/src/types/api.ts` did not match `workers/api/types.ts`
-- **Examples**: `CreateIssueRequest` had different fields, `CreateSpecRequest.contract` was `string | object` vs `string`
-- **Action taken**: Aligned all CLI types with API worker types
+- Promotion get: No GET /api/promotions/:id route exists (confirmed in workers/api/index.ts and workers/spec-do/index.ts) - removed command
+- Health extended: Base URL appends /api, so /api/health became /api/api/health (404) - fixed to /health in api-client.ts:181
+- Trial decide: API expects winnerId/comparisonMetrics, not winner/notes (workers/api/types.ts:446-448) - updated CLI
+- Promotion create: API requires fromRung/toRung (workers/api/types.ts:522-523) - added required options
+- Dead groups: No routes for workflow/deployment/environment (confirmed absent) - removed from ENTITIES
+- Debug methods: No /api/debug/* routes (confirmed absent) - removed from api-client.ts
+- Type mismatches: Aligned cli/src/types/api.ts with workers/api/types.ts
 
 ---
 

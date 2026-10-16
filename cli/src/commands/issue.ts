@@ -11,7 +11,7 @@ export function registerIssueCommands(
 ): void {
   const issue = program.command('issue').description('Issue management');
 
-  issue.command('create <title>').description('Create issue').option('--repository <id>', 'Repository ID', { required: true }).option('--body <text>', 'Issue body').option('--labels <labels>', 'Comma-separated labels').option('--number <num>', 'Issue number', { required: true }).action(createHandler(async (state, ..._args) => {
+  issue.command('create <title>').description('Create issue').requiredOption('--repository <id>', 'Repository ID').option('--body <text>', 'Issue body').option('--labels <labels>', 'Comma-separated labels').requiredOption('--number <num>', 'Issue number').action(createHandler(async (state, ..._args) => {
     const title = _args[0] as string;
     const opts = _args[1] as { repository: string; body?: string; labels?: string; number: number };
     

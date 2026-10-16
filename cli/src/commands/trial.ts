@@ -11,7 +11,7 @@ export function registerTrialCommands(
 ): void {
   const trial = program.command('trial').description('Trial operations');
 
-  trial.command('create').description('Create a trial').option('--candidate-a <id>', 'Candidate A ID', { required: true }).option('--candidate-b <id>', 'Candidate B ID', { required: true }).option('--spec <id>', 'Spec ID', { required: true }).option('--decided-by <id>', 'Decided by actor ID').action(createHandler(async (state, ..._args) => {
+  trial.command('create').description('Create a trial').requiredOption('--candidate-a <id>', 'Candidate A ID').requiredOption('--candidate-b <id>', 'Candidate B ID').requiredOption('--spec <id>', 'Spec ID').option('--decided-by <id>', 'Decided by actor ID').action(createHandler(async (state, ..._args) => {
     const opts = _args[0] as { candidateA: string; candidateB: string; spec: string; decidedBy?: string };
     const result = await state.client.createTrial({
       candidateAId: opts.candidateA,

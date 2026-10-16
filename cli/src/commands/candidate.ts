@@ -11,7 +11,7 @@ export function registerCandidateCommands(
 ): void {
   const candidate = program.command('candidate').description('Candidate management');
 
-  candidate.command('create').description('Create candidate').option('--spec <id>', 'Spec ID', { required: true }).option('--repository <id>', 'Repository ID', { required: true }).option('--commit <sha>', 'Commit SHA', { required: true }).option('--base-commit <sha>', 'Base commit SHA', { required: true }).option('--agent <id>', 'Agent ID').action(createHandler(async (state, ..._args) => {
+  candidate.command('create').description('Create candidate').requiredOption('--spec <id>', 'Spec ID').requiredOption('--repository <id>', 'Repository ID').requiredOption('--commit <sha>', 'Commit SHA').requiredOption('--base-commit <sha>', 'Base commit SHA').option('--agent <id>', 'Agent ID').action(createHandler(async (state, ..._args) => {
     const opts = _args[0] as { spec: string; repository: string; commit: string; baseCommit: string; agent?: string };
     const result = await state.client.createCandidate({
       specId: opts.spec,
