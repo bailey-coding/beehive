@@ -14,6 +14,7 @@ import {
   LEDGER_LIFECYCLE_SQL,
   SERVICE_TOKENS_SQL,
   DEPLOY_REFS_SQL,
+  LEDGER_CAS_SQL,
 } from '../schema-inline';
 
 const file = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
@@ -22,7 +23,7 @@ describe('schema.sql vs schema-inline.ts', () => {
   it('schema.sql is the inline sections concatenated, byte for byte', () => {
     // Base schema (which already holds the m3 service_accounts and m4 promotion ledger
     // sections), then the sections later migrations appended, in migration order
-    expect(file).toBe(SCHEMA_SQL + LEDGER_LIFECYCLE_SQL + SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL);
+    expect(file).toBe(SCHEMA_SQL + LEDGER_LIFECYCLE_SQL + SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL);
   });
 
   it('the standalone migration sections are verbatim parts of the base schema', () => {

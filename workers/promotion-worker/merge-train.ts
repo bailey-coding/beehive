@@ -55,24 +55,28 @@ export class MergeTrainManager {
         };
       }
 
-      const position = train.candidates.length + 1;
-      const newCandidate: MergeTrainCandidate = {
-        candidateId: request.candidateId,
-        specId: request.specId,
-        position,
-        status: 'waiting',
-      };
-
-      const updatedTrain: MergeTrainWithId = {
-        ...train,
-        candidates: [...train.candidates, newCandidate],
-        currentPosition: position,
-        nextMerge: newCandidate.candidateId,
-        status: 'processing',
-      };
-
-      await this.saveMergeTrain(updatedTrain);
-      console.log(`[MergeTrain] Added candidate ${request.candidateId} to position ${position}`);
+      // Position and capacity come from the train as saved, so a concurrent add cannot reuse a position
+      const updatedTrain = await this.modifyMergeTrain(request.specId, (current) => {
+        const active = current.candidates.filter(c => c.status === 'waiting' || c.status === 'merging').length;
+        if (active >= maxConcurrent) {
+          throw new Error(`Maximum concurrent candidates (${maxConcurrent}) reached. Please wait.`);
+        }
+        const position = current.candidates.length + 1;
+        const newCandidate: MergeTrainCandidate = {
+          candidateId: request.candidateId,
+          specId: request.specId,
+          position,
+          status: 'waiting',
+        };
+        return {
+          ...current,
+          candidates: [...current.candidates, newCandidate],
+          currentPosition: position,
+          nextMerge: newCandidate.candidateId,
+          status: 'processing',
+        };
+      });
+      console.log(`[MergeTrain] Added candidate ${request.candidateId} to position ${updatedTrain.currentPosition}`);
 
       await this.processMergeTrain(updatedTrain);
 
@@ -90,7 +94,7 @@ export class MergeTrainManager {
         specId: request.specId,
         fromRung: request.fromRung,
         toRung: request.toRung,
-        message: `Candidate added to merge train at position ${position}. Status: ${candidateInTrain.status}`,
+        message: `Candidate added to merge train at position ${candidateInTrain.position}. Status: ${candidateInTrain.status}`,
         timestamp: new Date().toISOString(),
         mode: 'merge-train',
         details: {
@@ -192,9 +196,9 @@ export class MergeTrainManager {
       startedAt: new Date().toISOString(),
     };
 
-    await this.saveMergeTrain(train);
-    console.log(`[MergeTrain] Created new merge train: ${train.id} for spec ${specId}`);
-    return train;
+    const saved = await this.saveMergeTrain(train);
+    console.log(`[MergeTrain] Created new merge train: ${saved.id} for spec ${specId}`);
+    return saved;
   }
 
   /**
@@ -214,8 +218,21 @@ export class MergeTrainManager {
   /**
    * Save merge train to Spec DO
    */
-  private async saveMergeTrain(train: MergeTrainWithId): Promise<void> {
-    await getPromotionLedger(this.env).saveMergeTrain(train);
+  private async saveMergeTrain(train: MergeTrainWithId): Promise<MergeTrainWithId> {
+    return getPromotionLedger(this.env).saveMergeTrain(train);
+  }
+
+  /**
+   * Read-modify-write against the train's current version (re-applied on a conflict).
+   * Throws when the spec has no train.
+   */
+  private async modifyMergeTrain(
+    specId: string,
+    mutate: (current: MergeTrainWithId) => MergeTrainWithId
+  ): Promise<MergeTrainWithId> {
+    const saved = await getPromotionLedger(this.env).modifyMergeTrain(specId, mutate);
+    if (!saved) throw new Error(`No merge train found for spec ${specId}`);
+    return saved;
   }
 
   /**
@@ -364,35 +381,27 @@ export class MergeTrainManager {
    */
   async retryFailedMerge(candidateId: string, specId: string): Promise<PromotionResult> {
     try {
-      const train = await this.getMergeTrainBySpec(specId);
-      
-      if (!train) {
-        throw new Error(`No merge train found for spec ${specId}`);
-      }
+      const updatedTrain = await this.modifyMergeTrain(specId, (train) => {
+        const candidate = train.candidates.find(c => c.candidateId === candidateId);
 
-      const candidate = train.candidates.find(c => c.candidateId === candidateId);
-      
-      if (!candidate) {
-        throw new Error(`Candidate ${candidateId} not found in merge train`);
-      }
+        if (!candidate) {
+          throw new Error(`Candidate ${candidateId} not found in merge train`);
+        }
 
-      if (candidate.status !== 'failed') {
-        throw new Error(`Candidate ${candidateId} is not in a failed state (current: ${candidate.status})`);
-      }
+        if (candidate.status !== 'failed') {
+          throw new Error(`Candidate ${candidateId} is not in a failed state (current: ${candidate.status})`);
+        }
 
-      const updatedCandidates = train.candidates.map(c => 
-        c.candidateId === candidateId 
-          ? { ...c, status: 'waiting' as const, failedAt: undefined, failureReason: undefined }
-          : c
-      );
-
-      const updatedTrain: MergeTrainWithId = {
-        ...train,
-        candidates: updatedCandidates,
-        status: 'processing',
-      };
-
-      await this.saveMergeTrain(updatedTrain);
+        return {
+          ...train,
+          candidates: train.candidates.map(c =>
+            c.candidateId === candidateId
+              ? { ...c, status: 'waiting' as const, failedAt: undefined, failureReason: undefined }
+              : c
+          ),
+          status: 'processing',
+        };
+      });
       await this.processMergeTrain(updatedTrain);
 
       return {
@@ -430,39 +439,31 @@ export class MergeTrainManager {
     reason: string
   ): Promise<PromotionResult> {
     try {
-      const train = await this.getMergeTrainBySpec(specId);
-      
-      if (!train) {
-        throw new Error(`No merge train found for spec ${specId}`);
-      }
+      await this.modifyMergeTrain(specId, (train) => {
+        const candidate = train.candidates.find(c => c.candidateId === candidateId);
 
-      const candidate = train.candidates.find(c => c.candidateId === candidateId);
-      
-      if (!candidate) {
-        throw new Error(`Candidate ${candidateId} not found in merge train`);
-      }
+        if (!candidate) {
+          throw new Error(`Candidate ${candidateId} not found in merge train`);
+        }
 
-      if (candidate.status !== 'merged') {
-        throw new Error(`Candidate ${candidateId} is not in a merged state (current: ${candidate.status})`);
-      }
+        if (candidate.status !== 'merged') {
+          throw new Error(`Candidate ${candidateId} is not in a merged state (current: ${candidate.status})`);
+        }
 
-      const updatedCandidates = train.candidates.map(c => 
-        c.candidateId === candidateId 
-          ? { 
-              ...c, 
-              status: 'rolled_back' as const,
-              failedAt: new Date().toISOString(),
-              failureReason: `Rolled back: ${reason}`
-            }
-          : c
-      );
-
-      const updatedTrain: MergeTrainWithId = {
-        ...train,
-        candidates: updatedCandidates,
-      };
-
-      await this.saveMergeTrain(updatedTrain);
+        return {
+          ...train,
+          candidates: train.candidates.map(c =>
+            c.candidateId === candidateId
+              ? {
+                  ...c,
+                  status: 'rolled_back' as const,
+                  failedAt: new Date().toISOString(),
+                  failureReason: `Rolled back: ${reason}`
+                }
+              : c
+          ),
+        };
+      });
 
       await getSpecDo(this.env).fetch(
         `/candidates/${encodeURIComponent(candidateId)}/rollback`,

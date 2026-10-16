@@ -20,11 +20,11 @@ beforeEach(async () => {
   await spec.init();
 });
 
-function call(path: string, method = 'GET', body?: unknown): Promise<Response> {
+function call(path: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<Response> {
   return spec.fetch(
     new Request(`https://spec-do.internal${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   );
@@ -63,6 +63,12 @@ function tournament(overrides: Partial<TournamentRecord> = {}): TournamentRecord
   };
 }
 
+// Two competing candidates: what a tournament needs to leave 'pending'
+const twoCandidates = [
+  { candidateId: 'cand-1', specId: 'spec-1', score: 80, status: 'competing' as const, metrics },
+  { candidateId: 'cand-2', specId: 'spec-1', score: 70, status: 'competing' as const, metrics },
+];
+
 function mergeTrain(overrides: Partial<MergeTrainRecord> = {}): MergeTrainRecord {
   return {
     id: 'mergetrain_1',
@@ -95,7 +101,7 @@ describe('m3 -> m4 migration', () => {
 
     expect(tableNames(restarted)).toEqual(expect.arrayContaining(['promotion_states', 'tournaments', 'merge_trains']));
     // m4 -> m5, m5 -> m6 (service tokens) and m6 -> m7 (deploy refs) run in the same pass
-    expect(schemaVersion(restarted)).toBe('m7');
+    expect(schemaVersion(restarted)).toBe('m8');
     expect(store.raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'").get()).toEqual({ n: 1 });
   });
 
@@ -103,7 +109,7 @@ describe('m3 -> m4 migration', () => {
     store.raw.exec("UPDATE metadata SET value = 'm3' WHERE key = 'schema_version'");
     await makeSpecDo(makeSqliteState(store.raw, store.kv)).init();
     await makeSpecDo(makeSqliteState(store.raw, store.kv)).init();
-    expect(schemaVersion(store)).toBe('m7');
+    expect(schemaVersion(store)).toBe('m8');
   });
 });
 
@@ -199,14 +205,15 @@ describe('/tournament-status', () => {
   it('POST creates (201), re-POST of the same id upserts (200)', async () => {
     const created = await call('/tournament-status', 'POST', tournament());
     expect(created.status).toBe(201);
-    expect(await created.json()).toEqual(tournament());
+    expect(await created.json()).toEqual({ ...tournament(), version: 1, attempts: 0 });
 
-    const again = await call('/tournament-status', 'POST', tournament({ status: 'in_progress' }));
+    const next = tournament({ status: 'in_progress', candidates: twoCandidates });
+    const again = await call('/tournament-status', 'POST', next, { 'X-Expected-Version': '1' });
     expect(again.status).toBe(200);
 
     const res = await call('/tournament-status?specId=spec-1');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(tournament({ status: 'in_progress' }));
+    expect(await res.json()).toEqual({ ...next, version: 2, attempts: 0 });
   });
 
   it('GET by spec returns the newest tournament; /all lists every one', async () => {
@@ -220,16 +227,19 @@ describe('/tournament-status', () => {
   });
 
   it('PATCH merges top-level fields and returns the record', async () => {
-    await call('/tournament-status', 'POST', tournament());
+    await call('/tournament-status', 'POST', tournament({ candidates: twoCandidates }));
+    await call('/tournament-status/tournament_1', 'PATCH', { status: 'in_progress' });
     const res = await call('/tournament-status/tournament_1', 'PATCH', {
       status: 'completed',
       winner: 'cand-1',
       completedAt: '2026-10-15T01:00:00.000Z',
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(
-      tournament({ status: 'completed', winner: 'cand-1', completedAt: '2026-10-15T01:00:00.000Z' })
-    );
+    expect(await res.json()).toEqual({
+      ...tournament({ candidates: twoCandidates, status: 'completed', winner: 'cand-1', completedAt: '2026-10-15T01:00:00.000Z' }),
+      version: 3,
+      attempts: 0,
+    });
   });
 
   it('PATCH of an unknown id is a coded 404; invalid payloads are 400', async () => {
@@ -242,7 +252,7 @@ describe('/tournament-status', () => {
 
   it('runs each write in a transaction', async () => {
     const before = store.transactions.count;
-    await call('/tournament-status', 'POST', tournament());
+    await call('/tournament-status', 'POST', tournament({ candidates: twoCandidates }));
     await call('/tournament-status/tournament_1', 'PATCH', { status: 'in_progress' });
     expect(store.transactions.count - before).toBe(2);
   });
@@ -258,7 +268,7 @@ describe('/merge-train-status', () => {
   it('POST creates (201) and keeps nextMerge: null round-trip', async () => {
     const res = await call('/merge-train-status', 'POST', mergeTrain({ nextMerge: null, status: 'idle' }));
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual(mergeTrain({ nextMerge: null, status: 'idle' }));
+    expect(await res.json()).toEqual({ ...mergeTrain({ nextMerge: null, status: 'idle' }), version: 1 });
   });
 
   it('re-POST of the same id upserts (rollback path)', async () => {
@@ -266,8 +276,8 @@ describe('/merge-train-status', () => {
     const rolledBack = mergeTrain({
       candidates: [{ candidateId: 'cand-1', specId: 'spec-1', position: 1, status: 'rolled_back', failureReason: 'Rolled back: x' }],
     });
-    expect((await call('/merge-train-status', 'POST', rolledBack)).status).toBe(200);
-    expect(await (await call('/merge-train-status?specId=spec-1')).json()).toEqual(rolledBack);
+    expect((await call('/merge-train-status', 'POST', rolledBack, { 'X-Expected-Version': '1' })).status).toBe(200);
+    expect(await (await call('/merge-train-status?specId=spec-1')).json()).toEqual({ ...rolledBack, version: 2 });
   });
 
   it('GET /all lists every train', async () => {
@@ -285,9 +295,10 @@ describe('/merge-train-status', () => {
       completedAt: '2026-10-15T01:00:00.000Z',
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(
-      mergeTrain({ status: 'idle', nextMerge: null, completedAt: '2026-10-15T01:00:00.000Z' })
-    );
+    expect(await res.json()).toEqual({
+      ...mergeTrain({ status: 'idle', nextMerge: null, completedAt: '2026-10-15T01:00:00.000Z' }),
+      version: 2,
+    });
 
     const missing = await call('/merge-train-status/nope', 'PATCH', { status: 'idle' });
     expect(missing.status).toBe(404);

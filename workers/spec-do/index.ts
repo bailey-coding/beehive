@@ -24,9 +24,37 @@ import {
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm7';
+const LATEST_SCHEMA_VERSION = 'm8';
 
 class ConflictError extends Error {}
+
+/** Parsed X-Expected-Version: null when absent, 'invalid' when not a positive integer. */
+function expectedVersion(request: Request): number | null | 'invalid' {
+  const raw = request.headers.get(EXPECTED_VERSION_HEADER);
+  if (raw === null) return null;
+  return /^[1-9]\d*$/.test(raw) ? Number(raw) : 'invalid';
+}
+
+/**
+ * Compare-and-swap check. `actual` is the stored version (null = new record). A new record needs
+ * no version. For an existing one a mismatch is always refused; a missing version is refused
+ * unless `optional` (PATCH, which merges server-side).
+ */
+function checkExpectedVersion(
+  actual: number | null,
+  expected: number | null,
+  optional: boolean
+): { code: string; message: string } | null {
+  if (actual === null) return null;
+  if (expected === null) {
+    return optional
+      ? null
+      : { code: VERSION_REQUIRED, message: `record is at version ${actual}; send ${EXPECTED_VERSION_HEADER} to replace it` };
+  }
+  return expected === actual
+    ? null
+    : { code: VERSION_CONFLICT, message: `record is at version ${actual}, not ${expected}; re-read and retry` };
+}
 class NotFoundError extends Error {}
 class ForbiddenError extends Error {}
 class BadRequestError extends Error {}
@@ -181,6 +209,12 @@ import {
   type TournamentRecord,
   type MergeTrainRecord,
 } from '../shared/promotion-ledger';
+import {
+  EXPECTED_VERSION_HEADER,
+  VERSION_CONFLICT,
+  VERSION_REQUIRED,
+  checkTournamentTransition,
+} from '../shared/ledger-state-machine';
 
 // Ledger lifecycle contract (tombstones, maintainer role, purge; shared with the edge)
 import {
@@ -487,6 +521,8 @@ export class SpecDO {
       this.applyServiceTokens();
       // deploy_refs + canary_deployments: likewise
       this.db.exec(DEPLOY_REFS_SQL);
+      // version / failure columns on tournaments + merge_trains: likewise
+      this.applyLedgerCas();
 
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
@@ -786,6 +822,8 @@ export class SpecDO {
       ['m6', () => this.applyServiceTokens()],
       // m6 -> m7: deploy refs + canary deployments
       ['m7', () => this.db!.exec(DEPLOY_REFS_SQL)],
+      // m7 -> m8: version columns on tournaments + merge_trains, tournament failure columns
+      ['m8', () => this.applyLedgerCas()],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -845,6 +883,17 @@ export class SpecDO {
       this.db.exec(`ALTER TABLE service_accounts ADD COLUMN actor_id TEXT REFERENCES actors(id)`);
     }
     this.db.exec(SERVICE_TOKENS_SQL);
+  }
+
+  /** Idempotent: adds only the version / failure columns that are missing (see schema.sql, m7 -> m8). */
+  private applyLedgerCas(): void {
+    this.addColumnsIfMissing('tournaments', [
+      'version INTEGER NOT NULL DEFAULT 1',
+      'failure_reason TEXT',
+      'failed_at TEXT',
+      'attempts INTEGER NOT NULL DEFAULT 0',
+    ]);
+    this.addColumnsIfMissing('merge_trains', ['version INTEGER NOT NULL DEFAULT 1']);
   }
 
   /** Idempotent: adds only the lifecycle columns that are missing, then purge_log and indexes. */
@@ -2226,23 +2275,26 @@ export class SpecDO {
       if (id === undefined && method === 'POST') {
         const p = parse(TournamentRecordSchema, 'tournament');
         if ('error' in p) return p.error;
-        const { record, created } = this.state.storage.transactionSync(() => {
-          const created = !this.getTournament(p.data.id);
-          this.writeTournament(p.data);
-          return { record: this.getTournament(p.data.id), created };
-        });
-        return json(record, created ? 201 : 200);
+        const expected = expectedVersion(request);
+        if (expected === 'invalid') return fail(`Invalid ${EXPECTED_VERSION_HEADER}`, 400);
+        const result = this.state.storage.transactionSync(() =>
+          this.applyTournamentWrite(p.data.id, () => p.data, expected)
+        );
+        if (result === null) return notFound('Tournament'); // only a PATCH can miss
+        if ('refused' in result) return fail(result.refused.message, 409, result.refused.code);
+        return json(result.record, result.created ? 201 : 200);
       }
       if (id !== undefined && !isListAll && method === 'PATCH') {
         const p = parse(TournamentPatchSchema, 'tournament patch');
         if ('error' in p) return p.error;
-        const updated = this.state.storage.transactionSync(() => {
-          const current = this.getTournament(id);
-          if (!current) return null;
-          this.writeTournament(TournamentRecordSchema.parse({ ...current, ...p.data, id }));
-          return this.getTournament(id);
-        });
-        return updated ? json(updated) : notFound('Tournament');
+        const expected = expectedVersion(request);
+        if (expected === 'invalid') return fail(`Invalid ${EXPECTED_VERSION_HEADER}`, 400);
+        const result = this.state.storage.transactionSync(() =>
+          this.applyTournamentWrite(id, (current) => TournamentRecordSchema.parse({ ...current, ...p.data, id }), expected, true)
+        );
+        if (result === null) return notFound('Tournament');
+        if ('refused' in result) return fail(result.refused.message, 409, result.refused.code);
+        return json(result.record);
       }
     }
 
@@ -2259,23 +2311,26 @@ export class SpecDO {
       if (id === undefined && method === 'POST') {
         const p = parse(MergeTrainRecordSchema, 'merge train');
         if ('error' in p) return p.error;
-        const { record, created } = this.state.storage.transactionSync(() => {
-          const created = !this.getMergeTrain(p.data.id);
-          this.writeMergeTrain(p.data);
-          return { record: this.getMergeTrain(p.data.id), created };
-        });
-        return json(record, created ? 201 : 200);
+        const expected = expectedVersion(request);
+        if (expected === 'invalid') return fail(`Invalid ${EXPECTED_VERSION_HEADER}`, 400);
+        const result = this.state.storage.transactionSync(() =>
+          this.applyMergeTrainWrite(p.data.id, () => p.data, expected)
+        );
+        if (result === null) return notFound('Merge train'); // only a PATCH can miss
+        if ('refused' in result) return fail(result.refused.message, 409, result.refused.code);
+        return json(result.record, result.created ? 201 : 200);
       }
       if (id !== undefined && !isListAll && method === 'PATCH') {
         const p = parse(MergeTrainPatchSchema, 'merge train patch');
         if ('error' in p) return p.error;
-        const updated = this.state.storage.transactionSync(() => {
-          const current = this.getMergeTrain(id);
-          if (!current) return null;
-          this.writeMergeTrain(MergeTrainRecordSchema.parse({ ...current, ...p.data, id }));
-          return this.getMergeTrain(id);
-        });
-        return updated ? json(updated) : notFound('Merge train');
+        const expected = expectedVersion(request);
+        if (expected === 'invalid') return fail(`Invalid ${EXPECTED_VERSION_HEADER}`, 400);
+        const result = this.state.storage.transactionSync(() =>
+          this.applyMergeTrainWrite(id, (current) => MergeTrainRecordSchema.parse({ ...current, ...p.data, id }), expected, true)
+        );
+        if (result === null) return notFound('Merge train');
+        if ('refused' in result) return fail(result.refused.message, 409, result.refused.code);
+        return json(result.record);
       }
     }
 
@@ -2399,16 +2454,57 @@ export class SpecDO {
     return row ? this.rowToTournament(row) : null;
   }
 
-  // Upsert by id: the promotion worker re-POSTs whole tournaments after changing them
-  private writeTournament(t: TournamentRecord): void {
+  /**
+   * The one write path for tournaments (run inside transactionSync). `build` gets the current
+   * record (null when `id` is new) and returns the record to store. Refuses with a coded 409
+   * reason when the caller's version is stale or missing, or the status transition is not allowed.
+   * `patch` = the caller is changing an existing record: a missing id answers null (404), and
+   * a missing expected version is accepted (the PATCH merge is atomic on its own).
+   */
+  private applyTournamentWrite(
+    id: string,
+    build: (current: TournamentRecord | null) => TournamentRecord,
+    expected: number | null,
+    patch = false
+  ): { record: TournamentRecord; created: boolean } | { refused: { code: string; message: string } } | null {
+    const row = this.queryAll('SELECT version, attempts FROM tournaments WHERE id = ?', id)[0];
+    const current = this.getTournament(id);
+    if (!current && patch) return null;
+    const stale = checkExpectedVersion(current ? (row.version as number) : null, expected, patch);
+    if (stale) return { refused: stale };
+
+    const next = build(current);
+    const attempts = current ? (row.attempts as number) : 0;
+    const violation = checkTournamentTransition(current, next, attempts);
+    if (violation) return { refused: violation };
+
+    const entersFailed = next.status === 'failed' && current?.status !== 'failed';
+    const resets = next.status === 'pending' && current?.status === 'failed';
+    this.writeTournament(next, {
+      version: current ? (row.version as number) + 1 : 1,
+      attempts: resets ? 0 : attempts + (entersFailed ? 1 : 0),
+      // failure details belong to 'failed' only; entering it stamps failedAt, leaving it clears both
+      failedAt: next.status === 'failed' ? (entersFailed ? new Date().toISOString() : (next.failedAt ?? current?.failedAt ?? null)) : null,
+      failureReason: next.status === 'failed' ? (next.failureReason ?? null) : null,
+    });
+    return { record: this.getTournament(id)!, created: !current };
+  }
+
+  // Upsert by id; version, attempts and the failure columns come from applyTournamentWrite
+  private writeTournament(
+    t: TournamentRecord,
+    meta: { version: number; attempts: number; failedAt: string | null; failureReason: string | null }
+  ): void {
     const ts = now();
     this.run(
       `INSERT INTO tournaments (id, spec_id, status, winner, candidates, comparisons, started_at, completed_at,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         created_at, updated_at, version, attempts, failed_at, failure_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET spec_id = excluded.spec_id, status = excluded.status,
          winner = excluded.winner, candidates = excluded.candidates, comparisons = excluded.comparisons,
-         started_at = excluded.started_at, completed_at = excluded.completed_at, updated_at = excluded.updated_at`,
+         started_at = excluded.started_at, completed_at = excluded.completed_at, updated_at = excluded.updated_at,
+         version = excluded.version, attempts = excluded.attempts, failed_at = excluded.failed_at,
+         failure_reason = excluded.failure_reason`,
       t.id,
       t.specId,
       t.status,
@@ -2418,7 +2514,11 @@ export class SpecDO {
       t.startedAt,
       t.completedAt ?? null,
       ts,
-      ts
+      ts,
+      meta.version,
+      meta.attempts,
+      meta.failedAt,
+      meta.failureReason
     );
   }
 
@@ -2434,6 +2534,10 @@ export class SpecDO {
         startedAt: r.started_at,
         completedAt: r.completed_at,
         status: r.status,
+        failedAt: r.failed_at,
+        failureReason: r.failure_reason,
+        version: r.version,
+        attempts: r.attempts,
       })
     );
   }
@@ -2451,17 +2555,34 @@ export class SpecDO {
     return row ? this.rowToMergeTrain(row) : null;
   }
 
-  // Upsert by id: rollbackMergedCandidate re-POSTs an existing train
-  private writeMergeTrain(t: MergeTrainRecord): void {
+  /** The one write path for merge trains; same contract as applyTournamentWrite (no status machine). */
+  private applyMergeTrainWrite(
+    id: string,
+    build: (current: MergeTrainRecord | null) => MergeTrainRecord,
+    expected: number | null,
+    patch = false
+  ): { record: MergeTrainRecord; created: boolean } | { refused: { code: string; message: string } } | null {
+    const row = this.queryAll('SELECT version FROM merge_trains WHERE id = ?', id)[0];
+    const current = this.getMergeTrain(id);
+    if (!current && patch) return null;
+    const stale = checkExpectedVersion(current ? (row.version as number) : null, expected, patch);
+    if (stale) return { refused: stale };
+
+    this.writeMergeTrain(build(current), current ? (row.version as number) + 1 : 1);
+    return { record: this.getMergeTrain(id)!, created: !current };
+  }
+
+  // Upsert by id; the version comes from applyMergeTrainWrite
+  private writeMergeTrain(t: MergeTrainRecord, version: number): void {
     const ts = now();
     this.run(
       `INSERT INTO merge_trains (id, spec_id, status, current_position, next_merge, candidates, started_at,
-         completed_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         completed_at, created_at, updated_at, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET spec_id = excluded.spec_id, status = excluded.status,
          current_position = excluded.current_position, next_merge = excluded.next_merge,
          candidates = excluded.candidates, started_at = excluded.started_at,
-         completed_at = excluded.completed_at, updated_at = excluded.updated_at`,
+         completed_at = excluded.completed_at, updated_at = excluded.updated_at, version = excluded.version`,
       t.id,
       t.specId,
       t.status,
@@ -2471,7 +2592,8 @@ export class SpecDO {
       t.startedAt ?? null,
       t.completedAt ?? null,
       ts,
-      ts
+      ts,
+      version
     );
   }
 
@@ -2486,6 +2608,7 @@ export class SpecDO {
         status: r.status,
         startedAt: r.started_at,
         completedAt: r.completed_at,
+        version: r.version,
       }),
       // nextMerge is nullable, not optional
       nextMerge: r.next_merge ?? null,

@@ -1,7 +1,7 @@
 /**
  * SpecDO init and runMigrations: a failing step fails init() loudly (no half-migrated
  * schema served, next request retries), a populated m3 ledger reaches m7 with its rows,
- * a rerun is a no-op, and a fresh ledger starts at m7.
+ * a rerun is a no-op, and a fresh ledger starts at m8.
  *
  * Task: review-fixes | Spec: AGENTS.md#state-management
  */
@@ -53,10 +53,10 @@ async function populatedM3(): Promise<SqliteState> {
 afterEach(() => vi.restoreAllMocks());
 
 describe('fresh ledger', () => {
-  it('starts at m7 on the first init, not m3', async () => {
+  it('starts at m8 on the first init, not m3', async () => {
     const s = makeSqliteState();
     await makeSpecDo(s).init();
-    expect(version(s)).toBe('m7');
+    expect(version(s)).toBe('m8');
   });
 });
 
@@ -85,13 +85,13 @@ describe('failing migration step', () => {
     broken = false;
     await spec.init();
     expect(spec.db).not.toBeNull();
-    expect(version(restarted)).toBe('m7');
+    expect(version(restarted)).toBe('m8');
     expect(tables(restarted)).toContain('deploy_refs');
   });
 });
 
-describe('m3 -> m7 on a populated ledger', () => {
-  it('keeps every row, ends at m7, and a rerun is a no-op', async () => {
+describe('m3 -> m8 on a populated ledger', () => {
+  it('keeps every row, ends at m8, and a rerun is a no-op', async () => {
     const old = await populatedM3();
     const before = Object.fromEntries(
       ['organizations', 'actors', 'specs', 'candidates', 'service_accounts'].map((t) => [t, count(old, t)])
@@ -101,7 +101,7 @@ describe('m3 -> m7 on a populated ledger', () => {
 
     const restarted = makeSqliteState(old.raw, old.kv);
     await makeSpecDo(restarted).init();
-    expect(version(restarted)).toBe('m7');
+    expect(version(restarted)).toBe('m8');
     for (const [t, n] of Object.entries(before)) expect(count(restarted, t)).toBe(n);
     expect(old.raw.prepare("SELECT actor_id, token_hash FROM service_accounts WHERE id = 'legacy'").get()).toEqual({
       actor_id: null,
@@ -114,7 +114,7 @@ describe('m3 -> m7 on a populated ledger', () => {
     const updatedAt = () => old.raw.prepare("SELECT updated_at FROM metadata WHERE key = 'schema_version'").get();
     const [schemaBefore, stampBefore] = [snapshot(), updatedAt()];
     await makeSpecDo(makeSqliteState(old.raw, old.kv)).init();
-    expect(version(restarted)).toBe('m7');
+    expect(version(restarted)).toBe('m8');
     expect(snapshot()).toBe(schemaBefore);
     expect(updatedAt()).toEqual(stampBefore);
     for (const [t, n] of Object.entries(before)) expect(count(restarted, t)).toBe(n);

@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { EXPECTED_VERSION_HEADER, VERSION_CONFLICT, VERSION_REQUIRED } from './ledger-state-machine';
 
 // ============================================================================
 // SCHEMAS
@@ -99,10 +100,21 @@ const tournamentFields = {
   startedAt: z.string(),
   completedAt: z.string().optional(),
   status: z.enum(['pending', 'in_progress', 'completed', 'failed']),
+  failedAt: z.string().optional(),
+  failureReason: z.string().optional(),
 };
 
 export const TournamentStatusSchema = z.object(tournamentFields).strict();
-export const TournamentRecordSchema = z.object({ id: z.string().min(1), ...tournamentFields }).strict();
+// version and attempts are owned by the Spec DO: read them from a response, never set them in a
+// request (the DO ignores them). version is what a client echoes back in X-Expected-Version.
+export const TournamentRecordSchema = z
+  .object({
+    id: z.string().min(1),
+    ...tournamentFields,
+    version: z.number().int().positive().optional(),
+    attempts: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 export const TournamentPatchSchema = TournamentStatusSchema.partial().strict();
 
 export const MergeTrainCandidateSchema = z
@@ -129,7 +141,9 @@ const mergeTrainFields = {
 };
 
 export const MergeTrainStatusSchema = z.object(mergeTrainFields).strict();
-export const MergeTrainRecordSchema = z.object({ id: z.string().min(1), ...mergeTrainFields }).strict();
+export const MergeTrainRecordSchema = z
+  .object({ id: z.string().min(1), ...mergeTrainFields, version: z.number().int().positive().optional() })
+  .strict();
 export const MergeTrainPatchSchema = MergeTrainStatusSchema.partial().strict();
 
 // ============================================================================
@@ -177,11 +191,22 @@ export interface SpecDoFetcher {
 }
 
 export class SpecDoLedgerError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
     this.name = 'SpecDoLedgerError';
   }
 }
+
+/** The record changed since it was read (or was read without a version): re-read and re-apply. */
+export class VersionConflictError extends SpecDoLedgerError {
+  constructor(message: string) {
+    super(message, 409, VERSION_CONFLICT);
+    this.name = 'VersionConflictError';
+  }
+}
+
+/** Read-modify-write attempts before a persistent conflict is surfaced. */
+export const MAX_CAS_ATTEMPTS = 3;
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
@@ -226,20 +251,42 @@ export class PromotionLedgerClient {
     return this.request('list tournaments', `${LEDGER_PATHS.tournaments}${LIST_ALL_SUFFIX}`, z.array(TournamentRecordSchema));
   }
 
+  /**
+   * Create (a record with no version, new id) or replace. Replacing an existing record sends
+   * tournament.version as the expected version: a stale or missing one throws VersionConflictError.
+   */
   async saveTournament(tournament: TournamentRecord): Promise<TournamentRecord> {
     return this.request('save tournament', LEDGER_PATHS.tournaments, TournamentRecordSchema, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: casHeaders(tournament.version),
       body: JSON.stringify(TournamentRecordSchema.parse(tournament)),
     });
   }
 
-  async updateTournament(id: string, patch: TournamentPatch): Promise<TournamentRecord> {
+  /** PATCH merges server-side in one transaction; pass expectedVersion to also guard against a stale read. */
+  async updateTournament(id: string, patch: TournamentPatch, expectedVersion?: number): Promise<TournamentRecord> {
     return this.request('update tournament', `${LEDGER_PATHS.tournaments}/${encodeURIComponent(id)}`, TournamentRecordSchema, {
       method: 'PATCH',
-      headers: JSON_HEADERS,
+      headers: casHeaders(expectedVersion),
       body: JSON.stringify(TournamentPatchSchema.parse(patch)),
     });
+  }
+
+  /**
+   * Read-modify-write the spec's tournament: loads the current record, applies `mutate`, saves
+   * with the version it read, and on a conflict reloads and re-applies (MAX_CAS_ATTEMPTS times).
+   * `mutate` must be a pure function of the record it is given. Null return = nothing to change.
+   * Null result = the spec has no tournament.
+   */
+  async modifyTournament(
+    specId: string,
+    mutate: (current: TournamentRecord) => TournamentRecord | null
+  ): Promise<TournamentRecord | null> {
+    return casLoop(
+      () => this.getTournamentBySpec(specId),
+      mutate,
+      (next) => this.saveTournament(next)
+    );
   }
 
   // --- merge trains ---
@@ -252,20 +299,33 @@ export class PromotionLedgerClient {
     return this.request('list merge trains', `${LEDGER_PATHS.mergeTrains}${LIST_ALL_SUFFIX}`, z.array(MergeTrainRecordSchema));
   }
 
+  /** Same version rules as saveTournament. */
   async saveMergeTrain(train: MergeTrainRecord): Promise<MergeTrainRecord> {
     return this.request('save merge train', LEDGER_PATHS.mergeTrains, MergeTrainRecordSchema, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: casHeaders(train.version),
       body: JSON.stringify(MergeTrainRecordSchema.parse(train)),
     });
   }
 
-  async updateMergeTrain(id: string, patch: MergeTrainPatch): Promise<MergeTrainRecord> {
+  async updateMergeTrain(id: string, patch: MergeTrainPatch, expectedVersion?: number): Promise<MergeTrainRecord> {
     return this.request('update merge train', `${LEDGER_PATHS.mergeTrains}/${encodeURIComponent(id)}`, MergeTrainRecordSchema, {
       method: 'PATCH',
-      headers: JSON_HEADERS,
+      headers: casHeaders(expectedVersion),
       body: JSON.stringify(MergeTrainPatchSchema.parse(patch)),
     });
+  }
+
+  /** Same contract as modifyTournament. */
+  async modifyMergeTrain(
+    specId: string,
+    mutate: (current: MergeTrainRecord) => MergeTrainRecord | null
+  ): Promise<MergeTrainRecord | null> {
+    return casLoop(
+      () => this.getMergeTrainBySpec(specId),
+      mutate,
+      (next) => this.saveMergeTrain(next)
+    );
   }
 
   // --- transport ---
@@ -273,7 +333,13 @@ export class PromotionLedgerClient {
   private async request<T>(op: string, path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
     const response = await this.specDo.fetch(path, init);
     if (!response.ok) {
-      throw new SpecDoLedgerError(`Failed to ${op}: ${response.status} ${await safeText(response)}`, response.status);
+      const text = await safeText(response);
+      const message = `Failed to ${op}: ${response.status} ${text}`;
+      const code = bodyCode(text);
+      if (response.status === 409 && (code === VERSION_CONFLICT || code === VERSION_REQUIRED)) {
+        throw new VersionConflictError(message);
+      }
+      throw new SpecDoLedgerError(message, response.status, code);
     }
     return parseBody(op, schema, await response.json());
   }
@@ -289,6 +355,28 @@ export class PromotionLedgerClient {
       throw new SpecDoLedgerError(`Failed to ${op}: ${response.status} ${await safeText(response)}`, response.status);
     }
     return parseBody(op, schema, await response.json());
+  }
+}
+
+function casHeaders(expectedVersion: number | undefined): Record<string, string> {
+  return expectedVersion === undefined ? JSON_HEADERS : { ...JSON_HEADERS, [EXPECTED_VERSION_HEADER]: String(expectedVersion) };
+}
+
+async function casLoop<T>(
+  load: () => Promise<T | null>,
+  mutate: (current: T) => T | null,
+  save: (next: T) => Promise<T>
+): Promise<T | null> {
+  for (let attempt = 1; ; attempt++) {
+    const current = await load();
+    if (current === null) return null;
+    const next = mutate(current);
+    if (next === null) return current;
+    try {
+      return await save(next);
+    } catch (e) {
+      if (!(e instanceof VersionConflictError) || attempt >= MAX_CAS_ATTEMPTS) throw e;
+    }
   }
 }
 
@@ -313,10 +401,15 @@ async function safeText(response: Response): Promise<string> {
   }
 }
 
-function isRecordNotFound(text: string): boolean {
+function bodyCode(text: string): string | undefined {
   try {
-    return (JSON.parse(text) as { code?: unknown }).code === RECORD_NOT_FOUND;
+    const code = (JSON.parse(text) as { code?: unknown }).code;
+    return typeof code === 'string' ? code : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function isRecordNotFound(text: string): boolean {
+  return bodyCode(text) === RECORD_NOT_FOUND;
 }

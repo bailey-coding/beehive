@@ -591,3 +591,21 @@ CREATE TABLE IF NOT EXISTS canary_deployments (
 CREATE INDEX IF NOT EXISTS idx_canary_deployments_candidate ON canary_deployments(candidate_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_canary_deployments_spec ON canary_deployments(spec_id, status);
 `;
+
+// Ledger versions + tournament failure columns (m7 -> m8). Comment-only: the columns are
+// added by SpecDO.applyLedgerCas. Byte-identical to the last section of schema.sql.
+export const LEDGER_CAS_SQL = `
+-- ============================================================================
+-- LEDGER VERSIONS + TOURNAMENT FAILURES (m7 -> m8, additive)
+-- Columns are added in code (SpecDO.applyLedgerCas) behind a PRAGMA
+-- table_info check, because ALTER TABLE ADD COLUMN is not idempotent:
+--   tournaments, merge_trains:
+--     version INTEGER NOT NULL DEFAULT 1   bumped by every write; a POST over an
+--       existing row, or a PATCH that sends X-Expected-Version, applies only if it
+--       still matches (compare-and-swap, checked in the write's transaction)
+--   tournaments only:
+--     failure_reason TEXT, failed_at TEXT, attempts INTEGER NOT NULL DEFAULT 0
+--       attempts counts entries into 'failed'; workers/shared/ledger-state-machine.ts
+--       holds the status transition rules the DO enforces
+-- ============================================================================
+`;

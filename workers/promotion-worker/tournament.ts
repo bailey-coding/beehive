@@ -30,6 +30,8 @@ export class TournamentManager {
    * Execute tournament promotion for a candidate
    */
   async executeTournament(request: PromotionRequest): Promise<PromotionResult> {
+    // Set once the tournament is in_progress: only then does a failure belong in the ledger
+    let runningId: string | null = null;
     try {
       console.log(`[Tournament] Starting tournament promotion for candidate ${request.candidateId}`);
 
@@ -78,6 +80,7 @@ export class TournamentManager {
       if (updatedTournament.status !== 'in_progress') {
         await this.startTournament(updatedTournament.id);
       }
+      runningId = updatedTournament.id;
 
       const comparisons = await this.runTournamentComparisons(updatedTournament);
       const winner = this.determineTournamentWinner(updatedTournament.candidates, comparisons);
@@ -109,6 +112,7 @@ export class TournamentManager {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[Tournament] Error: ${errorMessage}`);
+      if (runningId) await this.recordTournamentFailure(runningId, errorMessage);
 
       return {
         success: false,
@@ -197,9 +201,9 @@ export class TournamentManager {
       status: 'pending',
     };
 
-    await this.saveTournament(tournament);
-    console.log(`[Tournament] Created new tournament: ${tournament.id} for spec ${specId}`);
-    return tournament;
+    const saved = await this.saveTournament(tournament);
+    console.log(`[Tournament] Created new tournament: ${saved.id} for spec ${specId}`);
+    return saved;
   }
 
   /**
@@ -219,8 +223,21 @@ export class TournamentManager {
   /**
    * Save tournament to Spec DO
    */
-  private async saveTournament(tournament: TournamentWithId): Promise<void> {
-    await getPromotionLedger(this.env).saveTournament(tournament);
+  private async saveTournament(tournament: TournamentWithId): Promise<TournamentWithId> {
+    return getPromotionLedger(this.env).saveTournament(tournament);
+  }
+
+  /**
+   * Move a running tournament to 'failed' so a later request can retry it (the Spec DO counts
+   * failures and stops retries after MAX_TOURNAMENT_ATTEMPTS). Best effort: the original
+   * error is what the caller sees, so a ledger error here is only logged.
+   */
+  private async recordTournamentFailure(tournamentId: string, reason: string): Promise<void> {
+    try {
+      await this.updateTournament(tournamentId, { status: 'failed', failureReason: reason });
+    } catch (error) {
+      console.error(`[Tournament] Could not record failure of ${tournamentId}:`, error);
+    }
   }
 
   /**
@@ -251,11 +268,7 @@ export class TournamentManager {
     candidateId: string,
     fromRung: Rung
   ): Promise<TournamentWithId> {
-    const existingIndex = tournament.candidates.findIndex(
-      c => c.candidateId === candidateId
-    );
-
-    if (existingIndex >= 0) {
+    if (tournament.candidates.some(c => c.candidateId === candidateId)) {
       console.log(`[Tournament] Candidate ${candidateId} already in tournament`);
       return tournament;
     }
@@ -270,12 +283,17 @@ export class TournamentManager {
       metrics,
     };
 
-    const updatedTournament: TournamentWithId = {
-      ...tournament,
-      candidates: [...tournament.candidates, newCandidate],
-    };
-
-    await this.saveTournament(updatedTournament);
+    // Appended to the tournament as saved, so a concurrent add is kept (re-applied on a conflict)
+    const updatedTournament = await getPromotionLedger(this.env).modifyTournament(
+      tournament.specId,
+      (current) =>
+        current.candidates.some(c => c.candidateId === candidateId)
+          ? null
+          : { ...current, candidates: [...current.candidates, newCandidate] }
+    );
+    if (!updatedTournament) {
+      throw new Error(`Tournament for spec ${tournament.specId} disappeared while adding ${candidateId}`);
+    }
     console.log(`[Tournament] Added candidate ${candidateId} to tournament ${tournament.id}`);
     return updatedTournament;
   }
@@ -479,7 +497,7 @@ export class TournamentManager {
   ): Promise<void> {
     console.log(`[Tournament] Promoting winner ${winner.candidateId} to ${toRung}`);
 
-    await getSpecDo(this.env).fetch(
+    const promoted = await getSpecDo(this.env).fetch(
       `/candidates/${encodeURIComponent(winner.candidateId)}`,
       {
         method: 'PATCH',
@@ -491,6 +509,9 @@ export class TournamentManager {
         }),
       }
     );
+    if (!promoted.ok) {
+      throw new Error(`Failed to promote ${winner.candidateId}: ${promoted.status} ${await promoted.text()}`);
+    }
 
     const updatedCandidates = tournament.candidates.map(c =>
       c.candidateId === winner.candidateId
