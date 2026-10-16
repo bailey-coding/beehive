@@ -22,8 +22,10 @@ import {
   STATSIG_PRESETS,
   getLocalDevShadowConfig,
   getProductionShadowConfig,
-  normalizeTrafficSplitConfig
+  normalizeTrafficSplitConfig,
+  applyCanaryRefs
 } from './config';
+import type { SpecDoFetcher } from '../shared/deploy-refs';
 
 // Type for the Analytics Engine binding
 declare const ANALYTICS: AnalyticsEngine;
@@ -48,12 +50,16 @@ async function getShadowConfig(env: any): Promise<ShadowConfig> {
                  process.env.WRANGLER_ENV === 'development' ||
                  process.env.NODE_ENV === 'development';
 
-  if (isLocal) {
-    return getLocalDevShadowConfig();
-  }
+  // Production uses production worker URLs; either way the canary targets
+  // come from the Spec DO deploy refs (the traffic pointer)
+  const base = isLocal ? getLocalDevShadowConfig() : getProductionShadowConfig();
+  return applyCanaryRefs(base, specDoFetcher(env));
+}
 
-  // Production - use production worker URLs
-  return getProductionShadowConfig();
+function specDoFetcher(env: any): SpecDoFetcher | null {
+  if (typeof env.SPEC_DO?.idFromName !== 'function') return null;
+  const stub = env.SPEC_DO.get(env.SPEC_DO.idFromName('main'));
+  return { fetch: (path, init) => stub.fetch(`https://spec-do.internal${path}`, init) };
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   LEDGER_LIFECYCLE_SQL,
   LIFECYCLE_COLUMNS,
   SERVICE_TOKENS_SQL,
+  DEPLOY_REFS_SQL,
 } from './schema-inline';
 
 class ConflictError extends Error {}
@@ -29,6 +30,9 @@ class BadRequestError extends Error {}
 
 // /promotion-states, /tournament-status, /merge-train-status, each with an optional /<id> segment
 const LEDGER_ROUTE = /^(\/promotion-states|\/tournament-status|\/merge-train-status)(?:\/([^\/]+))?$/;
+
+// Deploy refs: d is the head of its (spec, rung) chain when no row names it as prev_ref_id
+const DEPLOY_HEAD = 'NOT EXISTS (SELECT 1 FROM deploy_refs n WHERE n.prev_ref_id = d.id)';
 
 // Ledger lifecycle. Bound parameters per statement stay <= 100 (DO SQLite limit).
 const MAX_BOUND_PARAMS = 100;
@@ -191,6 +195,24 @@ import {
   type ActorRole,
   type SetActorRoleResult,
 } from '../shared/ledger-lifecycle';
+
+// Deploy refs + canary deployments contract (shared with the canary worker and shadow router)
+import {
+  DEPLOY_ROUTE,
+  DeployRefSchema,
+  DeployRungSchema,
+  CanaryDeploymentSchema,
+  CanaryDeployRequestSchema,
+  CanaryPatchSchema,
+  RollbackRequestSchema,
+  RefRollbackRequestSchema,
+  type DeployRef,
+  type DeployRung,
+  type CanaryDeployment,
+  type CanaryDeployRequest,
+  type CanaryMoveResult,
+  type LiveRef,
+} from '../shared/deploy-refs';
 
 // Types
 import type {
@@ -433,6 +455,8 @@ export class SpecDO {
       this.applyLedgerLifecycle();
       // service_accounts.actor_id + service_tokens: likewise
       this.applyServiceTokens();
+      // deploy_refs + canary_deployments: likewise
+      this.db.exec(DEPLOY_REFS_SQL);
       
       // Mark as initialized
       await this.state.storage.put('schema_init', 'true');
@@ -776,7 +800,7 @@ export class SpecDO {
     // tournaments, merge_trains). Additive only: CREATE TABLE/INDEX IF NOT EXISTS.
     // Runs on any pre-m4 version so the routes work on first init after deploy;
     // an m2 ledger reaches m3 in ensureServiceAccountTables() and m4 next init.
-    if (currentVersion !== 'm4' && currentVersion !== 'm5' && currentVersion !== 'm6') {
+    if (currentVersion !== 'm4' && currentVersion !== 'm5' && currentVersion !== 'm6' && currentVersion !== 'm7') {
       try {
         this.db.exec(PROMOTION_LEDGER_SQL);
         const updateVersion = this.db.prepare(
@@ -795,7 +819,7 @@ export class SpecDO {
     // purge_log). Additive only: ALTER TABLE ADD COLUMN behind a PRAGMA check,
     // CREATE TABLE/INDEX IF NOT EXISTS. No table rebuild, no CHECK change.
     // Runs on any pre-m5 version, like m4; the version only advances m4 -> m5.
-    if (currentVersion !== 'm5' && currentVersion !== 'm6') {
+    if (currentVersion !== 'm5' && currentVersion !== 'm6' && currentVersion !== 'm7') {
       try {
         this.applyLedgerLifecycle();
         const updateVersion = this.db.prepare(
@@ -813,7 +837,7 @@ export class SpecDO {
     // Migration from m5 to m6: service tokens (service_accounts.actor_id behind a
     // PRAGMA check, service_tokens table, indexes). Additive only, no table rebuild.
     // Runs on any pre-m6 version, like m5; the version only advances m5 -> m6.
-    if (currentVersion !== 'm6') {
+    if (currentVersion !== 'm6' && currentVersion !== 'm7') {
       try {
         this.applyServiceTokens();
         const updateVersion = this.db.prepare(
@@ -825,6 +849,24 @@ export class SpecDO {
       } catch (e) {
         // Logged, not thrown: service-token verify then fails closed (DO 500 -> edge 503)
         console.log('[SpecDO] Migration to m6 failed:', e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    // Migration from m6 to m7: deploy refs + canary deployments. Additive only:
+    // CREATE TABLE/INDEX IF NOT EXISTS, no table rebuild, no ALTER.
+    // Runs on any pre-m7 version, like m6; the version only advances m6 -> m7.
+    if (currentVersion !== 'm7') {
+      try {
+        this.db.exec(DEPLOY_REFS_SQL);
+        const updateVersion = this.db.prepare(
+          "UPDATE metadata SET value = 'm7', updated_at = ? WHERE key = 'schema_version' AND value = 'm6'"
+        );
+        updateVersion.bind(now());
+        updateVersion.step();
+        updateVersion.free();
+      } catch (e) {
+        // Logged, not thrown: deploy-ref and canary routes then 500 (no pointer, no canary traffic)
+        console.log('[SpecDO] Migration to m7 failed:', e instanceof Error ? e.message : String(e));
       }
     }
   }
@@ -1839,7 +1881,10 @@ export class SpecDO {
     }
   }
 
-  /** Of these candidates, the ones with an active promotion or an in-flight promotion state. */
+  /**
+   * Of these candidates, the ones with an active promotion, an in-flight promotion
+   * state, or a live deploy ref (the head of some (spec, rung) points at them).
+   */
   private activePromotionsAmong(candidateIds: string[]): string[] {
     const found = new Set<string>();
     for (const ids of chunk(candidateIds, MAX_BOUND_PARAMS)) {
@@ -1850,6 +1895,7 @@ export class SpecDO {
           `SELECT candidate_id FROM promotion_states WHERE status IN ('pending', 'in_progress') AND candidate_id IN (${marks})`,
           ...ids
         ),
+        ...this.queryAll(`SELECT d.candidate_id FROM deploy_refs d WHERE ${DEPLOY_HEAD} AND d.candidate_id IN (${marks})`, ...ids),
       ];
       for (const r of rows) found.add(r.candidate_id as string);
     }
@@ -2477,6 +2523,340 @@ export class SpecDO {
     });
   }
 
+  // ============================================================================
+  // DEPLOY REFS + CANARY DEPLOYMENTS
+  // Payload shapes: workers/shared/deploy-refs.ts. Envelope { success, data }.
+  // A pointer move and its canary_deployments / promotions updates run in one
+  // transactionSync. Promotion and rollback both insert the new head.
+  // ============================================================================
+
+  private async handleDeployRefs(
+    request: Request,
+    url: URL,
+    collection: string,
+    rawId: string | undefined,
+    sub: string | undefined,
+    method: string
+  ): Promise<Response> {
+    const json = (data: unknown, status = 200) =>
+      new Response(JSON.stringify({ success: true, data, timestamp: Date.now() }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const fail = (error: string, status: number, code?: string) =>
+      new Response(JSON.stringify({ success: false, error, ...(code ? { code } : {}), timestamp: Date.now() }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const notFound = (what: string) => fail(`${what} not found`, 404, RECORD_NOT_FOUND);
+
+    const actorId = request.headers.get('X-Actor-ID') || 'system';
+    const id = rawId === undefined ? undefined : decodeURIComponent(rawId);
+
+    let body: unknown;
+    if (method === 'POST' || method === 'PATCH') {
+      try {
+        body = await request.json();
+      } catch {
+        return fail('Invalid JSON body', 400);
+      }
+    }
+    const parse = <T>(schema: ZodType<T>, what: string): { data: T } | { error: Response } => {
+      const parsed = schema.safeParse(body);
+      return parsed.success ? { data: parsed.data } : { error: fail(`Invalid ${what}: ${parsed.error.message}`, 400) };
+    };
+    const rungParam = DeployRungSchema.safeParse(url.searchParams.get('rung'));
+
+    try {
+      if (collection === 'canary-deployments') {
+        if (id === undefined && method === 'GET') {
+          const candidateId = url.searchParams.get('candidateId');
+          if (!candidateId) return fail('candidateId required', 400);
+          return json(this.listCanaryDeployments(candidateId));
+        }
+        if (id === undefined && method === 'POST') {
+          const p = parse(CanaryDeployRequestSchema, 'canary deployment');
+          if ('error' in p) return p.error;
+          return json(this.deployCanary(p.data, actorId), 201);
+        }
+        if (id !== undefined && sub === undefined && method === 'GET') {
+          const deployment = this.getCanaryDeployment(id);
+          return deployment ? json(deployment) : notFound('Canary deployment');
+        }
+        if (id !== undefined && sub === undefined && method === 'PATCH') {
+          const p = parse(CanaryPatchSchema, 'canary deployment patch');
+          if ('error' in p) return p.error;
+          const deployment = this.setCanaryAutoRollback(id, p.data.autoRollback);
+          return deployment ? json(deployment) : notFound('Canary deployment');
+        }
+        if (id !== undefined && sub === 'rollback' && method === 'POST') {
+          const p = parse(RollbackRequestSchema, 'rollback');
+          if ('error' in p) return p.error;
+          return json(this.rollbackCanary(id, p.data.reason, actorId));
+        }
+      }
+
+      if (collection === 'deploy-refs' && sub === undefined) {
+        if ((id === undefined || id === 'head') && method === 'GET') {
+          const specId = url.searchParams.get('specId');
+          if (!specId || !rungParam.success) return fail('specId and rung (canary|full) required', 400);
+          if (id === undefined) return json(this.listDeployRefs(specId, rungParam.data));
+          const head = this.deployHead(specId, rungParam.data);
+          return head ? json(head) : notFound('Deploy ref');
+        }
+        if (id === 'live' && method === 'GET') {
+          if (!rungParam.success) return fail('rung (canary|full) required', 400);
+          return json(this.liveRefs(rungParam.data));
+        }
+        if (id === 'rollback' && method === 'POST') {
+          const p = parse(RefRollbackRequestSchema, 'rollback');
+          if ('error' in p) return p.error;
+          const { specId, rung, reason } = p.data;
+          return json(this.state.storage.transactionSync(() => this.rollbackHead(specId, rung, reason, actorId)));
+        }
+      }
+    } catch (e) {
+      if (e instanceof NotFoundError) return fail(e.message, 404, RECORD_NOT_FOUND);
+      if (e instanceof ConflictError) return fail(e.message, 409);
+      throw e;
+    }
+
+    return fail('Not found', 404);
+  }
+
+  /** The head of a (spec, rung) chain, or null before its first move. */
+  deployHead(specId: string, rung: DeployRung): DeployRef | null {
+    const row = this.queryAll(`SELECT * FROM deploy_refs d WHERE d.spec_id = ? AND d.rung = ? AND ${DEPLOY_HEAD}`, specId, rung)[0];
+    return row ? this.rowToDeployRef(row) : null;
+  }
+
+  /** The chain from the head back to the first move (newest first). */
+  listDeployRefs(specId: string, rung: DeployRung): DeployRef[] {
+    const byId = new Map(
+      this.queryAll('SELECT * FROM deploy_refs WHERE spec_id = ? AND rung = ?', specId, rung).map((r) => [
+        r.id as string,
+        this.rowToDeployRef(r),
+      ])
+    );
+    const chain: DeployRef[] = [];
+    for (let ref = this.deployHead(specId, rung); ref; ref = ref.prevRefId ? byId.get(ref.prevRefId) ?? null : null) {
+      chain.push(ref);
+    }
+    return chain;
+  }
+
+  /** Heads that point at a candidate, with the canary deployment each one serves. */
+  liveRefs(rung: DeployRung): LiveRef[] {
+    return this.queryAll(`SELECT * FROM deploy_refs d WHERE d.rung = ? AND d.candidate_id IS NOT NULL AND ${DEPLOY_HEAD}`, rung).map(
+      (r) => {
+        const ref = this.rowToDeployRef(r);
+        return { ref, deployment: rung === 'canary' ? this.canaryForRef(ref) : null };
+      }
+    );
+  }
+
+  /** Record a canary and move the spec's canary ref to it, in one transaction. */
+  deployCanary(request: CanaryDeployRequest, actorId: string): CanaryMoveResult {
+    return this.state.storage.transactionSync(() => {
+      // Ids need no ledger row (like the promotion ledger), but a tombstoned one is gone
+      const candidate = this.queryAll('SELECT deleted_at FROM candidates WHERE id = ?', request.candidateId)[0];
+      if (candidate && candidate.deleted_at != null) throw new NotFoundError(`Candidate ${request.candidateId} not found`);
+      const spec = this.queryAll('SELECT deleted_at FROM specs WHERE id = ?', request.specId)[0];
+      if (spec && spec.deleted_at != null) throw new NotFoundError(`Spec ${request.specId} not found`);
+
+      const ref = this.moveDeployRef(
+        request.specId,
+        'canary',
+        { candidateId: request.candidateId, commitSha: request.commitSha ?? null, workerVersionId: request.workerVersionId },
+        'promote',
+        actorId
+      );
+      const id = generateId();
+      const ts = now();
+      this.run(
+        `INSERT INTO canary_deployments (id, candidate_id, spec_id, status, url, worker_version_id, commit_sha,
+           traffic_percentage, holdout_percentage, auto_rollback, deploy_ref_id, rollback_reason, created_at, updated_at)
+         VALUES (?, ?, ?, 'deployed', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+        id,
+        request.candidateId,
+        request.specId,
+        request.url,
+        request.workerVersionId,
+        request.commitSha ?? null,
+        request.trafficPercentage,
+        request.holdoutPercentage,
+        request.autoRollback === false ? 0 : 1,
+        ref.id,
+        ts,
+        ts
+      );
+      this.syncCanaryStatuses(request.specId);
+      return { deployment: this.getCanaryDeployment(id)!, ref };
+    });
+  }
+
+  /** Roll back a live canary: its spec's canary ref moves to the previous target. */
+  rollbackCanary(id: string, reason: string, actorId: string): CanaryMoveResult {
+    return this.state.storage.transactionSync(() => {
+      const deployment = this.getCanaryDeployment(id);
+      if (!deployment) throw new NotFoundError(`Canary deployment ${id} not found`);
+      const head = this.deployHead(deployment.specId, 'canary');
+      if (deployment.status !== 'deployed' || head?.workerVersionId !== deployment.workerVersionId) {
+        throw new ConflictError(`Canary deployment ${id} is not live (status ${deployment.status})`);
+      }
+      const ref = this.rollbackHead(deployment.specId, 'canary', reason, actorId);
+      return { deployment: this.getCanaryDeployment(id)!, ref };
+    });
+  }
+
+  listCanaryDeployments(candidateId: string): CanaryDeployment[] {
+    return this.queryAll('SELECT * FROM canary_deployments WHERE candidate_id = ? ORDER BY created_at DESC, rowid DESC', candidateId).map(
+      (r) => this.rowToCanaryDeployment(r)
+    );
+  }
+
+  getCanaryDeployment(id: string): CanaryDeployment | null {
+    const row = this.queryAll('SELECT * FROM canary_deployments WHERE id = ?', id)[0];
+    return row ? this.rowToCanaryDeployment(row) : null;
+  }
+
+  setCanaryAutoRollback(id: string, autoRollback: boolean): CanaryDeployment | null {
+    return this.state.storage.transactionSync(() => {
+      if (!this.getCanaryDeployment(id)) return null;
+      this.run('UPDATE canary_deployments SET auto_rollback = ?, updated_at = ? WHERE id = ?', autoRollback ? 1 : 0, now(), id);
+      return this.getCanaryDeployment(id);
+    });
+  }
+
+  /** Insert the new head of (spec, rung). Runs inside transactionSync. */
+  private moveDeployRef(
+    specId: string,
+    rung: DeployRung,
+    target: { candidateId: string | null; commitSha: string | null; workerVersionId: string | null },
+    action: DeployRef['action'],
+    actorId: string
+  ): DeployRef {
+    const head = this.deployHead(specId, rung);
+    const id = generateId();
+    this.run(
+      `INSERT INTO deploy_refs (id, spec_id, rung, candidate_id, commit_sha, worker_version_id, prev_ref_id, action, moved_by, moved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      specId,
+      rung,
+      target.candidateId,
+      target.commitSha,
+      target.workerVersionId,
+      head?.id ?? null,
+      action,
+      actorId,
+      now()
+    );
+    return this.rowToDeployRef(this.queryAll('SELECT * FROM deploy_refs WHERE id = ?', id)[0]);
+  }
+
+  /**
+   * Move the head to the target of head.prev_ref_id (the empty ref when there is
+   * none), mark the candidate's active promotion to this rung rolled back, and
+   * re-derive canary statuses from the new head. Runs inside transactionSync.
+   */
+  private rollbackHead(specId: string, rung: DeployRung, reason: string, actorId: string): DeployRef {
+    const head = this.deployHead(specId, rung);
+    if (!head) throw new NotFoundError(`Deploy ref ${specId}/${rung} not found`);
+    const prevRow = head.prevRefId ? this.queryAll('SELECT * FROM deploy_refs WHERE id = ?', head.prevRefId)[0] : undefined;
+    const prev = prevRow ? this.rowToDeployRef(prevRow) : null;
+    const ref = this.moveDeployRef(
+      specId,
+      rung,
+      { candidateId: prev?.candidateId ?? null, commitSha: prev?.commitSha ?? null, workerVersionId: prev?.workerVersionId ?? null },
+      'rollback',
+      actorId
+    );
+    if (head.candidateId) {
+      this.run(
+        `UPDATE promotions SET stage = 'rolled_back', rollback_reason = ? WHERE candidate_id = ? AND to_rung = ? AND stage = 'active'`,
+        reason,
+        head.candidateId,
+        rung
+      );
+    }
+    if (rung === 'canary') {
+      if (head.workerVersionId) {
+        this.run(
+          `UPDATE canary_deployments SET status = 'rolled_back', rollback_reason = ?, updated_at = ?
+           WHERE spec_id = ? AND worker_version_id = ? AND status = 'deployed'`,
+          reason,
+          now(),
+          specId,
+          head.workerVersionId
+        );
+      }
+      this.syncCanaryStatuses(specId);
+    }
+    return ref;
+  }
+
+  /** The canary the head points at is 'deployed'; any other 'deployed' one is superseded. */
+  private syncCanaryStatuses(specId: string): void {
+    const head = this.deployHead(specId, 'canary');
+    const live = head ? this.canaryForRef(head) : null;
+    const ts = now();
+    this.run(
+      `UPDATE canary_deployments SET status = 'superseded', updated_at = ? WHERE spec_id = ? AND status = 'deployed' AND id IS NOT ?`,
+      ts,
+      specId,
+      live?.id ?? null
+    );
+    if (live && live.status !== 'deployed') {
+      this.run(`UPDATE canary_deployments SET status = 'deployed', updated_at = ? WHERE id = ?`, ts, live.id);
+    }
+  }
+
+  /** Newest canary deployment of the ref's spec and worker version, if any. */
+  private canaryForRef(ref: DeployRef): CanaryDeployment | null {
+    if (!ref.workerVersionId) return null;
+    const row = this.queryAll(
+      'SELECT * FROM canary_deployments WHERE spec_id = ? AND worker_version_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+      ref.specId,
+      ref.workerVersionId
+    )[0];
+    return row ? this.rowToCanaryDeployment(row) : null;
+  }
+
+  private rowToDeployRef(r: Record<string, unknown>): DeployRef {
+    return DeployRefSchema.parse({
+      id: r.id,
+      specId: r.spec_id,
+      rung: r.rung,
+      candidateId: r.candidate_id ?? null,
+      commitSha: r.commit_sha ?? null,
+      workerVersionId: r.worker_version_id ?? null,
+      prevRefId: r.prev_ref_id ?? null,
+      action: r.action,
+      movedBy: r.moved_by,
+      movedAt: r.moved_at,
+    });
+  }
+
+  private rowToCanaryDeployment(r: Record<string, unknown>): CanaryDeployment {
+    return CanaryDeploymentSchema.parse({
+      id: r.id,
+      candidateId: r.candidate_id,
+      specId: r.spec_id,
+      status: r.status,
+      url: r.url,
+      workerVersionId: r.worker_version_id,
+      commitSha: r.commit_sha ?? null,
+      trafficPercentage: r.traffic_percentage,
+      holdoutPercentage: r.holdout_percentage,
+      autoRollback: Number(r.auto_rollback) === 1,
+      deployRefId: r.deploy_ref_id,
+      rollbackReason: r.rollback_reason ?? null,
+      createdAt: new Date(r.created_at as number).toISOString(),
+      updatedAt: new Date(r.updated_at as number).toISOString(),
+    });
+  }
+
   // Fetch from Durable Object
   async fetch(request: Request): Promise<Response> {
     // Promotion mode is key-value state: answer before the SQL schema is touched
@@ -2521,6 +2901,12 @@ export class SpecDO {
       const ledgerRoute = path.match(LEDGER_ROUTE);
       if (ledgerRoute) {
         return await this.handlePromotionLedger(request, url, ledgerRoute[1], ledgerRoute[2], method);
+      }
+
+      // Deploy refs + canary deployments: canary worker and shadow router, over the SPEC_DO binding
+      const deployRoute = path.match(DEPLOY_ROUTE);
+      if (deployRoute) {
+        return await this.handleDeployRefs(request, url, deployRoute[1], deployRoute[2], deployRoute[3], method);
       }
 
       // Extract actor ID from headers

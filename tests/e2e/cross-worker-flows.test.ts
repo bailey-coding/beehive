@@ -31,7 +31,7 @@ type CanaryDeployment = {
   id: string;
   candidateId: string;
   specId: string;
-  status: 'active' | 'deployed' | 'rolled_back' | 'failed';
+  status: 'deployed' | 'superseded' | 'rolled_back';
   url: string;
   trafficPercentage: number;
   createdAt: string;
@@ -110,13 +110,17 @@ async function getDeployment(deploymentId: string): Promise<{ deployment: Canary
   return readJson(response);
 }
 
-// REMOVED: rollbackDeployment - no direct equivalent in canary worker
-// The /rollback endpoint expects a RollbackTrigger body with candidateId, specId, reason, timestamp, metrics
-// but the old /canary/deployments/:id/rollback route used deploymentId in the path.
-// These are different APIs. The test below is commented out.
-// 
-// To properly test rollback, the test would need to construct a valid RollbackTrigger
-// with all required fields: candidateId, specId, reason, timestamp, metrics.
+// Rollback is a Spec DO deploy-ref move: the spec's canary ref goes back to its previous target
+async function rollbackCanary(candidateId: string, specId: string): Promise<{ success?: boolean; deployment: CanaryDeployment; deployRef: { candidateId: string | null; action: string } }> {
+  const response = await fetchWorker(
+    '/rollback',
+    'POST',
+    { candidateId, specId, reason: 'manual', timestamp: new Date().toISOString(), metrics: {} },
+    'canary'
+  );
+  expect(response.status).toBe(200);
+  return readJson(response) as Promise<{ success?: boolean; deployment: CanaryDeployment; deployRef: { candidateId: string | null; action: string } }>;
+}
 
 type SloStatus = {
   healthy: boolean;
@@ -389,21 +393,26 @@ describe('Cross-Worker Flow Tests', () => {
       expect(result.currentMetrics.errorRate).toBeDefined();
     });
 
-  // ==========================================================================
-  // REMOVED: Canary Rollback Test
-  // ==========================================================================
-  // The rollback test was removed because there's no direct equivalent to
-  // /canary/deployments/:id/rollback in the canary worker.
-  // The /rollback endpoint expects a RollbackTrigger body with candidateId, specId,
-  // reason, timestamp, and metrics - but the test doesn't have all this context.
-  // Per Opus agent: don't add routes just to satisfy the tests.
-  // 
-  // To test rollback properly, a test would need to:
-  // 1. Create a deployment
-  // 2. Construct a valid RollbackTrigger with all required fields
-  // 3. POST to /rollback with that body
-  
-  // it('should rollback a canary deployment', async () => { ... })
+    it('should rollback a canary by moving the deploy ref, and the shadow router follows it', async () => {
+      const first = await deployCanary(`${ctx.candidateId}-a`, ctx.specId, 10);
+      const second = await deployCanary(`${ctx.candidateId}-b`, ctx.specId, 10);
+      expect((await getDeployment(first.deployment.id)).deployment.status).toBe('superseded');
+
+      // The shadow router reads the live canary ref from the Spec DO
+      const before = await getShadowConfig();
+      expect(Object.keys(before.splits)).toContain(`${ctx.candidateId}-b`);
+
+      const rolled = await rollbackCanary(`${ctx.candidateId}-b`, ctx.specId);
+      expect(rolled.success).toBe(true);
+      expect(rolled.deployment.status).toBe('rolled_back');
+      expect(rolled.deployRef).toMatchObject({ candidateId: `${ctx.candidateId}-a`, action: 'rollback' });
+      expect((await getDeployment(first.deployment.id)).deployment.status).toBe('deployed');
+      expect((await getDeployment(second.deployment.id)).deployment.status).toBe('rolled_back');
+
+      const after = await getShadowConfig();
+      expect(Object.keys(after.splits)).not.toContain(`${ctx.candidateId}-b`);
+      expect(Object.keys(after.splits)).toContain(`${ctx.candidateId}-a`);
+    });
   });
 
   // ==========================================================================

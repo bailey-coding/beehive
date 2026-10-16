@@ -1,8 +1,27 @@
-import { CanaryConfig, CanaryDeployment, Env } from './types';
+import { DeployRefsClient, type CanaryDeployment } from '../shared/deploy-refs';
+import { CanaryConfig, Env } from './types';
 
-interface PreviewDeploymentResponse {
-  url: string;
-  id: string;
+export const CANARY_ACTOR_ID = 'canary-worker';
+
+// Answer of preview-manager POST /api/preview/canary
+interface CanaryVersionResponse {
+  success: boolean;
+  url?: string;
+  versionId?: string;
+  commitSha?: string | null;
+  error?: string;
+}
+
+/** Typed Spec DO client over the env's SPEC_DO namespace (never a stub in env). */
+export function deployRefsClient(env: Env): DeployRefsClient {
+  const stub = env.SPEC_DO.get(env.SPEC_DO.idFromName('main'));
+  return new DeployRefsClient({
+    fetch: (path, init) => stub.fetch(`https://spec-do.internal${path}`, init),
+  });
+}
+
+export function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
 export class CanaryWorker {
@@ -12,98 +31,81 @@ export class CanaryWorker {
     this.env = env;
   }
 
+  /**
+   * Build a version via the preview manager, then record the canary and move
+   * the spec's canary deploy ref to it (one Spec DO transaction).
+   */
   async deployCanary(config: CanaryConfig): Promise<Response> {
     try {
-      // Validate configuration
       if (!this.validateConfig(config)) {
-        return new Response(JSON.stringify({ error: 'Invalid configuration' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return jsonResponse({ error: 'Invalid configuration' }, 400);
       }
 
-      // Create canary deployment via Preview Manager
       const previewResponse = await this.env.PREVIEW_MANAGER.fetch(
-        'https://preview-manager.internal/api/deploy',
+        'https://preview-manager.internal/api/preview/canary',
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${this.env.API_AUTH_TOKEN || ''}`,
           },
-          body: JSON.stringify({
-            candidateId: config.candidateId,
-            specId: config.specId,
-            isCanary: true,
-            trafficPercentage: config.trafficPercentage
-          })
+          body: JSON.stringify({ candidateId: config.candidateId, specId: config.specId }),
         }
       );
 
       if (!previewResponse.ok) {
         const errorText = await previewResponse.text();
-        throw new Error(`Failed to create preview deployment: ${errorText}`);
+        // 4xx and 501 (no Versions client) pass through; other 5xx are an upstream failure
+        const status = previewResponse.status < 500 || previewResponse.status === 501 ? previewResponse.status : 502;
+        return jsonResponse({ success: false, error: `Failed to build canary version: ${errorText}` }, status);
       }
 
-      const previewData = await previewResponse.json() as PreviewDeploymentResponse;
+      const version = (await previewResponse.json()) as CanaryVersionResponse;
+      if (!version.url || !version.versionId) {
+        return jsonResponse({ success: false, error: 'Preview manager returned no url/versionId' }, 502);
+      }
 
-      // Store canary deployment in Spec DO
-      const deployment: CanaryDeployment = {
-        id: this.generateId(),
-        candidateId: config.candidateId,
-        specId: config.specId,
-        status: 'active',
-        url: previewData.url,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      const specDoId = this.env.SPEC_DO.idFromName('main');
-      const specDoStub = this.env.SPEC_DO.get(specDoId);
-
-      await specDoStub.fetch(
-        'https://spec-do.internal/api/canary-deployments',
+      const moved = await deployRefsClient(this.env).deployCanary(
         {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(deployment)
-        }
+          candidateId: config.candidateId,
+          specId: config.specId,
+          url: version.url,
+          workerVersionId: version.versionId,
+          commitSha: version.commitSha ?? null,
+          trafficPercentage: config.trafficPercentage,
+          holdoutPercentage: config.holdoutPercentage,
+          autoRollback: config.autoRollback,
+        },
+        CANARY_ACTOR_ID
       );
+      if (!moved.ok) {
+        return jsonResponse({ success: false, error: moved.error }, moved.status);
+      }
 
-      // Log to Analytics Engine
-      await this.logAnalytics('canary_deploy', {
+      // The ref has moved; a metrics failure must not report the deploy as failed
+      this.logAnalytics('canary_deploy', {
         candidateId: config.candidateId,
         specId: config.specId,
-        trafficPercentage: config.trafficPercentage
+        trafficPercentage: config.trafficPercentage,
       });
 
-      return new Response(JSON.stringify(deployment), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return jsonResponse({ success: true, deployment: moved.data.deployment, deployRef: moved.data.ref });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return new Response(JSON.stringify({ error: errorMessage }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return jsonResponse({ success: false, error: errorMessage }, 500);
     }
   }
 
-  async getCanaryDeployment(candidateId: string): Promise<CanaryDeployment | null> {
-    const specDoId = this.env.SPEC_DO.idFromName('main');
-    const specDoStub = this.env.SPEC_DO.get(specDoId);
+  async getCanaryDeployment(id: string): Promise<{ status: number; deployment?: CanaryDeployment; error?: string }> {
+    const res = await deployRefsClient(this.env).getCanaryDeployment(id);
+    return res.ok ? { status: 200, deployment: res.data } : { status: res.status, error: res.error };
+  }
 
-    const response = await specDoStub.fetch(
-      `https://spec-do.internal/api/canary-deployments?candidateId=${candidateId}`
-    );
-    
-    if (!response.ok) {
-      return null;
-    }
-
-    const deployments = await response.json() as CanaryDeployment[];
-    return deployments[0] || null;
+  /** The candidate's live canary (status 'deployed'), optionally for one spec, or null. */
+  async getLiveCanary(candidateId: string, specId?: string): Promise<CanaryDeployment | null> {
+    const res = await deployRefsClient(this.env).listCanaryDeployments(candidateId);
+    if (!res.ok) throw new Error(res.error);
+    return res.data.find((d) => d.status === 'deployed' && (!specId || d.specId === specId)) ?? null;
   }
 
   private validateConfig(config: CanaryConfig): boolean {
@@ -113,21 +115,23 @@ export class CanaryWorker {
       config.trafficPercentage > 0 &&
       config.trafficPercentage <= 100 &&
       config.holdoutPercentage >= 0 &&
-      config.holdoutPercentage <= 100
+      config.holdoutPercentage <= 100 &&
+      config.trafficPercentage + config.holdoutPercentage <= 100 &&
+      (config.autoRollback === undefined || typeof config.autoRollback === 'boolean')
     );
   }
 
-  private generateId(): string {
-    return `canary_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-  }
-
-  private async logAnalytics(event: string, data: Record<string, unknown>) {
-    await this.env.ANALYTICS.writeDataPoint({
-      indexes: [{ event }],
-      blobs: [{ event: JSON.stringify(data) }],
-      doubles: Object.entries(data)
-        .filter(([_, v]) => typeof v === 'number')
-        .map(([k, v]) => ({ [k]: v as number }))
-    });
+  private logAnalytics(event: string, data: Record<string, unknown>) {
+    try {
+      this.env.ANALYTICS.writeDataPoint({
+        indexes: [{ event }],
+        blobs: [{ event: JSON.stringify(data) }],
+        doubles: Object.entries(data)
+          .filter(([_, v]) => typeof v === 'number')
+          .map(([k, v]) => ({ [k]: v as number }))
+      });
+    } catch (error) {
+      console.error('[Canary] Failed to write analytics:', error);
+    }
   }
 }

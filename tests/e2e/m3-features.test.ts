@@ -50,7 +50,7 @@ const WORKER_URLS = {
   gateWorkflow: IS_LOCAL ? '' : 'https://beehive-gate-workflow.bz23711.workers.dev',
   sandboxRunner: IS_LOCAL ? '' : 'https://beehive-sandbox-runner.bz23711.workers.dev',
   queueConsumer: IS_LOCAL ? '' : 'https://beehive-queue-consumer.bz23711.workers.dev',
-  previewManager: IS_LOCAL ? '' : 'https://beehive-preview-manager.bz23711.workers.dev',
+  previewManager: IS_LOCAL ? 'http://localhost:8791' : 'https://beehive-preview-manager.bz23711.workers.dev',
   candidateService: IS_LOCAL ? '' : 'https://beehive-candidate-service.bz23711.workers.dev',
   scientistComparator: IS_LOCAL ? '' : 'https://beehive-scientist-comparator.bz23711.workers.dev',
 };
@@ -284,30 +284,9 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       expect(['canary', 'holdout', 'baseline', 'shadow']).toContain(data.type);
     }, 10000);
 
-    // No equivalent route: the shadow router has no traffic-split metrics endpoint
-    // (the old /shadow/splits). Skipped, not deleted; see docs/OPEN-QUESTIONS.md
-    // "2026-10-15: e2e test-side route drift".
-    it.skip('should get traffic split metrics', async () => {
-      const requestBody = {
-        candidateId: 'test-candidate',
-        startTime: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
-        endTime: new Date().toISOString(),
-      };
-
-      const response = await fetch(`${WORKER_URLS.shadowRouter}/shadow/splits`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      expect(response.status).toBe(200);
-      const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect((data as { splits?: unknown }).splits).toBeDefined();
-    }, 10000);
+    // 'should get traffic split metrics' (POST /shadow/splits) was deleted: it asked for
+    // split metrics over a time window, which live in Analytics Engine; the shadow router
+    // only writes them. See docs/OPEN-QUESTIONS.md "Canary deploy and rollback".
   });
 
   describe('M3 Features - Canary', () => {
@@ -319,8 +298,8 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         holdoutPercentage: 5,
       };
 
-      // Route is /deploy-canary. Locally this still fails with 500 until the
-      // preview-manager worker runs (canary deploy/rollback = spine item 2, out of scope).
+      // Locally this needs beehive-preview-manager on 8791 with WORKER_VERSIONS_MODE=stub
+      // (scripts/start-e2e-workers.sh); it answers 501 without a Versions client.
       const response = await fetch(`${WORKER_URLS.canary}/deploy-canary`, {
         method: 'POST',
         headers: {
@@ -355,23 +334,33 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       expect(metrics?.latencyP95).toBeGreaterThanOrEqual(0);
     }, 10000);
 
-    // No auto-rollback config route exists on the canary worker (only POST /rollback,
-    // spine item 2). Left failing on purpose; documented in docs/OPEN-QUESTIONS.md.
+    // The switch belongs to a live canary, so the test deploys one first (it used to
+    // configure a candidate with no canary, which has nothing to switch: 404).
     it.skipIf(shouldSkip)('should verify auto-rollback is configurable', async () => {
       const candidateId = `e2e-rollback-test-${Date.now()}`;
-      const response = await fetch(`${WORKER_URLS.canary}/canary/${candidateId}/auto-rollback`, {
+      const headers = {
+        'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
+        'Content-Type': 'application/json',
+      };
+      const deployResponse = await fetch(`${WORKER_URLS.canary}/deploy-canary`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ enabled: true }),
+        headers,
+        body: JSON.stringify({ candidateId, specId: `e2e-spec-${Date.now()}`, trafficPercentage: 5, holdoutPercentage: 5 }),
       });
+      expect(deployResponse.status).toBe(200);
 
-      expect(response.status).toBe(200);
-      const data = await readJson(response);
-      expect(data.success).toBe(true);
-      expect((data as { enabled?: boolean }).enabled).toBe(true);
+      for (const enabled of [false, true]) {
+        const response = await fetch(`${WORKER_URLS.canary}/canary/${candidateId}/auto-rollback`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ enabled }),
+        });
+
+        expect(response.status).toBe(200);
+        const data = await readJson(response);
+        expect(data.success).toBe(true);
+        expect((data as { enabled?: boolean }).enabled).toBe(enabled);
+      }
     }, 10000);
 
     it.skipIf(shouldSkip)('should handle invalid canary deployment', async () => {

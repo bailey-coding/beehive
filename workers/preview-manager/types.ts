@@ -40,6 +40,9 @@ export interface PreviewManagerEnv {
   
   // Queue for sending preview comparisons
   PREVIEW_SCIENTIST_QUEUE: Queue;
+
+  // 'stub' selects the local Workers Versions stand-in (versions.ts); unset -> 501
+  WORKER_VERSIONS_MODE?: string;
 }
 
 // ============================================================================
@@ -91,6 +94,18 @@ export const DeployPreviewRequestBodySchema = z.object({
   baseCommitSha: z.string().optional(),
   timestamp: z.number().int().positive().optional(),
 });
+
+// Body of POST /api/preview/canary (canary worker). Ids need no ledger row,
+// like the promotion ledger; when the candidate exists its commit is used.
+export const CanaryVersionRequestSchema = z
+  .object({
+    candidateId: z.string().min(1),
+    specId: z.string().min(1),
+    commitSha: z.string().min(1).optional(),
+  })
+  .strict();
+
+export type CanaryVersionRequest = z.infer<typeof CanaryVersionRequestSchema>;
 
 // ============================================================================
 // Queue Message Types

@@ -8,6 +8,7 @@
 
 # Dev vars
 .dev.vars
+.e2e-workers.pids
 .dev.vars.*
 !.dev.vars.example
 

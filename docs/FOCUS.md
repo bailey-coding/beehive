@@ -63,8 +63,10 @@ Completed items are removed, not struck through; history lives in git.*
 - **M1 ledger lifecycle** (tombstones, admin purge route) is implemented on branch
   `agent/spine-item3-ledger-lifecycle`, awaiting review; until it reaches `main`, a production
   wipe still means deleting the worker (`docs/OPS.md`).
-- **Cross-worker e2e tests:** 9 failures remain: SpecDO RPC + relative-URL bug in promotion worker (spine) and missing preview-manager `/api/deploy`,`/api/rollback` routes. Human needed; see OPEN-QUESTIONS 2026-10-15.
-- **m3-features.test.ts** is now gated (local by default; production needs `E2E_ENVIRONMENT=production` AND `E2E_ALLOW_PRODUCTION=1`, human approval per AGENTS.md). Locally it has 22 failing tests that still call the old `/shadow/*`, `/canary/*`, `/promotion/*` routes (see route table in `docs/SETUP.md`); needs the same route/shape fixes as cross-worker-flows.
+- **Local e2e:** 0 failures on branch `agent/canary-rollback` (canary deploy/rollback as
+  Spec DO deploy refs, m6 -> m7), awaiting review; see `docs/SETUP.md` "Local e2e status".
+  Production canary deploys answer 501 until a real Workers Versions client exists
+  (OPEN-QUESTIONS 2026-10-16).
 
 ## Next demo (post-submission)
 

@@ -9,8 +9,14 @@ compatibility_date = "2026-10-09"
 # Cloudflare Artifacts configuration
 [vars]
 
+# Durable Object binding for Spec DO (cross-script): the canary deploy refs
+# (traffic pointer) are read from it on every mirrored request
+[[durable_objects.bindings]]
+name = "SPEC_DO"
+class_name = "SpecDO"
+script_name = "beehive"
+
 # Analytics Engine for per-candidate metrics
-# Note: SPEC_DO binding removed for initial testing
 [[analytics_engine_datasets]]
 binding = "ANALYTICS"
 dataset = "beehive-metrics"

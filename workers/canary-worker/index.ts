@@ -4,14 +4,20 @@
  */
 
 import { authGate } from '../shared/auth';
-import { CanaryWorker } from './canary';
+import { CanaryWorker, CANARY_ACTOR_ID, deployRefsClient, jsonResponse } from './canary';
 import { RollbackManager } from './rollback';
 import { SLOMonitor } from './slo';
 import { handleRollbackQueue } from './queues';
 import type { Env, RollbackTrigger, CanaryConfig } from './types';
 import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types';
 
-const DEFAULT_SPEC_DO_NAME = 'main';
+async function readBody<T>(request: Request): Promise<T | Response> {
+  try {
+    return (await request.json()) as T;
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON body' }, 400);
+  }
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -30,64 +36,75 @@ export default {
       });
     }
 
-    // Initialize services
-    const specDoId = env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME);
-    const specDoStub = env.SPEC_DO.get(specDoId);
-    const canary = new CanaryWorker({ ...env, SPEC_DO: specDoStub } as unknown as Env);
-    const rollback = new RollbackManager({ ...env, SPEC_DO: specDoStub } as unknown as Env);
-    const slo = new SLOMonitor({ ...env, SPEC_DO: specDoStub } as unknown as Env);
+    // Pass env as-is. SPEC_DO must stay the namespace: the classes call
+    // idFromName()/get() on it. A stub in its place turns idFromName() into an
+    // RPC call returning an RpcPromise, and get(RpcPromise) throws DataCloneError.
+    const canary = new CanaryWorker(env);
+    const rollback = new RollbackManager(env);
+    const slo = new SLOMonitor(env);
 
     // Handle canary deployment requests
     if (path === '/deploy-canary' && request.method === 'POST') {
-      try {
-        const config: CanaryConfig = await request.json();
-        return await canary.deployCanary(config);
-      } catch (error) {
-        return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
+      const config = await readBody<CanaryConfig>(request);
+      if (config instanceof Response) return config;
+      return await canary.deployCanary(config);
     }
     
     // Handle rollback requests
     if (path === '/rollback' && request.method === 'POST') {
-      try {
-        const trigger: RollbackTrigger = await request.json();
-        return await rollback.triggerRollback(trigger);
-      } catch (error) {
-        return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
+      const trigger = await readBody<RollbackTrigger>(request);
+      if (trigger instanceof Response) return trigger;
+      return await rollback.triggerRollback(trigger);
     }
     
     // Get SLO status
     if (path === '/slo-status' && request.method === 'GET') {
       return await slo.getSLOStatus();
     }
+
+    // List a candidate's canary deployments (newest first)
+    if (path === '/canary-deployments' && request.method === 'GET') {
+      const candidateId = url.searchParams.get('candidateId');
+      if (!candidateId) return jsonResponse({ error: 'candidateId required' }, 400);
+      const res = await deployRefsClient(env).listCanaryDeployments(candidateId);
+      return res.ok ? jsonResponse({ success: true, deployments: res.data }) : jsonResponse({ error: res.error }, res.status);
+    }
     
-    // Get canary deployment by candidate ID
-    if (path.startsWith('/canary-deployments/') && request.method === 'GET') {
-      const candidateId = path.split('/').pop();
-      if (!candidateId) {
-        return new Response(JSON.stringify({ error: 'Candidate ID required' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
+    // Get canary deployment by deployment ID
+    const deploymentMatch = path.match(/^\/canary-deployments\/([^\/]+)$/);
+    if (deploymentMatch && request.method === 'GET') {
+      const result = await canary.getCanaryDeployment(decodeURIComponent(deploymentMatch[1]));
+      return result.deployment
+        ? jsonResponse({ success: true, deployment: result.deployment })
+        : jsonResponse({ error: result.status === 404 ? 'Deployment not found' : result.error }, result.status);
+    }
+
+    // Auto-rollback switch of a candidate's live canary: GET reads it, POST { enabled } sets it.
+    // A manual POST /rollback always runs; automatic (SLO) triggers respect the switch.
+    const autoRollbackMatch = path.match(/^\/canary\/([^\/]+)\/auto-rollback$/);
+    if (autoRollbackMatch && (request.method === 'GET' || request.method === 'POST')) {
+      const candidateId = decodeURIComponent(autoRollbackMatch[1]);
+      let enabled: boolean | undefined;
+      if (request.method === 'POST') {
+        const body = await readBody<{ enabled?: unknown }>(request);
+        if (body instanceof Response) return body;
+        if (typeof body?.enabled !== 'boolean') return jsonResponse({ error: 'enabled (boolean) is required' }, 400);
+        enabled = body.enabled;
       }
-      const deployment = await canary.getCanaryDeployment(candidateId);
-      if (!deployment) {
-        return new Response(JSON.stringify({ error: 'Deployment not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
-        });
+      let live;
+      try {
+        live = await canary.getLiveCanary(candidateId);
+      } catch (error) {
+        return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 502);
       }
-      return new Response(JSON.stringify(deployment), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      if (!live) return jsonResponse({ error: 'No live canary deployment for this candidate' }, 404);
+      let deployment = live;
+      if (enabled !== undefined) {
+        const res = await deployRefsClient(env).setAutoRollback(live.id, enabled, CANARY_ACTOR_ID);
+        if (!res.ok) return jsonResponse({ error: res.error }, res.status);
+        deployment = res.data;
+      }
+      return jsonResponse({ success: true, candidateId, deploymentId: deployment.id, enabled: deployment.autoRollback });
     }
     
     // Default response - return 404 for unknown routes
@@ -99,14 +116,8 @@ export default {
   
   // Queue consumer for rollback triggers
   async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext): Promise<void> {
-    const specDoId = env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME);
-    const specDoStub = env.SPEC_DO.get(specDoId);
-    
-    // Process rollback queue messages
-    await handleRollbackQueue(
-      batch,
-      { ...env, SPEC_DO: specDoStub } as unknown as Env
-    );
+    // Same rule as fetch: SPEC_DO stays the namespace
+    await handleRollbackQueue(batch, env);
   }
 } satisfies ExportedHandler<Env>;
 

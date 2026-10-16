@@ -13,6 +13,8 @@
 import { authGate } from '../shared/auth';
 import { WorkersBuildsClient } from './builds';
 import { ArtifactsClient } from './artifacts';
+import { workerVersionsClientFor } from './versions';
+import { CanaryVersionRequestSchema } from './types';
 import type {
   PreviewManagerEnv,
   PreviewQueueMessage,
@@ -64,6 +66,12 @@ const previewManagerHandler = {
     // Handle preview deployment requests from queue-consumer
     if (path === '/api/preview/deploy' && request.method === 'POST') {
       return await handleDeployPreviewRequest(request, env);
+    }
+
+    // Build a canary version for a candidate (canary worker). Rollback is not
+    // here: it is a Spec DO deploy-ref move.
+    if (path === '/api/preview/canary' && request.method === 'POST') {
+      return await handleCanaryVersionRequest(request, env);
     }
 
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -246,6 +254,67 @@ async function handleDeployPreviewRequest(
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+}
+
+/**
+ * Build a Workers version of a candidate for canary and return { url, versionId }.
+ * Stateless: the canary worker records the deployment and moves the deploy ref.
+ */
+async function handleCanaryVersionRequest(request: Request, env: PreviewManagerEnv): Promise<Response> {
+  const json = (data: unknown, status = 200) =>
+    new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return json({ success: false, error: 'Invalid JSON body' }, 400);
+  }
+  const parsed = CanaryVersionRequestSchema.safeParse(raw);
+  if (!parsed.success) return json({ success: false, error: parsed.error.message }, 400);
+  const { candidateId, specId } = parsed.data;
+
+  const versions = workerVersionsClientFor(env);
+  if (!versions) {
+    return json({
+      success: false,
+      error: 'Workers Versions client not implemented (unverified API, docs/OPEN-QUESTIONS.md); set WORKER_VERSIONS_MODE=stub for local dev',
+    }, 501);
+  }
+
+  try {
+    const stub = env.SPEC_DO.get(env.SPEC_DO.idFromName(DEFAULT_SPEC_DO_NAME));
+    const res = await stub.fetch(
+      new Request(`https://spec-do.internal/api/candidates/${encodeURIComponent(candidateId)}`, {
+        headers: { 'X-Actor-ID': 'preview-manager' },
+      })
+    );
+    let candidate: Candidate | null = null;
+    if (res.ok) {
+      candidate = ((await res.json()) as { data?: Candidate }).data ?? null;
+    } else if (res.status !== 404) {
+      return json({ success: false, error: `Spec DO candidate lookup failed: ${res.status}` }, 502);
+    }
+    if (candidate && candidate.specId !== specId) {
+      return json({ success: false, error: `Candidate ${candidateId} belongs to spec ${candidate.specId}, not ${specId}` }, 409);
+    }
+
+    const workerName = `${PREVIEW_WORKER_PREFIX}${candidateId}`;
+    const commitSha = candidate?.commitSha ?? parsed.data.commitSha ?? null;
+    const version = await versions.createVersion({ workerName, candidateId, commitSha });
+    return json({
+      success: true,
+      candidateId,
+      specId,
+      workerName,
+      commitSha,
+      url: version.url,
+      versionId: version.versionId,
+      versionsClient: versions.kind,
+    });
+  } catch (error) {
+    return json({ success: false, error: error instanceof Error ? error.message : String(error) }, 500);
   }
 }
 

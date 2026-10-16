@@ -461,3 +461,42 @@ describe('Shadow Router auth gate', () => {
     expect(response.status).toBe(401);
   });
 });
+
+// ============================================================================
+// Canary deploy refs (traffic follows the Spec DO pointer)
+// ============================================================================
+
+import { applyCanaryRefs } from '../config';
+
+describe('Shadow Router - canary deploy refs', () => {
+  const live = (candidateId: string, url: string) => ({
+    ref: { id: `ref-${candidateId}`, specId: 'spec-1', rung: 'canary', candidateId, commitSha: null, workerVersionId: `v-${candidateId}`, prevRefId: null, action: 'promote', movedBy: 'canary-worker', movedAt: 1 },
+    deployment: {
+      id: `d-${candidateId}`, candidateId, specId: 'spec-1', status: 'deployed', url, workerVersionId: `v-${candidateId}`, commitSha: null,
+      trafficPercentage: 10, holdoutPercentage: 5, autoRollback: true, deployRefId: `ref-${candidateId}`, rollbackReason: null,
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+    },
+  });
+  const fetcher = (data: unknown, status = 200) => ({
+    fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify(status === 200 ? { success: true, data } : { success: false, error: 'down' }), { status })),
+  });
+
+  it('adds each live canary as a mirror target with its split, read from /deploy-refs/live', async () => {
+    const specDo = fetcher([live('cand-a', 'https://a.example')]);
+    const config = await applyCanaryRefs(getDefaultShadowConfig(), specDo);
+    expect(specDo.fetch).toHaveBeenCalledWith('/deploy-refs/live?rung=canary', expect.objectContaining({ method: 'GET' }));
+    expect(config.candidatePreviews.get('cand-a')).toBe('https://a.example');
+    expect(config.statsig.splits['cand-a']).toEqual({ canaryPercentage: 10, holdoutPercentage: 5, baselinePercentage: 85 });
+  });
+
+  it('after a rollback (no live ref) the candidate is no longer a target', async () => {
+    const config = await applyCanaryRefs(getDefaultShadowConfig(), fetcher([]));
+    expect(config.candidatePreviews.has('cand-a')).toBe(false);
+  });
+
+  it('adds no canary target when the read fails, and leaves config alone without a binding', async () => {
+    const base = getDefaultShadowConfig();
+    expect((await applyCanaryRefs(base, fetcher(null, 500))).candidatePreviews.size).toBe(base.candidatePreviews.size);
+    expect(await applyCanaryRefs(base, null)).toBe(base);
+  });
+});

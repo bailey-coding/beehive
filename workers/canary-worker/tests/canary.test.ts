@@ -11,6 +11,7 @@ import { CanaryWorker } from '../canary';
 import { RollbackManager } from '../rollback';
 import { SLOMonitor } from '../slo';
 import type { CanaryConfig, CanaryDeployment, RollbackTrigger, Env, SLOStatus } from '../types';
+import type { DeployRef } from '../../shared/deploy-refs';
 
 // ============================================================================
 // Mock Environment
@@ -74,6 +75,51 @@ async function callHandler(
 
 async function readJson(response: Response): Promise<Record<string, unknown>> {
   return response.json() as Promise<Record<string, unknown>>;
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+// Spec DO deploy-ref routes answer { success, data }
+function envelope(data: unknown, status = 200): Response {
+  return json({ success: true, data, timestamp: Date.now() }, status);
+}
+
+function liveDeployment(overrides: Partial<CanaryDeployment> = {}): CanaryDeployment {
+  return {
+    id: 'deployment-001',
+    candidateId: 'candidate-001',
+    specId: 'spec-001',
+    status: 'deployed',
+    url: 'https://preview.example.com',
+    workerVersionId: 'stub-1',
+    commitSha: 'sha1',
+    trafficPercentage: 25,
+    holdoutPercentage: 10,
+    autoRollback: true,
+    deployRefId: 'ref-1',
+    rollbackReason: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+function ref(overrides: Partial<DeployRef> = {}): DeployRef {
+  return {
+    id: 'ref-1',
+    specId: 'spec-001',
+    rung: 'canary',
+    candidateId: 'candidate-001',
+    commitSha: 'sha1',
+    workerVersionId: 'stub-1',
+    prevRefId: null,
+    action: 'promote',
+    movedBy: 'canary-worker',
+    movedAt: Date.now(),
+    ...overrides,
+  };
 }
 
 // ============================================================================
@@ -289,75 +335,42 @@ describe('Rollback Logic', () => {
   });
 
   describe('Rollback Execution', () => {
-    it('should create rollback queue message', async () => {
-      const rollback = new RollbackManager(mockEnv);
-      
-      const trigger: RollbackTrigger = {
-        candidateId: 'candidate-001',
-        specId: 'spec-001',
-        reason: 'manual',
-        timestamp: new Date().toISOString(),
-        metrics: {},
-      };
-      
-      // Mock the Spec DO to return a deployment
-      mockSpecDoStub.fetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve([{
-          id: 'deployment-001',
-          candidateId: 'candidate-001',
-          specId: 'spec-001',
-          status: 'active',
-          url: 'https://preview.example.com',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }]),
-      });
-      
-      // Call triggerRollback
-      const response = await rollback.triggerRollback(trigger);
-      
-      // Verify response
-      expect(response.status).toBeDefined();
+    const trigger = (reason: RollbackTrigger['reason']): RollbackTrigger => ({
+      candidateId: 'candidate-001',
+      specId: 'spec-001',
+      reason,
+      timestamp: new Date().toISOString(),
+      metrics: {},
     });
 
-    it('should include candidate info in rollback message', async () => {
-      const trigger: RollbackTrigger = {
-        candidateId: 'candidate-123',
-        specId: 'spec-456',
-        reason: 'manual',
-        timestamp: new Date().toISOString(),
-        metrics: { latencyP95: 1500, errorRate: 0.05 },
-      };
-      
-      expect(trigger.candidateId).toBe('candidate-123');
-      expect(trigger.specId).toBe('spec-456');
-      expect(trigger.metrics.latencyP95).toBe(1500);
-      expect(trigger.metrics.errorRate).toBe(0.05);
+    it('rolls back by moving the deploy ref in the Spec DO, never via the preview manager', async () => {
+      mockSpecDoStub.fetch
+        .mockResolvedValueOnce(envelope([liveDeployment()]))
+        .mockResolvedValueOnce(envelope({ deployment: liveDeployment({ status: 'rolled_back', rollbackReason: 'manual' }), ref: ref({ action: 'rollback' }) }));
+
+      const response = await new RollbackManager(mockEnv).triggerRollback(trigger('manual'));
+
+      expect(response.status).toBe(200);
+      expect(await readJson(response)).toMatchObject({ success: true, deployment: { status: 'rolled_back' }, deployRef: { action: 'rollback' } });
+      const [url, init] = mockSpecDoStub.fetch.mock.calls[1];
+      expect(url).toBe('https://spec-do.internal/canary-deployments/deployment-001/rollback');
+      expect(JSON.parse(init.body)).toEqual({ reason: 'manual' });
+      expect(mockPreviewManager.fetch).not.toHaveBeenCalled();
+    });
+
+    it('an automatic trigger is refused (409) when auto-rollback is off; a manual one is not', async () => {
+      mockSpecDoStub.fetch.mockResolvedValueOnce(envelope([liveDeployment({ autoRollback: false })]));
+      expect((await new RollbackManager(mockEnv).triggerRollback(trigger('slo_violation'))).status).toBe(409);
+      expect(mockSpecDoStub.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers 404 when the candidate has no live canary', async () => {
+      mockSpecDoStub.fetch.mockResolvedValueOnce(envelope([liveDeployment({ status: 'rolled_back' })]));
+      expect((await new RollbackManager(mockEnv).triggerRollback(trigger('manual'))).status).toBe(404);
     });
   });
 
   describe('State Cleanup', () => {
-    it('should reset canary state after rollback', async () => {
-      const rollback = new RollbackManager(mockEnv);
-      
-      const deployment: CanaryDeployment = {
-        id: 'deployment-001',
-        candidateId: 'candidate-001',
-        specId: 'spec-001',
-        status: 'active',
-        url: 'https://preview.example.com',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      
-      // Update to rolling_back
-      deployment.status = 'rolling_back';
-      deployment.updatedAt = new Date().toISOString();
-      
-      expect(deployment.status).toBe('rolling_back');
-    });
-
     it('should log rollback event', async () => {
       const rollback = new RollbackManager(mockEnv);
       
@@ -448,102 +461,124 @@ describe('Canary Management', () => {
 // ============================================================================
 
 describe('Canary Deployment', () => {
+  const config: CanaryConfig = {
+    candidateId: 'candidate-001',
+    specId: 'spec-001',
+    trafficPercentage: 25,
+    holdoutPercentage: 10,
+    rollbackThreshold: { latencyP95: 1000, errorRate: 0.01 },
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockSpecDoStub.fetch.mockReset();
     mockPreviewManager.fetch.mockReset();
   });
 
-  it('should deploy canary with valid config', async () => {
-    const canary = new CanaryWorker(mockEnv);
-    
-    const config: CanaryConfig = {
-      candidateId: 'candidate-001',
-      specId: 'spec-001',
-      trafficPercentage: 25,
-      holdoutPercentage: 10,
-      rollbackThreshold: { latencyP95: 1000, errorRate: 0.01 },
-    };
-    
-    // Mock preview manager response
-    mockPreviewManager.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({
-        url: 'https://preview.example.com',
-        id: 'preview-001',
-      }),
-    });
-    
-    // Mock spec DO response
-    mockSpecDoStub.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ id: 'deployment-001' }),
-    });
-    
-    const response = await canary.deployCanary(config);
-    
+  it('builds a version via POST /api/preview/canary, then records it and moves the ref in the Spec DO', async () => {
+    mockPreviewManager.fetch.mockResolvedValueOnce(
+      json({ success: true, url: 'https://abc-beehive-candidate-candidate-001.workers.dev', versionId: 'stub-1', commitSha: 'sha1' })
+    );
+    mockSpecDoStub.fetch.mockResolvedValueOnce(envelope({ deployment: liveDeployment(), ref: ref() }, 201));
+
+    const response = await new CanaryWorker(mockEnv).deployCanary(config);
+
     expect(response.status).toBe(200);
+    const body = await readJson(response);
+    expect(body).toMatchObject({ success: true, deployment: { id: 'deployment-001', status: 'deployed' }, deployRef: { id: 'ref-1' } });
+    const [pmUrl, pmInit] = mockPreviewManager.fetch.mock.calls[0];
+    expect(pmUrl).toBe('https://preview-manager.internal/api/preview/canary');
+    expect(JSON.parse(pmInit.body)).toEqual({ candidateId: 'candidate-001', specId: 'spec-001' });
+    expect(pmInit.headers.Authorization).toBe('Bearer test-auth-token');
+    const [doUrl, doInit] = mockSpecDoStub.fetch.mock.calls[0];
+    expect(doUrl).toBe('https://spec-do.internal/canary-deployments');
+    expect(JSON.parse(doInit.body)).toMatchObject({ url: 'https://abc-beehive-candidate-candidate-001.workers.dev', workerVersionId: 'stub-1', commitSha: 'sha1', trafficPercentage: 25, holdoutPercentage: 10 });
   });
 
   it('should return 400 for invalid config', async () => {
-    const canary = new CanaryWorker(mockEnv);
-    
-    const config: CanaryConfig = {
-      candidateId: '', // Invalid - empty
-      specId: 'spec-001',
-      trafficPercentage: 25,
-      holdoutPercentage: 10,
-      rollbackThreshold: { latencyP95: 1000, errorRate: 0.01 },
-    };
-    
-    const response = await canary.deployCanary(config);
-    
+    const response = await new CanaryWorker(mockEnv).deployCanary({ ...config, candidateId: '' });
     expect(response.status).toBe(400);
+    expect(mockPreviewManager.fetch).not.toHaveBeenCalled();
   });
 
-  it('should return 500 on preview manager error', async () => {
-    const canary = new CanaryWorker(mockEnv);
-    
-    const config: CanaryConfig = {
-      candidateId: 'candidate-001',
-      specId: 'spec-001',
-      trafficPercentage: 25,
-      holdoutPercentage: 10,
-      rollbackThreshold: { latencyP95: 1000, errorRate: 0.01 },
-    };
-    
-    // Mock preview manager error
-    mockPreviewManager.fetch.mockResolvedValueOnce({
-      ok: false,
-      text: () => Promise.resolve('Preview manager error'),
-    });
-    
-    const response = await canary.deployCanary(config);
-    
-    expect(response.status).toBe(500);
+  it('returns 502 on a preview manager 5xx and 501 when it has no Versions client, moving no ref', async () => {
+    mockPreviewManager.fetch.mockResolvedValueOnce(new Response('boom', { status: 500 }));
+    expect((await new CanaryWorker(mockEnv).deployCanary(config)).status).toBe(502);
+    mockPreviewManager.fetch.mockResolvedValueOnce(new Response('not implemented', { status: 501 }));
+    expect((await new CanaryWorker(mockEnv).deployCanary(config)).status).toBe(501);
+    expect(mockSpecDoStub.fetch).not.toHaveBeenCalled();
   });
 
-  it('should get canary deployment by candidate ID', async () => {
-    const canary = new CanaryWorker(mockEnv);
-    
-    // Mock spec DO response with deployment
-    mockSpecDoStub.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve([{
-        id: 'deployment-001',
-        candidateId: 'candidate-001',
-        specId: 'spec-001',
-        status: 'active',
-        url: 'https://preview.example.com',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }]),
+  it('relays a Spec DO refusal (e.g. 404 tombstoned candidate)', async () => {
+    mockPreviewManager.fetch.mockResolvedValueOnce(json({ success: true, url: 'https://u', versionId: 'v' }));
+    mockSpecDoStub.fetch.mockResolvedValueOnce(json({ success: false, error: 'Candidate candidate-001 not found' }, 404));
+    const response = await new CanaryWorker(mockEnv).deployCanary(config);
+    expect(response.status).toBe(404);
+  });
+
+  it('GET /canary-deployments/:id reads the deployment by id', async () => {
+    mockSpecDoStub.fetch.mockResolvedValueOnce(envelope(liveDeployment()));
+    const response = await callHandler('/canary-deployments/deployment-001');
+    expect(response.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({ success: true, deployment: { id: 'deployment-001' } });
+    expect(mockSpecDoStub.fetch.mock.calls[0][0]).toBe('https://spec-do.internal/canary-deployments/deployment-001');
+  });
+
+  it('GET /canary-deployments/:id never puts a DO stub where the namespace belongs (DataCloneError regression)', async () => {
+    // A real stub answers any property as an RPC method; get(RpcPromise) then fails to clone.
+    const rpcStub = new Proxy(mockSpecDoStub as Record<string, unknown>, {
+      get(target, prop) {
+        if (prop in target) return target[prop as string];
+        return () => {
+          throw new Error('DataCloneError: Could not serialize object of type "RpcPromise"');
+        };
+      },
     });
-    
-    const deployment = await canary.getCanaryDeployment('candidate-001');
-    
-    expect(deployment).not.toBeNull();
-    expect(deployment?.candidateId).toBe('candidate-001');
+    const namespace = { idFromName: vi.fn().mockReturnValue('do-id'), get: vi.fn().mockReturnValue(rpcStub) };
+    mockSpecDoStub.fetch.mockResolvedValueOnce(envelope(liveDeployment()));
+    const request = createRequest('/canary-deployments/deployment-001', 'GET', undefined, { Authorization: 'Bearer test-auth-token' });
+    // @ts-ignore - mock environment
+    const response = await handler.fetch(request, { ...mockEnv, SPEC_DO: namespace }, mockCtx);
+    expect(response.status).toBe(200);
+    expect(namespace.get).toHaveBeenCalledWith('do-id');
+  });
+
+  it('GET /canary-deployments/:id answers 404 for an unknown deployment', async () => {
+    mockSpecDoStub.fetch.mockResolvedValueOnce(json({ success: false, error: 'Canary deployment not found', code: 'record_not_found' }, 404));
+    expect((await callHandler('/canary-deployments/nope')).status).toBe(404);
+  });
+
+  it('getLiveCanary returns the deployed one of a candidate', async () => {
+    mockSpecDoStub.fetch.mockResolvedValueOnce(
+      envelope([liveDeployment({ id: 'new', status: 'rolled_back' }), liveDeployment({ id: 'old' })])
+    );
+    const live = await new CanaryWorker(mockEnv).getLiveCanary('candidate-001');
+    expect(live?.id).toBe('old');
+  });
+});
+
+describe('Auto-rollback switch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSpecDoStub.fetch.mockReset();
+  });
+
+  it('POST /canary/:candidateId/auto-rollback sets it on the live canary', async () => {
+    mockSpecDoStub.fetch
+      .mockResolvedValueOnce(envelope([liveDeployment()]))
+      .mockResolvedValueOnce(envelope(liveDeployment({ autoRollback: false })));
+    const response = await callHandler('/canary/candidate-001/auto-rollback', 'POST', { enabled: false });
+    expect(response.status).toBe(200);
+    expect(await readJson(response)).toEqual({ success: true, candidateId: 'candidate-001', deploymentId: 'deployment-001', enabled: false });
+    const [url, init] = mockSpecDoStub.fetch.mock.calls[1];
+    expect(url).toBe('https://spec-do.internal/canary-deployments/deployment-001');
+    expect(init.method).toBe('PATCH');
+  });
+
+  it('answers 404 without a live canary and 400 without a boolean', async () => {
+    mockSpecDoStub.fetch.mockResolvedValueOnce(envelope([]));
+    expect((await callHandler('/canary/candidate-001/auto-rollback', 'POST', { enabled: true })).status).toBe(404);
+    expect((await callHandler('/canary/candidate-001/auto-rollback', 'POST', { enabled: 'yes' })).status).toBe(400);
   });
 });
 

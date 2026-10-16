@@ -111,6 +111,27 @@ anonymous, never master). Accounts from before m6 (if any) have no actor and no 
 so they cannot authenticate: revoke them and mint new ones. The old `/api/service-accounts*`
 routes are retired (410).
 
+### Canary deploy and rollback (deploy refs)
+
+Live once the m6 -> m7 migration reaches the deploy flow (the Spec DO migrates on its next
+init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/deploy-refs.ts`.
+
+- **The pointer is the Spec DO `deploy_refs` chain per (spec, rung).** Deploying a canary
+  appends a row whose `prev_ref_id` is the old head; rolling back appends a row pointing at the
+  previous target (the empty ref if there was none). Rolling back twice toggles back. The
+  shadow router reads the live canary heads on every mirrored request, so a rollback takes
+  effect on the next request with no redeploy. History is never rewritten.
+- **Manual rollback:** `POST https://beehive-canary-worker.../rollback` with
+  `{"candidateId","specId","reason":"manual","timestamp","metrics":{}}`. Automatic triggers
+  (`latency`, `error_rate`, `slo_violation`) are refused (409) for a canary whose switch is off:
+  `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
+- **Production canary deploys answer 501** until a real Workers Versions client exists:
+  `WORKER_VERSIONS_MODE` is unset on `beehive-preview-manager`, and the stub (`stub`) is for
+  local dev only. Do not set it in production; it would record versions that were never built.
+- **Deploy order:** `beehive-shadow-router` now binds `SpecDO` from `beehive` (`script_name`),
+  like canary-worker and preview-manager, so deploy `beehive` first.
+- A candidate a live ref points at cannot be tombstoned or purged (409), like an active promotion.
+
 ### Last resort: wipe the whole ledger
 
 **Destructive and irreversible; human approval required.** Prefer tombstone + purge above.

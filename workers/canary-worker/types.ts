@@ -21,7 +21,8 @@ export interface CanaryConfig {
   specId: string;
   trafficPercentage: number; // 1-100
   holdoutPercentage: number; // 0-100
-  rollbackThreshold: {
+  autoRollback?: boolean; // default true: SLO triggers may roll this canary back
+  rollbackThreshold?: {
     latencyP95: number; // milliseconds
     errorRate: number; // 0-1
   };
@@ -51,16 +52,8 @@ export interface SLOStatus {
   };
 }
 
-// Canary deployment result
-export interface CanaryDeployment {
-  id: string;
-  candidateId: string;
-  specId: string;
-  status: 'deploying' | 'active' | 'rolling_back' | 'rolled_back' | 'failed';
-  url: string;
-  createdAt: string;
-  updatedAt: string;
-}
+// Canary deployment record (Spec DO canary_deployments; contract in shared/deploy-refs.ts)
+export type { CanaryDeployment } from '../shared/deploy-refs';
 
 // Queue message type
 export interface QueueMessage {

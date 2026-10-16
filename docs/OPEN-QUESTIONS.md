@@ -154,14 +154,17 @@ Local run of `tests/e2e/cross-worker-flows.test.ts` after route fixes: 11 pass, 
      Fix: prefix `https://spec-do.internal`, as every other caller does.
    Not changed: SpecDO and promotion-train logic are spine. Affects 7 tests (mode, health,
    promote x3, valid/invalid transitions, consistency).
-2. **Canary -> preview-manager routes do not exist.** `canary-worker/canary.ts` calls
+2. **Canary -> preview-manager routes do not exist.** (Resolved on `agent/canary-rollback`:
+   `POST /api/preview/canary`; rollback is a Spec DO deploy-ref move. See "2026-10-16: Canary
+   deploy and rollback".) `canary-worker/canary.ts` calls
    `POST /api/deploy` and `rollback.ts` calls `POST /api/rollback`; `preview-manager` only serves
    `/api/preview/deploy`. Canary deploy/rollback cannot work until a route is designed (it needs a
    real Workers Builds deployment, not just wiring). Affects 2 tests + consistency test.
 3. **Canary -> preview-manager calls sent no bearer token** (fixed: `canary.ts`, `rollback.ts` now
    send `Authorization: Bearer ${API_AUTH_TOKEN}`; queue-consumer already did). The 401 was
    masked in local runs by (4).
-4. **Local service bindings only connect to running `wrangler dev` sessions.** wrangler reports
+4. **Local service bindings only connect to running `wrangler dev` sessions.** (Resolved on
+   `agent/canary-rollback`: the script starts preview-manager on 8791.) wrangler reports
    `[not connected]` and the call fails with `Worker "beehive-preview-manager" not found` unless that
    worker is also running (e.g. `--config workers/preview-manager/wrangler.toml --port 8791
    --inspector-port 9234`, with its own `.dev.vars`). `scripts/start-e2e-workers.sh` does not start it.
@@ -200,8 +203,8 @@ DO migrates only once this reaches `main`. Usage: `docs/OPS.md` "Ledger cleanup"
 - **Tombstone needs only the master token + an `X-Actor-ID`** (no maintainer role); purge and
   `include_deleted` need the role. There is no undelete route (restore = manual SQL).
 - **Active promotion** = a `promotions` row with `stage='active'` or a `promotion_states` row with
-  `status` `pending`/`in_progress`. It blocks both tombstone and purge. `deploy_refs` (item 2) does
-  not exist yet; add it to `activePromotionsAmong` when it does.
+  `status` `pending`/`in_progress`, or (since m7, `agent/canary-rollback`) a candidate that a live
+  `deploy_refs` head points at. It blocks both tombstone and purge.
 - **Purge scope.** Purge works on organizations (prefix or ids) and takes their whole tombstoned
   tree plus dependent rows (issue comments/links, gate verdicts, trials, promotions), which are
   not tombstoned themselves. An org is skipped if any descendant is live or tombstoned too
@@ -212,7 +215,8 @@ DO migrates only once this reaches `main`. Usage: `docs/OPS.md` "Ledger cleanup"
   (`PATCH .../stage`) on a tombstoned row are not refused; claim of a tombstoned spec is (404).
 - **Pre-existing bug found by the tests:** `createTrial` binds `decided_at = null` into a
   `NOT NULL` column, so `POST /api/trials` always fails. Not fixed (trial semantics).
-- **Local e2e environment:** `scripts/start-e2e-workers.sh` health checks use `curl -s` without
+- **Local e2e environment:** (Resolved on `agent/canary-rollback`: health checks use `curl -f`.)
+  `scripts/start-e2e-workers.sh` health checks use `curl -s` without
   `-f`, so a worker answering 503 (missing `workers/<name>/.dev.vars`) is reported healthy. Each
   of shadow-router, canary-worker and promotion-worker needs its own `.dev.vars`.
 
@@ -326,14 +330,83 @@ Resolves "Service accounts: API handler and Spec DO disagree" above. Usage: `doc
   worker answers `mode`). Tournament and merge-train "start" tests now join via `POST /promote`.
   Specs now use a unique `specId` per run (a completed tournament refuses more candidates with 500).
 - **Skipped (`it.skip`):** `should get traffic split metrics` (`/shadow/splits`): the shadow
-  router has no traffic-split metrics route. Needs a route or deletion.
+  router has no traffic-split metrics route. Needs a route or deletion. (Deleted on
+  `agent/canary-rollback`; see "2026-10-16: Canary deploy and rollback".)
 - **Source change (own commit, revertable):** promotion-worker `markAsCompleted` now sets
   `currentRung = targetRung`. Before, a completed promotion kept `currentRung` at the rung it
   started from, so `GET /promote/:id` could not report where a candidate is.
-- **Still failing, out of scope (spine item 2: canary deploy/rollback):**
+- **Still failing, out of scope (spine item 2: canary deploy/rollback):** (All three resolved on
+  `agent/canary-rollback`; see "2026-10-16: Canary deploy and rollback".)
   - `POST /deploy-canary` returns 500 locally: `beehive-preview-manager` is not running
     ("Make sure it is running locally"). `scripts/start-e2e-workers.sh` does not start it.
   - `GET /canary-deployments/:candidateId` throws `DataCloneError: Could not serialize object of
     type "RpcPromise"` (`workers/canary-worker/canary.ts:97`): an RPC stub result is returned
     through another RPC/serialization boundary without awaiting.
   - no auto-rollback config route (`/canary/:id/auto-rollback`) exists; only `POST /rollback`.
+
+---
+
+## 2026-10-16: Canary deploy and rollback (m6 -> m7) (branch `agent/canary-rollback`)
+
+Spine item 2, design as approved: preview-manager `POST /api/preview/canary` builds a version
+(`{url, versionId}`); rollback is a Spec DO ref move; `deploy_refs` is the authority. Contract:
+`workers/shared/deploy-refs.ts`. Usage: `docs/OPS.md` "Canary deploy and rollback". Reaches the
+live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 failed.
+
+- **Migration m6 -> m7, additive:** `CREATE TABLE/INDEX IF NOT EXISTS` for `deploy_refs` and
+  `canary_deployments`, no ALTER, no rebuild. Verified in node:sqlite from m6 and on a real
+  workerd ledger (the local DO from the pre-change baseline run reached m7 on restart).
+- **"Pointer move" is an append (inference, human call).** The head of a (spec, rung) is the row
+  no other row names as `prev_ref_id` (a unique index on `prev_ref_id` keeps the chain linear).
+  Promotion appends a row with the new target; rollback appends a row with the target of
+  `head.prev_ref_id`. So rows are never updated, history is a reflog, promotion and demotion are
+  the same insert, and rolling back twice toggles back (the plan's unit test). Rolling back the
+  first canary moves to the empty ref (`candidate_id` NULL: no canary). Going back more than one
+  step needs a new promotion; there is no "rollback to ref X" route.
+- **Schema beyond the approved column list:** `deploy_refs.action` (`promote`|`rollback`, audit),
+  `rung` CHECK limited to `canary`/`full` (the rungs with traffic), nullable target columns (the
+  empty ref). `canary_deployments` columns are mine (url, version, split, `auto_rollback`,
+  `deploy_ref_id`, status `deployed`/`superseded`/`rolled_back`). No foreign keys, like the
+  promotion ledger: e2e (and the promotion worker) use candidate/spec ids with no ledger row.
+  A tombstoned candidate or spec is refused (404).
+- **Workers Versions API: unverified, stubbed, not called.** Open: can a version be created from
+  a candidate commit, and can a deployment be switched to it instantly? Nothing here depends on
+  it. `workers/preview-manager/versions.ts` has only `StubWorkerVersionsClient` (`stub-<uuid>`,
+  URL `<prefix>-<worker>.<subdomain>.workers.dev`), selected by `WORKER_VERSIONS_MODE=stub`
+  (set by `scripts/start-e2e-workers.sh`). Unset (production) the route answers **501**, so
+  production canary deploys fail closed until a real client is written and verified. Rollback
+  calls no Cloudflare API at all: traffic follows the ref.
+- **Where traffic follows the ref.** shadow-router now binds `SpecDO` and, per mirrored request,
+  reads `GET /deploy-refs/live?rung=canary`: each live canary becomes a mirror target at its
+  version URL with its split. If the read fails, no canary target is added. No cache (a cache
+  would delay a rollback); one DO read per request. **Not built anywhere:** serving real user
+  traffic from the canary. The shadow router still discards candidate responses, so "canary %
+  live" is today "canary % mirrored". `/statsig/classify` is unchanged (unknown candidates get
+  the default split).
+- **Not written (needs promotion-worker changes, out of scope):** nothing writes a `full`-rung
+  ref (the promotion worker's canary -> full completion would), so the Artifacts
+  `refs/heads/production` provenance mirror is not written either. The rollback's
+  `promotions.stage='rolled_back'` update matches only `promotions` rows (`to_rung` = the rung,
+  `stage='active'`); the promotion worker does not write that table, so it usually matches
+  nothing. A toggle-back does not restore `stage='active'`.
+- **Lifecycle:** a candidate that a live head points at counts as active: tombstone and purge are
+  refused (409), like an active promotion. Non-head `deploy_refs` / `canary_deployments` rows of
+  a purged candidate are kept (no FKs), like the promotion ledger.
+- **`DataCloneError` on `GET /canary-deployments/:id` (fixed):** `canary-worker/index.ts` replaced
+  `env.SPEC_DO` (the namespace) with a DO stub. On a stub every property is an RPC method, so
+  `idFromName()` returned an `RpcPromise` and `get(RpcPromise)` could not clone it. The worker now
+  passes `env` unchanged (fetch and queue). Regression test in `canary-worker/tests/canary.test.ts`.
+  The route now takes a deployment id (as the e2e test always did); `?candidateId=` lists.
+- **Auto-rollback route: the test was wrong, the route was missing.** Added
+  `GET/POST /canary/:candidateId/auto-rollback` (`{enabled}`) on the candidate's live canary. The
+  test configured a candidate that had no canary, which has nothing to switch (404); it now
+  deploys first. Semantics (inference): a manual `POST /rollback` always runs; `latency`,
+  `error_rate`, `slo_violation` triggers get 409 when the switch is off. `SLOMonitor.getMetric`
+  still returns 0, so no automatic rollback fires yet.
+- **Response shapes aligned to the e2e tests:** `POST /deploy-canary` answers
+  `{success, deployment, deployRef}` with `status: 'deployed'` (was a bare record with `active`);
+  `rolling_back` is gone (the DO move is atomic).
+- **`/shadow/splits` e2e test deleted:** it asked for split metrics over a time window. Those live
+  in Analytics Engine, which the router only writes; serving them would mean new read semantics.
+- **Not fixed:** the canary worker's `ANALYTICS.writeDataPoint` payload puts objects in `blobs`
+  (pre-existing). It is now wrapped so a metrics failure cannot fail a deploy after the ref moved.

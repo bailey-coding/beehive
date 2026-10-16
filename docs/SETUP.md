@@ -29,6 +29,7 @@ printf 'API_AUTH_TOKEN=test-auth-token-12345\n' > .dev.vars
 printf 'API_AUTH_TOKEN=test-auth-token-12345\n' > workers/shadow-router/.dev.vars
 printf 'API_AUTH_TOKEN=test-auth-token-12345\n' > workers/canary-worker/.dev.vars
 printf 'API_AUTH_TOKEN=test-auth-token-12345\n' > workers/promotion-worker/.dev.vars
+printf 'API_AUTH_TOKEN=test-auth-token-12345\n' > workers/preview-manager/.dev.vars
 ```
 
 The token must match `tests/e2e/config.ts` (`local.apiToken`).
@@ -41,28 +42,35 @@ The token must match `tests/e2e/config.ts` (`local.apiToken`).
 | shadow-router | 8788 | `npx wrangler dev --config workers/shadow-router/wrangler.toml --port 8788 --inspector-port 9230` |
 | canary-worker | 8789 | `npx wrangler dev --config workers/canary-worker/wrangler.toml --port 8789 --inspector-port 9231` |
 | promotion-worker | 8790 | `npx wrangler dev --config workers/promotion-worker/wrangler.toml --port 8790 --inspector-port 9232` |
+| preview-manager | 8791 | `npx wrangler dev --config workers/preview-manager/wrangler.toml --port 8791 --inspector-port 9234 --var WORKER_VERSIONS_MODE:stub` |
 
 Give each its own `--inspector-port`, otherwise concurrent `wrangler dev` runs collide.
+`scripts/start-e2e-workers.sh` starts all five in order (beehive first: it hosts the Spec DO,
+and local bindings only connect to running `wrangler dev` sessions). It refuses to start if
+any of 8787-8791 is taken, and a worker counts as healthy only on a 2xx (`curl -f`; a missing
+`.dev.vars` answers 503). PIDs go to `.e2e-workers.pids`; `scripts/stop-e2e-workers.sh` stops
+only those processes and their children. `WORKER_VERSIONS_MODE=stub` makes preview-manager's
+canary route mint a local stub version (`stub-<uuid>`) instead of answering 501; nothing calls
+the Cloudflare API.
 Then `npm run test:e2e:local`. Production is unreachable from tests unless `E2E_ENVIRONMENT=production` and `E2E_ALLOW_PRODUCTION=1` are both set (human approval required, AGENTS.md). Despite older docs, local e2e makes real HTTP calls and does
 not use mocks; with no workers running you get `ECONNREFUSED`.
 
 ### Local e2e status
 
-Verified 2026-10-16 with `scripts/start-e2e-workers.sh` and `npm run test:e2e:local`: 44 passed,
-7 skipped, **6 failed** (`ledger-lifecycle` and `service-tokens` pass). The 6 failures are all canary deploy /
-rollback (spine item 2, not built) and need the `preview-manager` worker, which the local
-script does not start:
-
-- `cross-worker-flows`: canary deploy, canary deployment status, candidate-ID consistency
-- `m3-features`: canary deploy, auto-rollback config (no such route), complete workflow (deploys a canary)
+Verified 2026-10-16 (branch `agent/canary-rollback`) with `scripts/start-e2e-workers.sh` and
+`npm run test:e2e:local`: **52 passed, 5 skipped, 0 failed**. The 5 skips are the m3 health
+checks for workers with no local port (gate-workflow, sandbox-runner, queue-consumer,
+candidate-service, scientist-comparator). Before canary deploy/rollback
+(spine item 2) it was 44 passed, 7 skipped, 6 failed.
 
 Worker routes the tests use (the old `/canary/*`, `/shadow/*`, `/promotion/*` prefixes do not exist):
 
 | Worker | Routes |
 |---|---|
 | api (8787) | `/health` and `/api/health` answer `{ success, data: { status, version, timestamp, checks } }` |
-| shadow-router (8788) | `/health`, `/statsig/config`, `/statsig/presets`, `/statsig/preset/:name`, `POST /statsig/classify` |
-| canary-worker (8789) | `/health`, `/slo-status`, `POST /deploy-canary`, `POST /rollback`, `GET /canary-deployments/:candidateId` (currently 500, see `docs/OPEN-QUESTIONS.md`) |
+| shadow-router (8788) | `/health`, `/statsig/config` (`splits` includes each live canary, read from the Spec DO deploy refs), `/statsig/presets`, `/statsig/preset/:name`, `POST /statsig/classify` |
+| canary-worker (8789) | `/health`, `/slo-status`, `POST /deploy-canary` (answers `{ success, deployment, deployRef }`), `POST /rollback` (a deploy-ref move), `GET /canary-deployments/:deploymentId`, `GET /canary-deployments?candidateId=`, `GET/POST /canary/:candidateId/auto-rollback` |
+| preview-manager (8791) | `/health`, `POST /api/preview/deploy`, `POST /api/preview/canary` (answers `{ url, versionId }`; 501 unless `WORKER_VERSIONS_MODE=stub`) |
 | promotion-worker (8790) | `/health` (and `/promotion/health`), `GET/POST /mode` (answers `{ success, mode }`), `POST /promote`, `GET /promote/:candidateId` (ledger row under `state`), `/tournament[/status\|/list]`, `/merge-train[/status\|/list]`, `/merge/retry`, `/merge/rollback`, `/stats`, `/promote/:id/retry`, `/promote/:id/cancel` |
 
 There is no `/tournament/start` or `/merge-train/start`: tournaments and trains are joined

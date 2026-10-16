@@ -258,3 +258,66 @@ describe('Preview Manager - Configuration', () => {
     });
   });
 });
+
+// ============================================================================
+// Canary version route (POST /api/preview/canary)
+// ============================================================================
+
+describe('Preview Manager - canary version', () => {
+  const auth = { Authorization: 'Bearer test-auth-token' };
+
+  function envWithCandidate(candidate: Record<string, unknown> | null, status = candidate ? 200 : 404, mode?: string) {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(candidate ? { success: true, data: candidate } : { success: false, error: 'Not found' }), { status })
+    );
+    const env = {
+      ...baseMockEnv,
+      WORKER_VERSIONS_MODE: mode,
+      WORKERS_SUBDOMAIN: 'acct',
+      SPEC_DO: { ...baseMockEnv.SPEC_DO, get: vi.fn().mockReturnValue({ fetch }) } as any,
+    };
+    return { env, fetch };
+  }
+
+  async function post(env: PreviewManagerEnv, body: unknown) {
+    return handler.fetch(createRequest('/api/preview/canary', 'POST', body, auth), env, mockCtx);
+  }
+
+  it('answers 501 without a Versions client (no stub outside local dev, no Cloudflare API call)', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch');
+    const { env } = envWithCandidate(null);
+    const res = await post(env, { candidateId: 'c1', specId: 's1' });
+    expect(res.status).toBe(501);
+    expect(globalFetch).not.toHaveBeenCalled();
+    globalFetch.mockRestore();
+  });
+
+  it('stub mode returns a fresh { url, versionId } and the candidate commit', async () => {
+    const { env } = envWithCandidate({ id: 'c1', specId: 's1', commitSha: 'abc123' }, 200, 'stub');
+    const res = await post(env, { candidateId: 'c1', specId: 's1' });
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(body).toMatchObject({ success: true, candidateId: 'c1', specId: 's1', commitSha: 'abc123', versionsClient: 'stub', workerName: 'beehive-candidate-c1' });
+    expect(body.versionId).toMatch(/^stub-[0-9a-f-]{36}$/);
+    expect(body.url).toMatch(/^https:\/\/[0-9a-f]{8}-beehive-candidate-c1\.acct\.workers\.dev$/);
+    const again = await readJson(await post(env, { candidateId: 'c1', specId: 's1' }));
+    expect(again.versionId).not.toBe(body.versionId);
+  });
+
+  it('accepts a candidate with no ledger row (commit from the request), refuses a spec mismatch (409)', async () => {
+    const missing = envWithCandidate(null, 404, 'stub');
+    const res = await post(missing.env, { candidateId: 'c9', specId: 's1', commitSha: 'feed' });
+    expect(res.status).toBe(200);
+    expect((await readJson(res)).commitSha).toBe('feed');
+
+    const other = envWithCandidate({ id: 'c1', specId: 'other', commitSha: 'x' }, 200, 'stub');
+    expect((await post(other.env, { candidateId: 'c1', specId: 's1' })).status).toBe(409);
+  });
+
+  it('answers 400 on a bad body and 502 when the Spec DO lookup fails', async () => {
+    const { env } = envWithCandidate(null, 404, 'stub');
+    expect((await post(env, { candidateId: '' })).status).toBe(400);
+    const broken = envWithCandidate(null, 500, 'stub');
+    expect((await post(broken.env, { candidateId: 'c1', specId: 's1' })).status).toBe(502);
+  });
+});

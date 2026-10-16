@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
-import { SCHEMA_SQL, SERVICE_TOKENS_SQL } from '../schema-inline';
+import { SCHEMA_SQL, SERVICE_TOKENS_SQL, DEPLOY_REFS_SQL } from '../schema-inline';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
 import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 
@@ -380,7 +380,7 @@ describe('m5 -> m6 migration', () => {
     spec = makeSpecDo(restarted);
     store = restarted;
     await spec.init();
-    expect(version(restarted)).toBe('m6');
+    expect(version(restarted)).toBe('m7');
     expect(columns(restarted, 'service_accounts')).toContain('actor_id');
     expect(columns(restarted, 'service_tokens').length).toBeGreaterThan(0);
     expect(raw.prepare("SELECT actor_id, token_hash FROM service_accounts WHERE id = 'legacy'").get()).toEqual({
@@ -392,13 +392,14 @@ describe('m5 -> m6 migration', () => {
     expect((await verify(hash)).status).toBe(200);
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m6');
+    expect(version(restarted)).toBe('m7');
     expect(count("SELECT COUNT(*) AS n FROM service_accounts WHERE name = 'after-migration'")).toBe(1);
   });
 
   it('schema.sql and schema-inline.ts agree byte for byte', () => {
     const file = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
     expect(file.startsWith(SCHEMA_SQL)).toBe(true);
-    expect(file.endsWith(SERVICE_TOKENS_SQL)).toBe(true);
+    // m7 (deploy refs) is the last section, right after m6
+    expect(file.endsWith(SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL)).toBe(true);
   });
 });

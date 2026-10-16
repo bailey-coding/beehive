@@ -1,45 +1,36 @@
 #!/bin/bash
-# Stop all Beehive workers started for local e2e testing
+# Stop the Beehive workers started by scripts/start-e2e-workers.sh
 # Usage: ./scripts/stop-e2e-workers.sh
+#
+# Stops only the PIDs recorded in .e2e-workers.pids and their descendants
+# (npx -> sh -> wrangler -> workerd), never other wrangler/workerd processes.
 
-set -e
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PID_FILE="$REPO_ROOT/.e2e-workers.pids"
 
-echo "Stopping all Beehive workers..."
-
-# Kill wrangler processes
-if pkill -f wrangler 2>/dev/null; then
-    echo "  ✓ Sent termination signal to wrangler processes"
-else
-    echo "  - No wrangler processes found"
+if [ ! -s "$PID_FILE" ]; then
+    echo "- No .e2e-workers.pids file; nothing started by start-e2e-workers.sh to stop"
+    exit 0
 fi
 
-# Kill workerd processes (Cloudflare Workers runtime)
-if pkill -f workerd 2>/dev/null; then
-    echo "  ✓ Sent termination signal to workerd processes"
-else
-    echo "  - No workerd processes found"
-fi
+# Children first, so no workerd is left orphaned
+kill_tree() {
+    local pid="$1" child
+    for child in $(ps -o pid= --ppid "$pid" 2>/dev/null); do
+        kill_tree "$child"
+    done
+    kill "$pid" 2>/dev/null || true
+}
 
-# Give processes time to terminate
-sleep 3
-
-# Verify all processes are stopped
-WRANGLER_COUNT=$(ps aux | grep -v grep | grep wrangler | wc -l)
-WORKERD_COUNT=$(ps aux | grep -v grep | grep workerd | wc -l)
-
-if [ "$WRANGLER_COUNT" -eq 0 ] && [ "$WORKERD_COUNT" -eq 0 ]; then
-    echo "✓ All workers stopped successfully"
-else
-    echo "✗ Some processes may still be running:"
-    if [ "$WRANGLER_COUNT" -gt 0 ]; then
-        echo "  - $WRANGLER_COUNT wrangler process(es)"
-        ps aux | grep wrangler | grep -v grep
+echo "Stopping Beehive e2e workers..."
+while read -r pid; do
+    [ -n "$pid" ] || continue
+    if kill -0 "$pid" 2>/dev/null; then
+        kill_tree "$pid"
+        echo "  ✓ Stopped PID $pid and its children"
+    else
+        echo "  - PID $pid already gone"
     fi
-    if [ "$WORKERD_COUNT" -gt 0 ]; then
-        echo "  - $WORKERD_COUNT workerd process(es)"
-        ps aux | grep workerd | grep -v grep
-    fi
-    echo ""
-    echo "Try killing with: pkill -9 -f wrangler; pkill -9 -f workerd"
-    exit 1
-fi
+done < "$PID_FILE"
+
+rm -f "$PID_FILE"

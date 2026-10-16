@@ -428,3 +428,53 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_service_tokens_hash ON service_tokens(toke
 CREATE INDEX IF NOT EXISTS idx_service_tokens_account ON service_tokens(account_id);
 CREATE INDEX IF NOT EXISTS idx_service_accounts_actor ON service_accounts(actor_id);
 CREATE INDEX IF NOT EXISTS idx_service_accounts_name ON service_accounts(name);
+
+-- ============================================================================
+-- DEPLOY REFS + CANARY DEPLOYMENTS (m6 -> m7, additive)
+-- deploy_refs is the traffic pointer per (spec_id, rung) and the source of
+-- truth for rollback. Rows are append-only: every move inserts a row whose
+-- prev_ref_id is the head it replaces (the unique index keeps the chain
+-- linear), and the head is the row no other row points back to. Promotion
+-- moves the head to a new target, rollback to the target of head.prev_ref_id;
+-- candidate_id NULL is the empty ref (no candidate on that rung). The Artifacts
+-- production ref is a provenance mirror, never read here. canary_deployments
+-- records each canary and the ref row it created. Ids are not foreign keys,
+-- like the promotion ledger. Timestamps are epoch milliseconds.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS deploy_refs (
+  id TEXT PRIMARY KEY,
+  spec_id TEXT NOT NULL,
+  rung TEXT NOT NULL CHECK(rung IN ('canary', 'full')),
+  candidate_id TEXT,
+  commit_sha TEXT,
+  worker_version_id TEXT,
+  prev_ref_id TEXT,
+  action TEXT NOT NULL CHECK(action IN ('promote', 'rollback')),
+  moved_by TEXT NOT NULL,
+  moved_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_refs_prev ON deploy_refs(prev_ref_id);
+CREATE INDEX IF NOT EXISTS idx_deploy_refs_spec_rung ON deploy_refs(spec_id, rung);
+CREATE INDEX IF NOT EXISTS idx_deploy_refs_candidate ON deploy_refs(candidate_id);
+
+CREATE TABLE IF NOT EXISTS canary_deployments (
+  id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL,
+  spec_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('deployed', 'superseded', 'rolled_back')),
+  url TEXT NOT NULL,
+  worker_version_id TEXT NOT NULL,
+  commit_sha TEXT,
+  traffic_percentage REAL NOT NULL,
+  holdout_percentage REAL NOT NULL,
+  auto_rollback INTEGER NOT NULL DEFAULT 1,
+  deploy_ref_id TEXT NOT NULL,
+  rollback_reason TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_canary_deployments_candidate ON canary_deployments(candidate_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_canary_deployments_spec ON canary_deployments(spec_id, status);

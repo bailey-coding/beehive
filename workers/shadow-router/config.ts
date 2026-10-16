@@ -4,6 +4,7 @@
  */
 
 import type { TrafficSplitConfig, ShadowConfig } from './types';
+import { DeployRefsClient, type SpecDoFetcher } from '../shared/deploy-refs';
 
 // ============================================================================
 // Statsig Traffic Split Presets
@@ -193,4 +194,42 @@ export function normalizeTrafficSplitConfig(config: TrafficSplitConfig): Traffic
  */
 export function getPresetByName(name: string): TrafficSplitConfig {
   return STATSIG_PRESETS[name.toLowerCase()] || DEFAULT_STATSIG_CONFIG;
+}
+
+// ============================================================================
+// Deploy refs (the canary traffic pointer)
+// ============================================================================
+
+/**
+ * Overlay the live canary deploy refs from the Spec DO: each candidate a canary
+ * ref points at is mirrored to at its version URL, with the deployment's split.
+ * The ref is the only source of canary targets, so a rollback (ref move) takes
+ * the candidate out on the next request. Without a SPEC_DO binding the static
+ * config is returned unchanged; if the read fails, no canary target is added.
+ */
+export async function applyCanaryRefs(config: ShadowConfig, specDo: SpecDoFetcher | null): Promise<ShadowConfig> {
+  if (!specDo) return config;
+  let live;
+  try {
+    live = await new DeployRefsClient(specDo).liveRefs('canary');
+  } catch (error) {
+    live = { ok: false as const, status: 500, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (!live.ok) {
+    console.error('[Shadow] Deploy refs unavailable, no canary targets:', live.error);
+    return config;
+  }
+
+  const candidatePreviews = new Map(config.candidatePreviews);
+  const splits = { ...config.statsig.splits };
+  for (const { ref, deployment } of live.data) {
+    if (!ref.candidateId || !deployment) continue;
+    candidatePreviews.set(ref.candidateId, deployment.url);
+    splits[ref.candidateId] = normalizeTrafficSplitConfig({
+      canaryPercentage: deployment.trafficPercentage,
+      holdoutPercentage: deployment.holdoutPercentage,
+      baselinePercentage: 0,
+    });
+  }
+  return { ...config, candidatePreviews, statsig: { ...config.statsig, splits } };
 }

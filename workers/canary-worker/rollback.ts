@@ -1,6 +1,13 @@
-import { RollbackTrigger, CanaryDeployment, Env } from './types';
+import { RollbackTrigger, Env } from './types';
+import { CanaryWorker, CANARY_ACTOR_ID, deployRefsClient, jsonResponse } from './canary';
 import type { Message } from '@cloudflare/workers-types';
 
+/**
+ * Rollback is a ref operation (AGENTS.md rule 7): the Spec DO moves the spec's
+ * canary deploy ref back to its previous target, in one transaction with the
+ * deployment and promotion status updates. Nothing is redeployed; the shadow
+ * router follows the ref.
+ */
 export class RollbackManager {
   private env: Env;
 
@@ -10,84 +17,36 @@ export class RollbackManager {
 
   async triggerRollback(trigger: RollbackTrigger): Promise<Response> {
     try {
-      // Get current canary deployment
-      const canaryWorker = new (await import('./canary')).CanaryWorker(this.env);
-      const deployment = await canaryWorker.getCanaryDeployment(trigger.candidateId);
-      
+      if (!trigger?.candidateId || !trigger.reason) {
+        return jsonResponse({ error: 'candidateId and reason are required' }, 400);
+      }
+
+      // specId 'all' comes from SLOMonitor's aggregate violations
+      const specId = trigger.specId && trigger.specId !== 'all' ? trigger.specId : undefined;
+      const deployment = await new CanaryWorker(this.env).getLiveCanary(trigger.candidateId, specId);
       if (!deployment) {
-        return new Response(JSON.stringify({ error: 'Canary deployment not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return jsonResponse({ error: 'Canary deployment not found' }, 404);
       }
 
-      // Update deployment status
-      deployment.status = 'rolling_back';
-      deployment.updatedAt = new Date().toISOString();
-
-      const specDoId = this.env.SPEC_DO.idFromName('main');
-      const specDoStub = this.env.SPEC_DO.get(specDoId);
-
-      await specDoStub.fetch(
-        `https://spec-do.internal/api/canary-deployments/${deployment.id}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(deployment)
-        }
-      );
-
-      // Trigger rollback via Preview Manager
-      const rollbackResponse = await this.env.PREVIEW_MANAGER.fetch(
-        'https://preview-manager.internal/api/rollback',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.env.API_AUTH_TOKEN || ''}`,
-          },
-          body: JSON.stringify({
-            candidateId: trigger.candidateId,
-            reason: trigger.reason
-          })
-        }
-      );
-
-      if (!rollbackResponse.ok) {
-        const errorText = await rollbackResponse.text();
-        throw new Error(`Failed to trigger preview rollback: ${errorText}`);
+      // Automatic triggers respect the per-canary switch; a manual rollback always runs
+      if (trigger.reason !== 'manual' && !deployment.autoRollback) {
+        return jsonResponse({ error: 'Auto-rollback is disabled for this canary', deployment }, 409);
       }
 
-      // Update status to rolled_back
-      deployment.status = 'rolled_back';
-      await specDoStub.fetch(
-        `https://spec-do.internal/api/canary-deployments/${deployment.id}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(deployment)
-        }
-      );
+      const moved = await deployRefsClient(this.env).rollbackCanary(deployment.id, trigger.reason, CANARY_ACTOR_ID);
+      if (!moved.ok) {
+        return jsonResponse({ success: false, error: moved.error }, moved.status);
+      }
 
-      // Log rollback to Analytics Engine
-      await this.logAnalytics('canary_rollback', {
+      this.logAnalytics('canary_rollback', {
         candidateId: trigger.candidateId,
         reason: trigger.reason
       });
 
-      return new Response(JSON.stringify({ 
-        success: true, 
-        deployment: deployment 
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return jsonResponse({ success: true, deployment: moved.data.deployment, deployRef: moved.data.ref });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return new Response(JSON.stringify({ error: errorMessage }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return jsonResponse({ error: errorMessage }, 500);
     }
   }
 
@@ -97,10 +56,7 @@ export class RollbackManager {
       return await this.triggerRollback(body);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return new Response(JSON.stringify({ error: errorMessage }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return jsonResponse({ error: errorMessage }, 500);
     }
   }
 
@@ -113,13 +69,17 @@ export class RollbackManager {
     }
   }
 
-  private async logAnalytics(event: string, data: Record<string, unknown>) {
-    await this.env.ANALYTICS.writeDataPoint({
-      indexes: [{ event }],
-      blobs: [{ event: JSON.stringify(data) }],
-      doubles: Object.entries(data)
-        .filter(([_, v]) => typeof v === 'number')
-        .map(([k, v]) => ({ [k]: v as number }))
-    });
+  private logAnalytics(event: string, data: Record<string, unknown>) {
+    try {
+      this.env.ANALYTICS.writeDataPoint({
+        indexes: [{ event }],
+        blobs: [{ event: JSON.stringify(data) }],
+        doubles: Object.entries(data)
+          .filter(([_, v]) => typeof v === 'number')
+          .map(([k, v]) => ({ [k]: v as number }))
+      });
+    } catch (error) {
+      console.error('[Canary] Failed to write analytics:', error);
+    }
   }
 }
