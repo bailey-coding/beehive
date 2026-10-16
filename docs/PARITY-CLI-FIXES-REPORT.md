@@ -3,7 +3,7 @@
 **Branch:** `agent/parity-cli-fixes`
 **Date:** 2026-10-16
 **Tasks:** 3, 4, 5 from docs/FEATURE-PARITY.md
-**Commits:** b313d42 (Task 3), 4dd279a (Task 4), 94c960e (Task 5), 1615483 (docs)
+**Commits:** b313d42 (Task 3), 4dd279a (Task 4), 94c960e (Task 5), 1615483 (docs), d7e4444 (cleanup)
 
 See docs/OPEN-QUESTIONS.md section "CLI Parity Fixes - Implementation Findings" for detailed findings.
 
