@@ -39,6 +39,9 @@ retries), so a bad deploy is loud rather than half-migrated.
 1. Before deploying: confirm `schema_version` is `m3` on the live DO (a read-only
    `SELECT value FROM metadata WHERE key = 'schema_version'` through the maintainer's usual
    access; do not guess).
+   Also list what is there, `SELECT type, name FROM sqlite_master ORDER BY type, name`, and
+   compare it with `workers/spec-do/schema.sql`: the live ledger once carried a `service_accounts`
+   table of another design (`docs/OPEN-QUESTIONS.md` 2026-10-16) that stopped the m6 step.
 2. Confirm these queues exist, because nothing creates them any more (the old GitHub
    workflow did): `canary-rollback-triggers`, `promotion-events`,
    `preview-scientist-comparisons`, `beehive-scientist-comparisons`. Create any missing one
@@ -47,6 +50,8 @@ retries), so a bad deploy is loud rather than half-migrated.
    `BEEHIVE_LOCAL_DEV`) unset in production.
 4. Deploy `beehive` first. Check its logs for `Migration to m[4-8] failed`; any hit means the
    ledger stopped at the previous version and requests are failing until it is fixed.
+   `service_accounts has an unexpected shape`: that table is not this design's; if it is empty,
+   `DROP TABLE service_accounts` (the next request recreates it), otherwise migrate its rows first.
 5. Deploy `beehive-preview-manager` before `beehive-canary-worker`, then the remaining workers
    (shadow-router, promotion-worker, scientist-comparator, candidate-service, gate-workflow,
    queue-consumer, sandbox-runner). Deploy `beehive-promotion-worker` right after `beehive`:

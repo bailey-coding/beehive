@@ -877,6 +877,16 @@ export class SpecDO {
    */
   private applyServiceTokens(): void {
     if (!this.db) throw new Error('Database not initialized');
+    // CREATE TABLE IF NOT EXISTS keeps a table of another design as it is, and the first index on a
+    // missing column then fails with a cryptic error. Name the cause instead; never drop it here.
+    const have = this.queryAll(`PRAGMA table_info(service_accounts)`).map((c) => c.name as string);
+    const missing = ['token_hash', 'token_salt', 'is_active'].filter((c) => !have.includes(c));
+    if (have.length && missing.length) {
+      throw new Error(
+        `service_accounts has an unexpected shape (columns: ${have.join(', ')}; missing: ${missing.join(', ')}). ` +
+          `If the table is empty, DROP TABLE service_accounts and the next request recreates it; otherwise migrate its rows first.`
+      );
+    }
     this.db.exec(SERVICE_ACCOUNTS_SQL);
     const existing = new Set(this.queryAll(`PRAGMA table_info(service_accounts)`).map((c) => c.name as string));
     if (!existing.has('actor_id')) {

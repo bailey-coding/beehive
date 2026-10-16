@@ -470,3 +470,32 @@ Resolves the review follow-up on the one-DO-read-per-mirrored-request cost. Code
   candidates get mirrored traffic, not what users see.
 - **e2e:** the rollback e2e (`cross-worker-flows.test.ts`) now polls for up to 8s instead of reading the
   router once; it passes in about 10s.
+
+---
+
+## Live ledger had a `service_accounts` table of another design (2026-10-16)
+
+**Status**: Worked around on the live ledger; origin unknown. The m3 -> m8 deploy stopped at m5
+with `Migration to m6 failed: no such column: is_active at offset 75`, and every Spec DO request failed
+until the table was dropped by hand.
+
+**Finding**: `service_accounts` existed on the live Spec DO with a shape no commit in this repo
+creates: `actor_id TEXT NOT NULL UNIQUE`, `revoked_at`, `scopes TEXT NOT NULL`, no `token_hash`,
+`token_salt` or `is_active`, and only an `idx_service_accounts_org` index (created without
+`IF NOT EXISTS`). It held 0 rows. `CREATE TABLE IF NOT EXISTS` left it alone, so the m6 step's
+`CREATE INDEX ... ON service_accounts(is_active)` failed. Every migration test builds the table
+from this repo's own SQL, so none could see it. The fail-loud migration did its job: m4 and m5 are
+additive and had committed, m6 did not advance, nothing was half-migrated.
+
+**Fix on the ledger**: `DROP TABLE service_accounts` (empty, and nothing referenced it yet, since
+`service_tokens` is created by m6). The next request ran m6 -> m8.
+
+**In the code**: `applyServiceTokens` now checks the existing table's columns first and throws
+`service_accounts has an unexpected shape (columns: ...; missing: ...)` with the way out, instead of
+the index error. It never drops anything itself: a table with rows needs a human to migrate them.
+Regression test: `workers/spec-do/tests/migrations.test.ts`.
+
+**Open**: how the table got there. The deploy goes through the Cloudflare Artifacts repo, which
+may have carried an earlier design, or the table was created by hand. Unverified. Other tables on a
+ledger that predates this repo's history may differ the same way; `docs/OPS.md` step 1 now asks to
+list `sqlite_master` before deploying.

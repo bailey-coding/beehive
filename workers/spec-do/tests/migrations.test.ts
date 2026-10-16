@@ -60,6 +60,32 @@ describe('fresh ledger', () => {
   });
 });
 
+describe('service_accounts of another design (seen on the live ledger, 2026-10-16)', () => {
+  const LEGACY = `CREATE TABLE service_accounts (
+    id TEXT PRIMARY KEY, actor_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL UNIQUE, scopes TEXT NOT NULL,
+    organization_id TEXT, description TEXT, created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
+    revoked_at INTEGER, FOREIGN KEY (actor_id) REFERENCES actors(id), FOREIGN KEY (organization_id) REFERENCES organizations(id))`;
+
+  it('stops m6 with a message naming the table and the way out; dropping the empty table lets it finish', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const old = await populatedM3();
+    old.raw.exec('DROP TABLE service_accounts');
+    old.raw.exec(LEGACY);
+    const restarted = makeSqliteState(old.raw, old.kv);
+    const spec = makeSpecDo(restarted);
+
+    await expect(spec.init()).rejects.toThrow(/service_accounts has an unexpected shape.*missing: token_hash, token_salt, is_active/s);
+    // m4 and m5 are additive and committed; m6 did not advance, and nothing was dropped
+    expect(version(restarted)).toBe('m5');
+    expect(tables(restarted)).toContain('service_accounts');
+
+    restarted.raw.exec('DROP TABLE service_accounts');
+    await spec.init();
+    expect(version(restarted)).toBe('m8');
+    expect(tables(restarted)).toContain('service_tokens');
+  });
+});
+
 describe('failing migration step', () => {
   it('makes init() throw, leaves db unset, and a retry succeeds once the cause is removed', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
