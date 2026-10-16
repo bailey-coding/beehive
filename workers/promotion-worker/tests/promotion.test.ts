@@ -619,19 +619,27 @@ describe('Spec DO promotion ledger wiring', () => {
 
   it('tournament mode: a second candidate completes the tournament via PATCH', async () => {
     const { spec, env } = await ledgerEnv('tournament');
+    // The winner is recorded on a real candidate row (PATCH /api/candidates/:id/stage)
+    const agent = spec.createActor('agent', 'agent-1').id;
+    const org = spec.createOrganization('org', 'artifacts');
+    const repo = spec.createRepository('repo', org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'ns');
+    const s = spec.createSpec('spec', 'd', 'contract', [], org.id, agent);
+    const c1 = spec.createCandidate(s.id, repo.id, 'sha1', 'base', agent);
+    const c2 = spec.createCandidate(s.id, repo.id, 'sha2', 'base', agent);
     mockShadowRouter.fetch.mockResolvedValue(
-      new Response(JSON.stringify({ winner: 'cand-2', score: 90 }), { status: 200 })
+      new Response(JSON.stringify({ winner: c2.id, score: 90 }), { status: 200 })
     );
     const worker = new PromotionWorker(env);
 
-    await worker.promoteCandidate(request('cand-1'));
-    const response = await worker.promoteCandidate(request('cand-2'));
+    await worker.promoteCandidate(request(c1.id, s.id));
+    const response = await worker.promoteCandidate(request(c2.id, s.id));
     expect(response.status).toBe(200);
 
-    const [tournament] = spec.listTournaments('spec-1');
+    const [tournament] = spec.listTournaments(s.id);
     expect(tournament.status).toBe('completed');
     expect(tournament.winner).toBeDefined();
     expect(tournament.candidates).toHaveLength(2);
+    expect(spec.getCandidate(tournament.winner!)?.stage).toBe('passed_train');
   });
 
   it('merge-train mode: records the train and the merged car in the DO', async () => {

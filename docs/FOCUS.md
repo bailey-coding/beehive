@@ -16,39 +16,33 @@ Completed items are removed, not struck through; history lives in git.*
   ledger lifecycle), CI-only workflow, service tokens, canary deploy/rollback as Spec DO refs, review
   fixes, Spec DO internal auth, shadow-router ref cache, and the ledger compare-and-swap with the
   tournament state machine (schema m8).
-- The maintainer pushed to the Artifacts repo; the live Spec DO reached m8 after the empty legacy
-  `service_accounts` table was dropped (`docs/OPEN-QUESTIONS.md` 2026-10-16).
-- Local checks on `main`: 552 unit tests pass, typecheck clean, local e2e 56 passed / 5 skipped / 0 failed.
+- Production: all ten workers have a code deployment from 2026-10-16 21:58 UTC (the zod build fix unblocked
+  `beehive-promotion-worker`, `-canary-worker` and `-shadow-router`); the Spec DO is on m8 after the empty legacy
+  `service_accounts` table was dropped (`docs/OPEN-QUESTIONS.md` 2026-10-16); `bailey-coding` is the only
+  maintainer; `scripts/prod-health.sh` passes.
+- Local checks on `main` (with promotion-routes-fix merged): 559 unit tests pass, typecheck clean; local e2e
+  56 passed / 5 skipped / 0 failed (run on the routes branch).
 
 ## Next session, first (needs the maintainer)
 
-1. **Push the zod build fix, then redeploy and verify.** `beehive-promotion-worker`, `beehive-canary-worker` and
-   `beehive-shadow-router` failed to build on the 2026-10-16 push (`Could not resolve "zod"`: shared files import it,
-   a per-worker install cannot reach them) and still run 2026-10-15 code; the old promotion worker sends no
-   `X-Beehive-Internal`, so its Spec DO calls answer 401. The fix (a `postinstall` per worker) is verified in clean
-   copies. After `git push cf main`, `wrangler deployments list --name <worker>` must show a code deployment newer than
-   the push for all ten (`prod-health.sh` cannot see this). Details: `docs/OPEN-QUESTIONS.md` 2026-10-16.
-2. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
+1. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
    command output); switch that remote to a credential helper.
-3. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
+2. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys, and how to roll back when all ten
    workers deploy at once.
+3. Heads-up (promotion-routes-fix): tournament mode now records the winner on a real candidate and fails the
+   tournament when that is rejected, so a request naming a candidate the Spec DO does not know ends `failed`.
+   That is intended. The branch is merged but not yet deployed: push, then `git push cf main`, then check
+   `wrangler deployments list` shows a code deployment newer than the push for all ten.
 
 ## Decide first
 
-1. **Promotion worker calls Spec DO routes that do not exist** (`GET`/`PATCH /candidates/:id`,
-   `POST /candidates/:id/rollback`; the DO serves `/api/candidates/...`). Tournament metrics always fall
-   back to defaults, and winners and rollbacks are never recorded on the candidate. Spine decision: which
-   route and fields carry a rung change (`/api/candidates/:id/stage` exists), what a rollback writes, and
-   whether the DO owns `current_rung` (`docs/OPEN-QUESTIONS.md` 2026-10-16).
-2. **Edge `/health` on `beehive` answers `durableObject: ok` without calling the DO.** Make it call the DO
+1. **Edge `/health` on `beehive` answers `durableObject: ok` without calling the DO.** Make it call the DO
    and return 503 on failure, so monitors see a stuck ledger (`docs/OPEN-QUESTIONS.md` 2026-10-16).
-3. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
+2. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
 
 ## Cleanup
 
-- `agent/ocap-answers` (two docs commits recording the OCAP-CI decisions) is on `origin` but not in `main`:
-  cherry-pick, then archive its workspace.
 - Ten merged local `agent/*` branches (and their `origin` copies) can be deleted once nothing needs them.
 - `scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers (ArtifactFS is not built).
 - The 5 skipped local e2e tests are m3 health checks for workers with no local port.
