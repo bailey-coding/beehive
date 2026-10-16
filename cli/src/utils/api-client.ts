@@ -35,9 +35,6 @@ import {
   CreateIssueRequest,
   EntityHistoryResponse,
   EntityType,
-  StateDumpResponse,
-  QueueStatus,
-  ArtifactsStatus,
 } from '../types/api';
 
 // Custom error class for API errors
@@ -565,62 +562,7 @@ export class BeehiveClient {
     );
   }
 
-  // ============================================================================
-  // DEBUG ENDPOINTS (Custom for CLI)
-  // Note: These may need to be added to the API worker
-  // ============================================================================
 
-  /**
-   * Get full state dump from Spec DO
-   * This is a debug endpoint that aggregates all entities
-   */
-  async getStateDump(options?: RequestOptions): Promise<StateDumpResponse> {
-    return this.request<StateDumpResponse>('GET', '/debug/state-dump', undefined, options);
-  }
-
-  /**
-   * Get queue status
-   */
-  async getQueueStatus(queueName: string, options?: RequestOptions): Promise<QueueStatus> {
-    return this.request<QueueStatus>('GET', `/debug/queues/${queueName}/status`, undefined, options);
-  }
-
-  /**
-   * List all queues
-   */
-  async listQueues(options?: RequestOptions): Promise<QueueStatus[]> {
-    return this.request<QueueStatus[]>('GET', '/debug/queues', undefined, options);
-  }
-
-  /**
-   * Get Artifacts status
-   */
-  async getArtifactsStatus(options?: RequestOptions): Promise<ArtifactsStatus> {
-    return this.request<ArtifactsStatus>('GET', '/debug/artifacts/status', undefined, options);
-  }
-
-  /**
-   * List Artifacts repositories
-   */
-  async listArtifactsRepos(options?: RequestOptions): Promise<{ repositories: unknown[] }> {
-    return this.request<{ repositories: unknown[] }>('GET', '/debug/artifacts/repos', undefined, options);
-  }
-
-  /**
-   * Test claim workflow
-   */
-  async testClaimWorkflow(
-    specId: string,
-    dryRun?: boolean,
-    options?: RequestOptions
-  ): Promise<ClaimSpecResponse> {
-    return this.request<ClaimSpecResponse>(
-      'POST',
-      `/debug/claim-test/${specId}`,
-      { dryRun },
-      options
-    );
-  }
 
   // ============================================================================
   // RAW REQUEST (for extensibility)

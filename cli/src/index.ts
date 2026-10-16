@@ -222,6 +222,9 @@ function registerPhase1Commands(
 /**
  * Register Phase 2/3 entity commands using the factory
  * This automatically creates CRUD commands for new entities only
+ * 
+ * NOTE: workflow, deployment, and environment groups have been removed
+ * as they reference routes that do not exist in the API
  */
 function registerGeneratedCommands(
   program: Command,
@@ -229,9 +232,9 @@ function registerGeneratedCommands(
     action: (state: CliState, ...args: T) => Promise<void> | void
   ) => (opts: GlobalOptions, ...args: T) => Promise<void>
 ): void {
-  // Phase 2 and Phase 3 entities - only these are auto-registered
-  // Phase 1 entities are manually registered above
-  const phase2And3Entities = ['workflow', 'deployment', 'environment'] as const;
+  // Phase 2 and Phase 3 entities - currently none are auto-registered
+  // as workflow, deployment, and environment have been removed
+  const phase2And3Entities: readonly [] = [];
   
   for (const entityName of phase2And3Entities) {
     const entityConfig = ENTITIES[entityName];
