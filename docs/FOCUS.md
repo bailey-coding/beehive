@@ -22,13 +22,11 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Next session, first (needs the maintainer)
 
-1. `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh` passes all 11 checks; skim the `beehive` logs for
-   `Migration to m[4-8] failed`.
-2. Confirm `beehive-promotion-worker` runs commit `00a1f52` or later (the tolerant winner PATCH). Older
+1. Confirm `beehive-promotion-worker` runs commit `00a1f52` or later (the tolerant winner PATCH). Older
    builds end every tournament `failed` at the last step.
-3. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
+2. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
    command output); switch that remote to a credential helper.
-4. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
+3. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys, and how to roll back when all ten
    workers deploy at once.
 
