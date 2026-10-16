@@ -276,12 +276,23 @@ export async function enforceServiceCapability(
 
 ---
 
+## Decisions (2026-10-16, maintainer accepted)
+
+1. **Token lifetime**: 1 hour for CI, 24 hours for development. Set per token as `expires_at` at
+   mint time, with a server-side maximum so a caller cannot mint a long-lived CI token.
+2. **Token storage**: Beehive is the source of truth. It stores only the SHA-256 hash, mints,
+   revokes and expires; the plaintext is shown once and the consumer keeps it (for CI, in its
+   own secret store).
+3. **Capability inheritance**: None. Capabilities are explicit only.
+4. **Cross-service dependencies**: Service A's token includes a capability to invoke Service B.
+   Deferred until a resource-naming scheme exists; nothing in the repo needs it yet.
+
 ## Open Questions
 
-1. **Token lifetime**: How long should service tokens be valid? (Proposal: 1 hour for CI, 24 hours for development)
-2. **Token storage**: Where should service tokens be stored? (GitHub secrets per-service, or Beehive-managed)
-3. **Capability inheritance**: Should services inherit capabilities from their repo? (Proposal: No, explicit only)
-4. **Cross-service dependencies**: How to handle services that need to call each other? (Proposal: Service A's token includes capability to invoke Service B)
+1. **Path scoping enforcement**: Artifacts tokens are per repo with a read/write scope and a TTL;
+   there is no path-scoped token and no documented ArtifactFS path scoping. `path_prefix` in the
+   token structure above would have to be enforced by Beehive (for example gate-workflow
+   rejecting diffs outside the prefix). Not yet confirmed by the maintainer.
 
 ---
 
