@@ -379,7 +379,8 @@ live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 fail
 - **Where traffic follows the ref.** shadow-router now binds `SpecDO` and, per mirrored request,
   reads `GET /deploy-refs/live?rung=canary`: each live canary becomes a mirror target at its
   version URL with its split. If the read fails, no canary target is added. No cache (a cache
-  would delay a rollback); one DO read per request. **Not built anywhere:** serving real user
+  would delay a rollback); one DO read per request. (Superseded the same day: a short in-isolate
+  cache was added, see "2026-10-16: Shadow-router live-ref cache".) **Not built anywhere:** serving real user
   traffic from the canary. The shadow router still discards candidate responses, so "canary %
   live" is today "canary % mirrored". `/statsig/classify` is unchanged (unknown candidates get
   the default split).
@@ -444,3 +445,28 @@ purge, role grant and tombstone. Usage and secrets: `docs/OPS.md` "Spec DO inter
   `tests/e2e/probe` (port 8792, local-only, 404 unless `BEEHIVE_LOCAL_DEV=1`, never deployed): a
   worker with only the tier-1 token, used by `tests/e2e/spec-do-auth.test.ts`. The script now checks
   port 8792 as well.
+
+---
+
+## 2026-10-16: Shadow-router live-ref cache (branch `agent/do-auth-and-cache`)
+
+Resolves the review follow-up on the one-DO-read-per-mirrored-request cost. Code:
+`workers/shadow-router/live-refs-cache.ts`, used by `applyCanaryRefs` (`config.ts`).
+
+- **Bound on rollback visibility: `LIVE_REFS_CACHE_TTL_MS` (default 5000).** A ref move in the Spec DO
+  shows up in an isolate within one TTL of the move; each isolate caches on its own, so the bound holds
+  across the fleet. Promotion has the same delay (a new canary starts being mirrored up to one TTL late).
+- **DO read failure:** the last good value is served while its age (from when that read started) is
+  under 2 x TTL, then `applyCanaryRefs` returns the static config (no canary targets), as before the
+  cache. So the worst-case staleness of an old pointer is **2 x TTL = 10s by default**, only during a DO
+  outage. A rolled-back candidate can therefore keep receiving mirrored traffic for up to that long.
+- **Never cache an error:** a failed read stores nothing and the next request retries (no negative cache,
+  so an outage costs one in-flight read at a time, not one per request).
+- **Concurrent requests share one in-flight read** (also when it fails).
+- **`LIVE_REFS_CACHE_TTL_MS=0` disables** everything (no cache, no dedupe, no stale value): the old
+  behaviour. Unset, empty, negative or non-numeric -> 5000; values above 60000 are clamped to 60000.
+  Not set in `wrangler.toml`; add it as a worker var to change it.
+- **Mirror-only:** the router still discards candidate responses, so this delay affects which
+  candidates get mirrored traffic, not what users see.
+- **e2e:** the rollback e2e (`cross-worker-flows.test.ts`) now polls for up to 8s instead of reading the
+  router once; it passes in about 10s.

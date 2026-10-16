@@ -211,6 +211,11 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
 - **Deploy order:** `beehive-shadow-router` now binds `SpecDO` from `beehive` (`script_name`),
   like canary-worker and preview-manager, so deploy `beehive` first.
 - A candidate a live ref points at cannot be tombstoned or purged (409), like an active promotion.
+- **Shadow-router caches the live pointers** (in-isolate, `LIVE_REFS_CACHE_TTL_MS`, default
+  5000 ms, `0` disables, max 60000). A rollback (or promotion) reaches the router within one TTL;
+  if the Spec DO read fails the last value is served for at most one more TTL (worst case 2 x TTL =
+  10s by default), then the router falls back to the static config. Errors are never cached and
+  concurrent requests share one read. Details: `docs/OPEN-QUESTIONS.md` "Shadow-router live-ref cache".
 
 ### Last resort: wipe the whole ledger
 

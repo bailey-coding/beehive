@@ -393,14 +393,26 @@ describe('Cross-Worker Flow Tests', () => {
       expect(result.currentMetrics.errorRate).toBeDefined();
     });
 
-    it('should rollback a canary by moving the deploy ref, and the shadow router follows it', async () => {
+    // The shadow router caches the live canary pointers for LIVE_REFS_CACHE_TTL_MS (default 5s,
+    // workers/shadow-router/live-refs-cache.ts): a ref move shows up there within that bound, not instantly.
+    const SHADOW_FOLLOWS_WITHIN_MS = 5000 + 3000;
+    async function shadowSplitsUntil(done: (candidateIds: string[]) => boolean): Promise<string[]> {
+      const deadline = Date.now() + SHADOW_FOLLOWS_WITHIN_MS;
+      for (;;) {
+        const ids = Object.keys((await getShadowConfig()).splits);
+        if (done(ids) || Date.now() > deadline) return ids;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+
+    it('should rollback a canary by moving the deploy ref, and the shadow router follows it within the cache TTL', async () => {
       const first = await deployCanary(`${ctx.candidateId}-a`, ctx.specId, 10);
       const second = await deployCanary(`${ctx.candidateId}-b`, ctx.specId, 10);
       expect((await getDeployment(first.deployment.id)).deployment.status).toBe('superseded');
 
       // The shadow router reads the live canary ref from the Spec DO
-      const before = await getShadowConfig();
-      expect(Object.keys(before.splits)).toContain(`${ctx.candidateId}-b`);
+      const before = await shadowSplitsUntil((ids) => ids.includes(`${ctx.candidateId}-b`));
+      expect(before).toContain(`${ctx.candidateId}-b`);
 
       const rolled = await rollbackCanary(`${ctx.candidateId}-b`, ctx.specId);
       expect(rolled.success).toBe(true);
@@ -409,10 +421,10 @@ describe('Cross-Worker Flow Tests', () => {
       expect((await getDeployment(first.deployment.id)).deployment.status).toBe('deployed');
       expect((await getDeployment(second.deployment.id)).deployment.status).toBe('rolled_back');
 
-      const after = await getShadowConfig();
-      expect(Object.keys(after.splits)).not.toContain(`${ctx.candidateId}-b`);
-      expect(Object.keys(after.splits)).toContain(`${ctx.candidateId}-a`);
-    });
+      const after = await shadowSplitsUntil((ids) => !ids.includes(`${ctx.candidateId}-b`) && ids.includes(`${ctx.candidateId}-a`));
+      expect(after).not.toContain(`${ctx.candidateId}-b`);
+      expect(after).toContain(`${ctx.candidateId}-a`);
+    }, 30000);
   });
 
   // ==========================================================================

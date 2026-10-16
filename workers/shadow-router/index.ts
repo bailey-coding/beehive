@@ -27,6 +27,7 @@ import {
   applyCanaryRefs
 } from './config';
 import type { SpecDoFetcher } from '../shared/deploy-refs';
+import { getLiveRefsCache } from './live-refs-cache';
 
 // Type for the Analytics Engine binding
 declare const ANALYTICS: AnalyticsEngine;
@@ -54,7 +55,7 @@ async function getShadowConfig(env: any): Promise<ShadowConfig> {
   // Production uses production worker URLs; either way the canary targets
   // come from the Spec DO deploy refs (the traffic pointer)
   const base = isLocal ? getLocalDevShadowConfig() : getProductionShadowConfig();
-  return applyCanaryRefs(base, specDoFetcher(env));
+  return applyCanaryRefs(base, specDoFetcher(env), getLiveRefsCache(env));
 }
 
 export function specDoFetcher(env: any): SpecDoFetcher | null {

@@ -83,6 +83,8 @@ export interface ShadowRouterEnv {
   SPEC_DO?: any;
   // Tier-1 secret for Spec DO calls (workers/shared/spec-do-auth.ts); no admin token on this worker
   SPEC_DO_INTERNAL_TOKEN?: string;
+  // Live canary pointer cache TTL in ms (default 5000, 0 disables; workers/shadow-router/live-refs-cache.ts)
+  LIVE_REFS_CACHE_TTL_MS?: string;
   ANALYTICS?: AnalyticsEngine;
   SCIENTIST_QUEUE?: Queue;
   PREVIEW_SCIENTIST_QUEUE?: Queue;

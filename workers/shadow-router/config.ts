@@ -4,7 +4,8 @@
  */
 
 import type { TrafficSplitConfig, ShadowConfig } from './types';
-import { DeployRefsClient, type SpecDoFetcher } from '../shared/deploy-refs';
+import { DeployRefsClient, type LiveRef, type SpecDoFetcher } from '../shared/deploy-refs';
+import type { LiveRefsCache } from './live-refs-cache';
 
 // ============================================================================
 // Statsig Traffic Split Presets
@@ -204,25 +205,34 @@ export function getPresetByName(name: string): TrafficSplitConfig {
  * Overlay the live canary deploy refs from the Spec DO: each candidate a canary
  * ref points at is mirrored to at its version URL, with the deployment's split.
  * The ref is the only source of canary targets, so a rollback (ref move) takes
- * the candidate out on the next request. Without a SPEC_DO binding the static
- * config is returned unchanged; if the read fails, no canary target is added.
+ * the candidate out once the cached read expires (LIVE_REFS_CACHE_TTL_MS, default 5s;
+ * 0 reads every time). Without a SPEC_DO binding the static config is returned
+ * unchanged; if the read fails, no canary target is added (after at most one extra
+ * TTL of the last good value).
  */
-export async function applyCanaryRefs(config: ShadowConfig, specDo: SpecDoFetcher | null): Promise<ShadowConfig> {
+export async function applyCanaryRefs(
+  config: ShadowConfig,
+  specDo: SpecDoFetcher | null,
+  cache?: LiveRefsCache
+): Promise<ShadowConfig> {
   if (!specDo) return config;
-  let live;
-  try {
-    live = await new DeployRefsClient(specDo).liveRefs('canary');
-  } catch (error) {
-    live = { ok: false as const, status: 500, error: error instanceof Error ? error.message : String(error) };
-  }
-  if (!live.ok) {
-    console.error('[Shadow] Deploy refs unavailable, no canary targets:', live.error);
-    return config;
-  }
+  const load = async (): Promise<LiveRef[] | null> => {
+    try {
+      const result = await new DeployRefsClient(specDo).liveRefs('canary');
+      if (result.ok) return result.data;
+      console.error('[Shadow] Deploy refs unavailable, no canary targets:', result.error);
+    } catch (error) {
+      console.error('[Shadow] Deploy refs unavailable, no canary targets:', error instanceof Error ? error.message : String(error));
+    }
+    return null;
+  };
+  // With a cache the read is shared and short-lived (workers/shadow-router/live-refs-cache.ts)
+  const live = cache ? await cache.get(load) : await load();
+  if (!live) return config;
 
   const candidatePreviews = new Map(config.candidatePreviews);
   const splits = { ...config.statsig.splits };
-  for (const { ref, deployment } of live.data) {
+  for (const { ref, deployment } of live) {
     if (!ref.candidateId || !deployment) continue;
     candidatePreviews.set(ref.candidateId, deployment.url);
     splits[ref.candidateId] = normalizeTrafficSplitConfig({
