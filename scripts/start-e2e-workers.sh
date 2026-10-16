@@ -7,7 +7,7 @@
 # - Shadow router on port 8788
 # - Canary worker on port 8789
 # - Promotion worker on port 8790
-# - Preview manager on port 8791 (canary versions; WORKER_VERSIONS_MODE=stub)
+# - Preview manager on port 8791 (canary versions; WORKER_VERSIONS_MODE=stub + BEEHIVE_LOCAL_DEV=1)
 #
 # The API worker must start first because the Spec DO is bound to it, and the
 # other workers reach it (and each other) only while their wrangler dev runs.
@@ -80,8 +80,10 @@ wait_healthy "Canary worker" http://localhost:8789/health workers/canary-worker/
 start_worker "4/5" "Promotion worker" 8790 --config workers/promotion-worker/wrangler.toml
 wait_healthy "Promotion worker" http://localhost:8790/promotion/health workers/promotion-worker/.dev.vars
 
-# WORKER_VERSIONS_MODE=stub: canary versions come from the local stub, never the Cloudflare API
-start_worker "5/5" "Preview manager" 8791 --config workers/preview-manager/wrangler.toml --inspector-port 9234 --var WORKER_VERSIONS_MODE:stub
+# WORKER_VERSIONS_MODE=stub: canary versions come from the local stub, never the Cloudflare API.
+# BEEHIVE_LOCAL_DEV=1 is the local-only signal the stub requires; only this script sets it,
+# so a production worker with WORKER_VERSIONS_MODE=stub set by mistake still answers 501.
+start_worker "5/5" "Preview manager" 8791 --config workers/preview-manager/wrangler.toml --inspector-port 9234 --var WORKER_VERSIONS_MODE:stub --var BEEHIVE_LOCAL_DEV:1
 wait_healthy "Preview manager" http://localhost:8791/health workers/preview-manager/.dev.vars
 
 echo ""

@@ -298,7 +298,7 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         holdoutPercentage: 5,
       };
 
-      // Locally this needs beehive-preview-manager on 8791 with WORKER_VERSIONS_MODE=stub
+      // Locally this needs beehive-preview-manager on 8791 with WORKER_VERSIONS_MODE=stub and BEEHIVE_LOCAL_DEV=1
       // (scripts/start-e2e-workers.sh); it answers 501 without a Versions client.
       const response = await fetch(`${WORKER_URLS.canary}/deploy-canary`, {
         method: 'POST',

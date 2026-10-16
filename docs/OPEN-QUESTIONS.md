@@ -373,7 +373,7 @@ live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 fail
   a candidate commit, and can a deployment be switched to it instantly? Nothing here depends on
   it. `workers/preview-manager/versions.ts` has only `StubWorkerVersionsClient` (`stub-<uuid>`,
   URL `<prefix>-<worker>.<subdomain>.workers.dev`), selected by `WORKER_VERSIONS_MODE=stub`
-  (set by `scripts/start-e2e-workers.sh`). Unset (production) the route answers **501**, so
+  plus `BEEHIVE_LOCAL_DEV=1` (both set by `scripts/start-e2e-workers.sh`). Unset (production) the route answers **501**, so
   production canary deploys fail closed until a real client is written and verified. Rollback
   calls no Cloudflare API at all: traffic follows the ref.
 - **Where traffic follows the ref.** shadow-router now binds `SpecDO` and, per mirrored request,

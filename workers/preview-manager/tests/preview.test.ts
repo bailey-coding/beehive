@@ -266,13 +266,14 @@ describe('Preview Manager - Configuration', () => {
 describe('Preview Manager - canary version', () => {
   const auth = { Authorization: 'Bearer test-auth-token' };
 
-  function envWithCandidate(candidate: Record<string, unknown> | null, status = candidate ? 200 : 404, mode?: string) {
+  function envWithCandidate(candidate: Record<string, unknown> | null, status = candidate ? 200 : 404, mode?: string, localDev = mode === 'stub') {
     const fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(candidate ? { success: true, data: candidate } : { success: false, error: 'Not found' }), { status })
     );
     const env = {
       ...baseMockEnv,
       WORKER_VERSIONS_MODE: mode,
+      BEEHIVE_LOCAL_DEV: localDev ? '1' : undefined,
       WORKERS_SUBDOMAIN: 'acct',
       SPEC_DO: { ...baseMockEnv.SPEC_DO, get: vi.fn().mockReturnValue({ fetch }) } as any,
     };
@@ -290,6 +291,16 @@ describe('Preview Manager - canary version', () => {
     expect(res.status).toBe(501);
     expect(globalFetch).not.toHaveBeenCalled();
     globalFetch.mockRestore();
+  });
+
+  it('stub mode without the local-only signal still answers 501 (production safety)', async () => {
+    const { env, fetch } = envWithCandidate({ id: 'c1', specId: 's1', commitSha: 'abc123' }, 200, 'stub', false);
+    const res = await post(env, { candidateId: 'c1', specId: 's1' });
+    expect(res.status).toBe(501);
+    expect(fetch).not.toHaveBeenCalled();
+    // The signal alone, without stub mode, is not enough either
+    const only = envWithCandidate(null, 404, undefined, true);
+    expect((await post(only.env, { candidateId: 'c1', specId: 's1' })).status).toBe(501);
   });
 
   it('stub mode returns a fresh { url, versionId } and the candidate commit', async () => {

@@ -44,10 +44,17 @@ export class StubWorkerVersionsClient implements WorkerVersionsClient {
 }
 
 /**
- * The stub when WORKER_VERSIONS_MODE is 'stub' (local dev, tests), otherwise
- * null: there is no real client, and the route answers 501 rather than
- * reporting a version that was never built.
+ * The stub only when WORKER_VERSIONS_MODE is 'stub' AND BEEHIVE_LOCAL_DEV is '1'.
+ * The second variable is set only by scripts/start-e2e-workers.sh (`--var`), so a
+ * production worker with WORKER_VERSIONS_MODE=stub set by mistake still gets null:
+ * there is no real client, and the route answers 501 rather than reporting a
+ * version that was never built.
  */
-export function workerVersionsClientFor(env: { WORKER_VERSIONS_MODE?: string; WORKERS_SUBDOMAIN?: string }): WorkerVersionsClient | null {
-  return env.WORKER_VERSIONS_MODE === 'stub' ? new StubWorkerVersionsClient(env.WORKERS_SUBDOMAIN) : null;
+export function workerVersionsClientFor(env: {
+  WORKER_VERSIONS_MODE?: string;
+  BEEHIVE_LOCAL_DEV?: string;
+  WORKERS_SUBDOMAIN?: string;
+}): WorkerVersionsClient | null {
+  const local = env.BEEHIVE_LOCAL_DEV === '1';
+  return local && env.WORKER_VERSIONS_MODE === 'stub' ? new StubWorkerVersionsClient(env.WORKERS_SUBDOMAIN) : null;
 }

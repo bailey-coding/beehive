@@ -42,16 +42,17 @@ The token must match `tests/e2e/config.ts` (`local.apiToken`).
 | shadow-router | 8788 | `npx wrangler dev --config workers/shadow-router/wrangler.toml --port 8788 --inspector-port 9230` |
 | canary-worker | 8789 | `npx wrangler dev --config workers/canary-worker/wrangler.toml --port 8789 --inspector-port 9231` |
 | promotion-worker | 8790 | `npx wrangler dev --config workers/promotion-worker/wrangler.toml --port 8790 --inspector-port 9232` |
-| preview-manager | 8791 | `npx wrangler dev --config workers/preview-manager/wrangler.toml --port 8791 --inspector-port 9234 --var WORKER_VERSIONS_MODE:stub` |
+| preview-manager | 8791 | `npx wrangler dev --config workers/preview-manager/wrangler.toml --port 8791 --inspector-port 9234 --var WORKER_VERSIONS_MODE:stub --var BEEHIVE_LOCAL_DEV:1` |
 
 Give each its own `--inspector-port`, otherwise concurrent `wrangler dev` runs collide.
 `scripts/start-e2e-workers.sh` starts all five in order (beehive first: it hosts the Spec DO,
 and local bindings only connect to running `wrangler dev` sessions). It refuses to start if
 any of 8787-8791 is taken, and a worker counts as healthy only on a 2xx (`curl -f`; a missing
 `.dev.vars` answers 503). PIDs go to `.e2e-workers.pids`; `scripts/stop-e2e-workers.sh` stops
-only those processes and their children. `WORKER_VERSIONS_MODE=stub` makes preview-manager's
+only those processes and their children. `WORKER_VERSIONS_MODE=stub` together with
+`BEEHIVE_LOCAL_DEV=1` (the local-only signal, set only by the start script) makes preview-manager's
 canary route mint a local stub version (`stub-<uuid>`) instead of answering 501; nothing calls
-the Cloudflare API.
+the Cloudflare API. `stub` alone is not enough: a deployed worker answers 501 either way.
 Then `npm run test:e2e:local`. Production is unreachable from tests unless `E2E_ENVIRONMENT=production` and `E2E_ALLOW_PRODUCTION=1` are both set (human approval required, AGENTS.md). Despite older docs, local e2e makes real HTTP calls and does
 not use mocks; with no workers running you get `ECONNREFUSED`.
 
@@ -70,7 +71,7 @@ Worker routes the tests use (the old `/canary/*`, `/shadow/*`, `/promotion/*` pr
 | api (8787) | `/health` and `/api/health` answer `{ success, data: { status, version, timestamp, checks } }` |
 | shadow-router (8788) | `/health`, `/statsig/config` (`splits` includes each live canary, read from the Spec DO deploy refs), `/statsig/presets`, `/statsig/preset/:name`, `POST /statsig/classify` |
 | canary-worker (8789) | `/health`, `/slo-status`, `POST /deploy-canary` (answers `{ success, deployment, deployRef }`), `POST /rollback` (a deploy-ref move), `GET /canary-deployments/:deploymentId`, `GET /canary-deployments?candidateId=`, `GET/POST /canary/:candidateId/auto-rollback` |
-| preview-manager (8791) | `/health`, `POST /api/preview/deploy`, `POST /api/preview/canary` (answers `{ url, versionId }`; 501 unless `WORKER_VERSIONS_MODE=stub`) |
+| preview-manager (8791) | `/health`, `POST /api/preview/deploy`, `POST /api/preview/canary` (answers `{ url, versionId }`; 501 unless `WORKER_VERSIONS_MODE=stub` and `BEEHIVE_LOCAL_DEV=1`) |
 | promotion-worker (8790) | `/health` (and `/promotion/health`), `GET/POST /mode` (answers `{ success, mode }`), `POST /promote`, `GET /promote/:candidateId` (ledger row under `state`), `/tournament[/status\|/list]`, `/merge-train[/status\|/list]`, `/merge/retry`, `/merge/rollback`, `/stats`, `/promote/:id/retry`, `/promote/:id/cancel` |
 
 There is no `/tournament/start` or `/merge-train/start`: tournaments and trains are joined

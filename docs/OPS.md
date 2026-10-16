@@ -127,7 +127,8 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
   `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
 - **Production canary deploys answer 501** until a real Workers Versions client exists:
   `WORKER_VERSIONS_MODE` is unset on `beehive-preview-manager`, and the stub (`stub`) is for
-  local dev only. Do not set it in production; it would record versions that were never built.
+  local dev only: it also needs `BEEHIVE_LOCAL_DEV=1`, which only `scripts/start-e2e-workers.sh` sets,
+  so a stray `WORKER_VERSIONS_MODE=stub` in production still answers 501. Keep both unset.
 - **Deploy order:** `beehive-shadow-router` now binds `SpecDO` from `beehive` (`script_name`),
   like canary-worker and preview-manager, so deploy `beehive` first.
 - A candidate a live ref points at cannot be tombstoned or purged (409), like an active promotion.

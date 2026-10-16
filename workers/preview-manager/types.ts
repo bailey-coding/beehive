@@ -41,8 +41,10 @@ export interface PreviewManagerEnv {
   // Queue for sending preview comparisons
   PREVIEW_SCIENTIST_QUEUE: Queue;
 
-  // 'stub' selects the local Workers Versions stand-in (versions.ts); unset -> 501
+  // 'stub' selects the local Workers Versions stand-in (versions.ts), but only together
+  // with BEEHIVE_LOCAL_DEV=1 (set by scripts/start-e2e-workers.sh, never in production); else 501
   WORKER_VERSIONS_MODE?: string;
+  BEEHIVE_LOCAL_DEV?: string;
 }
 
 // ============================================================================
