@@ -18,8 +18,8 @@
 
 # Node.js
 /node_modules/
-/package-lock.json
-package-lock.json
+/cli/package-lock.json
+/workers/**/package-lock.json
 
 # Compiled output
 /dist/
