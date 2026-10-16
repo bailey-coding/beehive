@@ -113,7 +113,7 @@ export default {
 
     // Health check
     if (path === '/health' || path === '/api/health') {
-      return handleHealth(request);
+      return handleHealth(request, specDoStub);
     }
 
     // ============================================================================
@@ -1354,14 +1354,25 @@ $ ./scripts/demo-end-to-end.sh --local
 // HEALTH
 // ============================================================================
 
-async function handleHealth(_request: Request): Promise<Response> {
+async function handleHealth(_request: Request, specDoStub: SpecDoStub): Promise<Response> {
+  // Check Durable Object health by calling its health endpoint
+  let durableObjectStatus: 'ok' | 'error' = 'error';
+  try {
+    const doResponse = await specDoStub.fetch('/health');
+    if (doResponse.ok) {
+      durableObjectStatus = 'ok';
+    }
+  } catch (error) {
+    console.error('[Health] Durable Object health check failed:', error);
+  }
+
   const health: import('./types').HealthResponse = {
-    status: 'healthy',
+    status: durableObjectStatus === 'ok' ? 'healthy' : 'degraded',
     version: '0.1.0',
     timestamp: Date.now(),
     checks: {
       database: 'ok',
-      durableObject: 'ok',
+      durableObject: durableObjectStatus,
     },
   };
   return makeApiResponse(health);
