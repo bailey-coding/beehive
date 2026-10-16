@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev --local",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "postinstall": "npm install --prefix ../shared --no-audit --no-fund --no-package-lock"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^5.20261006.1"

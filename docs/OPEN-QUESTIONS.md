@@ -540,7 +540,8 @@ and report `durableObject: 'error'` with a 503 when it fails, so monitors see a 
 
 ## Three workers did not redeploy on the Artifacts push (2026-10-16)
 
-**Status**: Open; cause not found. Seen with `wrangler deployments list --name <worker>` after the push to `cf`.
+**Status**: Cause found (builds failed with `Could not resolve "zod"`), fix committed 2026-10-16 and verified in
+clean copies; takes effect when pushed and deployed. Seen with `wrangler deployments list --name <worker>`.
 
 **Finding**: seven workers (`beehive`, `-gate-workflow`, `-queue-consumer`, `-scientist-comparator`,
 `-preview-manager`, `-candidate-service`, `-sandbox-runner`) each have two new deployments at 21:32 and 21:37 UTC.
@@ -552,8 +553,22 @@ deployment is the 20:29 UTC secret change, and the code deployment before it is 
 (ledger, promotion mode); the old canary worker lacks deploy-ref canary logic; the old shadow-router does not follow
 live canary refs. `scripts/prod-health.sh` passes anyway, because `/health` on each worker answers 200.
 
-**Want**: see each of the three workers' Workers Build in the dashboard (connected repo and branch, trigger, build
-log, root directory and watch paths), fix or connect it, then push or deploy. After the fix, check
-`wrangler deployments list` shows a code deployment newer than the push for all ten. The check could join
-`scripts/prod-health.sh` (compare each worker's newest deployment time with the push).
+**Cause**: Workers Builds installs per worker (`npm install` in `workers/<name>/`). `promotion-worker` and
+`canary-worker` import `workers/shared/promotion-ledger.ts` and `deploy-refs.ts`, and `shadow-router` imports
+`deploy-refs.ts`; those shared files `import 'zod'`. Node resolves a bare import from the importing file's own
+directory upward (`workers/shared/`, `workers/`, repo root), never from the importing worker's `node_modules`, so a
+per-worker `zod` cannot satisfy it. The seven workers that built import only zod-free shared files (`auth`,
+`spec-do-auth`) and import zod from their own folder. `beehive` builds from the repo root, where `zod` is installed.
+Every local check missed it: the repo-root `node_modules` supplies zod to everything.
+
+**Fix**: `workers/shared/package.json` declares `zod`; `promotion-worker`, `canary-worker` and `shadow-router` (which
+had no `package.json`) run `npm install --prefix ../shared` in a `postinstall`, so a per-worker install also installs
+zod where the shared files resolve it. Verified: `git archive` into a clean directory, `npm install` in the worker
+folder only, `wrangler deploy --dry-run` builds all three. Rejected: a wrangler `[alias]` to `./node_modules/zod` (builds
+in a checkout without per-worker installs, i.e. local `wrangler dev` and the e2e start script, fail with `Cannot find
+module`), and `file:../shared` (npm puts zod in the worker, not in `workers/shared`). Assumes Workers Builds runs
+lifecycle scripts (the default). Alternative if it does not: set those three builds' root directory to the repo root.
+
+**Next**: after the push, check `wrangler deployments list` shows a code deployment newer than the push for all ten.
+**Want**: a CI step that builds each worker from a clean per-worker install, since nothing else catches this.
 

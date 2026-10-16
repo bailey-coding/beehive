@@ -1,0 +1,25 @@
+{
+  "name": "beehive-shadow-router",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Beehive Shadow Router - mirrors traffic to candidates and compares against the spec delta surface",
+  "main": "index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "npm install --prefix ../shared --no-audit --no-fund --no-package-lock"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0",
+    "wrangler": "^4.149.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
