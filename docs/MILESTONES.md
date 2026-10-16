@@ -149,6 +149,19 @@ addition is joining rationale to oracle-ladder outcomes.
 fixtures survive redaction in tests; intent search returns prior failures for a clause;
 one successor candidate demonstrably starts from a prior session.
 
+---
+
+## Future / Optional
+
+- **WfP: Workers for Platforms Migration** — Migrate candidate execution to Workers for Platforms
+  - Replace Artifacts-based candidate deployments with User Workers
+  - Use dynamic dispatch Worker for Shadow/Canary/Train routing
+  - Benefit: Native isolation, simplified deployment, built-in observability
+  - Blocked: Requires Workers for Platforms paid tier
+  - Confidence: 0.95 (architectural fit verified)
+
+---
+
 **Sequencing rule:** agents write candidates and glue; you write the orchestration spine.
 If a task touches the spec schema, DO ledger, or train logic, it belongs to a human or a
 single carefully supervised session — not to an autonomous agent run.
