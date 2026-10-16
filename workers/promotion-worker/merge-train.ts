@@ -11,7 +11,7 @@ import {
   Rung,
   Env,
 } from './types';
-import { getSpecDo, getPromotionLedger } from './spec-do';
+import { setCandidateStage, getPromotionLedger } from './spec-do';
 
 /**
  * Extended merge train type with ID
@@ -465,14 +465,9 @@ export class MergeTrainManager {
         };
       });
 
-      await getSpecDo(this.env).fetch(
-        `/candidates/${encodeURIComponent(candidateId)}/rollback`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason }),
-        }
-      );
+      // The ledger car is already rolled_back here; a failure below is reported, and the stage write
+      // is idempotent
+      await setCandidateStage(this.env, candidateId, 'rolled_back', `Rolled back from merge train: ${reason}`);
 
       return {
         success: true,

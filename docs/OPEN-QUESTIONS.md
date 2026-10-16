@@ -504,7 +504,7 @@ list `sqlite_master` before deploying.
 
 ## Promotion worker calls Spec DO routes that do not exist (2026-10-16)
 
-**Status**: Open, found by the local e2e rerun after the ledger CAS change. Pre-existing; spine work.
+**Status**: Resolved 2026-10-16 (promotion-routes-fix) with the existing DO routes; the plan is at the end of this entry. Found by the local e2e rerun after the ledger CAS change.
 
 **Finding**: `workers/promotion-worker` calls `GET /candidates/:id` (tournament metrics,
 `tournament.ts`), `PATCH /candidates/:id` (promote the winner: `current_rung`, `status: promoted`,
@@ -514,11 +514,33 @@ them: its candidate routes are `/api/candidates`, `/api/candidates/:id`, `.../st
 fall back to defaults, a tournament winner and a rolled-back merge-train car are never recorded on the
 candidate, and none of it failed visibly because the responses were not checked.
 
-**Not fixed here**: making the winner PATCH fatal (tried, reverted) fails every tournament at the last
+**Original note (now resolved)**: making the winner PATCH fatal (tried, reverted) fails every tournament at the last
 step. The fix is a decision for the maintainer: which DO route and fields carry a rung change
 (`/api/candidates/:id/stage` exists), what a rollback writes, and whether the DO should own the
 `current_rung` bookkeeping the ledger already has in `promotion_states`. Until then the winner PATCH
 only logs a warning.
+
+**Plan (promotion-routes-fix, existing routes only, no DO change)**:
+- `GET /candidates/:id` -> `GET /api/candidates/:id`. The body is `{success, data}` with `shadowScore` and
+  `shadowMetrics` (a JSON string); there are no `metrics`/`score` fields, so those two feed the existing defaults.
+  A !ok answer still falls back to defaults (the comparison tolerates missing metrics), but is now a real read.
+- Winner `PATCH /candidates/:id` -> `PATCH /api/candidates/:id/stage {stage, notes}` with `X-Actor-ID:
+  promotion-worker`. The DO writes `candidates.stage` and an `entity_history` row. Rung -> stage:
+  pre-merge `passed_premerge`, shadow `passed_shadow`, train `passed_train`, canary `passed_canary`, full
+  `promoted`. `promoted_at` has no column; the history row's `changed_at` is that timestamp. The call is
+  fatal again (throws on !ok), so the tournament is recorded `failed` and can be retried.
+- Rollback `POST /candidates/:id/rollback` -> the same stage route with `stage: 'rolled_back'`, `notes:
+  <reason>`. It writes the candidate stage and a history row, nothing else. Fatal for the call (returns
+  `success: false`); the ledger car is already `rolled_back` by then and the stage write is idempotent.
+- Rejected: a new `PATCH /api/candidates/:id` or `/rollback` route (spine work, and the stage route already
+  carries a stage plus history); having the DO own `current_rung` (the ledger's `promotion_states` already
+  does); calling the deploy-ref `rollbackHead` (that is the canary/ref rollback for deployed rungs, not a
+  merge-train car); adding a `promoted_at`/`current_rung` column (schema change).
+- Mixed versions: every route used exists in the DO today, so a new worker works against an old DO, and
+  an old worker against a new DO behaves as before (its 404s). No ordering dependency.
+- Result: the winner write is fatal again; tournament e2e now seeds real candidates, since a fabricated id is correctly rejected.
+- Known gap: the stage route does not validate the transition (any stage is accepted, an unknown one hits
+  the table CHECK and answers 500). Not changed here.
 
 ---
 

@@ -4,7 +4,7 @@
  * Calls go through SpecDO's fetch router (not RPC: SpecDO does not extend DurableObject).
  */
 
-import type { Env, PromotionMode } from './types';
+import type { Env, PromotionMode, Rung } from './types';
 import { getSpecDoStub } from '../shared/spec-do-auth';
 import { PromotionLedgerClient } from '../shared/promotion-ledger';
 
@@ -67,4 +67,47 @@ export async function storePromotionMode(env: Env, mode: PromotionMode): Promise
 export async function resolvePromotionMode(env: Env): Promise<PromotionMode> {
   const stored = await getStoredPromotionMode(env);
   return stored ?? ((env.PROMOTION_MODE as PromotionMode) || 'tournament');
+}
+
+/** Candidate stage recorded when a candidate is promoted to a rung ('full' is the end state) */
+export const CANDIDATE_STAGE_FOR_RUNG: Record<Rung, string> = {
+  'pre-merge': 'passed_premerge',
+  shadow: 'passed_shadow',
+  train: 'passed_train',
+  canary: 'passed_canary',
+  full: 'promoted',
+};
+
+const PROMOTION_ACTOR = 'promotion-worker';
+
+/**
+ * Read a candidate row (GET /api/candidates/:id). Throws on any non-2xx, a 404 included.
+ */
+export async function getCandidate(env: Env, candidateId: string): Promise<Record<string, unknown>> {
+  const response = await getSpecDo(env).fetch(`/api/candidates/${encodeURIComponent(candidateId)}`);
+  if (!response.ok) {
+    throw new Error(`Failed to get candidate ${candidateId}: ${response.status} ${await response.text()}`);
+  }
+  const body = await response.json() as { data?: Record<string, unknown> };
+  return body.data ?? {};
+}
+
+/**
+ * Record a candidate's stage and a history row (PATCH /api/candidates/:id/stage).
+ * Throws on any non-2xx, a 404 included.
+ */
+export async function setCandidateStage(
+  env: Env,
+  candidateId: string,
+  stage: string,
+  notes: string
+): Promise<void> {
+  const response = await getSpecDo(env).fetch(`/api/candidates/${encodeURIComponent(candidateId)}/stage`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'X-Actor-ID': PROMOTION_ACTOR },
+    body: JSON.stringify({ stage, notes }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to set candidate ${candidateId} to ${stage}: ${response.status} ${await response.text()}`);
+  }
 }

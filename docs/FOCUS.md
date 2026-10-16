@@ -26,8 +26,9 @@ Completed items are removed, not struck through; history lives in git.*
    `Migration to m[4-8] failed`.
 2. Grant a first maintainer: `POST /api/admin/actors/<id>/role {"role":"maintainer"}`. Until one exists any
    actor can grant itself the role.
-3. Confirm `beehive-promotion-worker` runs commit `00a1f52` or later (the tolerant winner PATCH). Older
-   builds end every tournament `failed` at the last step.
+3. Tournament mode now records the winner on a real candidate and fails the tournament when that is
+   rejected (promotion-routes-fix). Tournament requests naming a candidate that does not exist in the Spec DO
+   end `failed`; that is intended.
 4. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
    command output); switch that remote to a credential helper.
 5. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
@@ -36,14 +37,9 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Decide first
 
-1. **Promotion worker calls Spec DO routes that do not exist** (`GET`/`PATCH /candidates/:id`,
-   `POST /candidates/:id/rollback`; the DO serves `/api/candidates/...`). Tournament metrics always fall
-   back to defaults, and winners and rollbacks are never recorded on the candidate. Spine decision: which
-   route and fields carry a rung change (`/api/candidates/:id/stage` exists), what a rollback writes, and
-   whether the DO owns `current_rung` (`docs/OPEN-QUESTIONS.md` 2026-10-16).
-2. **Edge `/health` on `beehive` answers `durableObject: ok` without calling the DO.** Make it call the DO
+1. **Edge `/health` on `beehive` answers `durableObject: ok` without calling the DO.** Make it call the DO
    and return 503 on failure, so monitors see a stuck ledger (`docs/OPEN-QUESTIONS.md` 2026-10-16).
-3. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
+2. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
 
 ## Cleanup
 
