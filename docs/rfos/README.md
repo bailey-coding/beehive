@@ -37,7 +37,7 @@ A Request for Observation (RFO) is a retrospective document that captures learni
 
 | Number | Title | Status | Date | Severity |
 |--------|-------|--------|------|----------|
-| *None yet* | - | - | - | - |
+| [RFO-2026-10-14](./2026-10-14-promotion-routes-fix.md) | Promotion Routes Fix - Missing Spec DO Route Calls | Actioned | 2026-10-14 | SEV-2 |
 
 ---
 

@@ -32,7 +32,8 @@ A Request for Comments (RFC) is a formal proposal document that describes a new 
 
 | Number | Title | Status | Date | Author |
 |--------|-------|--------|------|--------|
-| *None yet* | - | - | - | - |
+| [RFC-0001](./0001-oracle-ladder-architecture.md) | Oracle Ladder Architecture | Implemented (Retrospective) | 2026-10-09 | Maintainer / Architecture Team |
+| [RFC-0002](./0002-workers-native-stores.md) | Workers-Native Stores Architecture | Implemented (Retrospective) | 2026-10-09 | Maintainer / Architecture Team |
 
 ---
 
