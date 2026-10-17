@@ -21,7 +21,7 @@ import {
 } from './ui-semantic';
 import { buildRepoUrl, type RepoRef } from './ui-repo-ref';
 import {
-  appPage, statusPage, dashboardCrumb, issuesCrumbs,
+  appPage, statusPage, dashboardCrumb, issuesCrumbs, orgCrumbs, repoCrumbs,
   type ChromeSource,
 } from './ui-layout';
 
@@ -163,10 +163,11 @@ export async function orgPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid organization ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid organization ID.');
   }
   
   const [org, repos, specs, candidates, trials, promotions, issues] = await Promise.all([
@@ -180,7 +181,7 @@ export async function orgPage(
   ]);
   
   if (!org) {
-    return page('Not found', '<p>Organization not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Organization not found. <a href="/app">Back to dashboard</a>');
   }
   
   // Filter in UI (R1)
@@ -224,10 +225,8 @@ export async function orgPage(
   ]);
   
   const body = `
-    ${subHeader(getName(org), '/app', 'All organizations')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(org))}</dd>
         <dt>Type</dt><dd>${esc(getType(org))}</dd>
@@ -245,12 +244,8 @@ export async function orgPage(
       ${tableHtml(['Name', 'Stage', 'Created'], specsRows)}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/orgs/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this organization...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
     
@@ -264,7 +259,14 @@ export async function orgPage(
     </p>
   `;
   
-  return page(getName(org), body);
+  return appPage(chrome, {
+    title: getName(org),
+    crumbs: orgCrumbs(org),
+    section: null,
+    orgId: id,
+    searchAction: `/app/orgs/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -309,10 +311,11 @@ export async function repoPage(
   url: URL,
   session: Session,
   doReader: DoReader,
-  env?: ArtifactsUiEnv
+  env: ArtifactsUiEnv | undefined,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid repository ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid repository ID.');
   }
   
   const [repo, orgs, specs, candidates, issues, trials, promotions] = await Promise.all([
@@ -326,9 +329,9 @@ export async function repoPage(
   ]);
   
   if (!repo) {
-    return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Repository not found. <a href="/app">Back to dashboard</a>');
   }
-  
+
   const repoOrg = orgs.find((o) => getId(o) === getOrganizationId(repo));
   const linkedSpec = specs.find((s) => getId(s) === getSpecId(repo));
   const repoIssues = issues.filter((i) => getRepositoryId(i) === id);
@@ -365,10 +368,8 @@ export async function repoPage(
   const tabContent = await renderRepoTab(activeTab, repo, repoOrg, linkedSpec, repoIssues, repoCandidates, repoSpecs, commits, trials, promotions, env);
   
   const body = `
-    ${subHeader(getName(repo), '/app', 'All repositories')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(repo))}</dd>
         <dt>Organization</dt><dd>${repoOrg ? `<a href="/app/orgs/${esc(encodeURIComponent(getId(repoOrg)))}">${esc(getName(repoOrg))}</a>` : 'N/A'}</dd>
@@ -385,22 +386,26 @@ export async function repoPage(
     
     ${tabContent}
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="${hierarchicalRepoPath}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this repository...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(getName(repo), body);
+
+  return appPage(chrome, {
+    title: getName(repo),
+    crumbs: repoCrumbs({ repo, org: repoOrg ?? null, repoUrl: hierarchicalRepoPath }),
+    section: 'repos',
+    orgId: repoOrg ? getId(repoOrg) : undefined,
+    repoUrl: hierarchicalRepoPath,
+    searchAction: `${hierarchicalRepoPath}#search`,
+    query,
+  }, body);
 }
 
 /**

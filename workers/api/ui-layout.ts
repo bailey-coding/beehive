@@ -180,6 +180,11 @@ function trail(...parts: Array<Crumb | Array<Crumb | null> | null | undefined>):
   return parts.flat().filter((c): c is Crumb => !!c);
 }
 
+/** Org page trail: Dashboard > org (a missing row leaves just Dashboard). */
+export function orgCrumbs(org: DoRow | null | undefined): Crumb[] {
+  return trail(dashboardCrumb(), orgCrumb(org));
+}
+
 export function repoCrumbs(ref: { repo: DoRow; org: DoRow | null; repoUrl: string }, org?: DoRow | null): Crumb[] {
   return trail(dashboardCrumb(), orgCrumb(org ?? ref.org), { label: pick(ref.repo, 'name') || 'Repository', href: ref.repoUrl });
 }

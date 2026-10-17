@@ -174,7 +174,7 @@ export async function handleUi(
         return statusPage(chrome, 404, 'Not found', 'Repository not found. <a href="/app">Back to dashboard</a>');
       }
       // Render using UUID (all existing page code works unchanged)
-      return await repoPage(pick(ref.repo, 'id'), url, session, doReader, env);
+      return await repoPage(pick(ref.repo, 'id'), url, session, doReader, env, chrome);
     } catch (error) {
       console.error('Repo page error:', error);
       return statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
@@ -201,9 +201,9 @@ export async function handleUi(
     try {
       switch (kind) {
         case 'orgs':
-          return await orgPage(id, url, session, doReader);
+          return await orgPage(id, url, session, doReader, chrome);
         case 'repos':
-          return await repoPage(id, url, session, doReader, env);
+          return await repoPage(id, url, session, doReader, env, chrome);
         case 'issues':
           return await legacyIssue(id, url, session, viewer, doReader, chrome);
         case 'specs':

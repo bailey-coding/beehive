@@ -268,3 +268,83 @@ describe('issue pages (L4)', () => {
     expect(html).not.toContain('<bdi>R&D</bdi>');
   });
 });
+
+// ============================================================================
+
+describe('org and repo pages (L5)', () => {
+  let widgets: string;
+  let shop: string;
+
+  beforeEach(() => {
+    widgets = spec.createRepository('widgets', orgId, 'baseline', undefined, undefined, 'https://example.invalid/w.git', 'acme').id;
+    shop = spec.createRepository('shop', orgId, 'baseline', undefined, undefined, 'https://example.invalid/s.git', 'ns').id;
+  });
+
+  it('org page: h1 and trail, h2 Details, one search control kept as results + navbar input', async () => {
+    const res = await ui(`/app/orgs/${orgId}?q=wid`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('<h1>acme</h1>');
+    expect(html).toContain('<li><a href="/app"><bdi>Dashboard</bdi></a></li><li aria-current="page"><bdi>acme</bdi></li>');
+    expect(html).toContain('<h2>Details</h2>');
+    expect(html).not.toContain('<h3>Details</h3>');
+    expect(count(html, 'name="q"')).toBe(1);
+    expect(html).toContain(`action="/app/orgs/${orgId}#search"`);
+    expect(html).toContain('value="wid"');
+    expect(html).toContain('<section class="search-box" id="search">');
+    expect(html).toContain('badge mock'); // the results stay labelled as mocked
+    expect(html).toContain(`<a href="/app/orgs/${orgId}" aria-current="page"><bdi>acme</bdi></a>`);
+    expect(html).not.toContain('aria-current="true"');
+    expect(html).not.toContain('class="subbar"');
+  });
+
+  it.each([
+    ['UUID', () => `/app/repos/${widgets}`, '/app/repos/acme/widgets', 'widgets'],
+    ['2-part', () => '/app/repos/acme/widgets', '/app/repos/acme/widgets', 'widgets'],
+    ['3-part', () => '/app/repos/acme/ns/shop', '/app/repos/acme/ns/shop', 'shop'],
+  ])('repo page via %s URL: trail, tabs, Issues item, one search control', async (_n, path, canonical, name) => {
+    const res = await ui(path());
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(`<h1>${name}</h1>`);
+    expect(html).toContain(`<li><a href="/app"><bdi>Dashboard</bdi></a></li><li><a href="/app/orgs/${orgId}"><bdi>acme</bdi></a></li>`);
+    expect(html).toContain(`<li aria-current="page"><bdi>${name}</bdi></li>`);
+    expect(html).toContain(`<a href="${canonical}/issues">Issues</a>`);
+    expect(html).toContain('<a href="/app#repositories" aria-current="true">Repositories</a>');
+    expect(html).toContain('<nav class="tabs" aria-label="Repository sections">');
+    expect(html).toContain('aria-current="page" class="tab active">overview<');
+    expect(html).toContain('<h2>Details</h2>');
+    expect(count(html, 'name="q"')).toBe(1);
+    expect(html).toContain(`action="${canonical}#search"`);
+    expect(html).toContain('<section class="search-box" id="search">');
+  });
+
+  it('repo page whose org row is missing renders a shorter trail, never an invented label', async () => {
+    overrides.push((req) => (new URL(req.url).pathname === '/api/organizations' && req.method === 'GET' ? Response.json({ success: true, data: [] }) : undefined));
+    const res = await ui(`/app/repos/${widgets}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('<li><a href="/app"><bdi>Dashboard</bdi></a></li><li aria-current="page"><bdi>widgets</bdi></li>');
+    expect(html).toContain('No organizations');
+  });
+
+  it('escapes hostile org and repo names in the trail, title and heading', async () => {
+    const evilOrg = spec.createOrganization('<img src=x onerror=alert(1)>', 'artifacts').id;
+    const evilRepo = spec.createRepository('<b>r</b>', evilOrg, 'baseline', undefined, undefined, 'https://example.invalid/e.git', 'x').id;
+    for (const path of [`/app/orgs/${evilOrg}`, `/app/repos/${evilRepo}`]) {
+      const html = await (await ui(path)).text();
+      expect(html, path).not.toContain('<img src=x');
+      expect(html, path).not.toContain('<b>r</b>');
+    }
+  });
+
+  it('keeps the page status codes: unknown org and repo are 404, a DO failure is 502 inside the layout', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await ui('/app/orgs/missing')).status).toBe(404);
+    expect((await ui('/app/repos/missing')).status).toBe(404);
+    overrides.push((req) => (new URL(req.url).pathname === '/api/specs' ? Response.json({ success: false, error: 'boom' }, { status: 500 }) : undefined));
+    const res = await ui(`/app/orgs/${orgId}`);
+    expect(res.status).toBe(502);
+    expect(await res.text()).toContain('<nav class="site-crumbs" aria-label="Breadcrumb">');
+  });
+});
