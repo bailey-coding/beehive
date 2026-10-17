@@ -195,3 +195,29 @@ New CLI behaviour (optional `--number`) is a later M8 CLI task, after T1 is live
 7. Should the DO itself reject comments on closed issues or when `comment_policy` is `locked`/`maintainers_only`? (Spine; the plan only enforces it in the UI.)
 8. Keep `GET /app/issues/:id` as a permanent route, or redirect it to the canonical repo URL?
 9. Should URLs use the issue number (`/issues/12`, GitHub style, scoped for free) instead of the id? Plan keeps ids because existing links use them.
+
+## 13. Maintainer decisions (2026-10-17)
+
+Production read (GETs only): `/api/issues` answers 200 with an empty list, so there are no live issues, no duplicate
+numbers and nothing for the mixed-version window to break. Tombstoned rows were not checked.
+
+| Q | Decision |
+|---|---|
+| 1 | Accept the brief "new UI, old DO" create failure; no number hint. |
+| 2 | Defer the unique index (own change; re-run the duplicate check then). Never bump `LATEST_SCHEMA_VERSION` in T1. |
+| 3 | Moot for existing data (no issues). Whether the fix is deployed is still unchecked. |
+| 4 | Yes, as a separate follow-up (distinct entity-404 error); not part of this work. e2e guards it meanwhile. |
+| 5 | Skip. |
+| 6 | Yes: issue detail enforces `visibility` like the list. |
+| 7 | `locked` and `maintainers_only` are enforced in the DO (explicit 4xx, not 500). `closed` still accepts comments; the UI offers Reopen. Whether closed issues accept comments becomes a per-repo setting. Spine: human review. |
+| 8 | Redirect `GET /app/issues/:id` to the canonical repo URL; keep the old URL working. |
+| 9 | Later, after the duplicate-number question is settled. |
+
+**New scope from these answers (not in T1-T7; each needs a plan and human sign-off):**
+- **Issue-to-issue links.** No such table exists (`schema.sql` has `issue_spec_links`, `issue_candidate_links`, `issue_comments` only). Needs a new
+  `issue_issue_links` table plus routes and UI ("follow-up of", "see also").
+- **Closed-issue comment setting.** `comment_policy` is CHECK-constrained to `open | maintainers_only | locked`, so a closed-issue setting needs
+  a new column (or a new policy value), i.e. a schema change.
+- Both are schema changes, so they hit the old-DO trap in risk 3 (a schema bump makes an old DO throw `Unknown schema_version`).
+  Do them together in one additive migration, in their own push, after T1-T7 have shipped, and check how earlier migrations (m3 to m8)
+  handled the mixed-version window before writing it. They are not part of the "make the pages reachable" work.
