@@ -5,8 +5,8 @@ RFC-0004
 # RFC: Canary Deploy + Auto-Rollback System
 
 **Status:** Implemented (Retrospective)  
-**Date:** 2026-10-13 (Approximate, based on commit c27628a)  
-**Author:** Maintainer / Architecture Team  
+**Date:** 2026-10-16 (commit c27628a, 01:26 UTC)  
+**Author:** unattributed (backfilled from git history)  
 **Related:** RFC-0001 (Oracle Ladder), MILESTONES.md M3/M6.5  
 **Supersedes:** None
 
@@ -31,7 +31,7 @@ Deploying candidates directly to full production is risky. Even with the pre-mer
 
 ### Canary Requirements
 
-✅ **Small percentage** - Configurable percentage of live traffic (default: 1-5%)
+✅ **Small percentage** - Configurable percentage of live traffic (no default in code)
 ✅ **SLO monitoring** - Track Service Level Objectives continuously
 ✅ **Auto-rollback** - Automatic reversion on SLO violation
 ✅ **Statsig integration** - Use Statsig for feature flagging and gradual rollout
@@ -42,124 +42,34 @@ Deploying candidates directly to full production is risky. Even with the pre-mer
 
 ## Detailed Design
 
-### Canary Deployment Flow
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** the original diagram, state machine, SQL and
+> rollback steps did not match the code (`deploy_refs` has no `status`; rungs are only `canary`
+> and `full`; rollback is not a status flip). Replaced below from `workers/spec-do/schema.sql`
+> and `workers/shared/deploy-refs.ts`. Whether SLO-triggered auto-rollback runs without a human
+> call was not verified (the code has an `auto-rollback` route and an `auto_rollback` switch).
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CANARY DEPLOYMENT FLOW                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐    │
-│  │ Preview       │     │ Preview       │     │ Canary       │    │
-│  │ Manager       │────►│ Deploy Ref    │────►│ Deploy Ref   │    │
-│  │               │     │ (stored)      │     │ (active)     │    │
-│  └──────────────┘     └──────────────┘     └──────┬───────┘    │
-│                                                        │            │
-│                                                        ▼            │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Spec DO (Durable Object)                   │   │
-│  │  ┌─────────────────────────────────────────────────┐    │   │
-│  │  │  deploy_refs table                                   │    │   │
-│  │  │  - id: deploy reference ID                          │    │   │
-│  │  │  - candidate_id: the candidate being deployed         │    │   │
-│  │  │  - rung: canary (or shadow, train, full)               │    │   │
-│  │  │  - status: staging, active, rolling_back, failed     │    │   │
-│  │  │  - created_at: timestamp                               │    │   │
-│  │  │  - canary_deployments: JSON array of canary deploys │    │   │
-│  │  └─────────────────────────────────────────────────┘    │   │
-│  │                                                              │   │
-│  │  ┌─────────────────────────────────────────────────┐    │   │
-│  │  │  canary_deployments table                             │    │   │
-│  │  │  - deploy_ref_id: FK to deploy_refs                     │    │   │
-│  │  │  - worker_name: name of the worker                      │    │   │
-│  │  │  - worker_version: version deployed                     │    │   │
-│  │  │  - percentage: traffic percentage (0-100)             │    │   │
-│  │  │  - status: created, deployed, monitoring, rolling_back  │    │   │
-│  │  └─────────────────────────────────────────────────┘    │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Workers Builds                           │   │
-│  │  - Creates isolated preview deployments                     │   │
-│  │  - Canary deploys are preview deployments with traffic    │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Shadow Router                           │   │
-│  │  - Follows live canary deploy references                   │   │
-│  │  - Routes small % of traffic to canary                    │   │
-│  │  - Statsig integration for traffic splitting                 │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Monitoring & Rollback                    │   │
-│  │  - Analytics Engine tracks SLO metrics                    │   │
-│  │  - Auto-rollback on SLO violation                          │   │
-│  │  - Ref-based: update deploy_refs status, not redeploy       │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+Implemented in c27628a (2026-10-16 01:26 UTC), migration m6 -> m7, additive.
 
-### Canary Deployment States
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  STAGING    │───►│  ACTIVE     │───►│ MONITORING  │───►│ ROLLED_BACK  │
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-     │                  │                  │                  │
-     │                  │                  │                  │
-     ▼                  ▼                  ▼                  ▼
-  Deploy       Traffic        SLO Check       Revert refs
-  to Workers  Split          Failed           to previous
-  (preview)   (Statsig)                            deploy
-```
-
-### Schema Changes (M6→M7 Additive)
-
-**New Tables:**
-
-```sql
--- Deploy references (existing, enhanced)
-CREATE TABLE deploy_refs (
-    id TEXT PRIMARY KEY,
-    candidate_id TEXT NOT NULL REFERENCES candidates(id),
-    rung TEXT NOT NULL CHECK(rung IN ('shadow', 'train', 'canary', 'full')),
-    status TEXT NOT NULL CHECK(status IN ('staging', 'active', 'rolling_back', 'failed', 'completed')),
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    completed_at INTEGER,
-    canary_deployments_json TEXT  -- JSON array of canary deployment IDs
-);
-
--- Canary deployments (NEW for canary support)
-CREATE TABLE canary_deployments (
-    id TEXT PRIMARY KEY,
-    deploy_ref_id TEXT NOT NULL REFERENCES deploy_refs(id),
-    worker_name TEXT NOT NULL,           -- e.g., 'beehive-canary'
-    worker_version TEXT NOT NULL,        -- version being deployed
-    percentage INTEGER NOT NULL CHECK(percentage >= 0 AND percentage <= 100),
-    status TEXT NOT NULL CHECK(status IN ('created', 'deployed', 'monitoring', 'rolling_back', 'failed')),
-    statsig_feature_flag TEXT,           -- Statsig flag for traffic splitting
-    slo_violations_json TEXT,             -- JSON array of SLO violations
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-);
-```
-
-### Rollback Mechanism
-
-**Ref-Based Rollback (per ADR rules):**
-
-1. Update `deploy_refs.status` from 'active' to 'rolling_back'
-2. Update `canary_deployments.status` to 'rolling_back'
-3. Update `deploy_refs.status` to 'failed' or 'completed' (depending on outcome)
-4. Shadow Router stops routing traffic to the rolled-back deployment
-5. **No redeploy needed** - Just reference changes
-
-**Auto-Rollback Triggers:**
-- SLO violation (e.g., error rate > threshold)
-- Latency spike (e.g., p99 > 2x baseline)
-- Manual trigger (via API or maintainer action)
+- **`deploy_refs`** is the traffic pointer per `(spec_id, rung)` with `rung IN ('canary','full')`.
+  Rows are append-only: every move inserts a row with `prev_ref_id` set to the head it replaces
+  (unique index keeps the chain linear); the head is the row nothing points back to. Columns:
+  `id, spec_id, rung, candidate_id, commit_sha, worker_version_id, prev_ref_id,
+  action IN ('promote','rollback'), moved_by, moved_at` (epoch ms). `candidate_id NULL` is the
+  empty ref.
+- **Rollback is a ref operation (AGENTS.md rule 7).** Promotion inserts a row pointing at the
+  new target; rollback inserts a row pointing at the target of `head.prev_ref_id`. Both are the
+  same insert in opposite directions, so rolling back twice toggles back. No status field is
+  edited and nothing is redeployed. The Artifacts production ref is a provenance mirror only.
+- **`canary_deployments`** records each canary and the ref row it created: `id, candidate_id,
+  spec_id, status IN ('deployed','superseded','rolled_back'), url, worker_version_id, commit_sha,
+  traffic_percentage, holdout_percentage, auto_rollback, deploy_ref_id, rollback_reason,
+  created_at, updated_at`.
+- **Flow.** `preview-manager` `POST /api/preview/canary` deploys (Workers Versions are stubbed
+  unless `BEEHIVE_LOCAL_DEV=1` and `WORKER_VERSIONS_MODE=stub`; production answers 501, e326b8c);
+  `canary-worker` holds the SLO monitor, `/slo-status`, and the auto-rollback route; the shadow
+  router reads the live canary pointers from the Spec DO (cached, RFC-0005).
+- **Traffic percentage** is validated as `0 < x <= 100` with `traffic + holdout <= 100`
+  (`workers/canary-worker/canary.ts:116`); no 1-5% default exists in code.
 
 ---
 
@@ -262,7 +172,7 @@ From the git history:
 ### Design Decisions That Held Up
 
 ✅ **Deploy refs pattern** - Central tracking of deployments works well
-✅ **Ref-based operations** - Rollback is just a status change, very fast
+✅ **Ref-based operations** - Rollback is an append-only ref insert, not a status change (see Detailed Design)
 ✅ **Percentage config** - Configurable canary percentage provides flexibility
 ✅ **Auto-rollback** - Automated monitoring prevents prolonged issues
 

@@ -5,8 +5,8 @@ RFC-0003
 # RFC: Service Tokens & Object-Capability Model
 
 **Status:** Implemented (Retrospective)  
-**Date:** 2026-10-12 (Approximate, based on commit aeec713)  
-**Author:** Maintainer / Architecture Team  
+**Date:** 2026-10-16 (commit aeec713, 01:04 UTC)  
+**Author:** unattributed (backfilled from git history)  
 **Related:** ADR-0005 (Organizational Memory), MILESTONES.md M5/M6.2  
 **Supersedes:** None
 
@@ -14,127 +14,51 @@ RFC-0003
 
 ## Summary
 
-This retrospective RFC documents the decision to implement **service-scoped object-capability (OCAP) tokens** as the authentication and authorization model for Beehive. This replaced the legacy `/api/service-accounts` endpoint with a more granular, capability-based system where actors (agents and humans) receive tokens limited to specific services and resources.
+This retrospective RFC documents the decision to implement **service-scoped object-capability (OCAP) tokens** as the authentication and authorization model for Beehive. This replaced the legacy `/api/service-accounts` endpoint with expiring, revocable, hashed bearer tokens carrying coarse `read`/`write`/`read_write` scopes, one actor per account. Service-scoped capabilities and path restrictions were not built (M6.2).
 
 ---
 
 ## Motivation
 
-### The Problem
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** the original Motivation, Detailed Design and
+> Migration text described a `services` table, a capability enum, path restrictions and a
+> `/api/service-tokens` endpoint. None exist in the repo (`grep` finds no `capabilities_json`,
+> `path_restrictions` or `service:read`; `docs/MILESTONES.md` M6.2 lists capability minting and
+> path-prefix enforcement as not built). Those sections are replaced below with what commit
+> aeec713 and `workers/spec-do/schema.sql` show. The Alternatives and Lessons sections were not
+> changed and have no repo evidence: see the audit.
 
-The initial implementation used a monolithic service account model with repo-wide tokens. This had several issues:
-
-1. **Over-permissive** - Tokens granted access to entire repositories
-2. **No scoping** - Couldn't limit agents to specific services or paths
-3. **Legacy API** - Used `/api/service-accounts` endpoint which didn't align with capability model
-4. **No lifecycle integration** - Service accounts weren't integrated with DO lifecycle
-
-### Requirements
-
-✅ **Service-level granularity** - Tokens scoped to specific services, not entire repos
-✅ **Path restrictions** - Capabilities with path restrictions for fine-grained access
-✅ **Time-bound** - Tokens with expiration and limited lifetime
-✅ **Actor-based** - Tokens tied to specific actors (agents or humans)
-✅ **Lifecycle-aware** - DO lifecycle refuses service actor operations
-✅ **Backward compatible** - Migration path from legacy service accounts
+The pre-m6 scheme was a service account row carrying its own `token_hash`/`token_salt`, and the
+API handler and Spec DO disagreed on its shape (`docs/OPEN-QUESTIONS.md`, "Service accounts: API
+handler and Spec DO disagree"; "Until then, service tokens cannot authenticate"). An older
+`GET /api/service-accounts` was open to any read principal and listed `token_hash`/`token_salt`
+(`docs/OPEN-QUESTIONS.md` 2026-10-16). Goal: one working, revocable, expiring token scheme.
 
 ---
 
 ## Detailed Design
 
-### Object-Capability Model
+Implemented in aeec713 (2026-10-16 01:04 UTC), migration m5 -> m6, additive.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    OBJECT-CAPABILITY MODEL                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Actor (Agent or Human)                                               │
-│       │                                                               │
-│       ▼                                                               │
-│  ┌─────────────────┐    ┌─────────────────┐                      │
-│  │ Service Token   │◄───│ Capability Mint │                      │
-│  │                 │    │ (Spec DO)       │                      │
-│  │ - Actor ID      │    │                 │                      │
-│  │ - Service ID    │    │ - service_token │                      │
-│  │ - Capabilities  │    │ - role          │                      │
-│  │ - Expiration    │    │ - permissions   │                      │
-│  │ - Path Restr.   │    └─────────────────┘                      │
-│  └────────┬────────┘         │                                      │
-│             │                  │                                      │
-│             ▼                  ▼                                      │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Service Table                              │   │
-│  │  - id: unique identifier                                      │   │
-│  │  - name: human-readable service name                        │   │
-│  │  - org_id: owning organization                                │   │
-│  │  - path_prefix: URL path prefix for monorepo support         │   │
-│  │  - created_at: timestamp                                       │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Service Tokens Table Schema
-
-```sql
-CREATE TABLE service_tokens (
-    id TEXT PRIMARY KEY,
-    actor_id TEXT NOT NULL REFERENCES actors(id),
-    service_id TEXT NOT NULL REFERENCES services(id),
-    capabilities_json TEXT NOT NULL,  -- JSON array of capability strings
-    path_restrictions_json TEXT,       -- JSON array of path patterns
-    expires_at INTEGER NOT NULL,        -- Unix timestamp
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    is_active BOOLEAN NOT NULL DEFAULT 1,
-    FOREIGN KEY (service_id) REFERENCES services(id)
-);
-```
-
-### Capability System
-
-**Capabilities are fine-grained permissions:**
-
-```typescript
-type Capability = 
-  | 'service:read'        // Read service metadata
-  | 'service:write'       // Modify service
-  | 'service:delete'      // Delete service
-  | 'repo:read'          // Read repository
-  | 'repo:write'         // Push to repository
-  | 'repo:admin'         // Admin operations
-  | 'spec:read'          // Read spec
-  | 'spec:claim'         // Claim spec for implementation
-  | 'candidate:create'    // Create candidate
-  | 'candidate:promote'   // Promote candidate
-  | 'issue:create'        // Create issues
-  | 'issue:comment'       // Comment on issues
-  | 'trial:create'        // Create trials
-  | 'gate:run'           // Run gates
-  | 'metrics:read'       // Read metrics
-  | 'admin:purge'        // Purge data (maintainer only)
-  | 'admin:tombstone'    // Tombstone records (maintainer only)
-;
-```
-
-### Migration from Legacy Service Accounts
-
-**Old System (Legacy):**
-- Endpoint: `/api/service-accounts`
-- Scope: Entire repository
-- Token type: Bearer token with repo-wide access
-
-**New System (Service Tokens):**
-- Endpoint: `/api/service-tokens`
-- Scope: Specific service with path restrictions
-- Token type: OCAP token with fine-grained capabilities
-
-**Migration Path:**
-1. Auto-register services from existing repos
-2. Generate service tokens for existing service accounts
-3. Phase out `/api/service-accounts` endpoint
-4. Update all clients to use new token system
-5. DO lifecycle refuses service actor operations (backstop)
+- **Account and actor.** `service_accounts` (m3) gains `actor_id`; each account owns one actor row
+  of type `agent` (the `actors.type` CHECK has no `service`). A service actor is identified by
+  `service_accounts.actor_id`, not by type (`workers/spec-do/schema.sql`, SERVICE TOKENS comment).
+- **Tokens.** `service_tokens(id, account_id, token_hash, token_prefix, scopes, created_by,
+  created_at, expires_at NOT NULL, revoked_at, last_used_at)`, unique index on `token_hash`.
+  Plaintext is `bh_svc_` + base64url of 32 random bytes (`workers/shared/service-tokens.ts`); only
+  the SHA-256 hex and a 12-character display prefix are stored; plaintext is returned once.
+- **Scopes.** `read`, `write` or `read_write` (CHECK constraint). `docs/OPS.md` ("Service tokens")
+  documents minting only `["read"]`; every write and `/api/admin/*` route is 403 for a service
+  principal, and the edge always gives service principals `promotionAuthority: false`.
+- **Routes.** Master-token admin routes under `/api/admin/service-accounts` (mint, list, rotate,
+  revoke; `workers/api/service-accounts.ts`). Spec DO routes `/internal/service-accounts*` are
+  admin-tier and `/internal/service-tokens/verify` is tier 1 (`workers/shared/spec-do-auth.ts`).
+  There is no `/api/service-tokens` endpoint.
+- **Legacy.** `/api/service-accounts*` answers 410 Gone (`workers/api/index.ts:308`).
+- **Lifecycle backstop.** Tombstone, purge and role routes refuse a service actor as caller (403);
+  tokens of a tombstoned org stop verifying (`docs/OPEN-QUESTIONS.md` 2026-10-16).
+- **No automatic migration.** Pre-m6 accounts have no actor and no token rows, so they never
+  authenticate; they can be listed and revoked, not given new tokens.
 
 ---
 
@@ -210,9 +134,9 @@ From the git history:
 
 - **Commit aeec713:** "service tokens end to end (actor per account, service_tokens table, m5->m6 additive), retire legacy /api/service-accounts, DO lifecycle refuses service actors"
 - This was part of M5→M6 additive migration
-- Service tokens table added to schema
+- `service_tokens` table added; `service_accounts.actor_id` added
 - Legacy `/api/service-accounts` endpoint retired
-- All workers updated to validate service tokens
+- Tokens are verified at the edge (`workers/api/principal.ts`) through the Spec DO; other workers do not validate them
 
 ---
 
@@ -220,8 +144,7 @@ From the git history:
 
 ### What Went Well
 
-✅ **Smooth migration** - Auto-registration of services worked well
-✅ **Backward compatibility** - Legacy tokens continued to work during transition
+⚠️ **Lessons below are unsupported by repo evidence** (backfilled; the claims of auto-registration, backward compatibility and path-prefix handling contradict the m6 notes in `docs/OPEN-QUESTIONS.md`: pre-m6 accounts fail closed)
 ✅ **Granular control** - Service-level scoping provides needed flexibility
 ✅ **Monorepo support** - Path prefix handling works for complex repos
 

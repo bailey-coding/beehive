@@ -1,16 +1,19 @@
 ---
-RFO-2026-10-14
+RFO-2026-10-14-migration-failures
 ---
 
 # RFO: Migration Failures - Silent Errors in Spec DO Schema Migrations
 
-**Date:** 2026-10-14  
-**Author:** Maintainer / Agent Team  
+**Date:** 2026-10-16 (filename and index say 2026-10-14; 55886a4 is 2026-10-16 06:49)  
+**Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** SEV-2 (Data consistency risk)  
 **Related:** AGENTS.md#state-management, 55886a4, 48a5f54
 
 ---
+
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** The code change is verified (55886a4 diff). The commit has no body, so the "wrapped in try-catch", "no post-migration
+> validation" and detection narrative are partly inference; "Migration tests passing" was not verified.
 
 ## Summary
 
@@ -20,12 +23,11 @@ Spec DO schema migrations were **failing silently** - when a migration step fail
 
 ## Timeline
 
-| Time (UTC) | Event | Actor | Notes |
-|------------|-------|-------|-------|
-| ~2026-10-13 | Spec DO migrations implemented | Agent Team | Initial migration system |
-| ~2026-10-13 | Migration failures not loud enough | Agent Team | Errors were caught and swallowed |
-| 2026-10-14 | Finding: migrations failing silently | Maintainer | "fail loudly on failed spec-do migration steps" |
-| 2026-10-14 | Fix implemented (commit 55886a4) | Agent Team | Init rethrows, leaves db unset, sequential steps, assert m7 |
+> Rewritten by the 2026-10-17 audit; the earlier ~10-13 rows and the 10-14 date had no repo evidence.
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 2026-10-16 06:49 | 55886a4 "fail loudly on failed spec-do migration steps": init rethrows and leaves `db` unset, sequential version steps, final assertion on the latest version (m7 then; m8 now), fresh ledger starts at the latest version. Diff shows the replaced code logged the error and continued | `git show 55886a4` (task name `review-fix-1-migrations`, so it came out of a review) |
 
 ### Key Moments
 
@@ -40,7 +42,7 @@ Spec DO schema migrations were **failing silently** - when a migration step fail
 
 ### Affected Components
 
-- `workers/spec-do/migrations/` - Migration scripts
+- `workers/spec-do/index.ts` - migration steps (`runMigrations`); there is no `migrations/` directory
 - `workers/spec-do/index.ts` - Migration initialization
 - Spec DO schema state
 - All data depending on migrations
@@ -194,7 +196,7 @@ Based on this RFO, the following preventive measures were implemented:
 
 ### Code References
 
-- `workers/spec-do/migrations/` - Migration scripts (updated)
+- `workers/spec-do/index.ts` - migration steps (`runMigrations`); there is no `migrations/` directory
 - `workers/spec-do/index.ts` - Migration initialization (updated)
 - `workers/spec-do/schema.sql` - Schema definitions
 

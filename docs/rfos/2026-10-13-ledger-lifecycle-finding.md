@@ -1,16 +1,19 @@
 ---
-RFO-2026-10-13
+RFO-2026-10-13-ledger-lifecycle-finding
 ---
 
 # RFO: Ledger Lifecycle Finding - Spec DO is Append-Only with No Delete Routes
 
-**Date:** 2026-10-13  
-**Author:** Maintainer / Agent Team  
+**Date:** 2026-10-13 (manual test-org cleanup); implemented 2026-10-15  
+**Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** Near-Miss (Architectural gap discovered, no user impact)  
 **Related:** ADR-0002 (Coordination State Storage), ADR-0005 (Organizational Memory), 48a5f54, e57e6b1, f7dd837
 
 ---
+
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** Root cause, detection ("maintainer noticed during M1 work", "~1 day"), the lessons and the "preventive measures implemented"
+> section are inference, unsupported by repo evidence. "All workers updated" and "migration tests added" were not verified.
 
 ## Summary
 
@@ -23,15 +26,15 @@ During M1 implementation, it was discovered that **the Spec Durable Object was a
 
 ## Timeline
 
-| Time (UTC) | Event | Actor | Notes |
-|------------|-------|-------|-------|
-| ~2026-10-12 | Spec DO initial implementation | Agent Team | Basic CRUD operations implemented |
-| ~2026-10-13 | Finding: No delete routes exist | Maintainer | "The only wipe is wrangler delete beehive --force + redeploy" |
-| 2026-10-13 | Finding documented in OPEN-QUESTIONS.md | Agent Team | Added as open question |
-| 2026-10-13 | RFC for ledger lifecycle created | Agent Team | Proposed tombstones + maintainer purge |
-| 2026-10-14 | Ledger lifecycle implemented (commit 48a5f54) | Agent Team | M1 ledger lifecycle: tombstones, maintainer role, batched purge |
-| 2026-10-14 | Docs updated (commit e57e6b1) | Agent Team | README M3/M4 status drift fixed, finding logged |
-| 2026-10-14 | Merge to main (commit f7dd837) | Maintainer | agent/docs-drift merged |
+> Rewritten by the 2026-10-17 audit. The earlier rows (a lifecycle "RFC created" on 10-13, implementation
+> dated 10-14) had no repo evidence: no such RFC exists, and 48a5f54, e57e6b1 and f7dd837 are all 2026-10-15.
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 2026-10-13 | Maintainer removes 27 test orgs by hand in the Cloudflare dashboard; the only platform wipe is `wrangler delete --name beehive --force` + redeploy | `docs/OPEN-QUESTIONS.md` (lines 111, 231) |
+| 2026-10-15 20:35 | e57e6b1 logs the ledger-lifecycle finding and fixes README drift | `git show e57e6b1` |
+| 2026-10-15 22:12 | f7dd837 merges agent/docs-drift | `git show f7dd837` |
+| 2026-10-15 22:16 | 48a5f54 adds the M1 ledger lifecycle (m4 -> m5, additive) | `git show 48a5f54` |
 
 ### Key Moments
 
@@ -124,7 +127,7 @@ To catch similar issues earlier:
 **Commit 48a5f54:** "step: add M1 ledger lifecycle (tombstones, maintainer role, batched purge; m4->m5 additive)"
 
 Changes:
-- Added tombstone fields to all ledger tables
+- Added `deleted_at`/`deleted_by`/`delete_reason` to organizations, repositories, specs, candidates and issues; `actors.role`; `purge_log`
 - Added soft-delete operations (mark as tombstone, not delete)
 - Added maintainer-only purge routes (for test data cleanup)
 - Implemented batched purge for efficiency
@@ -178,7 +181,7 @@ Changes:
 This RFO is related to:
 - OPEN-QUESTIONS.md entry: "Ledger lifecycle" finding
 - ADR-0005: Organizational Memory (persisting near-miss artifacts)
-- AGENTS.md working convention: "The DO gives transactional, read-your-writes semantics for promotion decisions"
+- ADR-0002: "The DO gives transactional, read-your-writes semantics for promotion decisions"
 
 ### Pattern Recognition
 
@@ -210,9 +213,9 @@ Based on this RFO, the following preventive measures were implemented:
 ### Code References
 
 - `workers/spec-do/schema.sql` - Schema with tombstone fields
-- `workers/spec-do/schema-inline.ts` - Generated schema with lifecycle
+- `workers/spec-do/schema-inline.ts` - Inline copy of the schema with lifecycle
 - `workers/spec-do/index.ts` - Ledger lifecycle operations
-- `workers/spec-do/migrations/` - Migration scripts (m4->m5)
+- `workers/spec-do/index.ts` - m5 migration step (`applyLedgerLifecycle`); there is no `migrations/` directory
 - `docs/OPEN-QUESTIONS.md` - Original finding documentation
 
 ---

@@ -5,8 +5,8 @@ RFC-0005
 # RFC: Shadow Router In-Isolate Caching
 
 **Status:** Implemented (Retrospective)  
-**Date:** 2026-10-13 (Approximate, based on commit 746c42c)  
-**Author:** Maintainer / Architecture Team  
+**Date:** 2026-10-16 (commit 746c42c, 07:12 UTC)  
+**Author:** unattributed (backfilled from git history)  
 **Related:** RFC-0001 (Oracle Ladder), MILESTONES.md M2/M3  
 **Supersedes:** None
 
@@ -59,7 +59,7 @@ This creates latency and performance issues.
 │  │  ┌─────────────────────────────────────────────────┐    │   │
 │  │  │  Cache Entry: live_canary_refs                            │    │   │
 │  │  │                                                             │    │   │
-│  │  │  Key: spec_id + candidate_id                              │    │   │
+│  │  │  One entry per isolate (the whole LiveRef[] list)         │    │   │
 │  │  │  Value: {                                                   │    │   │
 │  │  │    deploy_ref_id: "...",                                    │    │   │
 │  │  │    worker_url: "...",                                      │    │   │
@@ -104,16 +104,14 @@ This creates latency and performance issues.
 
 ### Cache Configuration
 
-```typescript
-// Environment variables (with defaults)
-const LIVE_REFS_CACHE_TTL_MS = parseInt(process.env.LIVE_REFS_CACHE_TTL_MS || '5000');
-const LIVE_REFS_CACHE_ENABLED = process.env.LIVE_REFS_CACHE_ENABLED !== 'false';
-```
+The cache is `LiveRefsCache` in `workers/shadow-router/live-refs-cache.ts`; the loader is the Spec
+DO read in `applyCanaryRefs` (`workers/shadow-router/config.ts`). There is one entry per isolate
+holding the full list of live canary pointers, not one entry per spec/candidate.
 
-**Configurable Parameters:**
-- `LIVE_REFS_CACHE_TTL_MS` - Cache TTL in milliseconds (default: 5000 = 5 seconds)
-- `LIVE_REFS_CACHE_ENABLED` - Enable/disable caching (default: true)
-- `0` disables caching entirely
+- `LIVE_REFS_CACHE_TTL_MS` (wrangler var / secret, string): unset or invalid -> 5000 ms;
+  `0` disables the cache; values above `MAX_LIVE_REFS_TTL_MS` (60000) are clamped.
+- There is no `LIVE_REFS_CACHE_ENABLED` flag; the earlier text invented it (`grep` finds it only
+  in this RFC). On a failed read with no servable value, the caller falls back to the static config.
 
 ### Cache Behavior Details
 
@@ -132,7 +130,7 @@ const LIVE_REFS_CACHE_ENABLED = process.env.LIVE_REFS_CACHE_ENABLED !== 'false';
    - Prevents caching of error states
 
 4. **In-Flight Deduplication:**
-   - Multiple concurrent requests for same key
+   - Concurrent requests that find the entry expired
    - Only first request fetches from Spec DO
    - Others wait for first request to complete
    - Prevents thundering herd problem

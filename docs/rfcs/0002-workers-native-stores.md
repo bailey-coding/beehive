@@ -6,7 +6,7 @@ RFC-0002
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-09 (Approximate, based on ADR-0002 timestamp)  
-**Author:** Maintainer / Initial Architecture Team  
+**Author:** unattributed (backfilled from git history)  
 **Related:** ADR-0002 (Coordination State Storage), ADR-0005 (Organizational Memory)  
 **Supersedes:** None
 
@@ -105,14 +105,14 @@ Git notes were considered but rejected because:
 | - Trials | Spec DO | Head-to-head comparisons |
 | - Promotions | Spec DO | Promotion decisions |
 | - Issues | Spec DO | GitHub-style issues |
-| **Cross-Spec Indexes** | D1 | Relational queries across specs |
+| **Cross-Spec Indexes** | D1 | Relational queries across specs (planned: no D1 binding exists in any `wrangler.toml` or in code) |
 | - Spec indexes | D1 | Search and discovery |
 | - Candidate metadata | D1 | Aggregated across specs |
 | **Metric Streams** | Analytics Engine | Time-series, high-cardinality |
 | - Match rates | Analytics Engine | Per-candidate validation |
 | - Latency | Analytics Engine | Performance monitoring |
 | - SLO metrics | Analytics Engine | Service level objectives |
-| **Session Records** | R2 | Large artifacts |
+| **Session Records** | R2 | Large artifacts (planned: no R2 binding exists in any `wrangler.toml`; session provenance is M7) |
 | - Transcripts | R2 | Agent session history |
 | - Snapshots | R2 | Cached states |
 | **Provenance** | Git Notes | Append-only, portable |
@@ -132,7 +132,7 @@ Git notes were considered but rejected because:
 - Durable: State persists across worker restarts
 - Isolated: Each DO instance is independent
 
-**Schema Location:** `workers/spec-do/schema-inline.ts` (generated from `schema.sql`)
+**Schema Location:** `workers/spec-do/schema.sql` is the reference; `workers/spec-do/schema-inline.ts` is a hand-maintained inline copy (no generator exists) that `workers/spec-do/tests/schema-sync.test.ts` requires to match byte for byte (0fa4abb)
 
 ---
 
@@ -230,9 +230,7 @@ This architecture was implemented from the project's inception:
 
 - **Spike Phase:** Initial Spec DO implementation with basic schema
 - **M1 Phase:** Ledger lifecycle added (tombstones, maintainer role, batched purge)
-- **M2 Phase:** Enhanced with gate verdicts, trials, promotions
-- **M3 Phase:** Tournament state machine and compare-and-swap
-- **M4 Phase:** Full schema with all current tables
+- Schema versions m1..m8 (`LATEST_SCHEMA_VERSION = 'm8'`, `workers/spec-do/index.ts:27`): m2 candidate columns, m3 service_accounts, m4 promotion ledger, m5 lifecycle (tombstones), m6 service tokens, m7 deploy refs and canary deployments, m8 ledger CAS and tournament failures
 
 ### Key Implementation Commits
 
@@ -250,7 +248,7 @@ From the git history:
 
 ✅ **Right choice for coordination** - Spec DO handles all coordination state effectively
 ✅ **SQLite works well** - Reliable, well-understood, good performance
-✅ **Schema generation** - Generating inline schema from SQL works well
+⚠️ **Inline schema copy** - `schema-inline.ts` is copied by hand, not generated; the sync test is the guard
 ✅ **Migration system** - Versioned migrations work for schema evolution
 
 ### Challenges Faced
