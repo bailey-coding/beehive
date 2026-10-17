@@ -5,8 +5,8 @@ RFC-0001
 # RFC: Oracle Ladder Architecture
 
 **Status:** Implemented (Retrospective)  
-**Date:** 2026-10-09 (Approximate, based on ADR-0001 timestamp)  
-**Author:** Maintainer / Initial Architecture Team  
+**Date:** 2026-10-09 (approximate; ADR-0001 is the VCS client model and does not define the ladder, whose first written form is `AGENTS.md`)  
+**Author:** unattributed (backfilled 2026-10-16 from git history; no commit names a decision-maker)  
 **Related:** ADR-0002 (Coordination State Storage), MILESTONES.md  
 **Supersedes:** None
 
@@ -194,13 +194,13 @@ Candidate Implementation
 ### Affected Components
 
 All major Beehive components implement parts of the oracle ladder:
-- `workers/beehive` - Edge router, entry point
-- `workers/beehive-gate-workflow` - Pre-merge gate execution
-- `workers/beehive-shadow-router` - Shadow traffic mirroring
-- `workers/beehive-scientist-comparator` - Comparison against declared delta surface
-- `workers/beehive-preview-manager` - Preview deployments
-- `workers/beehive-promotion` - Train and full promotion
-- `workers/beehive-canary` - Canary deployment and rollback
+- `workers/api` (deployed as `beehive`) - Edge router, entry point
+- `workers/gate-workflow` - Pre-merge gate execution
+- `workers/shadow-router` - Shadow traffic mirroring
+- `workers/scientist-comparator` - Comparison against declared delta surface
+- `workers/preview-manager` - Preview deployments
+- `workers/promotion-worker` - Train and full promotion
+- `workers/canary-worker` - Canary deployment and rollback
 - `workers/spec-do` - Spec Durable Object (state management)
 
 ### Breaking Changes
@@ -227,9 +227,9 @@ None - This was a foundational design decision made at project inception.
 
 This RFC documents decisions that were **already implemented** in the initial project structure:
 
-- **M2 (2026-10-12):** Shadow Router, Scientist Comparator, Preview Manager implemented
-- **M3:** Promotion Worker with train/canary/full modes
-- **M4:** Submission with full oracle ladder demo
+- **M2 (completed 2026-10-12 per `docs/MILESTONES.md`):** Shadow Router, Scientist Comparator, Preview Manager implemented
+- **M3 (partial per `docs/MILESTONES.md`):** `promotion-worker` (tournament and merge-train modes) and `canary-worker`; the Full rung and the drift/holdout checks are not verified here
+- **M4:** submitted; reported by the maintainer, not verified here
 
 ### Related Commits
 
