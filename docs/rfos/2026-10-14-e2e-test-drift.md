@@ -1,13 +1,13 @@
 ---
-RFO-2026-10-14
+RFO-2026-10-14-e2e-test-drift
 ---
 
 # RFO: E2E Test Drift - Route/Shape Mismatches
 
-**Date:** 2026-10-14  
-**Author:** Maintainer / Agent Team  
+**Date:** 2026-10-15 (filename and index say 2026-10-14; the fixing commits are 2026-10-15)  
+**Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
-**Severity:** SEV-2 (Test failures blocking CI)  
+**Severity:** SEV-2 (local e2e failures; GitHub CI did not run e2e at the time)  
 **Related:** AGENTS.md#testing, cd2c218, MILESTONES.md M3
 
 ---
@@ -20,19 +20,22 @@ End-to-end tests in the `m3-features.test.ts` and `cross-worker-flows` test suit
 
 ## Timeline
 
-| Time (UTC) | Event | Actor | Notes |
-|------------|-------|-------|-------|
-| ~2026-10-12 | M3 features implemented | Agent Team | Train, Canary, Promotion workers |
-| ~2026-10-13 | Test suites not updated | Agent Team | Tests based on old route assumptions |
-| ~2026-10-14 | Test failures observed | CI System | E2E tests failing due to drift |
-| 2026-10-14 | Drift fixed and canary leftovers documented (commit cd2c218) | Agent Team | Tests updated, documentation added |
+> Rewritten by the 2026-10-17 audit: the earlier rows (M3 on ~10-12, "test failures observed" by a
+> "CI System") had no repo evidence. GitHub CI ran typecheck and unit tests only (`ci.yml`) and
+> had no e2e job on 2026-10-15; an Enhanced CI workflow with e2e came in 69c62aa (2026-10-16).
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 2026-10-15 20:40 | 28acab9 fixes cross-worker e2e shapes and the canary->preview auth header | `git show 28acab9` |
+| 2026-10-15 22:57 | cd2c218 fixes e2e test-side route/shape drift | `git show cd2c218` |
+| 2026-10-15 | Local `npm run test:e2e:local`: before 28 failed / 22 passed / 6 skipped; after 6 failed / 43 passed / 7 skipped | `docs/OPEN-QUESTIONS.md`, "e2e test-side route drift" |
 
 ### Key Moments
 
-- **Detected:** CI failures in e2e test suites
+- **Detected:** local e2e run (`npm run test:e2e:local`), not CI
 - **Root Cause Identified:** Tests had outdated route assumptions and shapes
 - **Mitigated:** Tests updated to match current implementation
-- **Resolved:** All e2e tests passing, canary leftovers documented
+- **Resolved (partly):** 43 passed, 6 still failed and 7 skipped afterwards; canary leftovers documented
 
 ---
 
@@ -42,16 +45,16 @@ End-to-end tests in the `m3-features.test.ts` and `cross-worker-flows` test suit
 
 - `tests/e2e/m3-features.test.ts` - M3 feature tests
 - `tests/e2e/cross-worker-flows.test.ts` - Cross-worker integration tests
-- `workers/beehive-canary` - Canary worker (had leftovers from previous work)
-- `workers/beehive-promotion` - Promotion worker
-- `workers/beehive-shadow-router` - Shadow router
+- `workers/canary-worker` - Canary worker (had leftovers from previous work)
+- `workers/promotion-worker` - Promotion worker
+- `workers/shadow-router` - Shadow router
 
 ### User Impact
 
 - **Affected Users:** Developers (test failures blocking PRs)
-- **Impact Type:** CI pipeline broken, unable to verify changes
+- **Impact Type:** local e2e suite unreliable, unable to verify changes
 - **Duration:** Approximately 1-2 days
-- **Severity:** SEV-2 (Significant degradation - CI broken)
+- **Severity:** SEV-2 (local e2e suite unreliable)
 
 ### Technical Impact
 
@@ -91,7 +94,7 @@ Additionally, the canary worker had "leftovers" - code or configuration from pre
 
 ### Detection Method
 
-**CI Build Failure** - E2E tests failing in CI pipeline.
+**Local e2e run** - 28 of 56 tests failed before the fix (`docs/OPEN-QUESTIONS.md`).
 
 ### Detection Delay
 
@@ -111,7 +114,7 @@ To catch similar issues earlier:
 
 ### Initial Response
 
-1. **CI Failure Alert** - E2E test failures reported
+1. **Local e2e run** - failures observed
 2. **Investigation** - Determined tests had drifted from implementation
 
 ### Mitigation
@@ -122,18 +125,16 @@ Changes:
 - Updated `tests/e2e/m3-features.test.ts` to match current routes and shapes
 - Updated `tests/e2e/cross-worker-flows.test.ts` to match current implementation
 - Documented canary worker leftovers for cleanup
-- Verified all e2e tests pass
+- Result per OPEN-QUESTIONS: 6 failed, 43 passed, 7 skipped
 
 ### Resolution
 
-- All e2e tests passing
-- Tests now match current implementation
+- 6 e2e tests still failing after this commit (see OPEN-QUESTIONS); tests now match current implementation
 - Canary leftovers documented for future cleanup
 
 ### Verification
 
-- CI pipeline green
-- All e2e tests passing
+- Not CI: counts above are from a local run
 - Tests verified against actual worker behavior
 
 ---
@@ -201,7 +202,7 @@ Based on this RFO, the following preventive measures were implemented:
 
 - `tests/e2e/m3-features.test.ts` - Updated M3 feature tests
 - `tests/e2e/cross-worker-flows.test.ts` - Updated cross-worker tests
-- `workers/beehive-canary` - Canary worker (leftovers documented)
+- `workers/canary-worker` - Canary worker (leftovers documented)
 
 ---
 
@@ -213,4 +214,4 @@ Based on this RFO, the following preventive measures were implemented:
 
 ---
 
-*This RFO documents a SEV-2 incident where e2e tests drifted from implementation, causing CI failures. The fix involved updating tests to match current routes and shapes, and documenting canary worker leftovers for future cleanup.*
+*This RFO documents a SEV-2 incident where e2e tests drifted from implementation, causing local e2e failures. The fix involved updating tests to match current routes and shapes, and documenting canary worker leftovers for future cleanup.*
