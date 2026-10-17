@@ -1471,16 +1471,31 @@ export class SpecDO {
   /**
    * Local error mapper for the issue routes only. The main fetch catch maps just ConflictError,
    * and callers branch on 404 elsewhere, so it is deliberately not widened. Anything unmapped
-   * is rethrown to it unchanged.
+   * is rethrown to it unchanged. Order: actor (403), then the JSON body (400), then the handler.
    */
-  private issueRoute(successStatus: number, fn: () => unknown): Response {
+  private async issueRoute(
+    request: Request,
+    successStatus: number,
+    actorId: string,
+    fn: (body: Record<string, unknown>) => unknown
+  ): Promise<Response> {
     const reply = (success: boolean, status: number, extra: Record<string, unknown>) =>
       new Response(JSON.stringify({ success, ...extra, timestamp: Date.now() }), {
         status,
         headers: { 'Content-Type': 'application/json' },
       });
     try {
-      return reply(true, successStatus, { data: fn() });
+      this.requireIssueActor(actorId);
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        throw new BadRequestError('request body must be valid JSON');
+      }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new BadRequestError('request body must be a JSON object');
+      }
+      return reply(true, successStatus, { data: fn(body as Record<string, unknown>) });
     } catch (e) {
       const status =
         e instanceof BadRequestError ? 400 : e instanceof ForbiddenError ? 403 : e instanceof NotFoundError ? 404 : e instanceof ConflictError ? 409 : 0;
@@ -3517,9 +3532,14 @@ export class SpecDO {
       // ============================================================================
       
       if (path === '/api/issues' && method === 'POST') {
-        const body: CreateIssueRequest = await request.json();
-        return this.issueRoute(201, () => {
-          this.requireIssueActor(actorId);
+        return await this.issueRoute(request, 201, actorId, (raw) => {
+          const body = raw as unknown as CreateIssueRequest;
+          if (typeof body.title !== 'string' || body.title.trim() === '') throw new BadRequestError('title must be a non-empty string');
+          if (typeof body.repositoryId !== 'string' || body.repositoryId === '') throw new BadRequestError('repositoryId must be a non-empty string');
+          if (body.body !== undefined && body.body !== null && typeof body.body !== 'string') throw new BadRequestError('body must be a string');
+          if (body.labels !== undefined && body.labels !== null && (!Array.isArray(body.labels) || body.labels.some((l) => typeof l !== 'string'))) {
+            throw new BadRequestError('labels must be an array of strings');
+          }
           this.requireSameAuthor(body.createdBy, actorId);
           return this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels);
         });
@@ -3563,20 +3583,16 @@ export class SpecDO {
       
       if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
-        const body: UpdateIssueStatusRequest = await request.json();
-        return this.issueRoute(200, () => {
-          this.requireIssueActor(actorId);
-          this.setIssueStatus(id, body.status, actorId);
+        return await this.issueRoute(request, 200, actorId, (body) => {
+          this.setIssueStatus(id, body.status as string, actorId);
           return this.getIssue(id);
         });
       }
 
       if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
-        const body: UpdateIssueCommentPolicyRequest = await request.json();
-        return this.issueRoute(200, () => {
-          this.requireIssueActor(actorId);
-          this.updateIssueCommentPolicy(id, body.commentPolicy, actorId);
+        return await this.issueRoute(request, 200, actorId, (body) => {
+          this.updateIssueCommentPolicy(id, body.commentPolicy as string, actorId);
           return this.getIssue(id);
         });
       }
@@ -3587,11 +3603,9 @@ export class SpecDO {
       
       if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'POST') {
         const id = this.extractParentId(path);
-        const body: CreateIssueCommentRequest = await request.json();
-        return this.issueRoute(201, () => {
-          this.requireIssueActor(actorId);
+        return await this.issueRoute(request, 201, actorId, (body) => {
           this.requireSameAuthor(body.createdBy, actorId);
-          return this.createIssueComment(id, body.body, actorId);
+          return this.createIssueComment(id, body.body as string, actorId);
         });
       }
       

@@ -216,3 +216,21 @@ describe('actor validation on every issue write', () => {
     expect((await writes[1][1](user)).status).toBe(201);
   });
 });
+
+describe('malformed bodies on comment, status and policy routes are 400', () => {
+  const targets: [string, string, string][] = [
+    ['comment', 'POST', 'comments'],
+    ['status', 'PATCH', 'status'],
+    ['policy', 'PATCH', 'comment-policy'],
+  ];
+  it.each(targets)('%s: invalid JSON, null and array bodies', async (_n, method, suffix) => {
+    for (const text of ['{nope', 'null', '[]', '']) {
+      const res = await spec.fetch(
+        new Request(`https://spec-do.internal/api/issues/${issueId}/${suffix}`, { method, headers: { 'X-Actor-ID': maintainer }, body: text })
+      );
+      expect(res.status).toBe(400);
+    }
+    expect(commentCount()).toBe(0);
+    expect(policy()).toBe('open');
+  });
+});

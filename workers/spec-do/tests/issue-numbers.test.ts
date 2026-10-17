@@ -121,3 +121,34 @@ describe('D1 issue numbering', () => {
     expect(issueCount(repoA)).toBe(0);
   });
 });
+
+describe('malformed create requests are 400 with a fixed message, never a 500 with SQLite text', () => {
+  const raw = (body: string) =>
+    spec.fetch(new Request('https://spec-do.internal/api/issues', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Actor-ID': actor }, body }));
+
+  it.each([
+    ['no title', { repositoryId: 'x' }],
+    ['non-string title', { repositoryId: 'x', title: 5 }],
+    ['blank title', { repositoryId: 'x', title: '  ' }],
+    ['no repositoryId', { title: 't' }],
+    ['non-string body', { repositoryId: 'x', title: 't', body: 5 }],
+    ['bad labels', { repositoryId: 'x', title: 't', labels: [1] }],
+  ])('%s', async (_name, payload) => {
+    const res = await create(payload);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).not.toMatch(/sqlite|parameter/i);
+  });
+
+  it.each([['invalid JSON', '{nope'], ['null', 'null'], ['array', '[]'], ['string', '"x"'], ['empty', '']])('%s body', async (_name, text) => {
+    const res = await raw(text);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { success: boolean }).success).toBe(false);
+  });
+
+  it('an unknown actor still gets 403 before the body is read', async () => {
+    const res = await spec.fetch(
+      new Request('https://spec-do.internal/api/issues', { method: 'POST', headers: { 'X-Actor-ID': 'nobody' }, body: '{nope' })
+    );
+    expect(res.status).toBe(403);
+  });
+});
