@@ -169,6 +169,26 @@ API, CLI and UI agree, and remove calls to routes that do not exist. Source of t
   error to an empty list; no client calls a missing route; local e2e green.
 - **Sequencing:** CLI tasks share `cli/src/utils/api-client.ts` and `cli/src/index.ts`; run
   them serially, each branch cut from `main`.
+- **UI issue pages:** plan in `docs/M8-UI-ISSUES-PLAN.md` (branch `agent/ui-issues-plan`).
+
+**M9 — Site navigation (proposed 2026-10-17, not started; after the M8 UI issue-pages fix).** Give the
+logged-in `/app` UI one shared layout with real navigation. Both this and the issue pages edit the page
+layout in `workers/api/ui-html.ts`, so do the issue pages first. Plan before any code.
+- **Navbar:** brand/home link, org switcher, links to repos, specs and issues, signed-in user and sign-out.
+- **Breadcrumbs:** a trail such as `org › repo › issues › #12` on every detail page; a shared layout helper.
+- **Search box:** placeholder over the mocked M6 semantic search, labelled with `mockedLabel()` until M6.5.
+- **Shared layout pieces:** one flash/error area (today `ui.ts` renders its own), current-page highlight,
+  skip link for keyboard users.
+- **Out of scope (see M10):** user menu, notifications, command palette.
+- **Exit criteria:** every `/app` page uses the shared layout; existing `/app` functions (create org, repo,
+  spec, issue) still work; no new fetch maps an error to an empty list; local e2e green.
+
+**M10 — Account menu and notifications (proposed 2026-10-17, future).** Needs the M9 layout.
+- **User menu:** profile, API tokens and service accounts, sign-out.
+- **Notifications:** promotion, canary rollback and gate results. Open decision for a human: where the state
+  lives. By the architecture rules it is a Spec DO table (not the repo), which is spine-adjacent.
+- **Command palette:** keyboard-driven navigation and search.
+- **Exit criteria:** to be set when the notification storage decision is made.
 
 ---
 
