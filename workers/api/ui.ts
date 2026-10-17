@@ -207,11 +207,11 @@ export async function handleUi(
         case 'issues':
           return await legacyIssue(id, url, session, viewer, doReader, chrome);
         case 'specs':
-          return await specPage(id, url, session, doReader);
+          return await specPage(id, url, session, doReader, chrome);
         case 'candidates':
-          return await candidatePage(id, url, session, doReader);
+          return await candidatePage(id, url, session, doReader, chrome);
         case 'trials':
-          return await trialPage(id, url, session, doReader);
+          return await trialPage(id, url, session, doReader, chrome);
         default:
           return statusPage(chrome, 404, 'Not found', 'Unknown entity type. <a href="/app">Back to dashboard</a>');
       }

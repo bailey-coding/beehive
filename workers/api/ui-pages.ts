@@ -21,7 +21,7 @@ import {
 } from './ui-semantic';
 import { buildRepoUrl, type RepoRef } from './ui-repo-ref';
 import {
-  appPage, statusPage, dashboardCrumb, issuesCrumbs, orgCrumbs, repoCrumbs,
+  appPage, statusPage, dashboardCrumb, issuesCrumbs, orgCrumbs, repoCrumbs, specCrumbs, candidateCrumbs, trialCrumbs,
   type ChromeSource,
 } from './ui-layout';
 
@@ -610,10 +610,11 @@ export async function specPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid spec ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid spec ID.');
   }
   
   const [spec, orgs, repos, candidates, trials, promotions, issues] = await Promise.all([
@@ -627,7 +628,7 @@ export async function specPage(
     ]);
     
     if (!spec) {
-      return page('Not found', '<p>Spec not found. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Spec not found. <a href="/app">Back to dashboard</a>');
     }
   
   const specOrg = orgs.find((o) => getId(o) === getOrganizationId(spec));
@@ -727,10 +728,8 @@ export async function specPage(
     ]);
   
   const body = `
-    ${subHeader(getName(spec), '/app', 'All specs')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(spec))}</dd>
         <dt>Organization</dt><dd>${specOrg ? `<a href="/app/orgs/${esc(encodeURIComponent(getId(specOrg)))}">${esc(getName(specOrg))}</a>` : 'N/A'}</dd>
@@ -777,22 +776,25 @@ export async function specPage(
       ${tableHtml(['Title', 'Visibility', 'Type', 'Stage'], issueRows)}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/specs/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this spec...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-    return page(getName(spec), body);
+
+  return appPage(chrome, {
+    title: getName(spec),
+    crumbs: specCrumbs(spec, specOrg),
+    section: 'specs',
+    orgId: specOrg ? getId(specOrg) : undefined,
+    searchAction: `/app/specs/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -806,10 +808,11 @@ export async function candidatePage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid candidate ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid candidate ID.');
   }
   
   const [candidate, specs, orgs, repos, trialsList, promotionsList, verdicts] = await Promise.all([
@@ -823,10 +826,11 @@ export async function candidatePage(
   ]);
   
   if (!candidate) {
-    return page('Not found', '<p>Candidate not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Candidate not found. <a href="/app">Back to dashboard</a>');
   }
-  
+
   const spec = specs.find((s) => getId(s) === getSpecId(candidate));
+  const specOrg = spec ? orgs.find((o) => getId(o) === getOrganizationId(spec)) : undefined;
   const repo = repos.find((r) => getId(r) === getRepositoryId(candidate));
   const repoHierarchicalUrl = repo ? buildRepoUrl(repo, orgs) : null;
   
@@ -912,10 +916,8 @@ export async function candidatePage(
   }).join('');
   
   const body = `
-    ${subHeader(`Candidate ${getId(candidate).slice(0, 8)}`, '/app', 'All candidates')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(candidate))}</dd>
         <dt>Spec</dt><dd>${spec ? `<a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a>` : 'N/A'}</dd>
@@ -950,22 +952,25 @@ export async function candidatePage(
       ${promoDetails}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/candidates/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search for this candidate...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(`Candidate ${getId(candidate).slice(0, 8)}`, body);
+
+  return appPage(chrome, {
+    title: `Candidate ${getId(candidate).slice(0, 8)}`,
+    crumbs: candidateCrumbs(candidate, spec, specOrg),
+    section: 'specs',
+    orgId: specOrg ? getId(specOrg) : undefined,
+    searchAction: `/app/candidates/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -979,21 +984,23 @@ export async function trialPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid trial ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid trial ID.');
   }
-  
-  const [trial, specs, candidates, promotionsList] = await Promise.all([
+
+  const [trial, specs, orgs, candidates, promotionsList] = await Promise.all([
     doReader.get(`/api/trials/${encodeURIComponent(id)}`),
     doReader.list('/api/specs', 500),
+    doReader.list('/api/organizations', 500), // for the breadcrumb; shared with the navigation read
     doReader.list('/api/candidates', 500),
     doReader.list('/api/promotions', 500),
   ]);
-  
+
   if (!trial) {
-    return page('Not found', '<p>Trial not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Trial not found. <a href="/app">Back to dashboard</a>');
   }
   
   const candidateA = candidates.find((c) => getId(c) === pick(trial, 'candidate_a_id', 'candidateAId'));
@@ -1002,7 +1009,9 @@ export async function trialPage(
   
   const specA = candidateA ? specs.find((s) => getId(s) === getSpecId(candidateA)) : undefined;
   const specB = candidateB ? specs.find((s) => getId(s) === getSpecId(candidateB)) : undefined;
-  
+  const trailSpec = specA ?? specB;
+  const trailOrg = trailSpec ? orgs.find((o) => getId(o) === getOrganizationId(trailSpec)) : undefined;
+
   const winnerPromotions = winner
     ? promotionsList.filter((p) => pick(p, 'candidate_id', 'candidateId') === getId(winner))
     : [];
@@ -1035,10 +1044,8 @@ export async function trialPage(
   const idSlice = (c: DoRow | undefined) => c ? getId(c).slice(0, 8) : 'N/A';
   
   const body = `
-    ${subHeader(`Trial ${getId(trial).slice(0, 8)}`, '/app', 'All trials')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(trial))}</dd>
         <dt>Candidate A</dt><dd>${candidateA ? `<a href="/app/candidates/${esc(encodeURIComponent(getId(candidateA)))}">${esc(idSlice(candidateA))}</a>` : 'N/A'}</dd>
@@ -1064,22 +1071,25 @@ export async function trialPage(
     </section>
     ` : ''}
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/trials/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search for this trial...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(`Trial ${getId(trial).slice(0, 8)}`, body);
+
+  return appPage(chrome, {
+    title: `Trial ${getId(trial).slice(0, 8)}`,
+    crumbs: trialCrumbs(trial, trailSpec, trailOrg),
+    section: 'specs',
+    orgId: trailOrg ? getId(trailOrg) : undefined,
+    searchAction: `/app/trials/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================

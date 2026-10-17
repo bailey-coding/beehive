@@ -348,3 +348,97 @@ describe('org and repo pages (L5)', () => {
     expect(await res.text()).toContain('<nav class="site-crumbs" aria-label="Breadcrumb">');
   });
 });
+
+// ============================================================================
+
+describe('spec, candidate and trial pages (L6)', () => {
+  let specId: string;
+  let c1: string;
+  let c2: string;
+  let trialId: string;
+
+  beforeEach(() => {
+    const repo = spec.createRepository('widgets', orgId, 'candidate', undefined, undefined, 'https://example.invalid/w.git', 'acme').id;
+    specId = spec.createSpec('Pricing', 'd', '{"endpoints":[]}', [], orgId, userId).id;
+    c1 = spec.createCandidate(specId, repo, 'sha1', 'base', userId).id;
+    c2 = spec.createCandidate(specId, repo, 'sha2', 'base', userId).id;
+    trialId = spec.createTrial(specId, c1, c2, userId).id;
+  });
+
+  const dash = '<li><a href="/app"><bdi>Dashboard</bdi></a></li>';
+  const org = () => `<li><a href="/app/orgs/${orgId}"><bdi>acme</bdi></a></li>`;
+  const specCrumb = () => `<li><a href="/app/specs/${specId}"><bdi>Pricing</bdi></a></li>`;
+
+  it('spec: Dashboard > org > spec, Specs item current, one search control, h2 Details', async () => {
+    const res = await ui(`/app/specs/${specId}?q=pri`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('<h1>Pricing</h1>');
+    expect(html).toContain(`${dash}${org()}<li aria-current="page"><bdi>Pricing</bdi></li>`);
+    expect(html).toContain('<a href="/app#specs" aria-current="true">Specs</a>');
+    expect(count(html, 'name="q"')).toBe(1);
+    expect(html).toContain(`action="/app/specs/${specId}#search"`);
+    expect(html).toContain('value="pri"');
+    expect(html).toContain('<h2>Details</h2>');
+    expect(html).not.toContain('<h3>Details</h3>');
+    expect(html).not.toContain('class="subbar"');
+  });
+
+  it('candidate: ... > spec > Candidate xxxxxxxx', async () => {
+    const html = await (await ui(`/app/candidates/${c1}`)).text();
+    expect(html).toContain(`<h1>Candidate ${c1.slice(0, 8)}</h1>`);
+    expect(html).toContain(`${dash}${org()}${specCrumb()}<li aria-current="page"><bdi>Candidate ${c1.slice(0, 8)}</bdi></li>`);
+    expect(count(html, 'name="q"')).toBe(1);
+    expect(html).toContain(`action="/app/candidates/${c1}#search"`);
+    expect(html).toContain('<h2>Details</h2>');
+  });
+
+  it('trial: ... > spec (from candidate A) > Trial xxxxxxxx', async () => {
+    const res = await ui(`/app/trials/${trialId}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(`${dash}${org()}${specCrumb()}<li aria-current="page"><bdi>Trial ${trialId.slice(0, 8)}</bdi></li>`);
+    expect(count(html, 'name="q"')).toBe(1);
+    expect(html).toContain('<h2>Details</h2>');
+  });
+
+  it('trial reads the organization list once (breadcrumb and navigation share it)', async () => {
+    await ui(`/app/trials/${trialId}`);
+    expect(orgListReads()).toHaveLength(1);
+  });
+
+  it('a missing org row drops its crumb on spec, candidate and trial pages', async () => {
+    overrides.push((req) => (new URL(req.url).pathname === '/api/organizations' && req.method === 'GET' ? Response.json({ success: true, data: [] }) : undefined));
+    for (const [path, last] of [
+      [`/app/specs/${specId}`, 'Pricing'],
+      [`/app/candidates/${c1}`, `Candidate ${c1.slice(0, 8)}`],
+      [`/app/trials/${trialId}`, `Trial ${trialId.slice(0, 8)}`],
+    ]) {
+      const html = await (await ui(path)).text();
+      expect(html, path).not.toContain('<bdi>acme</bdi></a></li><li');
+      expect(html, path).toContain(`<li aria-current="page"><bdi>${last}</bdi></li>`);
+    }
+  });
+
+  it('a spec name with markup is escaped in the trail of its candidate page and the title', async () => {
+    const evil = spec.createSpec('<script>alert(1)</script>', 'd', '{}', [], orgId, userId).id;
+    const repo = spec.createRepository('r2', orgId, 'candidate', undefined, undefined, 'https://example.invalid/r2.git', 'acme').id;
+    const cand = spec.createCandidate(evil, repo, 's', 'b', userId).id;
+    for (const path of [`/app/specs/${evil}`, `/app/candidates/${cand}`]) {
+      const html = await (await ui(path)).text();
+      expect(html, path).not.toContain('<script>alert(1)');
+      expect(html, path).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    }
+  });
+
+  it('keeps 404 for unknown spec, candidate and trial and 502 for a DO failure', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const kind of ['specs', 'candidates', 'trials']) expect((await ui(`/app/${kind}/missing`)).status, kind).toBe(404);
+    overrides.push((req) => (new URL(req.url).pathname === '/api/promotions' ? Response.json({ success: false, error: 'boom' }, { status: 500 }) : undefined));
+    for (const path of [`/app/specs/${specId}`, `/app/candidates/${c1}`, `/app/trials/${trialId}`]) {
+      const res = await ui(path);
+      expect(res.status, path).toBe(502);
+      expect(await res.text()).toContain('could not load this page');
+    }
+  });
+});
