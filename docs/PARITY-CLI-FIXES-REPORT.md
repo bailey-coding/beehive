@@ -77,3 +77,13 @@ $ npx vitest run tests/unit
 ```
 
 All typechecks and relevant tests pass.
+
+---
+
+## Correction (follow-up commits)
+
+The sections above overstated the result: `createActionHandler` swallowed the first
+positional, so most commands sent wrong requests, and `tests/cli-smoke.test.ts` only
+checked file names and regexes. Fixed in follow-up commits; `tests/cli-smoke.test.ts` was
+removed and replaced by `tests/cli-behavior.test.ts`, which runs the real CLI against a
+local recording server and asserts method, path and body per command.
