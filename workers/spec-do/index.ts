@@ -59,6 +59,9 @@ class NotFoundError extends Error {}
 class ForbiddenError extends Error {}
 class BadRequestError extends Error {}
 
+const COMMENT_POLICIES = ['open', 'maintainers_only', 'locked'];
+const MAX_COMMENT_CHARS = 10_000;
+
 // /promotion-states, /tournament-status, /merge-train-status, each with an optional /<id> segment
 const LEDGER_ROUTE = /^(\/promotion-states|\/tournament-status|\/merge-train-status)(?:\/([^\/]+))?$/;
 
@@ -3545,10 +3548,9 @@ export class SpecDO {
       if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
         const body: UpdateIssueCommentPolicyRequest = await request.json();
-        this.updateIssueCommentPolicy(id, body.commentPolicy, actorId);
-        const issue = this.getIssue(id);
-        return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
-          headers: { 'Content-Type': 'application/json' },
+        return this.issueRoute(200, () => {
+          this.updateIssueCommentPolicy(id, body.commentPolicy, actorId);
+          return this.getIssue(id);
         });
       }
       
@@ -3559,14 +3561,9 @@ export class SpecDO {
       if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'POST') {
         const id = this.extractParentId(path);
         const body: CreateIssueCommentRequest = await request.json();
-        const comment = this.createIssueComment(
-          id,
-          body.body,
-          body.createdBy || actorId
-        );
-        return new Response(JSON.stringify({ success: true, data: comment, timestamp: Date.now() }), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
+        return this.issueRoute(201, () => {
+          this.requireSameAuthor(body.createdBy, actorId);
+          return this.createIssueComment(id, body.body, actorId);
         });
       }
       
@@ -4147,25 +4144,53 @@ export class SpecDO {
   // UPDATE METHODS
   // ============================================================================
 
+  /** Maintainer only: without that, any actor could undo a lock. Throws Forbidden/BadRequest/NotFound. */
   updateIssueCommentPolicy(id: string, commentPolicy: string, changedBy: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare(`UPDATE issues SET comment_policy = ? WHERE id = ?`);
-    stmt.bind(commentPolicy, id);
-    stmt.step();
-    stmt.free();
-    this.recordHistory('issue', id, commentPolicy, changedBy, 'Comment policy updated');
+    this.state.storage.transactionSync(() => {
+      if (!this.isMaintainer(changedBy)) throw new ForbiddenError('changing the comment policy requires a maintainer actor');
+      if (!COMMENT_POLICIES.includes(commentPolicy)) {
+        throw new BadRequestError(`commentPolicy must be one of ${COMMENT_POLICIES.join(', ')}`);
+      }
+      this.requireLiveIssue(id);
+      const stmt = this.db!.prepare(`UPDATE issues SET comment_policy = ? WHERE id = ?`);
+      stmt.bind(commentPolicy, id);
+      stmt.step();
+      stmt.free();
+      this.recordHistory('issue', id, commentPolicy as EntityStage, changedBy, 'Comment policy updated');
+    });
   }
 
+  /** The issue row, or NotFoundError when it is unknown or tombstoned */
+  private requireLiveIssue(id: string): Record<string, unknown> {
+    const issue = this.queryAll(`SELECT comment_policy, status, created_by FROM issues WHERE id = ? AND deleted_at IS NULL`, id)[0];
+    if (!issue) throw new NotFoundError('issue not found');
+    return issue;
+  }
+
+  /**
+   * Rules: live issue (404), non-empty body of at most MAX_COMMENT_CHARS (400). A `locked` or
+   * `maintainers_only` issue takes comments from maintainers only (403 for anyone else); `open`
+   * takes everyone's, and a `closed` issue still accepts comments. One transaction.
+   */
   createIssueComment(issueId: string, body: string, createdBy: string): IssueCommentResponse {
     if (!this.db) throw new Error('Database not initialized');
-    const id = generateId();
-    const stmt = this.db.prepare(
-      `INSERT INTO issue_comments (id, issue_id, body, created_by, created_at) VALUES (?, ?, ?, ?, ?)`
-    );
-    stmt.bind(id, issueId, body, createdBy, now());
-    stmt.step();
-    stmt.free();
-    return { id, issueId, body, createdBy, createdAt: now() };
+    if (typeof body !== 'string' || body.trim() === '') throw new BadRequestError('body must be a non-empty string');
+    if (body.length > MAX_COMMENT_CHARS) throw new BadRequestError(`body must be at most ${MAX_COMMENT_CHARS} characters`);
+    return this.state.storage.transactionSync(() => {
+      const issue = this.requireLiveIssue(issueId);
+      if (issue.comment_policy !== 'open' && !this.isMaintainer(createdBy)) {
+        throw new ForbiddenError(`issue is ${issue.comment_policy}: only maintainers may comment`);
+      }
+      const id = generateId();
+      const stmt = this.db!.prepare(
+        `INSERT INTO issue_comments (id, issue_id, body, created_by, created_at) VALUES (?, ?, ?, ?, ?)`
+      );
+      stmt.bind(id, issueId, body, createdBy, now());
+      stmt.step();
+      stmt.free();
+      return { id, issueId, body, createdBy, createdAt: now() };
+    });
   }
 
   createRepository(
