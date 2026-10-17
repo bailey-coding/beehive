@@ -78,3 +78,14 @@ Left untouched. Checked: no `*.zig` files in the repo (consistent with "Zig only
 ## Hygiene
 
 Templates: ADRs 0003-0005 omit Context/Alternatives/Consequences and Author; RFCs/RFOs follow the template headings. Indexes list every record; RFC/RFO README dates were not updated to the corrected dates (see record headers).
+
+## Follow-up (2026-10-17, after the audit)
+
+Decisions taken on the audit's open points, applied in the commit that adds this section:
+
+- **ADR-0005** is now **Proposed** (the schema it requires is not built); README and ARCHITECTURE index updated.
+- **ADR-0001** (Sapling) stays Accepted: it records the intended direction, and the audit note already says it is not built.
+- **Missing records:** added ADR-0006 (deploy path), ADR-0007 (fail-closed edge auth) and ADR-0008 (tombstone then purge), each written only from repo evidence with sources cited and no invented alternatives. The tournament state machine, the deploy-ref chain and the reserved org stay recorded inside RFC-0006, RFC-0004 and the reserved-org RFO.
+- **ARCHITECTURE.md** labels for ADR-0004 and ADR-0005 now match the ADR titles.
+- **RFC/RFO README** dates and authors match the corrected record headers; RFC-0003 is retitled "Service Tokens (object-capability model not built)".
+- **Not changed:** RFO filenames keep their original dates (renaming would break links); unsupported "Alternatives" and "Lessons" sections stay, flagged in place; RFO severities are left for a human.

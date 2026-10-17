@@ -32,13 +32,13 @@ A Request for Comments (RFC) is a formal proposal document that describes a new 
 
 | Number | Title | Status | Date | Author |
 |--------|-------|--------|------|--------|
-| [RFC-0001](./0001-oracle-ladder-architecture.md) | Oracle Ladder Architecture | Implemented (Retrospective) | 2026-10-09 | Maintainer / Architecture Team |
-| [RFC-0002](./0002-workers-native-stores.md) | Workers-Native Stores Architecture | Implemented (Retrospective) | 2026-10-09 | Maintainer / Architecture Team |
-| [RFC-0003](./0003-service-tokens-ocap.md) | Service Tokens & Object-Capability Model | Implemented (Retrospective) | 2026-10-12 | Maintainer / Architecture Team |
-| [RFC-0004](./0004-canary-deploy-rollback.md) | Canary Deploy + Auto-Rollback System | Implemented (Retrospective) | 2026-10-13 | Maintainer / Architecture Team |
-| [RFC-0005](./0005-shadow-router-cache.md) | Shadow Router In-Isolate Caching | Implemented (Retrospective) | 2026-10-13 | Maintainer / Architecture Team |
-| [RFC-0006](./0006-ledger-compare-and-swap.md) | Ledger Compare-and-Swap with Tournament State | Implemented (Retrospective) | 2026-10-13 | Maintainer / Architecture Team |
-| [RFC-0007](./0007-two-tier-token-authentication.md) | Two-Tier Internal Token Authentication | Implemented (Retrospective) | 2026-10-13 | Maintainer / Architecture Team |
+| [RFC-0001](./0001-oracle-ladder-architecture.md) | Oracle Ladder Architecture | Implemented (Retrospective) | 2026-10-09 | unattributed |
+| [RFC-0002](./0002-workers-native-stores.md) | Workers-Native Stores Architecture | Implemented (Retrospective) | 2026-10-09 | unattributed |
+| [RFC-0003](./0003-service-tokens-ocap.md) | Service Tokens (capability model not built) | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFC-0004](./0004-canary-deploy-rollback.md) | Canary Deploy + Auto-Rollback System | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFC-0005](./0005-shadow-router-cache.md) | Shadow Router In-Isolate Caching | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFC-0006](./0006-ledger-compare-and-swap.md) | Ledger Compare-and-Swap with Tournament State | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFC-0007](./0007-two-tier-token-authentication.md) | Two-Tier Internal Token Authentication | Implemented (Retrospective) | 2026-10-16 | unattributed |
 
 ---
 

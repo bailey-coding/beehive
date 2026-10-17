@@ -35,7 +35,10 @@ An Architecture Decision Record (ADR) is a short document that captures an impor
 | [ADR-0002](./0002-coordination-state.md) | Coordination State Storage | Accepted | 2026-10-09 |
 | [ADR-0003](./0003-language.md) | Language Strategy | Accepted | 2026-10-09 |
 | [ADR-0004](./0004-ci.md) | CI and Builds | Accepted | 2026-10-09 |
-| [ADR-0005](./0005-org-memory.md) | Organizational Memory | Accepted | 2026-10-09 |
+| [ADR-0005](./0005-org-memory.md) | Organizational Memory | Proposed | 2026-10-09 |
+| [ADR-0006](./0006-deploy-path.md) | Deploy path: GitHub CI-only, one Artifacts push | Accepted | 2026-10-15 |
+| [ADR-0007](./0007-fail-closed-edge-auth.md) | Fail-closed edge authentication | Accepted | 2026-10-14 |
+| [ADR-0008](./0008-tombstone-then-purge.md) | Tombstone, then guarded purge | Accepted | 2026-10-15 |
 
 ---
 

@@ -2,7 +2,7 @@
 RFC-0003
 ---
 
-# RFC: Service Tokens & Object-Capability Model
+# RFC: Service Tokens (object-capability model not built)
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-16 (commit aeec713, 01:04 UTC)  
