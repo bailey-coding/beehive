@@ -55,7 +55,7 @@ describe('D1 issue numbering', () => {
     expect((await created(await create({ repositoryId: repoA, title: 'three' }))).number).toBe(3);
   });
 
-  it('20 parallel creates get 20 distinct numbers', async () => {
+  it('20 parallel creates get 20 distinct numbers (the handler is synchronous after request.json(), so this does not by itself prove the transaction)', async () => {
     const results = await Promise.all(
       Array.from({ length: 20 }, (_, i) => create({ repositoryId: repoA, title: `p${i}` }).then(created))
     );
@@ -108,6 +108,24 @@ describe('D1 issue numbering', () => {
     expect(issueCount(repoA)).toBe(0);
     vi.restoreAllMocks();
     expect((await created(await create({ repositoryId: repoA, title: 'again' }))).number).toBe(1);
+  });
+
+  it('a failure after the number is read and the row inserted leaves nothing behind; the next create reuses that number', async () => {
+    // Every third history write fails, i.e. after the number was read and the issue inserted
+    const real = SpecDO.prototype.recordHistory;
+    let calls = 0;
+    vi.spyOn(SpecDO.prototype, 'recordHistory').mockImplementation(function (this: SpecDO, ...args: Parameters<SpecDO['recordHistory']>) {
+      if (++calls % 3 === 0) throw new Error('history down');
+      return real.apply(this, args);
+    });
+    const statuses = await Promise.all(Array.from({ length: 9 }, (_, i) => create({ repositoryId: repoA, title: `f${i}` }).then((r) => r.status)));
+    expect(statuses.filter((s) => s === 500)).toHaveLength(3);
+    const numbers = (store.raw.prepare('SELECT number FROM issues WHERE repository_id = ? ORDER BY number').all(repoA) as { number: number }[]).map((r) => r.number);
+    expect(numbers).toEqual([1, 2, 3, 4, 5, 6]); // no orphan rows, no gaps
+    const histories = (store.raw.prepare(`SELECT COUNT(*) AS n FROM entity_history WHERE entity_type = 'issue'`).get() as { n: number }).n;
+    expect(histories).toBe(6);
+    vi.restoreAllMocks();
+    expect((await created(await create({ repositoryId: repoA, title: 'next' }))).number).toBe(7);
   });
 
   it('takes the author from the header actor', async () => {
