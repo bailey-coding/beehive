@@ -273,6 +273,9 @@ export default {
     if (path.match(/^\/api\/issues\/[^\/]+\/stage$/) && method === 'PATCH') {
       return handleUpdateIssueStage(request, specDoStub);
     }
+    if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
+      return handleUpdateIssueStatus(request, specDoStub);
+    }
     if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
       return handleUpdateIssueCommentPolicy(request, specDoStub);
     }
@@ -1782,6 +1785,17 @@ async function handleUpdateIssueStage(
   const body: import('./types').UpdateIssueStageRequest = await request.json();
   const actorId = request.headers.get('X-Actor-ID') || 'unknown';
   const response = await sendToSpecDo(stub, `/api/issues/${id}/stage`, 'PATCH', body, actorId);
+  return response;
+}
+
+async function handleUpdateIssueStatus(
+  request: Request,
+  stub: SpecDoStub
+): Promise<Response> {
+  const id = extractParentId(request.url);
+  const body: import('./types').UpdateIssueStatusRequest = await request.json();
+  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const response = await sendToSpecDo(stub, `/api/issues/${id}/status`, 'PATCH', body, actorId);
   return response;
 }
 

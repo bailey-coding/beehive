@@ -540,7 +540,8 @@ export const PromotionResponseSchema = z.object({
 // ============================================================================
 
 export interface CreateIssueRequest {
-  number: number;
+  /** Optional: the Spec DO assigns the next number for the repository when omitted */
+  number?: number;
   repositoryId: string;
   title: string;
   body?: string;
@@ -570,6 +571,10 @@ export interface UpdateIssueStageRequest {
   notes?: string;
 }
 
+export interface UpdateIssueStatusRequest {
+  status: 'open' | 'closed';
+}
+
 export interface UpdateIssueCommentPolicyRequest {
   commentPolicy: 'open' | 'maintainers_only' | 'locked';
 }
@@ -584,7 +589,7 @@ export const IssueStageSchema = z.enum([
 ]);
 
 export const CreateIssueRequestSchema = z.object({
-  number: z.number().int().positive(),
+  number: z.number().int().positive().optional(),
   repositoryId: UUIDSchema,
   title: z.string().min(1),
   body: z.string().optional(),

@@ -59,6 +59,11 @@ class NotFoundError extends Error {}
 class ForbiddenError extends Error {}
 class BadRequestError extends Error {}
 
+const COMMENT_POLICIES = ['open', 'maintainers_only', 'locked'];
+const MAX_COMMENT_CHARS = 10_000;
+// An explicit issue number above this is refused: a float-sized one would make MAX+1 return itself
+const MAX_ISSUE_NUMBER = 2_147_483_647;
+
 // /promotion-states, /tournament-status, /merge-train-status, each with an optional /<id> segment
 const LEDGER_ROUTE = /^(\/promotion-states|\/tournament-status|\/merge-train-status)(?:\/([^\/]+))?$/;
 
@@ -271,6 +276,7 @@ import type {
   CreateIssueRequest,
   UpdateIssueStageRequest,
   UpdateIssueCommentPolicyRequest,
+  UpdateIssueStatusRequest,
   CreateIssueCommentRequest,
   CreateIssueSpecLinkRequest,
   CreateIssueCandidateLinkRequest,
@@ -1462,8 +1468,69 @@ export class SpecDO {
   // ISSUES
   // ============================================================================
 
+  /**
+   * Local error mapper for the issue routes only. The main fetch catch maps just ConflictError,
+   * and callers branch on 404 elsewhere, so it is deliberately not widened. Anything unmapped
+   * is rethrown to it unchanged. Order: actor (403), then the JSON body (400), then the handler.
+   */
+  private async issueRoute(
+    request: Request,
+    successStatus: number,
+    actorId: string,
+    fn: (body: Record<string, unknown>) => unknown
+  ): Promise<Response> {
+    const reply = (success: boolean, status: number, extra: Record<string, unknown>) =>
+      new Response(JSON.stringify({ success, ...extra, timestamp: Date.now() }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    try {
+      this.requireIssueActor(actorId);
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        throw new BadRequestError('request body must be valid JSON');
+      }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new BadRequestError('request body must be a JSON object');
+      }
+      return reply(true, successStatus, { data: fn(body as Record<string, unknown>) });
+    } catch (e) {
+      const status =
+        e instanceof BadRequestError ? 400 : e instanceof ForbiddenError ? 403 : e instanceof NotFoundError ? 404 : e instanceof ConflictError ? 409 : 0;
+      if (!status) throw e;
+      return reply(false, status, { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /**
+   * The header actor must be a row in `actors` and not a service account's actor. 'unknown' (no
+   * header) and unknown ids are refused with 403, so issue writes never rest on a bare string.
+   * Only as strong as the edge: a master-token holder can still assert any existing actor id.
+   */
+  private requireIssueActor(actorId: string): void {
+    if (actorId === 'unknown' || !this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, actorId).length) {
+      throw new ForbiddenError('X-Actor-ID must name an existing actor');
+    }
+    if (this.isServiceActor(actorId)) throw new ForbiddenError('service account actors cannot write issues');
+  }
+
+  /** The author is the header actor; a body that names someone else is refused, never trusted. */
+  private requireSameAuthor(bodyCreatedBy: unknown, actorId: string): void {
+    if (bodyCreatedBy !== undefined && bodyCreatedBy !== null && bodyCreatedBy !== '' && bodyCreatedBy !== actorId) {
+      throw new ForbiddenError('createdBy must match the X-Actor-ID header');
+    }
+  }
+
+  /**
+   * `number` is optional: omitted, it is MAX(number)+1 for the repository (tombstoned issues count,
+   * so a number is never reused). All checks, the INSERT and the history row run in one
+   * transactionSync, so concurrent creates cannot take the same number and a failed history write
+   * leaves no row. Throws BadRequestError / NotFoundError / ConflictError (see issueRoute).
+   */
   createIssue(
-    number: number,
+    number: number | undefined,
     repositoryId: string,
     title: string,
     body: string,
@@ -1471,35 +1538,54 @@ export class SpecDO {
     labels?: string[]
   ): IssueRow {
     if (!this.db) throw new Error('Database not initialized');
-    
+    if (number !== undefined && number !== null && (!Number.isSafeInteger(number) || number < 1 || number > MAX_ISSUE_NUMBER)) {
+      throw new BadRequestError(`number must be an integer between 1 and ${MAX_ISSUE_NUMBER}`);
+    }
+
     const id = generateId();
     const labelsJson = labels ? JSON.stringify(labels) : null;
-    
-    const stmt = this.db.prepare(
-      `INSERT INTO issues 
-       (id, number, repository_id, title, body, status, labels, created_at, created_by, comment_policy, visibility, stage) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    stmt.bind(id, number, repositoryId, title, body, 'open', labelsJson, now(), createdBy, 'open', 'public', 'reported');
-    stmt.step();
-    stmt.free();
-    
-    this.recordHistory('issue', id, 'reported', createdBy, 'Issue created');
-    
-    return {
-      id,
-      number,
-      repository_id: repositoryId,
-      title,
-      body: body ?? undefined,
-      status: 'open',
-      labels: labelsJson ?? undefined,
-      created_at: now(),
-      created_by: createdBy,
-      comment_policy: 'open',
-      visibility: 'public',
-      stage: 'reported',
-    };
+
+    return this.state.storage.transactionSync(() => {
+      const repo = this.queryAll(`SELECT deleted_at FROM repositories WHERE id = ?`, repositoryId)[0];
+      if (!repo) throw new NotFoundError('repository not found');
+      if (repo.deleted_at != null) throw new ConflictError('repository is tombstoned');
+
+      let assigned: number;
+      if (number === undefined || number === null) {
+        assigned = (this.queryAll(`SELECT COALESCE(MAX(number), 0) + 1 AS n FROM issues WHERE repository_id = ?`, repositoryId)[0].n as number);
+      } else {
+        if (this.queryAll(`SELECT 1 AS x FROM issues WHERE repository_id = ? AND number = ?`, repositoryId, number).length) {
+          throw new ConflictError(`issue number ${number} is already used in this repository`);
+        }
+        assigned = number;
+      }
+
+      const stmt = this.db!.prepare(
+        `INSERT INTO issues 
+         (id, number, repository_id, title, body, status, labels, created_at, created_by, comment_policy, visibility, stage) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      stmt.bind(id, assigned, repositoryId, title, body, 'open', labelsJson, now(), createdBy, 'open', 'public', 'reported');
+      stmt.step();
+      stmt.free();
+
+      this.recordHistory('issue', id, 'reported', createdBy, 'Issue created');
+
+      return {
+        id,
+        number: assigned,
+        repository_id: repositoryId,
+        title,
+        body: body ?? undefined,
+        status: 'open',
+        labels: labelsJson ?? undefined,
+        created_at: now(),
+        created_by: createdBy,
+        comment_policy: 'open',
+        visibility: 'public',
+        stage: 'reported',
+      };
+    });
   }
 
   transitionIssue(id: string, newStage: IssueRow['stage'], changedBy: string, notes?: string): void {
@@ -3446,18 +3532,16 @@ export class SpecDO {
       // ============================================================================
       
       if (path === '/api/issues' && method === 'POST') {
-        const body: CreateIssueRequest = await request.json();
-        const issue = this.createIssue(
-          body.number,
-          body.repositoryId,
-          body.title,
-          body.body || '',
-          body.createdBy || actorId,
-          body.labels
-        );
-        return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
+        return await this.issueRoute(request, 201, actorId, (raw) => {
+          const body = raw as unknown as CreateIssueRequest;
+          if (typeof body.title !== 'string' || body.title.trim() === '') throw new BadRequestError('title must be a non-empty string');
+          if (typeof body.repositoryId !== 'string' || body.repositoryId === '') throw new BadRequestError('repositoryId must be a non-empty string');
+          if (body.body !== undefined && body.body !== null && typeof body.body !== 'string') throw new BadRequestError('body must be a string');
+          if (body.labels !== undefined && body.labels !== null && (!Array.isArray(body.labels) || body.labels.some((l) => typeof l !== 'string'))) {
+            throw new BadRequestError('labels must be an array of strings');
+          }
+          this.requireSameAuthor(body.createdBy, actorId);
+          return this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels);
         });
       }
       
@@ -3497,13 +3581,19 @@ export class SpecDO {
         });
       }
       
+      if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
+        const id = this.extractParentId(path);
+        return await this.issueRoute(request, 200, actorId, (body) => {
+          this.setIssueStatus(id, body.status as string, actorId);
+          return this.getIssue(id);
+        });
+      }
+
       if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
-        const body: UpdateIssueCommentPolicyRequest = await request.json();
-        this.updateIssueCommentPolicy(id, body.commentPolicy, actorId);
-        const issue = this.getIssue(id);
-        return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
-          headers: { 'Content-Type': 'application/json' },
+        return await this.issueRoute(request, 200, actorId, (body) => {
+          this.updateIssueCommentPolicy(id, body.commentPolicy as string, actorId);
+          return this.getIssue(id);
         });
       }
       
@@ -3513,15 +3603,9 @@ export class SpecDO {
       
       if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'POST') {
         const id = this.extractParentId(path);
-        const body: CreateIssueCommentRequest = await request.json();
-        const comment = this.createIssueComment(
-          id,
-          body.body,
-          body.createdBy || actorId
-        );
-        return new Response(JSON.stringify({ success: true, data: comment, timestamp: Date.now() }), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
+        return await this.issueRoute(request, 201, actorId, (body) => {
+          this.requireSameAuthor(body.createdBy, actorId);
+          return this.createIssueComment(id, body.body as string, actorId);
         });
       }
       
@@ -4102,25 +4186,75 @@ export class SpecDO {
   // UPDATE METHODS
   // ============================================================================
 
+  /** Maintainer only: without that, any actor could undo a lock. Throws Forbidden/BadRequest/NotFound. */
   updateIssueCommentPolicy(id: string, commentPolicy: string, changedBy: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    const stmt = this.db.prepare(`UPDATE issues SET comment_policy = ? WHERE id = ?`);
-    stmt.bind(commentPolicy, id);
-    stmt.step();
-    stmt.free();
-    this.recordHistory('issue', id, commentPolicy, changedBy, 'Comment policy updated');
+    this.state.storage.transactionSync(() => {
+      if (!this.isMaintainer(changedBy)) throw new ForbiddenError('changing the comment policy requires a maintainer actor');
+      if (!COMMENT_POLICIES.includes(commentPolicy)) {
+        throw new BadRequestError(`commentPolicy must be one of ${COMMENT_POLICIES.join(', ')}`);
+      }
+      this.requireLiveIssue(id);
+      const stmt = this.db!.prepare(`UPDATE issues SET comment_policy = ? WHERE id = ?`);
+      stmt.bind(commentPolicy, id);
+      stmt.step();
+      stmt.free();
+      this.recordHistory('issue', id, commentPolicy as EntityStage, changedBy, 'Comment policy updated');
+    });
   }
 
+  /**
+   * Close or reopen: the issue's creator or a maintainer (403 otherwise). The same status again
+   * is a no-op. `stage` is left alone; the history row carries the current one.
+   */
+  setIssueStatus(id: string, status: string, changedBy: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    if (status !== 'open' && status !== 'closed') throw new BadRequestError("status must be 'open' or 'closed'");
+    this.state.storage.transactionSync(() => {
+      const issue = this.requireLiveIssue(id);
+      if (issue.created_by !== changedBy && !this.isMaintainer(changedBy)) {
+        throw new ForbiddenError('only the issue creator or a maintainer may close or reopen it');
+      }
+      if (issue.status === status) return;
+      const closing = status === 'closed';
+      const stmt = this.db!.prepare(`UPDATE issues SET status = ?, closed_at = ?, closed_by = ? WHERE id = ?`);
+      stmt.bind(status, closing ? now() : null, closing ? changedBy : null, id);
+      stmt.step();
+      stmt.free();
+      this.recordHistory('issue', id, issue.stage as EntityStage, changedBy, closing ? 'Issue closed' : 'Issue reopened');
+    });
+  }
+
+  /** The issue row, or NotFoundError when it is unknown or tombstoned */
+  private requireLiveIssue(id: string): Record<string, unknown> {
+    const issue = this.queryAll(`SELECT comment_policy, status, created_by, stage FROM issues WHERE id = ? AND deleted_at IS NULL`, id)[0];
+    if (!issue) throw new NotFoundError('issue not found');
+    return issue;
+  }
+
+  /**
+   * Rules: live issue (404), non-empty body of at most MAX_COMMENT_CHARS (400). A `locked` or
+   * `maintainers_only` issue takes comments from maintainers only (403 for anyone else); `open`
+   * takes everyone's, and a `closed` issue still accepts comments. One transaction.
+   */
   createIssueComment(issueId: string, body: string, createdBy: string): IssueCommentResponse {
     if (!this.db) throw new Error('Database not initialized');
-    const id = generateId();
-    const stmt = this.db.prepare(
-      `INSERT INTO issue_comments (id, issue_id, body, created_by, created_at) VALUES (?, ?, ?, ?, ?)`
-    );
-    stmt.bind(id, issueId, body, createdBy, now());
-    stmt.step();
-    stmt.free();
-    return { id, issueId, body, createdBy, createdAt: now() };
+    if (typeof body !== 'string' || body.trim() === '') throw new BadRequestError('body must be a non-empty string');
+    if (body.length > MAX_COMMENT_CHARS) throw new BadRequestError(`body must be at most ${MAX_COMMENT_CHARS} characters`);
+    return this.state.storage.transactionSync(() => {
+      const issue = this.requireLiveIssue(issueId);
+      if (issue.comment_policy !== 'open' && !this.isMaintainer(createdBy)) {
+        throw new ForbiddenError(`issue is ${issue.comment_policy}: only maintainers may comment`);
+      }
+      const id = generateId();
+      const stmt = this.db!.prepare(
+        `INSERT INTO issue_comments (id, issue_id, body, created_by, created_at) VALUES (?, ?, ?, ?, ?)`
+      );
+      stmt.bind(id, issueId, body, createdBy, now());
+      stmt.step();
+      stmt.free();
+      return { id, issueId, body, createdBy, createdAt: now() };
+    });
   }
 
   createRepository(

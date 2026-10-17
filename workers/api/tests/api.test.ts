@@ -671,3 +671,25 @@ describe('Shared Utilities', () => {
     });
   });
 });
+
+describe('PATCH /api/issues/:id/status (edge passthrough)', () => {
+  beforeEach(() => {
+    mockSpecDoStub.fetch.mockReset();
+    mockSpecDoNamespace.get.mockReturnValue(mockSpecDoStub);
+  });
+
+  it('forwards the body and the actor header to the Spec DO and returns its answer', async () => {
+    mockSpecDoStub.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ success: false, error: 'nope' }), { status: 403 }));
+    const request = createRequest('/api/issues/issue-1/status', 'PATCH', { status: 'closed' }, {
+      Authorization: 'Bearer test-auth-token',
+      'X-Actor-ID': 'actor-1',
+    });
+    const response = await worker.fetch(request, mockEnv, mockCtx);
+    expect(response.status).toBe(403);
+    const forwarded = mockSpecDoStub.fetch.mock.calls[0][0] as Request;
+    expect(forwarded.method).toBe('PATCH');
+    expect(new URL(forwarded.url).pathname).toBe('/api/issues/issue-1/status');
+    expect(forwarded.headers.get('X-Actor-ID')).toBe('actor-1');
+    expect(await forwarded.json()).toEqual({ status: 'closed' });
+  });
+});
