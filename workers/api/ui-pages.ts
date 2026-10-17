@@ -19,6 +19,7 @@ import {
   mockFileTree, renderFileTree, renderFileTreeSection,
   type ArtifactsUiEnv
 } from './ui-semantic';
+import { buildRepoUrl } from './ui-repo-ref';
 
 // Session type (re-exported from ui.ts for tests)
 export interface Session {
@@ -144,38 +145,7 @@ function getNamespace(row: DoRow): string {
   return pick(row, 'namespace');
 }
 
-/**
- * Build a hierarchical repo URL or fall back to UUID URL.
- * Falls back when: org not found, namespace empty, or any component has invalid characters.
- */
-function buildRepoUrl(repo: DoRow, orgs: DoRow[], repoIdFallback?: string): string {
-  const id = repoIdFallback || pick(repo, 'id');
-  const repoOrg = orgs.find((o) => pick(o, 'id') === pick(repo, 'organization_id', 'organizationId'));
-  
-  if (!repoOrg) {
-    // Fallback to UUID URL if org not found (Bug #3 fix)
-    return `/app/repos/${esc(encodeURIComponent(id))}`;
-  }
-  
-  const orgName = pick(repoOrg, 'name');
-  const namespace = pick(repo, 'namespace') || 'default';
-  const repoName = pick(repo, 'name') || id;
-  
-  // Validate all components have allowed characters (Bug #2 fix)
-  const validComponent = /^[A-Za-z0-9_.-]{1,64}$/;
-  if (!validComponent.test(orgName) || 
-      !validComponent.test(namespace) || 
-      !validComponent.test(repoName)) {
-    // Fallback to UUID URL if any component has invalid characters
-    return `/app/repos/${esc(encodeURIComponent(id))}`;
-  }
-  
-  // If namespace equals orgName, use 2-part URL; otherwise use 3-part
-  const namespacePart = namespace === orgName ? '' : `/${esc(encodeURIComponent(namespace))}`;
-  return `/app/repos/${esc(encodeURIComponent(orgName))}${namespacePart}/${esc(encodeURIComponent(repoName))}`;
-}
-
-// Export buildRepoUrl for use in ui.ts
+// buildRepoUrl lives in ui-repo-ref.ts (shared validator); re-exported for ui.ts and tests
 export { buildRepoUrl };
 
 // ============================================================================
