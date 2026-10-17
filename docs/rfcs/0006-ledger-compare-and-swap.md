@@ -5,9 +5,9 @@ RFC-0006
 # RFC: Ledger Compare-and-Swap (CAS) with Tournament State Machine
 
 **Status:** Implemented (Retrospective)  
-**Date:** 2026-10-13 (Approximate, based on commit fbc9fb5)  
-**Author:** Maintainer / Architecture Team  
-**Related:** RFC-0001 (Oracle Ladder), RFC-0004 (Canary Deploy), MILESTONES.md M7/M8  
+**Date:** 2026-10-16 (commit fbc9fb5, 20:04 UTC)  
+**Author:** unattributed (backfilled from git history)  
+**Related:** RFC-0001 (Oracle Ladder), RFC-0004 (Canary Deploy), MILESTONES.md M5a (idempotency)  
 **Supersedes:** None
 
 ---
@@ -28,7 +28,7 @@ The Spec DO ledger faces a fundamental challenge:
 - **Atomic operations** - Promotion decisions must be atomic (promote + record verdict together)
 - **Version conflicts** - Need to detect and handle conflicts when two processes try to update the same record
 
-**From the codebase:** "Queue delivery is at-least-once and double-writes are possible today." (Commit 8ef8b61)
+**From the docs:** "Queue delivery is at-least-once and double-writes are possible today" (`docs/MILESTONES.md` M5a; it is not in commit 8ef8b61). Note this CAS covers tournaments and merge trains only; M5a idempotency keys for all Spec DO mutations are still planned.
 
 ### Requirements
 
@@ -43,155 +43,40 @@ The Spec DO ledger faces a fundamental challenge:
 
 ## Detailed Design
 
-### Compare-and-Swap Pattern
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** the original design claimed a `version` column on
+> "all ledger tables", a `GET/PATCH /spec-do/record/:id` API and an INIT/RUNNING/DECIDING/
+> CANCELLED tournament machine. None of that matches the code. Replaced from fbc9fb5,
+> `workers/spec-do/schema.sql` (m8 block) and `workers/shared/ledger-state-machine.ts`.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    COMPARE-AND-SWAP (CAS)                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Client (Promotion Worker)                                          │
-│       │                                                               │
-│       ▼                                                               │
-│  ┌─────────────────┐                                                │
-│  │  Step 1: Read   │  GET /spec-do/record/:id                       │
-│  │  - Get current │──────────────────────► Spec DO                │
-│  │    version     │     (current_version = v1)                   │
-│  │  - Get current │                                     │
-│  │    data        │                                     │
-│  └────────┬────────┘                                                │
-│            │                                                          │
-│            ▼                                                          │
-│  ┌─────────────────┐                                                │
-│  │  Step 2: Modify │  Local computation                            │
-│  │  - Update data  │  new_data = f(current_data)                    │
-│  │  - New version  │  new_version = current_version + 1           │
-│  └────────┬────────┘                                                │
-│            │                                                          │
-│            ▼                                                          │
-│  ┌─────────────────┐                                                │
-│  │  Step 3: CAS    │  PATCH /spec-do/record/:id                    │
-│  │  - Send:       │──────────────────────► Spec DO                │
-│  │    new_data   │     IF version == current_version:            │
-│  │    new_version│        UPDATE record                         │
-│  │    expected_v │        SET data = new_data                    │
-│  │    er        │        SET version = new_version              │
-│  │  - Check:     │        RETURN success                         │
-│  │    version == │     ELSE:                                      │
-│  │    expected_v │        RETURN conflict                         │
-│  │    er        │                                                   │
-│  └────────┬────────┘                                                │
-│            │                                                          │
-│     ┌──────┴──────┐                                                │
-│     ▼             ▼                                                 │
-│  Success      Conflict                                                │
-│     │             │                                                 │
-│     ▼             ▼                                                 │
-│  Done      Retry with                                                │
-│            fresh version                                              │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+Implemented in fbc9fb5 (2026-10-16 20:04 UTC), migration m7 -> m8, additive. Problem stated in the
+commit: tournament and merge-train POST replaced whole rows, so concurrent promotion workers lost
+updates (last writer won).
 
-### Version Field in Schema
+### Compare-and-swap
 
-All ledger tables now include a `version` field:
+- `version INTEGER NOT NULL DEFAULT 1` exists on **`tournaments` and `merge_trains` only**
+  (added by `SpecDO.applyLedgerCas`, PRAGMA-guarded). Candidates, specs and the other tables have
+  no version column. Every write bumps it.
+- Routes are `/tournament-status` and `/merge-train-status` (`LEDGER_PATHS`,
+  `workers/shared/promotion-ledger.ts:172`). A POST over an existing row requires the
+  `X-Expected-Version` header (409 `version_required` / `version_conflict`); a PATCH honours the
+  header when sent. Check and write share one `transactionSync`.
+- Promotion worker clients use `PromotionLedgerClient.modifyTournament` / `modifyMergeTrain`:
+  re-read and re-apply on conflict, 3 tries. A failed winner promotion now throws.
 
-```sql
--- Example: candidates table
-CREATE TABLE candidates (
-    id TEXT PRIMARY KEY,
-    spec_id TEXT NOT NULL REFERENCES specs(id),
-    repository_id TEXT NOT NULL REFERENCES repositories(id),
-    commit_hash TEXT NOT NULL,
-    actor_id TEXT NOT NULL REFERENCES actors(id),
-    status TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 0,  -- ← CAS version
-    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-);
-```
+### Tournament state machine (`workers/shared/ledger-state-machine.ts`)
 
-### Tournament State Machine
+States are `pending`, `in_progress`, `completed`, `failed` (not the INIT/RUNNING/DECIDING/CANCELLED
+set previously shown; there is no cancelled state).
 
-**Tournament = Multi-candidate promotion competition**
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TOURNAMENT STATE MACHINE                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  States:                                                            │
-│                                                                      │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐           │
-│  │   INIT      │───►│   RUNNING   │───►│  DECIDING   │           │
-│  │  (setup)    │    │  (in-prog)  │    │  (evaluating)│           │
-│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘           │
-│         │                  │                  │                   │
-│         │                  │                  │                   │
-│         ▼                  ▼                  ▼                   │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐           │
-│  │  CANCELLED  │◄───┤    FAILED    │◄───┤  COMPLETED │           │
-│  │             │    │             │    │             │           │
-│  └─────────────┘    └─────────────┘    └─────────────┘           │
-│                                                                      │
-│  Transitions:                                                         │
-│  - INIT → RUNNING: Tournament starts, candidates registered         │
-│  - RUNNING → DECIDING: All candidates have been evaluated          │
-│  - DECIDING → COMPLETED: Winner selected and promoted             │
-│  - RUNNING → FAILED: Unrecoverable error occurred                  │
-│  - DECIDING → FAILED: No winner could be determined                  │
-│  - Any → CANCELLED: External cancellation request                  │
-│                                                                      │
-│  CAS Integration:                                                    │
-│  - All state transitions use CAS to prevent conflicts             │
-│  - Retry on conflict with fresh version                              │
-│  - Failed tournaments recorded for observability                   │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Promotion Worker Read-Modify-Write Retries
-
-From the commit message: "promotion worker read-modify-write retries and records failed tournaments"
-
-```typescript
-// Pseudocode for promotion worker CAS retry
-async function updateCandidateWithRetry(
-  candidateId: string,
-  updateFn: (data: Candidate) => Candidate,
-  maxRetries: number = 3
-): Promise<Candidate> {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    // Step 1: Read current state
-    const { data: current, version } = await specDoClient.getCandidate(candidateId);
-    
-    // Step 2: Modify locally
-    const updated = updateFn(current);
-    const newVersion = version + 1;
-    
-    // Step 3: CAS
-    const result = await specDoClient.updateCandidate(
-      candidateId,
-      updated,
-      { expectedVersion: version, newVersion }
-    );
-    
-    if (result.success) {
-      return updated; // Success
-    }
-    
-    // Conflict - retry with fresh data
-    if (result.error === 'version_conflict') {
-      continue; // Retry loop will fetch fresh data
-    }
-    
-    throw result.error;
-  }
-  
-  throw new Error(`Max retries (${maxRetries}) exceeded`);
-}
-```
+- `pending -> in_progress` needs at least 2 competing candidates
+- `in_progress -> completed` needs a winner that is one of the candidates, and `completedAt`
+- `in_progress -> failed` needs `failureReason`; the DO counts entries into `failed` in `attempts`
+- `failed -> in_progress` retry while `attempts < MAX_TOURNAMENT_ATTEMPTS` (3), else
+  `retries_exhausted`; `failed -> pending` resets `attempts` to 0
+- `completed` is terminal; rewriting the current status is allowed (idempotent)
+- New tournament columns: `failure_reason`, `failed_at`, `attempts`. The rules are enforced in
+  the DO in the same transaction as the write, and shared with clients so they cannot drift.
 
 ---
 
@@ -252,7 +137,7 @@ async function updateCandidateWithRetry(
 ### Positive
 
 ✅ **Concurrent write handling** - CAS detects and handles concurrent updates
-✅ **Atomic operations** - Read-modify-write is now atomic with retries
+✅ **Atomic operations** - the version check and write share one transaction; client read-modify-write retries up to 3 times
 ✅ **Conflict visibility** - Failed tournaments are recorded for observability
 ✅ **Retry logic** - Graceful handling of conflicts
 ✅ **Version tracking** - Each update increments version, providing history
@@ -275,8 +160,8 @@ From the git history:
 
 - **Commit fbc9fb5:** "ledger compare-and-swap (version + X-Expected-Version) and tournament state machine; promotion worker read-modify-write retries and records failed tournaments (m7 -> m8)"
 - Part of M7→M8 additive migration
-- Added version fields to ledger tables
-- Implemented CAS logic in Spec DO
+- Added `version` to `tournaments` and `merge_trains`
+- Implemented CAS logic in Spec DO (`X-Expected-Version`)
 - Added tournament state machine
 - Updated promotion worker with retry logic
 - Added failed tournament recording
