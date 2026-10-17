@@ -36,6 +36,7 @@ End-to-end tests in the `m3-features.test.ts` and `cross-worker-flows` test suit
 - **Root Cause Identified:** Tests had outdated route assumptions and shapes
 - **Mitigated:** Tests updated to match current implementation
 - **Resolved (partly):** 43 passed, 6 still failed and 7 skipped afterwards; canary leftovers documented
+- **Later:** the 6 remaining local e2e failures went to 0 ("Local e2e: 6 failed -> 0 failed", `docs/OPEN-QUESTIONS.md` ~line 354)
 
 ---
 
