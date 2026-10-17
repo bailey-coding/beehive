@@ -644,3 +644,13 @@ No tests cover any of it.
 **Not fixed here**: `agent/parity-ui` is editing `ui.ts` (M8: comments route, `doReader` swallowing errors), so these go
 to that work to avoid a conflict. Until then the pages are dead code with no production exposure.
 
+
+## Issue writes trust a client-asserted actor until a user-bound token exists (2026-10-17)
+
+**Status**: Open - proposal only, needs a human (spine; overlaps M3/M6.2 capability minting).
+
+**Done (M8 PR 1, `agent/m8-issues-do`)**: the Spec DO resolves the `X-Actor-ID` header against the `actors` table for issue create, comment, status and comment-policy. An unknown id, `unknown` (no header) and any service-account actor get 403 (`requireIssueActor`, `workers/spec-do/index.ts`). Maintainer status stays ledger-global `actors.role` (`isMaintainer`), service actors excluded. UI requests derive the actor from the signed session, never from a form field (`workers/api/tests/ui-actor.test.ts`); a session whose actor row is gone is sent to `/login`, and a first login creates the row (`ensureActor`).
+
+**Remaining limit**: `authenticate()` (`workers/api/principal.ts:36-109`) knows only the master token, whose actor is the client-sent `X-Actor-ID` (line 44), and read-only service tokens. A master-token holder can therefore still act as any existing actor id (including a maintainer) on these routes. The CLI sends no actor on `issue create`, so it now gets an explicit 403 (it used to fail on the `created_by` foreign key with a 500).
+
+**Proposal (not built)**: a user-bound API token (`kind: 'user'`). Minted by an authenticated UI session (settings page) or by a maintainer for a named actor; stored hashed like `service_tokens` (`workers/shared/service-tokens.ts`), with a `user_tokens` table keyed to `actors.id`, scopes `read`/`write`, expiry and revoke. `authenticate()` would look the hash up in the Spec DO and return `{ kind: 'user', actorId, scopes }`, with the edge rewriting `X-Actor-ID` from it exactly as it does for service tokens (`workers/api/index.ts:100-105`), so the header is no longer client-asserted for these callers; the CLI would send the token and drop `--actor`. Open points: which routes `write` scope covers; whether a user token may ever carry `maintainer` (`isMaintainer` reads the actor, so it would); overlap with capability tokens in M3/M6.2; a new table is a schema migration, so it needs the two-push method in `docs/M8-UI-ISSUES-PLAN.md` (plan branch `agent/ui-issues-plan-v2`) section 13.

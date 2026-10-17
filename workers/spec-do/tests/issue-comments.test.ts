@@ -190,3 +190,29 @@ describe('D3 PATCH /api/issues/:id/status', () => {
     expect((await setStatus('closed', user)).status).toBe(404);
   });
 });
+
+describe('actor validation on every issue write', () => {
+  const writes: [string, (actorId?: string) => Promise<Response>][] = [
+    ['create issue', (a) => call('/api/issues', 'POST', { title: 't', repositoryId: (store.raw.prepare('SELECT repository_id AS r FROM issues').get() as { r: string }).r }, a)],
+    ['comment', (a) => comment('hi', a)],
+    ['status', (a) => call(`/api/issues/${issueId}/status`, 'PATCH', { status: 'closed' }, a)],
+    ['comment policy', (a) => setPolicy('locked', a)],
+  ];
+  const issues = () => (store.raw.prepare('SELECT COUNT(*) AS n FROM issues').get() as { n: number }).n;
+
+  it.each(writes)('%s: an unknown actor id, "unknown" and a missing header are 403', async (_name, write) => {
+    const before = { issues: issues(), comments: commentCount() };
+    for (const who of ['no-such-actor', 'unknown', undefined]) expect((await write(who)).status).toBe(403);
+    expect({ issues: issues(), comments: commentCount() }).toEqual(before);
+    expect(policy()).toBe('open');
+  });
+
+  it.each(writes)('%s: a service account actor is 403 even with the maintainer role', async (_name, write) => {
+    expect((await write(serviceActor)).status).toBe(403);
+  });
+
+  it('a real actor still works (create issue, comment)', async () => {
+    expect((await writes[0][1](user)).status).toBe(201);
+    expect((await writes[1][1](user)).status).toBe(201);
+  });
+});

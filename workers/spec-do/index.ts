@@ -1487,6 +1487,18 @@ export class SpecDO {
     }
   }
 
+  /**
+   * The header actor must be a row in `actors` and not a service account's actor. 'unknown' (no
+   * header) and unknown ids are refused with 403, so issue writes never rest on a bare string.
+   * Only as strong as the edge: a master-token holder can still assert any existing actor id.
+   */
+  private requireIssueActor(actorId: string): void {
+    if (actorId === 'unknown' || !this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, actorId).length) {
+      throw new ForbiddenError('X-Actor-ID must name an existing actor');
+    }
+    if (this.isServiceActor(actorId)) throw new ForbiddenError('service account actors cannot write issues');
+  }
+
   /** The author is the header actor; a body that names someone else is refused, never trusted. */
   private requireSameAuthor(bodyCreatedBy: unknown, actorId: string): void {
     if (bodyCreatedBy !== undefined && bodyCreatedBy !== null && bodyCreatedBy !== '' && bodyCreatedBy !== actorId) {
@@ -3505,6 +3517,7 @@ export class SpecDO {
       if (path === '/api/issues' && method === 'POST') {
         const body: CreateIssueRequest = await request.json();
         return this.issueRoute(201, () => {
+          this.requireIssueActor(actorId);
           this.requireSameAuthor(body.createdBy, actorId);
           return this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels);
         });
@@ -3550,6 +3563,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         const body: UpdateIssueStatusRequest = await request.json();
         return this.issueRoute(200, () => {
+          this.requireIssueActor(actorId);
           this.setIssueStatus(id, body.status, actorId);
           return this.getIssue(id);
         });
@@ -3559,6 +3573,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         const body: UpdateIssueCommentPolicyRequest = await request.json();
         return this.issueRoute(200, () => {
+          this.requireIssueActor(actorId);
           this.updateIssueCommentPolicy(id, body.commentPolicy, actorId);
           return this.getIssue(id);
         });
@@ -3572,6 +3587,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         const body: CreateIssueCommentRequest = await request.json();
         return this.issueRoute(201, () => {
+          this.requireIssueActor(actorId);
           this.requireSameAuthor(body.createdBy, actorId);
           return this.createIssueComment(id, body.body, actorId);
         });
