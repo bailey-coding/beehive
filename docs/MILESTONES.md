@@ -155,9 +155,12 @@ API, CLI and UI agree, and remove calls to routes that do not exist. Source of t
 - **Route correctness: done 2026-10-16** (`agent/promotion-routes-fix`): the promotion worker's calls to
   nonexistent Spec DO routes now use `GET /api/candidates/:id` and `PATCH /api/candidates/:id/stage`
   (`docs/OPEN-QUESTIONS.md` 2026-10-16). Deployed once the merge is pushed and `git push cf main` runs.
-- **UI:** issue comments route (`/api/issues/:id/comments`); `doReader` surfaces errors
-  instead of turning 404/500 into empty lists; make the repo issue pages reachable and fix the defects
-  listed in `docs/OPEN-QUESTIONS.md` 2026-10-17 (they are dead code today).
+- **UI:** `doReader` surfaces errors instead of turning 404/500 into empty lists.
+- **UI issue pages: done when `agent/m8-issues-ui` (PR 2) merges** (the Spec DO half, `agent/m8-issues-do`, is on `main`). Issue
+  comments use `/api/issues/:id/comments`; the repo issue pages (list, new, detail, comment, close/reopen) are reachable in the 2-part,
+  3-part and UUID URL forms and scoped to their repo. 13 of the 14 defects in `docs/M8-UI-ISSUES-PLAN.md` section 1 are fixed; defect 11
+  (`doReader.get` maps a DO catch-all 404 to "not found") is deliberately left open and pinned by a test for the follow-up. Live once the
+  maintainer pushes to the Artifacts repo.
 - **CLI fixes:** `promotion create`/`trial decide` bodies, `health extended` path, `promotion get`;
   register missing options and implement the create stubs; delete dead `workflow`,
   `deployment`, `environment` groups.
@@ -169,8 +172,8 @@ API, CLI and UI agree, and remove calls to routes that do not exist. Source of t
   error to an empty list; no client calls a missing route; local e2e green.
 - **Sequencing:** CLI tasks share `cli/src/utils/api-client.ts` and `cli/src/index.ts`; run
   them serially, each branch cut from `main`.
-- **UI issue pages:** plan in `docs/M8-UI-ISSUES-PLAN.md` (branch `agent/ui-issues-plan-v2`), reviewed in
-  `docs/M8-UI-ISSUES-PLAN-REVIEW.md` (branch `agent/ui-issues-review`). Two PRs: Spec DO changes first, then the UI.
+- **UI issue pages (plan):** `docs/M8-UI-ISSUES-PLAN.md` (branch `agent/ui-issues-plan-v2`), reviewed in
+  `docs/M8-UI-ISSUES-PLAN-REVIEW.md` (branch `agent/ui-issues-review`). Two PRs: Spec DO changes first, then the UI (both done, see above).
 
 **M9 — Site navigation (proposed 2026-10-17, not started; after the M8 UI issue-pages fix).** Give the
 logged-in `/app` UI one shared layout with real navigation. Both this and the issue pages edit the page

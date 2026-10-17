@@ -73,7 +73,8 @@ retries), so a bad deploy is loud rather than half-migrated.
    - new `beehive-canary-worker` -> old `beehive-preview-manager`: the canary route answers 404.
    - `beehive-shadow-router` falls back to its static config while the DO read fails.
    Migrations are additive and not undone by rolling a worker back, so old code would then run against
-   the newer schema; that combination is untested here.
+   the newer schema. For the Spec DO that fails: old code throws `Unknown schema_version` and every request errors
+   (`workers/spec-do/index.ts:842`; `docs/OPEN-QUESTIONS.md` 2026-10-17). Rolling back across a schema bump is an outage.
 6. After deploy: `./scripts/prod-health.sh` passes (`GET /health` answers 200 on each worker with the
    bearer token, and the Spec DO check answers 200);
    `GET /api/service-accounts` answers 410; mint a service token

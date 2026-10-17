@@ -22,6 +22,13 @@ function stubWith(actors: { id: string }[], calls: Request[] = []) {
       calls.push(req.clone());
       const url = new URL(req.url);
       if (url.pathname === '/api/actors') return Response.json({ success: true, data: actors });
+      if (url.pathname === '/api/issues/issue-001') {
+        return Response.json({ success: true, data: { id: 'issue-001', repository_id: 'repo-1', visibility: 'public' } });
+      }
+      if (url.pathname === '/api/repositories/repo-1') {
+        return Response.json({ success: true, data: { id: 'repo-1', name: 'r', organization_id: 'org-1', namespace: 'ns' } });
+      }
+      if (url.pathname === '/api/organizations/org-1') return Response.json({ success: true, data: { id: 'org-1', name: 'acme' } });
       return Response.json({ success: true, data: {} });
     },
   };
@@ -39,7 +46,7 @@ describe('UI actor derivation', () => {
     expect(res?.headers.get('Set-Cookie')).toMatch(/__Host-beehive_session=;/);
   });
 
-  it('a comment post ignores a forged createdBy form field: header and payload carry the session actor', async () => {
+  it('a comment post ignores a forged createdBy form field: the header carries the session actor and the payload only the body', async () => {
     const calls: Request[] = [];
     const form = new FormData();
     form.append('issueId', 'issue-001');
@@ -59,7 +66,7 @@ describe('UI actor derivation', () => {
     const post = calls.find((c) => c.method === 'POST')!;
     expect(new URL(post.url).pathname).toBe('/api/issues/issue-001/comments');
     expect(post.headers.get('X-Actor-ID')).toBe('actor-1');
-    expect(await post.json()).toMatchObject({ createdBy: 'actor-1' });
+    expect(await post.json()).toEqual({ body: 'hi' });
   });
 });
 

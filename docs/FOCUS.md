@@ -38,11 +38,11 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Decide first
 
-1. **Repo-level issue pages (`39a2669`) are unreachable dead code with six defects** (routes nested inside a regex
-   that cannot match them, comments post to a missing route, racy and probably wrong issue numbers, an unencoded
-   redirect, issue not scoped to repo, four copies of the repo lookup). The persistence half of that commit is fine.
-   Fix them in the M8 UI work (`agent/parity-ui` is editing `ui.ts`) or delete the pages until then.
-   Details: `docs/OPEN-QUESTIONS.md` 2026-10-17.
+1. **Repo-level issue pages (`39a2669`): fixed on `agent/m8-issues-ui` (M8 PR 2), pending merge and the maintainer's deploy.**
+   Reachable in 2-part, 3-part and UUID URL forms; Spec DO assigns the number; close/reopen, lock-aware comment form. The DO half is
+   already on `main`; both halves ship in the one `beehive` worker (`wrangler.toml`), so one push deploys them together and there is no
+   new-UI-on-old-DO window within it. Defect 11 stays open (pinned by a test).
+   Details: `docs/OPEN-QUESTIONS.md` 2026-10-17 (review of `39a2669`, with corrections).
 
 ## Cleanup
 

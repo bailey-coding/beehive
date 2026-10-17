@@ -145,6 +145,18 @@ export function visibilityBadge(visibility: string): SafeHtml {
 }
 
 /**
+ * Flash messages from the `ok` and `error` query parameters (escaped). Redirects carry the
+ * message there, so every page that can be redirected to renders it with this one helper.
+ */
+export function flash(url: URL): SafeHtml {
+  const ok = url.searchParams.get('ok');
+  const error = url.searchParams.get('error');
+  return safeHtml(
+    `${ok ? `<p class="flash ok">${esc(ok)}</p>` : ''}${error ? `<p class="flash err">${esc(error)}</p>` : ''}`
+  );
+}
+
+/**
  * Create a "Mocked" label badge.
  */
 export function mockedLabel(text: string = 'Mocked'): SafeHtml {
