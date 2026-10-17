@@ -5,9 +5,9 @@ RFC-0007
 # RFC: Two-Tier Internal Token Authentication for Spec DO
 
 **Status:** Implemented (Retrospective)  
-**Date:** 2026-10-13 (Approximate, based on commit 36c0716)  
-**Author:** Maintainer / Architecture Team  
-**Related:** RFC-0003 (Service Tokens), ADR-0002 (Coordination State Storage)  
+**Date:** 2026-10-16 (commit 36c0716, 07:10 UTC)  
+**Author:** unattributed (backfilled from git history)  
+**Related:** RFC-0003 (Service Tokens; its service tokens are end-user bearer tokens checked at the edge, a separate layer), ADR-0002 (Coordination State Storage)  
 **Supersedes:** None
 
 ---
@@ -41,134 +41,30 @@ The Spec DO needed an authentication mechanism that:
 
 ## Detailed Design
 
-### Two-Tier Token System
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** the original design listed routes that do not
+> exist (`DELETE /api/organizations/:id`, `POST /api/ledger/purge`, `POST /api/service-tokens`),
+> sent tokens as `Authorization: Bearer`, and showed a `workers/shared/specDoClient.ts`
+> pseudocode class. Replaced from `workers/shared/spec-do-auth.ts` (commit 36c0716).
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TWO-TIER TOKEN AUTH                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Tier 1: INTERNAL                            │   │
-│  │  Token: SPEC_DO_INTERNAL_TOKEN                              │   │
-│  │                                                             │   │
-│  │  Required for:                                                 │   │
-│  │  - All read operations on Spec DO                           │   │
-│  │  - Standard write operations (non-destructive)              │   │
-│  │  - Accessed by: beehive, beehive-gate-workflow,             │   │
-│  │                beehive-shadow-router, beehive-preview-manager│   │
-│  │                                                             │   │
-│  │  Operations allowed:                                          │   │
-│  │  - GET /api/specs/:id                                        │   │
-│  │  - GET /api/candidates/:id                                    │   │
-│  │  - POST /api/candidates (create)                              │   │
-│  │  - POST /api/gate_verdicts (record)                          │   │
-│  │  - POST /api/trials (create)                                 │   │
-│  │  - Most CRUD operations                                      │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Tier 2: ADMIN                               │   │
-│  │  Token: SPEC_DO_ADMIN_TOKEN                                  │   │
-│  │                                                             │   │
-│  │  Required for:                                                 │   │
-│  │  - Destructive operations only                               │   │
-│  │  - Accessed by: beehive (edge router) only                   │   │
-│  │                                                             │   │
-│  │  Operations allowed:                                          │   │
-│  │  - DELETE /api/organizations/:id (tombstone)                 │   │
-│  │  - DELETE /api/repositories/:id (tombstone)                   │   │
-│  │  - POST /api/ledger/purge (batched purge)                     │   │
-│  │  - POST /api/service-accounts (legacy, retired)               │   │
-│  │  - POST /api/service-tokens (service-scoped)                │   │
-│  │  - Any operation that modifies role/service-accounts          │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  Authentication Flow:                                               │
-│                                                                      │
-│  Request ━━━━━━━━► [ Authed Stub ] ━━━━━━━► Spec DO Route Handler      │
-│                      │                                          │
-│                      ├── Check Bearer Token                     │
-│                      ├── Verify token exists                    │
-│                      ├── Check token tier                        │
-│                      ├── Verify operation allowed for tier       │
-│                      │                                          │
-│                      ├── 401 if wrong bearer                     │
-│                      ├── 403 if operation not allowed for tier   │
-│                      └── 503 if token missing (fail-closed)      │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+Any worker with the cross-script `SPEC_DO` binding can call the Spec DO directly, so the DO checks
+tokens of its own, independent of the edge's `API_AUTH_TOKEN` (`workers/shared/auth.ts`).
 
-### Token Configuration
-
-```bash
-# Environment variables for Spec DO
-SPEC_DO_INTERNAL_TOKEN=...  # Tier 1 token
-SPEC_DO_ADMIN_TOKEN=...      # Tier 2 token (more privileged)
-```
-
-**Security Notes:**
-- Tokens are configured via Workers secrets or `.dev.vars`
-- Tokens are never committed to the repository
-- Each worker that calls Spec DO must have the appropriate token
-
-### Shared Authed Stub
-
-All callers use a shared authenticated client stub:
-
-```typescript
-// workers/shared/specDoClient.ts (pseudocode)
-
-class AuthedSpecDoClient {
-  constructor(private token: string) {}
-  
-  async fetchSpec(id: string): Promise<Spec> {
-    const response = await fetch(`${SPEC_DO_URL}/api/specs/${id}`, {
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    // Fail-closed: always check Response.ok
-    if (!response.ok) {
-      throw new Error(`Spec DO returned ${response.status}: ${await response.text()}`);
-    }
-    
-    return response.json();
-  }
-  
-  async purgeLedger(): Promise<void> {
-    // Requires admin token
-    const response = await fetch(`${SPEC_DO_URL}/api/ledger/purge`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Spec DO returned ${response.status}`);
-    }
-  }
-}
-
-// Each worker gets a client with appropriate token
-export const specDoClient = new AuthedSpecDoClient(process.env.SPEC_DO_INTERNAL_TOKEN);
-export const specDoAdminClient = new AuthedSpecDoClient(process.env.SPEC_DO_ADMIN_TOKEN);
-```
-
-### Fail-Closed Behavior
-
-From AGENTS.md: "Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missing `API_AUTH_TOKEN` → 503, wrong bearer → 401, including `/health` and local dev."
-
-The two-tier system extends this:
-- **Missing token** → 503 (Service Unavailable)
-- **Wrong token (invalid)** → 401 (Unauthorized)
-- **Right token, wrong tier** → 403 (Forbidden)
-- **All internal routes** require authentication (no exceptions)
+- **Tier 1, `SPEC_DO_INTERNAL_TOKEN`**, header `X-Beehive-Internal`: required on every DO route.
+  Every worker that calls the DO holds it (api, gate-workflow, queue-consumer, preview-manager,
+  candidate-service, shadow-router, scientist-comparator, canary-worker, promotion-worker).
+- **Tier 2, `SPEC_DO_ADMIN_TOKEN`**, header `X-Beehive-Admin`, additionally on admin routes
+  (`isAdminRoute`): `POST /internal/tombstone`, `POST /internal/purge`,
+  `POST /internal/actors/:id/role`, everything under `/internal/service-accounts*`, and
+  `PATCH /api/actors/:id/promotion-authority`. Only the `beehive` API worker is given the admin
+  token. `/internal/service-tokens/verify` (the edge's per-request check) is tier 1.
+- **Fail-closed order** (`specDoAuthGate`, runs before routing): the DO's own
+  `SPEC_DO_INTERNAL_TOKEN` unset -> 503; admin route and `SPEC_DO_ADMIN_TOKEN` unset -> 503;
+  missing or wrong tier-1 header -> 401; admin route with missing or wrong admin header -> 403.
+  Comparison is constant-time (`timingSafeEqual`). Token values are never logged.
+- **Shared stub.** Callers use `getSpecDoStub(env)`, which attaches that worker's tokens (the
+  admin header only on admin routes); nobody sets the headers by hand.
+- Tokens are Workers secrets or `.dev.vars`/start-script vars; deploy impact is in `docs/OPS.md`
+  ("Spec DO internal tokens", deploy checklist step 0).
 
 ---
 
@@ -256,7 +152,7 @@ From the git history:
 
 - **Commit 36c0716:** "two-tier internal token check on Spec DO routes (SPEC_DO_INTERNAL_TOKEN on all callers, SPEC_DO_ADMIN_TOKEN on beehive only for purge/tombstone/role/service-accounts); shared authed stub for every caller; start script, probe worker, tests, docs"
 - Part of authentication hardening
-- Implemented in workers/shared/auth.ts
+- Implemented in `workers/shared/spec-do-auth.ts` (new file; `workers/shared/auth.ts` is the edge `API_AUTH_TOKEN` check)
 - Added to start scripts and probe worker
 - Documentation updated
 
