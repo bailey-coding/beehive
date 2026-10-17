@@ -222,3 +222,19 @@ None touches the spine; L1 and L9 get a human look because every later page depe
 7. **Pre-session pages** (login failed, access denied, 503): give them the minimal brand-only shell in L7, or leave as is?
 8. **Visual regression:** accept manual checks, or approve adding Playwright (and a CI cost) for screenshots?
 9. **Deploy timing:** one PR for L1-L8 and deploy after it, or are intermediate deploys acceptable (users would see mixed headers)?
+
+## 9. Answers (2026-10-17): the plan's own defaults, chosen by the orchestrating agent, not yet seen by the maintainer
+
+The maintainer asked for the plan -> review -> implement -> review pipeline without stopping, so each question takes the plan's default, the cheapest option that keeps M9 inside its stated scope. The maintainer can override any of them before L1 starts; none is irreversible.
+
+| Q | Answer |
+|---|---|
+| 1 | "Issues" is contextual (inside a repo only). No cross-repo index page in M9. |
+| 2 | Dashboard anchors; no new `/app/repos` or `/app/specs` index pages. |
+| 3 | The search box submits to the current entity's existing mock search, labelled with `mockedLabel()`; on pages with no search it is a disabled labelled placeholder. |
+| 4 | Navigation only, no cookie. Show 20 orgs, with a "more" link to the dashboard when there are more. |
+| 5 | Yes, fix the flash text contrast now; leave badge contrast for later (note it in `docs/FOCUS.md`). |
+| 6 | No sticky header. |
+| 7 | Yes, the minimal brand-only shell for pre-session pages in L7. |
+| 8 | Manual visual checklist only. Do NOT add Playwright (new tooling and CI cost need a maintainer decision). |
+| 9 | One PR for L1-L8, deployed once after merge by the maintainer's `cf` push; no intermediate deploys. |
