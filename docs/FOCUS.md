@@ -25,8 +25,8 @@ Completed items are removed, not struck through; history lives in git.*
   (`BEEHIVE_ACTOR` / `defaultActor` / `--actor`, an admin stopgap until M12). Plan and reviews: `docs/M8-*.md`.
 - M9 (site navigation) is implemented on `agent/m9-nav` (2026-10-17), **not merged or deployed**; the independent
   review (L9, `docs/M9-REVIEW.md`) is still to do. Plan and plan review: `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`.
-- Local checks on `agent/m9-nav` (2026-10-17): 832 unit tests pass, typecheck clean; local e2e result in the M9 PR
-  (run with `E2E_UI=1`, see `docs/SETUP.md`). On `main`: 743 unit tests, e2e 63 passed / 5 skipped / 0 failed.
+- Local checks on `agent/m9-nav` (2026-10-17): 832 unit tests pass, typecheck clean; local e2e 70 passed / 5 skipped /
+  0 failed (run with `E2E_UI=1`, see `docs/SETUP.md`). On `main`: 743 unit tests, e2e 63 passed / 5 skipped / 0 failed.
 
 ## Next session, first (needs the maintainer)
 
