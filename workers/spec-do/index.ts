@@ -61,6 +61,8 @@ class BadRequestError extends Error {}
 
 const COMMENT_POLICIES = ['open', 'maintainers_only', 'locked'];
 const MAX_COMMENT_CHARS = 10_000;
+// An explicit issue number above this is refused: a float-sized one would make MAX+1 return itself
+const MAX_ISSUE_NUMBER = 2_147_483_647;
 
 // /promotion-states, /tournament-status, /merge-train-status, each with an optional /<id> segment
 const LEDGER_ROUTE = /^(\/promotion-states|\/tournament-status|\/merge-train-status)(?:\/([^\/]+))?$/;
@@ -1521,8 +1523,8 @@ export class SpecDO {
     labels?: string[]
   ): IssueRow {
     if (!this.db) throw new Error('Database not initialized');
-    if (number !== undefined && number !== null && (!Number.isInteger(number) || number < 1)) {
-      throw new BadRequestError('number must be an integer >= 1');
+    if (number !== undefined && number !== null && (!Number.isSafeInteger(number) || number < 1 || number > MAX_ISSUE_NUMBER)) {
+      throw new BadRequestError(`number must be an integer between 1 and ${MAX_ISSUE_NUMBER}`);
     }
 
     const id = generateId();

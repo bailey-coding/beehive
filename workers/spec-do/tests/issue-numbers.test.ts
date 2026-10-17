@@ -69,6 +69,12 @@ describe('D1 issue numbering', () => {
     expect((await created(await create({ repositoryId: repoA, title: 'y' }))).number).toBe(8);
   });
 
+  it('accepts the largest allowed number (2^31-1) and the next auto number is distinct', async () => {
+    expect((await created(await create({ repositoryId: repoA, title: 'max', number: 2_147_483_647 }))).number).toBe(2_147_483_647);
+    expect((await created(await create({ repositoryId: repoA, title: 'next' }))).number).toBe(2_147_483_648);
+    expect((await created(await create({ repositoryId: repoA, title: 'after' }))).number).toBe(2_147_483_649);
+  });
+
   it('answers an explicit duplicate with 409 and writes no row', async () => {
     await created(await create({ repositoryId: repoA, title: 'x', number: 4 }));
     expect((await create({ repositoryId: repoA, title: 'dup', number: 4 })).status).toBe(409);
@@ -81,7 +87,7 @@ describe('D1 issue numbering', () => {
     expect((await create({ repositoryId: repoA, title: 'again', number: 2 })).status).toBe(409);
   });
 
-  it.each([0, -1, 1.5, '3', 'x'])('rejects number %s with 400', async (number) => {
+  it.each([0, -1, 1.5, '3', 'x', 1e300, 2 ** 53, 2_147_483_648])('rejects number %s with 400', async (number) => {
     expect((await create({ repositoryId: repoA, title: 'bad', number })).status).toBe(400);
     expect(issueCount(repoA)).toBe(0);
   });
