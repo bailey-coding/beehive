@@ -194,6 +194,17 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    500 rows, one transaction each. Refused (409) if a target candidate has an active
    promotion. `entity_history` and `purge_log` survive.
 
+### CLI actor attribution (stopgap until M12)
+
+The CLI authenticates with the master token, whose actor is whatever `X-Actor-ID` the client sends. Set
+`defaultActor` in the CLI config file or `BEEHIVE_ACTOR` in the environment to a real actor id in the ledger
+(usually a maintainer); it is sent on every request, and `--actor <id>` on a create command overrides it
+(precedence: flag, then env, then config; nothing is sent if none is set). This is attribution for admin
+use, not authentication: any master-token holder can name any actor. With no actor set the edge records `'unknown'`, and
+Spec DO issue writes by an unknown actor get 403 once the issue changes deploy; set one before using
+`issue create`. `--actor` is on `gate run`, `org create` and `actor create/trust/grant-promotion` too. M12
+(verified identity and user tokens) replaces it.
+
 ### Service tokens: mint, rotate, revoke
 
 Live once the m5 -> m6 migration reaches the deploy flow (the Spec DO migrates on its next
