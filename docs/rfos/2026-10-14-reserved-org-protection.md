@@ -1,16 +1,19 @@
 ---
-RFO-2026-10-14
+RFO-2026-10-14-reserved-org-protection
 ---
 
 # RFO: Reserved Org Protection - Preventing Accidental Deletion of beehive-system
 
-**Date:** 2026-10-14  
-**Author:** Maintainer / Architecture Team  
+**Date:** 2026-10-16 (filename and index say 2026-10-14; 46c9667 is 2026-10-16 06:50)  
+**Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** SEV-1 (Critical - production data protection)  
 **Related:** AGENTS.md#state-management, 46c9667, ADR-0002
 
 ---
+
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** Severity SEV-1 and "affected users: all" describe the hypothetical outcome; the repo shows a review fix made before any
+> incident (the template's Near-Miss class fits better; left for a human to reclassify). Detection and lessons are unsupported by repo evidence.
 
 ## Summary
 
@@ -20,11 +23,11 @@ The `beehive-system` organization is a **reserved system organization** that mus
 
 ## Timeline
 
-| Time (UTC) | Event | Actor | Notes |
-|------------|-------|-------|-------|
-| ~2026-10-13 | Reserved org concept established | Architecture Team | beehive-system as system org |
-| ~2026-10-14 | Risk identified: org could be accidentally deleted | Maintainer | No protection against deletion |
-| 2026-10-14 | Protection implemented (commit 46c9667) | Agent Team | 403 for delete attempts, prefix purge skips reserved |
+> Rewritten by the 2026-10-17 audit; the earlier ~10-13 "reserved org concept established" and ~10-14 rows had no repo evidence.
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 2026-10-16 06:50 | 46c9667 refuses tombstone/purge of `beehive-system` (403 at the edge in `workers/api/lifecycle.ts` and in the Spec DO); prefix purge skips it as reserved | `git show 46c9667` (task name `review-fix-2-reserved-org`, so it came out of a review) |
 
 ### Key Moments
 
@@ -39,7 +42,7 @@ The `beehive-system` organization is a **reserved system organization** that mus
 
 ### Affected Components
 
-- `workers/beehive` - Edge router (primary protection)
+- `workers/api` - Edge router (primary protection)
 - `workers/spec-do` - Spec Durable Object (secondary protection)
 - `beehive-system` organization - The reserved system org
 
@@ -113,7 +116,7 @@ Changes:
 - **Edge protection**: Edge router returns 403 for delete/tombstone/purge of beehive-system
 - **Spec DO protection**: Spec DO also checks and refuses operations on reserved org
 - **Prefix purge skip**: Bulk purge operations skip reserved organizations
-- **Reserved marker**: Organizations can be marked as 'reserved' in the database
+- **Reserved id**: the reserved ids are constants (`RESERVED_ORGANIZATION_ID = 'beehive-system'`, `RESERVED_ACTOR_ID = 'master'`, `workers/shared/ledger-lifecycle.ts:18`); there is no database flag
 
 ### Resolution
 
@@ -141,7 +144,7 @@ Changes:
 
 ### What Could Be Improved
 
-⚠️ **Automated testing** - Need tests that verify reserved org protection
+⚠️ **Automated testing** - tests exist (`workers/api/tests/lifecycle.test.ts`, `workers/spec-do/tests/ledger-lifecycle.test.ts`); coverage not reviewed by this audit
 ⚠️ **Audit logging** - Log attempts to delete reserved orgs
 ⚠️ **Dynamic reserved list** - Make reserved list configurable
 
@@ -150,7 +153,7 @@ Changes:
 ✅ **Multi-layer protection** - Edge and DO both check for reserved status
 ✅ **403 errors** - Clear, actionable error response
 ✅ **Prefix purge skip** - Bulk operations handle reserved orgs correctly
-✅ **Reserved marker** - Database-level marking for consistency
+⚠️ **Reserved id constant** - hard-coded, not a database marker
 
 ---
 
@@ -191,7 +194,7 @@ Based on this RFO, the following preventive measures were implemented:
 
 ### Code References
 
-- `workers/beehive` - Edge router protection
+- `workers/api` - Edge router protection
 - `workers/spec-do` - Spec DO protection
 - `workers/shared/` - Reserved org checks
 
