@@ -1,16 +1,19 @@
 ---
-RFO-2026-10-14
+RFO-2026-10-14-promotion-routes-fix
 ---
 
 # RFO: Promotion Routes Fix - Missing Spec DO Route Calls
 
-**Date:** 2026-10-14  
-**Author:** Maintainer / Agent Team  
+**Date:** 2026-10-16 (filename and index say 2026-10-14; every cited commit is 2026-10-16)  
+**Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** SEV-2 (Significant degradation - promotion worker unable to complete promotions)  
 **Related:** ADR-0002 (Coordination State Storage), RFC-0001 (Oracle Ladder Architecture), 6f5b2a8, b487a18, 48fd866, 3d97f48
 
 ---
+
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** 48fd866 (doReader 502) is the UI/API parity change, not part of this fix. "All users affected", the 1-day duration, the
+> action items and lessons are unsupported by repo evidence. "Routes tested end-to-end" was not verified.
 
 ## Summary
 
@@ -20,13 +23,17 @@ The promotion worker was calling three Durable Object routes that **did not exis
 
 ## Timeline
 
-| Time (UTC) | Event | Actor | Notes |
-|------------|-------|-------|-------|
-| ~2026-10-13 | Promotion worker implemented with assumed Spec DO routes | Agent Team | Routes were based on initial design, not actual implementation |
-| ~2026-10-14 | Code review catches missing routes | Maintainer | "The promotion worker called three DO routes that do not exist, unnoticed" (from AGENTS.md) |
-| 2026-10-14 | Fix implemented (commit 6f5b2a8) | Agent Team | Promotion worker updated to use correct routes |
-| 2026-10-14 | Merge to main (commit b487a18) | Maintainer | agent/promotion-routes-fix merged |
-| 2026-10-14 | Verification complete (commit 3d97f48) | Agent Team | M8 marks promotion-routes-fix as done |
+> Rewritten by the 2026-10-17 audit. The earlier rows claimed a maintainer code review quoting AGENTS.md; the finding
+> came from an e2e rerun, and the AGENTS.md rule was added after (8ef8b61), not before.
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 2026-10-16 | Local e2e rerun after the ledger CAS change finds the promotion worker calling three Spec DO routes that do not exist; logged | `docs/OPEN-QUESTIONS.md` "Promotion worker calls Spec DO routes that do not exist (2026-10-16)" |
+| 2026-10-16 21:37 | 8ef8b61 adds the AGENTS.md rule "check `Response.ok`" | `git show 8ef8b61` |
+| 2026-10-16 21:54 | 6f5b2a8 promotion worker records winners and rollbacks via `/api/candidates/:id/stage`, reads `/api/candidates/:id` | `git show 6f5b2a8` |
+| 2026-10-16 22:00 | b487a18 merges agent/promotion-routes-fix | `git show b487a18` |
+| 2026-10-16 22:04 | 3d97f48 marks the M8 item done | `git show 3d97f48` |
+| 2026-10-16 22:29 | ad33f17 FOCUS records the fix as deployed and verified | `git show ad33f17` |
 
 ### Key Moments
 
@@ -42,7 +49,7 @@ The promotion worker was calling three Durable Object routes that **did not exis
 
 ### Affected Components
 
-- `workers/beehive-promotion` - Promotion Worker (primary)
+- `workers/promotion-worker` - Promotion Worker (primary)
 - `workers/spec-do` - Spec Durable Object (routes were missing)
 - Oracle ladder progression (Pre-merge → Shadow → Train → Canary → Full)
 
@@ -67,9 +74,11 @@ The promotion worker was calling three Durable Object routes that **did not exis
 ### Direct Cause
 
 The promotion worker was making HTTP calls to three Durable Object routes that were never implemented in the Spec DO:
-1. `/api/candidates/:id/promote` (or similar promote route)
-2. `/api/candidates/:id/demote` (or similar demote route)
-3. One additional unspecified route
+1. `GET /candidates/:id` (tournament metrics, `workers/promotion-worker/tournament.ts`)
+2. `PATCH /candidates/:id` (record the winner: `current_rung`, `status: promoted`, `promoted_at`)
+3. `POST /candidates/:id/rollback` (merge-train rollback, `merge-train.ts`)
+
+The Spec DO serves `/api/candidates`, `/api/candidates/:id`, `.../stage`, `.../preview`, `.../gate-verdicts`, `.../execute`; every call answered 404 (`docs/OPEN-QUESTIONS.md` 2026-10-16).
 
 The promotion worker's Spec DO client had these routes hardcoded, but they didn't match the actual Spec DO API surface.
 
@@ -122,8 +131,7 @@ To catch similar issues earlier:
 
 Changes:
 - Updated promotion worker to use correct Spec DO routes
-- Changed from `/api/candidates/:id/promote` to `/api/candidates/:id/stage`
-- Changed from `/api/candidates/:id/demote` to `/api/candidates/:id/stage` (with different parameters)
+- Winner `PATCH /candidates/:id` became `PATCH /api/candidates/:id/stage {stage, notes}`; rollback `POST /candidates/:id/rollback` became the same stage route with `stage: 'rolled_back'`; `GET /candidates/:id` became `GET /api/candidates/:id`
 - Added proper error handling for winner writes
 
 ### Resolution
@@ -135,9 +143,9 @@ Changes:
 
 ### Verification
 
-**Commit 3d97f48:** "M8 marks the promotion route correctness item done (promotion-routes-fix) | task: focus-update | spec: docs | confidence: 0.9"
+**Commit 3d97f48:** "M8 marks the promotion route correctness item done (promotion-routes-fix)"
 
-- Deployment verified
+- Deployment: ad33f17 (FOCUS) records it deployed and verified; 3d97f48 itself only marks the milestone item
 - Promotion worker successfully advances candidates through oracle ladder
 - Routes tested end-to-end
 
@@ -178,7 +186,7 @@ Changes:
 ### Related Findings
 
 This RFO is related to other findings in OPEN-QUESTIONS.md:
-- "The promotion worker called three DO routes that do not exist, unnoticed" (2026-10-16)
+- "The promotion worker called three DO routes that do not exist, unnoticed" (AGENTS.md, from 8ef8b61; OPEN-QUESTIONS 2026-10-16)
 - This was added to AGENTS.md as a working convention: "Check `Response.ok` on every fetch to the Spec DO or another worker: a 404 is an error, never 'empty'"
 
 ### Pattern Recognition
@@ -205,11 +213,11 @@ Based on this RFO, the following preventive measures were implemented:
 - **Fix:** [6f5b2a8](https://github.com/bailey-coding/beehive/commit/6f5b2a8) - Promotion worker route fix
 - **Merge:** [b487a18](https://github.com/bailey-coding/beehive/commit/b487a18) - Merge of promotion-routes-fix
 - **Verification:** [3d97f48](https://github.com/bailey-coding/beehive/commit/3d97f48) - M8 completion
-- **AGENTS.md Update:** [8480fde](https://github.com/bailey-coding/beehive/commit/8480fde) - Added Response.ok check rule
+- **AGENTS.md Update:** [8ef8b61](https://github.com/bailey-coding/beehive/commit/8ef8b61) - Added Response.ok check rule (8480fde is the unrelated edge /health change)
 
 ### Code References
 
-- `workers/beehive-promotion/` - Promotion worker (fixed)
+- `workers/promotion-worker/` - Promotion worker (fixed)
 - `workers/spec-do/` - Spec Durable Object (routes verified)
 - `workers/shared/` - Spec DO client (updated)
 
