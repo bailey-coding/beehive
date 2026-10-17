@@ -200,8 +200,10 @@ The CLI authenticates with the master token, whose actor is whatever `X-Actor-ID
 `defaultActor` in the CLI config file or `BEEHIVE_ACTOR` in the environment to a real actor id in the ledger
 (usually a maintainer); it is sent on every request, and `--actor <id>` on a create command overrides it
 (precedence: flag, then env, then config; nothing is sent if none is set). This is attribution for admin
-use, not authentication: any master-token holder can name any actor. M12 (verified identity and user
-tokens) replaces it.
+use, not authentication: any master-token holder can name any actor. With no actor set the edge records `'unknown'`, and
+Spec DO issue writes by an unknown actor get 403 once the issue changes deploy; set one before using
+`issue create`. `--actor` is on `gate run`, `org create` and `actor create/trust/grant-promotion` too. M12
+(verified identity and user tokens) replaces it.
 
 ### Service tokens: mint, rotate, revoke
 

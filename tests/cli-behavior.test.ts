@@ -123,6 +123,37 @@ describe('X-Actor-ID attribution', () => {
     ).toBe('from-flag');
   });
 
+  it('blank or whitespace BEEHIVE_ACTOR sends no header', async () => {
+    expect(await actorHeader(issueArgs, { BEEHIVE_ACTOR: '' })).toBeUndefined();
+    recorded = [];
+    expect(await actorHeader(issueArgs, { BEEHIVE_ACTOR: '   ' })).toBeUndefined();
+  });
+
+  it('trims BEEHIVE_ACTOR', async () => {
+    expect(await actorHeader(issueArgs, { BEEHIVE_ACTOR: '  a1 ' })).toBe('a1');
+  });
+
+  it('null or blank config defaultActor sends no header', async () => {
+    const f = join(home, 'null-config.json');
+    writeFileSync(f, JSON.stringify({ defaultActor: null }));
+    expect(await actorHeader(['--config', f, ...issueArgs])).toBeUndefined();
+    recorded = [];
+    writeFileSync(f, JSON.stringify({ defaultActor: '  ' }));
+    expect(await actorHeader(['--config', f, ...issueArgs])).toBeUndefined();
+  });
+
+  it.each([
+    ['gate run', ['gate', 'run', 'c1']],
+    ['org create', ['org', 'create', 'o']],
+    ['actor create', ['actor', 'create', 'n', '--type', 'human']],
+    ['actor trust', ['actor', 'trust', 'a1', '0.5']],
+    ['actor grant-promotion', ['actor', 'grant-promotion', 'a1']],
+  ])('%s: --actor beats env and config', async (_n, args) => {
+    expect(await actorHeader([...cfgFile(), ...args, '--actor', 'from-flag'], { BEEHIVE_ACTOR: 'from-env' })).toBe('from-flag');
+    recorded = [];
+    expect(await actorHeader([...cfgFile(), ...args], { BEEHIVE_ACTOR: 'from-env' })).toBe('from-env');
+  });
+
   it('applies to reads too', async () => {
     expect(await actorHeader(['issue', 'list'], { BEEHIVE_ACTOR: 'from-env' })).toBe('from-env');
   });

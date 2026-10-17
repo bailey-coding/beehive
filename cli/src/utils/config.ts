@@ -51,12 +51,16 @@ export function loadConfig(options?: ConfigOptions): BeehiveConfig {
   if (process.env[ENV_API_URL]) {
     config.apiUrl = process.env[ENV_API_URL];
   }
-  if (process.env[ENV_ACTOR]) {
-    config.defaultActor = process.env[ENV_ACTOR];
+  const envActor = process.env[ENV_ACTOR]?.trim();
+  if (envActor) {
+    config.defaultActor = envActor;
   }
   if (process.env[ENV_VERBOSE] === 'true') {
     config.verbose = true;
   }
+
+  // A blank actor must never become a blank header
+  config.defaultActor = typeof config.defaultActor === 'string' ? config.defaultActor.trim() || undefined : undefined;
 
   // Override with explicit options
   if (options?.apiUrl) {
