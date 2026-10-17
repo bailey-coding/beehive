@@ -21,6 +21,7 @@ function makeDO(): { spec: SpecDO; raw: DatabaseSync } {
     storage: {
       get: async (k: string) => kv.get(k),
       put: async (k: string, v: unknown) => void kv.set(k, v),
+      transactionSync: <T>(fn: () => T): T => fn(),
       sql: {
         exec(query: string, ...bindings: unknown[]) {
           if (bindings.length === 0 && /;\s*\S/.test(query.trim())) {
@@ -133,14 +134,19 @@ describe('listPromotions bind order', () => {
 
 describe('listIssues bind order', () => {
   it('filters by repo, repo+stage+status, and unfiltered', () => {
-    const i1 = spec.createIssue(1, 'r1', 't', 'b', 'u');
-    const i2 = spec.createIssue(2, 'r1', 't', 'b', 'u');
-    const i3 = spec.createIssue(1, 'r2', 't', 'b', 'u');
+    // createIssue now requires a live repository
+    const org = spec.createOrganization('o', 'artifacts');
+    const mk = (name: string) =>
+      spec.createRepository(name, org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'ns').id;
+    const [r1, r2] = [mk('r1'), mk('r2')];
+    const i1 = spec.createIssue(1, r1, 't', 'b', 'u');
+    const i2 = spec.createIssue(2, r1, 't', 'b', 'u');
+    const i3 = spec.createIssue(1, r2, 't', 'b', 'u');
     setStage('issues', i2.id, 'implementing');
     raw.prepare(`UPDATE issues SET status = 'closed' WHERE id = ?`).run(i2.id);
     expect(ids(spec.listIssues(10, 0))).toEqual(ids([i1, i2, i3]));
-    expect(ids(spec.listIssues(10, 0, 'r1'))).toEqual(ids([i1, i2]));
-    expect(ids(spec.listIssues(10, 0, 'r1', 'implementing', 'closed'))).toEqual([i2.id]);
+    expect(ids(spec.listIssues(10, 0, r1))).toEqual(ids([i1, i2]));
+    expect(ids(spec.listIssues(10, 0, r1, 'implementing', 'closed'))).toEqual([i2.id]);
     expect(ids(spec.listIssues(10, 0, undefined, undefined, 'open'))).toEqual(ids([i1, i3]));
   });
 });

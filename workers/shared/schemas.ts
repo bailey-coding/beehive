@@ -346,7 +346,7 @@ export const IssueStageSchema = z.enum([
 ]);
 
 export const CreateIssueRequestSchema = z.object({
-  number: z.number().int().positive(),
+  number: z.number().int().positive().optional(),
   repositoryId: UUIDSchema,
   title: z.string().min(1),
   body: z.string().optional(),

@@ -1462,8 +1462,42 @@ export class SpecDO {
   // ISSUES
   // ============================================================================
 
+  /**
+   * Local error mapper for the issue routes only. The main fetch catch maps just ConflictError,
+   * and callers branch on 404 elsewhere, so it is deliberately not widened. Anything unmapped
+   * is rethrown to it unchanged.
+   */
+  private issueRoute(successStatus: number, fn: () => unknown): Response {
+    const reply = (success: boolean, status: number, extra: Record<string, unknown>) =>
+      new Response(JSON.stringify({ success, ...extra, timestamp: Date.now() }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    try {
+      return reply(true, successStatus, { data: fn() });
+    } catch (e) {
+      const status =
+        e instanceof BadRequestError ? 400 : e instanceof ForbiddenError ? 403 : e instanceof NotFoundError ? 404 : e instanceof ConflictError ? 409 : 0;
+      if (!status) throw e;
+      return reply(false, status, { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** The author is the header actor; a body that names someone else is refused, never trusted. */
+  private requireSameAuthor(bodyCreatedBy: unknown, actorId: string): void {
+    if (bodyCreatedBy !== undefined && bodyCreatedBy !== null && bodyCreatedBy !== '' && bodyCreatedBy !== actorId) {
+      throw new ForbiddenError('createdBy must match the X-Actor-ID header');
+    }
+  }
+
+  /**
+   * `number` is optional: omitted, it is MAX(number)+1 for the repository (tombstoned issues count,
+   * so a number is never reused). All checks, the INSERT and the history row run in one
+   * transactionSync, so concurrent creates cannot take the same number and a failed history write
+   * leaves no row. Throws BadRequestError / NotFoundError / ConflictError (see issueRoute).
+   */
   createIssue(
-    number: number,
+    number: number | undefined,
     repositoryId: string,
     title: string,
     body: string,
@@ -1471,35 +1505,54 @@ export class SpecDO {
     labels?: string[]
   ): IssueRow {
     if (!this.db) throw new Error('Database not initialized');
-    
+    if (number !== undefined && number !== null && (!Number.isInteger(number) || number < 1)) {
+      throw new BadRequestError('number must be an integer >= 1');
+    }
+
     const id = generateId();
     const labelsJson = labels ? JSON.stringify(labels) : null;
-    
-    const stmt = this.db.prepare(
-      `INSERT INTO issues 
-       (id, number, repository_id, title, body, status, labels, created_at, created_by, comment_policy, visibility, stage) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    stmt.bind(id, number, repositoryId, title, body, 'open', labelsJson, now(), createdBy, 'open', 'public', 'reported');
-    stmt.step();
-    stmt.free();
-    
-    this.recordHistory('issue', id, 'reported', createdBy, 'Issue created');
-    
-    return {
-      id,
-      number,
-      repository_id: repositoryId,
-      title,
-      body: body ?? undefined,
-      status: 'open',
-      labels: labelsJson ?? undefined,
-      created_at: now(),
-      created_by: createdBy,
-      comment_policy: 'open',
-      visibility: 'public',
-      stage: 'reported',
-    };
+
+    return this.state.storage.transactionSync(() => {
+      const repo = this.queryAll(`SELECT deleted_at FROM repositories WHERE id = ?`, repositoryId)[0];
+      if (!repo) throw new NotFoundError('repository not found');
+      if (repo.deleted_at != null) throw new ConflictError('repository is tombstoned');
+
+      let assigned: number;
+      if (number === undefined || number === null) {
+        assigned = (this.queryAll(`SELECT COALESCE(MAX(number), 0) + 1 AS n FROM issues WHERE repository_id = ?`, repositoryId)[0].n as number);
+      } else {
+        if (this.queryAll(`SELECT 1 AS x FROM issues WHERE repository_id = ? AND number = ?`, repositoryId, number).length) {
+          throw new ConflictError(`issue number ${number} is already used in this repository`);
+        }
+        assigned = number;
+      }
+
+      const stmt = this.db!.prepare(
+        `INSERT INTO issues 
+         (id, number, repository_id, title, body, status, labels, created_at, created_by, comment_policy, visibility, stage) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      stmt.bind(id, assigned, repositoryId, title, body, 'open', labelsJson, now(), createdBy, 'open', 'public', 'reported');
+      stmt.step();
+      stmt.free();
+
+      this.recordHistory('issue', id, 'reported', createdBy, 'Issue created');
+
+      return {
+        id,
+        number: assigned,
+        repository_id: repositoryId,
+        title,
+        body: body ?? undefined,
+        status: 'open',
+        labels: labelsJson ?? undefined,
+        created_at: now(),
+        created_by: createdBy,
+        comment_policy: 'open',
+        visibility: 'public',
+        stage: 'reported',
+      };
+    });
   }
 
   transitionIssue(id: string, newStage: IssueRow['stage'], changedBy: string, notes?: string): void {
@@ -3447,17 +3500,9 @@ export class SpecDO {
       
       if (path === '/api/issues' && method === 'POST') {
         const body: CreateIssueRequest = await request.json();
-        const issue = this.createIssue(
-          body.number,
-          body.repositoryId,
-          body.title,
-          body.body || '',
-          body.createdBy || actorId,
-          body.labels
-        );
-        return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
-          status: 201,
-          headers: { 'Content-Type': 'application/json' },
+        return this.issueRoute(201, () => {
+          this.requireSameAuthor(body.createdBy, actorId);
+          return this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels);
         });
       }
       
