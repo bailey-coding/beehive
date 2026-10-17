@@ -546,17 +546,20 @@ only logs a warning.
 
 ## Edge `/health` on `beehive` reports the Spec DO as ok without calling it (2026-10-16)
 
-**Status**: Open, not fixed.
+**Status**: Resolved 2026-10-17 in code (takes effect when deployed). `8480fde` made `handleHealth` call the DO's
+`/health`; it still answered HTTP 200 `degraded` when the DO was down, so a status-code check passed with a stuck
+ledger. It now answers 503 `unhealthy` (`success: false`, both checks `error`), with unit tests for the healthy,
+non-OK and throwing cases (`workers/api/tests/api.test.ts`).
 
-**Finding**: `handleHealth` (`workers/api/index.ts`) returns a fixed body with `database: 'ok'` and
+**Finding** (as first logged): `handleHealth` (`workers/api/index.ts`) returned a fixed body with `database: 'ok'` and
 `durableObject: 'ok'` and never touches the Spec DO. During the m3 -> m8 deploy the ledger was stuck at
 m5 and every DO request failed, yet `GET /health` on `beehive` still answered 200 `healthy`. It also does
 not trigger the DO's lazy init, so it does not run the migrations either (an earlier version of the
 deploy checklist said it did). `docs/OPS.md` step 4 now points at `scripts/prod-health.sh`, whose last
 check is `GET /api/organizations?limit=1`.
 
-**Want**: have `handleHealth` make a cheap DO call (the DO's own `/health` answers `OK` after `init()`)
-and report `durableObject: 'error'` with a 503 when it fails, so monitors see a stuck ledger.
+**Wanted, now done**: `handleHealth` makes a cheap DO call (the DO's own `/health` answers `OK` after `init()`)
+and reports `error` with a 503 when it fails, so monitors see a stuck ledger. It also triggers the DO's lazy init.
 
 ---
 

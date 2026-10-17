@@ -36,9 +36,7 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Decide first
 
-1. **Edge `/health` on `beehive` answers `durableObject: ok` without calling the DO.** Make it call the DO
-   and return 503 on failure, so monitors see a stuck ledger (`docs/OPEN-QUESTIONS.md` 2026-10-16).
-2. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
+1. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
 
 ## Cleanup
 

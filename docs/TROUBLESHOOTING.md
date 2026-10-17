@@ -572,10 +572,10 @@ with an inspector port already in use.
 
 - **`1042`**: the worker is not deployed yet. After `wrangler delete --name beehive --force`,
   ask the maintainer to redeploy `beehive` (deploy flow: `docs/OPS.md`). Agents never deploy.
-- **Every Spec DO request fails right after a deploy** (`init failed`, 500s) while `beehive`'s
-  `/health` still answers 200: the ledger stopped at the previous schema version because a migration
-  step threw (by design: init fails loudly, the next request retries). The edge `/health` is static and
-  never calls the DO, so use `./scripts/prod-health.sh` and read the `beehive` logs for
+- **Every Spec DO request fails right after a deploy** (`init failed`, 500s): the ledger stopped at the
+  previous schema version because a migration step threw (by design: init fails loudly, the next request
+  retries). `beehive`'s `/health` answers 503 `unhealthy` in that state (older builds answered 200: it did
+  not call the DO). Use `./scripts/prod-health.sh` and read the `beehive` logs for
   `Migration to mN failed`. Seen: `service_accounts has an unexpected shape` (a table of another design
   was on the live ledger): if it is empty, `DROP TABLE service_accounts` and the next request
   recreates it, otherwise migrate its rows first (`docs/OPEN-QUESTIONS.md` 2026-10-16).
@@ -609,8 +609,8 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8790/health
 ```
 
 Use `./scripts/health-check.sh` for the local dev workers. For the deployed ones use
-`BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh`: `/health` on `beehive` is static and passes even when the
-Spec DO is broken, so the script also makes a request that reaches the DO.
+`BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh`: `/health` on `beehive` calls the Spec DO (503 when it is
+down), and the script also makes a separate request that reaches the DO.
 
 ---
 

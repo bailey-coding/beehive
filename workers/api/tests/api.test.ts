@@ -68,21 +68,45 @@ describe('API Handlers', () => {
   // ========================================================================
 
   describe('GET /health', () => {
+    const authed = () => createRequest('/health', 'GET', undefined, { Authorization: 'Bearer test-auth-token' });
+
     it('should return healthy status with correct structure', async () => {
-      const request = createRequest('/health', 'GET', undefined, {
-        Authorization: 'Bearer test-auth-token',
-      });
-      
-      const response = await worker.fetch(request, mockEnv, mockCtx);
-      
+      mockSpecDoStub.fetch.mockResolvedValue(new Response('OK', { status: 200 }));
+
+      const response = await worker.fetch(authed(), mockEnv, mockCtx);
+
       expect(response.status).toBe(200);
       const data = await response.json();
-      
+
       expect(data.success).toBe(true);
       expect(data.data.status).toBe('healthy');
       expect(data.data.version).toBeDefined();
       expect(data.data.timestamp).toBeDefined();
-      expect(data.data.checks).toBeDefined();
+      expect(data.data.checks).toEqual({ database: 'ok', durableObject: 'ok' });
+      expect(mockSpecDoStub.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers 503 unhealthy when the Spec DO answers non-OK (e.g. a stuck migration)', async () => {
+      mockSpecDoStub.fetch.mockResolvedValue(new Response('init failed', { status: 500 }));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const response = await worker.fetch(authed(), mockEnv, mockCtx);
+
+      expect(response.status).toBe(503);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.data.status).toBe('unhealthy');
+      expect(data.data.checks).toEqual({ database: 'error', durableObject: 'error' });
+    });
+
+    it('answers 503 unhealthy when the Spec DO call throws', async () => {
+      mockSpecDoStub.fetch.mockRejectedValue(new Error('no such column: is_active'));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const response = await worker.fetch(authed(), mockEnv, mockCtx);
+
+      expect(response.status).toBe(503);
+      expect((await response.json()).data.checks.durableObject).toBe('error');
     });
 
     it('should return 401 for missing auth token', async () => {

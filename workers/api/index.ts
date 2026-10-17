@@ -1355,27 +1355,30 @@ $ ./scripts/demo-end-to-end.sh --local
 // ============================================================================
 
 async function handleHealth(_request: Request, specDoStub: SpecDoStub): Promise<Response> {
-  // Check Durable Object health by calling its health endpoint
-  let durableObjectStatus: 'ok' | 'error' = 'error';
+  // The Spec DO's /health answers only after its init() (schema + migrations) succeeded, so a ledger
+  // stuck on a failed migration shows here. The ledger is the only database: both checks share the result.
+  let ledgerOk = false;
   try {
     const doResponse = await specDoStub.fetch('/health');
-    if (doResponse.ok) {
-      durableObjectStatus = 'ok';
-    }
+    ledgerOk = doResponse.ok;
+    if (!ledgerOk) console.error(`[Health] Spec DO /health answered ${doResponse.status}`);
   } catch (error) {
-    console.error('[Health] Durable Object health check failed:', error);
+    console.error('[Health] Spec DO /health failed:', error);
   }
 
+  const check = ledgerOk ? 'ok' : 'error';
   const health: import('./types').HealthResponse = {
-    status: durableObjectStatus === 'ok' ? 'healthy' : 'degraded',
+    status: ledgerOk ? 'healthy' : 'unhealthy',
     version: '0.1.0',
     timestamp: Date.now(),
-    checks: {
-      database: 'ok',
-      durableObject: durableObjectStatus,
-    },
+    checks: { database: check, durableObject: check },
   };
-  return makeApiResponse(health);
+  if (ledgerOk) return makeApiResponse(health);
+  // 503 so monitors and scripts that look at the status code see a broken ledger
+  return new Response(
+    JSON.stringify({ success: false, error: 'Spec DO unavailable', data: health, timestamp: Date.now() }),
+    { status: 503, headers: { 'Content-Type': 'application/json' } }
+  );
 }
 
 // ============================================================================

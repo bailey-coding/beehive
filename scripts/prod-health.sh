@@ -7,10 +7,10 @@
 #
 # Two kinds of check:
 #   /health on every worker: the worker is deployed and the token matches.
-#   GET /api/organizations?limit=1 on beehive: the only check that reaches the Spec DO. The edge
-#   /health is static (it answers 'durableObject: ok' without calling the DO), so it cannot see a
-#   failed migration. This request is the first DO call after a deploy, so it also runs the
-#   migrations (docs/OPS.md checklist step 4): 200 = the ledger initialised, 500 = a migration
+#   GET /api/organizations?limit=1 on beehive: a request that goes through to the Spec DO. The edge
+#   /health calls the DO too (503 when it is down) since the health fix, but builds before it answered
+#   200 with the ledger stuck, so this check stays. It is the first DO call after a deploy, so it also
+#   runs the migrations (docs/OPS.md checklist step 4): 200 = the ledger initialised, 500 = a migration
 #   failed (read the beehive logs: `Migration to m[4-8] failed`).
 #
 # Exit status 0 only if every check answered 200. The token goes to curl through stdin, not argv.

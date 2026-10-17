@@ -56,8 +56,9 @@ retries), so a bad deploy is loud rather than half-migrated.
 4. Push: `git pull origin main && git push cf main` deploys all ten workers at once. The Spec DO
    migrates on its first init after `beehive` deploys, not at deploy time, so make one authenticated
    request that reaches the DO: `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh` (its last check is
-   `GET /api/organizations?limit=1`). **Not `/health`**: the edge `/health` is static and answers
-   `durableObject: ok` without calling the DO, so it passes while the ledger is stuck. Then check the
+   `GET /api/organizations?limit=1`). The edge `/health` also calls the DO and answers 503 `unhealthy` while
+   the ledger cannot initialise, but only from the deploy that includes that change; the 2026-10-16 m3 -> m8
+   deploy still had a static `/health` that passed with the ledger stuck, so keep the script's DO request. Then check the
    `beehive` logs for `Migration to m[4-8] failed`; any hit, or a 500 from the script, means the ledger
    stopped at the previous version and requests are failing until it is fixed.
    `service_accounts has an unexpected shape`: that table is not this design's; if it is empty,
