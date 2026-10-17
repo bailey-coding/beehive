@@ -64,6 +64,73 @@ export interface LayoutOpts {
   flash?: boolean;
 }
 
+// ============================================================================
+// Chrome source (lazy, method-aware)
+// ============================================================================
+
+
+/** Memoise an async function: the in-flight promise is shared, rejections included. */
+export function once<T>(fn: () => Promise<T>): () => Promise<T> {
+  let p: Promise<T> | undefined;
+  return () => (p ??= fn());
+}
+
+/** The light chrome: no organization list, and therefore no Spec DO read. */
+export function lightChrome(session: Session, url: URL): Chrome {
+  return { login: session.login, url, orgs: { skipped: true } };
+}
+
+/**
+ * Reads the organization list for the switcher. Never throws: a Spec DO failure (including a 404,
+ * which the reader raises as an error) becomes `{ ok: false }`, which renders as "unavailable",
+ * never as "no organizations". A reply the reader maps to `[]` (non-array data) still shows as none.
+ */
+export async function loadChrome(reader: DoReader, session: Session, url: URL): Promise<Chrome> {
+  try {
+    const rows = await reader.list('/api/organizations', ORG_READ_LIMIT);
+    const orgs = rows
+      .map((o) => ({ id: pick(o, 'id'), name: pick(o, 'name') }))
+      .filter((o) => isValidId(o.id));
+    return { login: session.login, url, orgs: { ok: true, orgs, total: orgs.length } };
+  } catch (error) {
+    console.error('Navigation organization list error:', error);
+    return { login: session.login, url, orgs: { ok: false } };
+  }
+}
+
+/**
+ * The per-request source. GET/HEAD pages read the organization list (once, only when a page
+ * renders); every other method gets the light chrome, so writes, refused writes and the
+ * cross-origin 403 add no read.
+ */
+export function makeChromeSource(method: string, reader: DoReader, session: Session, url: URL): ChromeSource {
+  if (method === 'GET' || method === 'HEAD') return once(() => loadChrome(reader, session, url));
+  return once(async () => lightChrome(session, url));
+}
+
+/**
+ * Wraps a reader so identical reads within one request share one in-flight promise (rejections
+ * too). Used for GET requests only, so the navigation read and a page's own `Promise.all` do not
+ * read the same list twice.
+ */
+export function memoizeReader(reader: DoReader): DoReader {
+  const gets = new Map<string, Promise<DoRow | null>>();
+  const lists = new Map<string, Promise<DoRow[]>>();
+  return {
+    get: (path) => {
+      let p = gets.get(path);
+      if (!p) gets.set(path, (p = reader.get(path)));
+      return p;
+    },
+    list: (path, limit) => {
+      const key = `${path}|${limit ?? ''}`;
+      let p = lists.get(key);
+      if (!p) lists.set(key, (p = reader.list(path, limit)));
+      return p;
+    },
+  };
+}
+
 const SWITCHER_LIMIT = 20;
 const ORG_READ_LIMIT = 500;
 

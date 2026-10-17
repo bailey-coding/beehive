@@ -19,6 +19,7 @@ export interface UiEnv {
 import { page, esc, str, table, tableHtml, isValidId } from './ui-html';
 import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, type DoReader, type DoRow, type Session, type IssueViewer } from './ui-pages';
 import { parseRepoIssuesPath, resolveRepoRef, buildRepoUrl, validComponent, type RepoIssuesRoute, type RepoRef } from './ui-repo-ref';
+import { makeChromeSource, memoizeReader } from './ui-layout';
 import type { SpecDoStub } from '../shared/spec-do-auth';
 
 // Re-export Session for use by tests
@@ -127,8 +128,14 @@ export async function handleUi(
   // Only decides what the pages offer; the Spec DO re-checks every write. Sessions are never service accounts.
   const viewer: IssueViewer = { actorId: session.actorId, isMaintainer: pick(actorRow, 'role') === 'maintainer' };
 
-  // CREATE DOREADER - available to all authenticated routes below
-  const doReader = createDoReader(stub, session.actorId);
+  // CREATE DOREADER - available to all authenticated routes below. GET/HEAD requests share
+  // identical reads (the navigation's organization list and a page's own list) within the request.
+  const readOnly = method === 'GET' || method === 'HEAD';
+  const rawReader = createDoReader(stub, session.actorId);
+  const doReader = readOnly ? memoizeReader(rawReader) : rawReader;
+  // Lazy navigation data: nothing is read until a page awaits it while rendering, so the origin
+  // checks below still precede every DO read, and non-GET requests never read the org list.
+  const chrome = makeChromeSource(method, doReader, session, url);
 
   // Dashboard route
   if (path === '/app' && method === 'GET') return dashboard(url, session, stub, doReader);
