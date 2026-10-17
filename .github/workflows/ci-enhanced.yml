@@ -9,10 +9,18 @@ name: CI Enhanced
 # to install shared's dependencies. This workflow catches such issues.
 #
 # Note: CI only. Nothing here deploys (docs/OPS.md).
+# paths-ignore must match ci.yml and ci-skip.yml. If any job here becomes a required check, a
+# docs-only PR leaves it Pending: add same-named no-op jobs on the inverse paths (see ci-skip.yml).
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   push:
     branches: ['**']
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
 
 env:
   NODE_VERSION: '22'
