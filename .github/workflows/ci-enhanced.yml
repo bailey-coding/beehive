@@ -172,6 +172,10 @@ jobs:
             fi
           done
 
+      - name: Install CLI dependencies (tests/cli-behavior.test.ts runs the CLI via tsx)
+        working-directory: cli
+        run: npm install
+
       - name: Run unit tests
         run: npm test
 
