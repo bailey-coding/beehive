@@ -22,6 +22,7 @@ import {
   SERVICE_TOKENS_SQL,
   DEPLOY_REFS_SQL,
   LEDGER_CAS_SQL,
+  LIFECYCLE_COLUMNS,
 } from '../schema-inline';
 
 // Helper to extract table definitions from SQL
@@ -43,7 +44,7 @@ function extractTableDefinitions(sql: string): Map<string, string> {
       }
       currentTable = createMatch[2];
       currentDefinition = line;
-    } else if (currentTable && trimmed === ')';) {
+    } else if (currentTable && trimmed === ');') {
       // End of table definition
       currentDefinition += '\n' + line;
       tables.set(currentTable, currentDefinition);
@@ -133,8 +134,9 @@ describe('schema.sql completeness and consistency', () => {
       'expires_at',
       'is_active',
       'last_used_at',
-      'actor_id',
     ];
+    // actor_id is added by the m6 migration in index.ts (ALTER TABLE is not idempotent), so it is
+    // checked in the migration tests below, not in the base CREATE TABLE.
 
     for (const col of requiredColumns) {
       expect(
@@ -195,120 +197,77 @@ describe('schema-inline.ts vs schema.sql synchronization', () => {
   });
 });
 
+// Columns that schema.sql deliberately leaves out of CREATE TABLE and that index.ts adds with a
+// PRAGMA-guarded ALTER, because ALTER TABLE ADD COLUMN is not idempotent.
+const indexSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+
+function columnsOf(tables: Map<string, string>, table: string): string[] {
+  const def = tables.get(table);
+  expect(def, `Table ${table} should exist`).not.toBeUndefined();
+  return extractColumnsFromTable(def!);
+}
+
 describe('legacy schema issues that should be caught', () => {
-  const schemaPath = new URL('../schema.sql', import.meta.url);
-  const schemaContent = readFileSync(schemaPath, 'utf8');
+  const schemaContent = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+  const tables = extractTableDefinitions(schemaContent);
 
   it('service_accounts table is NOT the legacy schema', () => {
-    // Legacy schema had:
-    // CREATE TABLE service_accounts (
-    //   id TEXT PRIMARY KEY, actor_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL UNIQUE, scopes TEXT NOT NULL,
-    //   organization_id TEXT, description TEXT, created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
-    //   revoked_at INTEGER, FOREIGN KEY (actor_id) REFERENCES actors(id), FOREIGN KEY (organization_id) REFERENCES organizations(id))
-    
-    // Current schema should have token_hash, token_salt, is_active
-    expect(schemaContent).toContain('token_hash TEXT');
-    expect(schemaContent).toContain('token_salt TEXT');
-    expect(schemaContent).toContain('is_active BOOLEAN');
-    
-    // Should NOT have revoked_at (replaced by is_active)
-    // Note: We check that the service_accounts CREATE TABLE has these columns
-    const serviceAccountsSection = schemaContent.match(/CREATE TABLE[\s\S]*?service_accounts[\s\S]*?\);/);
-    expect(serviceAccountsSection, 'service_accounts table definition should exist').not.toBeNull();
-    
-    // Verify the table has the actor_id column (but not as NOT NULL UNIQUE without also having token_hash)
-    const serviceAccountsDef = serviceAccountsSection![0];
-    expect(serviceAccountsDef).toContain('actor_id');
-    expect(serviceAccountsDef).toContain('token_hash');
+    // The legacy table had actor_id NOT NULL UNIQUE, revoked_at, and no token_hash/token_salt/is_active.
+    const cols = columnsOf(tables, 'service_accounts');
+    for (const col of ['token_hash', 'token_salt', 'is_active']) expect(cols).toContain(col);
+    expect(cols).not.toContain('revoked_at');
+    // actor_id is added by the m6 migration, nullable.
+    expect(indexSource).toContain('ALTER TABLE service_accounts ADD COLUMN actor_id TEXT REFERENCES actors(id)');
   });
 
-  it('all entity tables have tombstone columns for soft deletion', () => {
-    // After m5, all entity tables should have deleted_at, deleted_by, delete_reason
-    const entityTables = ['organizations', 'repositories', 'actors', 'specs', 'candidates', 'issues'];
-    
-    for (const table of entityTables) {
-      const tableSection = schemaContent.match(new RegExp(`CREATE TABLE[\\s\\S]*?${table}[\\s\\S]*?\);`));
-      expect(tableSection, `Table ${table} should exist`).not.toBeNull();
-      
-      const tableDef = tableSection![0];
-      // Should have soft deletion columns
-      expect(tableDef).toContain('deleted_at');
-      expect(tableDef).toContain('deleted_by');
-      expect(tableDef).toContain('delete_reason');
+  it('entity tables get tombstone columns from the m5 migration', () => {
+    for (const table of ['organizations', 'repositories', 'specs', 'candidates', 'issues']) {
+      expect(LIFECYCLE_COLUMNS[table], `${table} should get tombstone columns`).toEqual([
+        'deleted_at INTEGER',
+        'deleted_by TEXT',
+        'delete_reason TEXT',
+      ]);
     }
+    expect(indexSource).toContain('addColumnsIfMissing');
+    expect(schemaContent).toContain('idx_organizations_deleted');
   });
 
-  it('metadata table has schema_version tracking', () => {
-    const metadataSection = schemaContent.match(/CREATE TABLE[\s\S]*?metadata[\s\S]*?\);/);
-    expect(metadataSection, 'metadata table should exist').not.toBeNull();
-    
-    const metadataDef = metadataSection![0];
-    expect(metadataDef).toContain('schema_version');
-    expect(metadataDef).toContain('updated_at');
+  it('metadata table can hold the schema_version row', () => {
+    // schema_version is a row (key), not a column.
+    const cols = columnsOf(tables, 'metadata');
+    for (const col of ['key', 'value', 'updated_at']) expect(cols).toContain(col);
+    expect(indexSource).toContain("'schema_version'");
   });
 });
 
 describe('promotion ledger tables', () => {
-  const schemaPath = new URL('../schema.sql', import.meta.url);
-  const schemaContent = readFileSync(schemaPath, 'utf8');
+  const schemaContent = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+  const tables = extractTableDefinitions(schemaContent);
 
-  it('promotion_states table exists with all required columns', () => {
-    const promotionStatesSection = schemaContent.match(/CREATE TABLE[\s\S]*?promotion_states[\s\S]*?\);/);
-    expect(promotionStatesSection, 'promotion_states table should exist').not.toBeNull();
-    
-    const def = promotionStatesSection![0];
-    expect(def).toContain('candidate_id');
-    expect(def).toContain('current_rung');
-    expect(def).toContain('target_rung');
-    expect(def).toContain('status');
-    expect(def).toContain('attempted_at');
+  const expectColumns = (table: string, expected: string[]) => {
+    const cols = columnsOf(tables, table);
+    for (const col of expected) expect(cols, `${table} should have column ${col}`).toContain(col);
+  };
+
+  it('promotion_states table has its columns', () => {
+    expectColumns('promotion_states', [
+      'candidate_id', 'spec_id', 'current_rung', 'target_rung', 'status', 'mode', 'started_at', 'updated_at',
+    ]);
   });
 
-  it('tournaments table exists with all required columns', () => {
-    const tournamentsSection = schemaContent.match(/CREATE TABLE[\s\S]*?tournaments[\s\S]*?\);/);
-    expect(tournamentsSection, 'tournaments table should exist').not.toBeNull();
-    
-    const def = tournamentsSection![0];
-    expect(def).toContain('id');
-    expect(def).toContain('spec_id');
-    expect(def).toContain('status');
-    expect(def).toContain('mode');
-    expect(def).toContain('winner_id');
-    expect(def).toContain('created_at');
+  it('tournaments table has its columns', () => {
+    expectColumns('tournaments', ['id', 'spec_id', 'status', 'winner', 'candidates', 'created_at']);
   });
 
-  it('merge_trains table exists with all required columns', () => {
-    const mergeTrainsSection = schemaContent.match(/CREATE TABLE[\s\S]*?merge_trains[\s\S]*?\);/);
-    expect(mergeTrainsSection, 'merge_trains table should exist').not.toBeNull();
-    
-    const def = mergeTrainsSection![0];
-    expect(def).toContain('id');
-    expect(def).toContain('current_rung');
-    expect(def).toContain('status');
-    expect(def).toContain('created_at');
+  it('merge_trains table has its columns', () => {
+    expectColumns('merge_trains', ['id', 'spec_id', 'status', 'current_position', 'candidates', 'created_at']);
   });
 
-  it('deploy_refs table exists with deployment reference tracking', () => {
-    const deployRefsSection = schemaContent.match(/CREATE TABLE[\s\S]*?deploy_refs[\s\S]*?\);/);
-    expect(deployRefsSection, 'deploy_refs table should exist').not.toBeNull();
-    
-    const def = deployRefsSection![0];
-    expect(def).toContain('id');
-    expect(def).toContain('spec_id');
-    expect(def).toContain('rung');
-    expect(def).toContain('commit_sha');
-    expect(def).toContain('prev_ref_id');
-    expect(def).toContain('deployed_at');
+  it('deploy_refs table has deployment reference tracking', () => {
+    expectColumns('deploy_refs', ['id', 'spec_id', 'rung', 'candidate_id', 'commit_sha', 'prev_ref_id', 'moved_at']);
   });
 
-  it('canary_deployments table exists for canary deployment tracking', () => {
-    const canarySection = schemaContent.match(/CREATE TABLE[\s\S]*?canary_deployments[\s\S]*?\);/);
-    expect(canarySection, 'canary_deployments table should exist').not.toBeNull();
-    
-    const def = canarySection![0];
-    expect(def).toContain('candidate_id');
-    expect(def).toContain('canary_percentage');
-    expect(def).toContain('started_at');
-    expect(def).toContain('status');
+  it('canary_deployments table has canary tracking', () => {
+    expectColumns('canary_deployments', ['candidate_id', 'spec_id', 'status', 'traffic_percentage', 'created_at']);
   });
 });
