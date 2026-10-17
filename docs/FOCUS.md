@@ -75,6 +75,14 @@ Completed items are removed, not struck through; history lives in git.*
   client exists (OPEN-QUESTIONS 2026-10-16).
 - **M1 ledger lifecycle** is deployed with m8; the production purge is untested against real data. Use
   tombstone then purge (`docs/OPS.md` "Ledger cleanup"), never delete the worker.
+- **Spike: run all ten workers as one `wrangler dev` process** (`-c wrangler.toml -c workers/<name>/wrangler.toml ...`)
+  instead of six processes on fixed ports (`scripts/start-e2e-workers.sh`). Probed 2026-10-17 with wrangler 4.151:
+  all ten configs load in one process and the Spec DO is reached in-process (the edge `/health` got a 503 from the
+  DO, which is correct without its token). Unresolved: (1) `--var` appears to reach only the primary worker, so the other
+  nine would need `SPEC_DO_INTERNAL_TOKEN` another way (per-config `.dev.vars` or a shared env file); (2) only the
+  primary is on `--port`, so tests that call 8788-8792 directly must reach those workers through bindings or another
+  route; (3) the binding table printed `[not connected]` for cross-worker bindings at startup, untested after it settled.
+  Acceptance: the 56 local e2e tests pass. The six-process script is the working fallback and CI runs it today.
 
 ## Next demo (post-submission)
 
