@@ -281,6 +281,26 @@ binding (the promotion worker); no edge route exposes them.
 - Not covered: two requests creating a tournament for the same spec at the same moment still
   make two rows (ids are random); readers take the newest.
 
+### Workers Builds watch paths (drafted 2026-10-17, not yet applied)
+
+Goal: a docs-only push to `cf` should not rebuild all ten workers. Watch paths are a Workers Builds
+setting (dashboard: worker -> Settings -> Builds). They are not in `wrangler.toml`, and the Cloudflare
+Terraform provider (5.28.0) has no Workers Builds resource, so `scripts/builds-watch-paths.sh` PATCHes the
+Builds API from `scripts/builds-watch-paths.json` (maintainer's host only; it changes production config).
+
+- Dry run, then apply: `CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... ./scripts/builds-watch-paths.sh [--apply]`.
+  The token must be user-scoped with Workers Builds edit access.
+- Settings: include `*`, exclude `docs/*` and `*.md`. Exclude-only on purpose: every worker imports
+  `workers/shared/`, and the docs do not say whether files outside a worker's root directory exist during
+  its build, so per-worker include lists could leave a worker silently stale.
+- Rules (Cloudflare docs): `*` is the only wildcard; excludes are checked first; a push with 20+ commits or
+  3000+ changed files always builds.
+- Unverified: whether watch paths apply to the Artifacts trigger. Check on one worker first: apply, push a
+  docs-only commit to `cf`, and see whether `wrangler deployments list` shows a new deployment. If one
+  appears, record it in `docs/OPEN-QUESTIONS.md`; do not work around it.
+- Mixed-version window: workers can now sit at different versions for longer, so changes must stay additive.
+- Upstream: if the Terraform provider gains a Workers Builds resource, replace the script with it.
+
 ### Last resort: wipe the whole ledger
 
 **Destructive and irreversible; human approval required.** Prefer tombstone + purge above.
