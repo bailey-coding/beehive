@@ -1,7 +1,7 @@
 /**
  * Issue Commands
  */
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { CliState, GlobalOptions } from '../index';
 import { printOutput, formatSuccess, formatError } from '../utils/output';
 
@@ -11,7 +11,11 @@ export function registerIssueCommands(
 ): void {
   const issue = program.command('issue').description('Issue management');
 
-  issue.command('create <title>').description('Create issue').requiredOption('--repository <id>', 'Repository ID').option('--body <text>', 'Issue body').option('--labels <labels>', 'Comma-separated labels').requiredOption('--number <num>', 'Issue number').action(createHandler(async (state, ..._args) => {
+  issue.command('create <title>').description('Create issue').requiredOption('--repository <id>', 'Repository ID').option('--body <text>', 'Issue body').option('--labels <labels>', 'Comma-separated labels').requiredOption('--number <num>', 'Issue number', (v) => {
+    const n = Number.parseInt(v, 10);
+    if (!Number.isInteger(n) || n < 1) throw new InvalidArgumentError('must be a positive integer');
+    return n;
+  }).action(createHandler(async (state, ..._args) => {
     const title = _args[0] as string;
     const opts = _args[1] as { repository: string; body?: string; labels?: string; number: number };
     

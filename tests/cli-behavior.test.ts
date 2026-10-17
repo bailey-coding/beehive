@@ -185,4 +185,17 @@ describe('CLI requests', () => {
   it('health extended', async () => {
     await expectRequest(['health', 'extended'], 'GET', '/api/health');
   });
+
+  it('spec create rejects a non-JSON contract without sending a request', async () => {
+    const { code, stderr } = await runCli(['spec', 'create', 'n', '--organization', 'o1', '--contract', 'not json', '--declared-delta-surface', 'x']);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/valid JSON/);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it('issue create rejects a non-integer --number', async () => {
+    const { code } = await runCli(['issue', 'create', 't', '--repository', 'r1', '--number', 'abc']);
+    expect(code).not.toBe(0);
+    expect(recorded).toHaveLength(0);
+  });
 });

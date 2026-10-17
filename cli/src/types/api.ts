@@ -262,7 +262,6 @@ export interface CreatePromotionRequest {
   fromRung: PromotionRung;
   toRung: PromotionRung;
   promotedBy?: string;
-  notes?: string;
 }
 
 export interface PromotionResponse {
@@ -324,23 +323,6 @@ export interface EntityHistoryResponse {
     changes: Record<string, unknown>;
     metadata?: Record<string, unknown>;
   }>;
-}
-
-// ============================================================================
-// DEBUG / STATE DUMP
-// ============================================================================
-
-export interface StateDumpResponse {
-  organizations: OrganizationResponse[];
-  actors: ActorResponse[];
-  repositories: RepositoryResponse[];
-  specs: SpecResponse[];
-  candidates: CandidateResponse[];
-  gateVerdicts: GateVerdictResponse[];
-  trials: TrialResponse[];
-  promotions: PromotionResponse[];
-  issues: IssueResponse[];
-  timestamp: number;
 }
 
 // ============================================================================

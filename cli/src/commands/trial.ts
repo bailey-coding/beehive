@@ -36,12 +36,12 @@ export function registerTrialCommands(
     printOutput(t, { format: state.outputFormat, pretty: true });
   }));
 
-  trial.command('decide <trial-id> <winner-id>').description('Decide trial').option('--comparison-metrics <json>', 'Comparison metrics as JSON string').option('--decided-by <id>', 'Actor ID who decided').option('--notes <notes>', 'Trial notes').action(createHandler(async (state, ..._args) => {
+  trial.command('decide <trial-id> <winner-id>').description('Decide trial').option('--comparison-metrics <json>', 'Comparison metrics as JSON string (default: {})').option('--decided-by <id>', 'Actor ID who decided').action(createHandler(async (state, ..._args) => {
     const trialId = _args[0] as string;
     const winnerId = _args[1] as string;
-    const opts = _args[2] as { comparisonMetrics?: string; decidedBy?: string; notes?: string } || {};
+    const opts = _args[2] as { comparisonMetrics?: string; decidedBy?: string } || {};
     
-    let comparisonMetrics = undefined;
+    let comparisonMetrics: Record<string, unknown> = {};
     if (opts.comparisonMetrics) {
       try {
         comparisonMetrics = JSON.parse(opts.comparisonMetrics);
