@@ -55,6 +55,10 @@ jobs:
         working-directory: workers/queue-consumer
         run: npm install
 
+      - name: Install CLI dependencies (tests/cli-behavior.test.ts runs the CLI via tsx)
+        working-directory: cli
+        run: npm install
+
       - name: Run typecheck
         run: npm run typecheck
 
