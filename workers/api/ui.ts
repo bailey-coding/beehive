@@ -144,7 +144,7 @@ export async function handleUi(
   // ref does not resolve they fall through, so repos named "issues" or "new" keep working.
   const issueRoute = parseRepoIssuesPath(path, method);
   if (issueRoute) {
-    const handled = await handleRepoIssues(issueRoute, request, url, session, viewer, stub, doReader);
+    const handled = await handleRepoIssues(issueRoute, request, url, session, viewer, stub, doReader, chrome);
     if (handled) return handled;
   }
 
@@ -205,7 +205,7 @@ export async function handleUi(
         case 'repos':
           return await repoPage(id, url, session, doReader, env);
         case 'issues':
-          return await legacyIssue(id, url, session, viewer, doReader);
+          return await legacyIssue(id, url, session, viewer, doReader, chrome);
         case 'specs':
           return await specPage(id, url, session, doReader);
         case 'candidates':
@@ -521,12 +521,13 @@ async function createSpec(form: FormData, session: Session, stub: SpecDoStub): P
 // ============================================================================
 
 const MAX_COMMENT_CHARS = 10_000;
-const NO_REPO_PAGE = () => page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
-const NOT_FOUND_ISSUE = () => page('Not found', '<p>Issue not found. <a href="/app">Back to dashboard</a></p>', 404);
-const LOAD_ERROR = () =>
-  page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
-const FORBIDDEN_ORIGIN = () => page('Forbidden', '<p>Cross-origin request blocked.</p>', 403);
-const METHOD_NOT_ALLOWED = () => page('Method not allowed', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 405);
+const NOT_FOUND_ISSUE = (chrome: ChromeSource) =>
+  statusPage(chrome, 404, 'Not found', 'Issue not found. <a href="/app">Back to dashboard</a>');
+const LOAD_ERROR = (chrome: ChromeSource) => statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
+const FORBIDDEN_ORIGIN = (chrome: ChromeSource) => statusPage(chrome, 403, 'Forbidden', 'Cross-origin request blocked.');
+const METHOD_NOT_ALLOWED = (chrome: ChromeSource) =>
+  statusPage(chrome, 405, 'Method not allowed', 'Method not allowed. <a href="/app">Back to dashboard</a>');
+const INVALID_ISSUE_ID = (chrome: ChromeSource) => statusPage(chrome, 404, 'Not found', 'Invalid issue ID.');
 
 const POST_KINDS = new Set(['create', 'comment', 'status']);
 
@@ -541,47 +542,48 @@ async function handleRepoIssues(
   session: Session,
   viewer: IssueViewer,
   stub: SpecDoStub,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response | null> {
   const isPostKind = POST_KINDS.has(route.kind);
   const method = request.method;
 
   // One origin check, before any DO read, for every state-changing issue route.
-  if (method === 'POST' && isPostKind && !sameOrigin(request)) return FORBIDDEN_ORIGIN();
+  if (method === 'POST' && isPostKind && !sameOrigin(request)) return FORBIDDEN_ORIGIN(chrome);
 
   let ref: RepoRef | null;
   try {
     ref = await resolveRepoRef(doReader, route.refSegments);
   } catch (error) {
     console.error('Issue route repo lookup error:', error);
-    return LOAD_ERROR();
+    return LOAD_ERROR(chrome);
   }
   if (!ref) return null;
 
   const allowed = isPostKind ? method === 'POST' : method === 'GET' || method === 'HEAD';
-  if (!allowed) return METHOD_NOT_ALLOWED();
+  if (!allowed) return METHOD_NOT_ALLOWED(chrome);
 
   try {
     switch (route.kind) {
       case 'list':
-        return await repoIssuesPage(ref, url, session, doReader);
+        return await repoIssuesPage(ref, url, session, doReader, chrome);
       case 'new':
-        return newIssuePage(ref, url, session);
+        return await newIssuePage(ref, url, session, chrome);
       case 'detail': {
         const issueId = route.issueId as string;
-        if (!isValidId(issueId)) return page('Not found', '<p>Invalid issue ID.</p>', 404);
-        return await issuePage(issueId, ref, url, session, doReader, viewer);
+        if (!isValidId(issueId)) return INVALID_ISSUE_ID(chrome);
+        return await issuePage(issueId, ref, url, session, doReader, viewer, chrome);
       }
       case 'create':
         return await createIssue(await readForm(request), ref, session, stub);
       case 'comment':
       case 'status': {
         const issueId = route.issueId as string;
-        if (!isValidId(issueId)) return page('Not found', '<p>Invalid issue ID.</p>', 404);
+        if (!isValidId(issueId)) return INVALID_ISSUE_ID(chrome);
         const issue = await doReader.get(`/api/issues/${encodeURIComponent(issueId)}`);
         // Private or out-of-repo issues are 404 before anything is written or disclosed.
         if (!issue || pick(issue, 'repository_id', 'repositoryId') !== pick(ref.repo, 'id') || pick(issue, 'visibility') === 'private') {
-          return NOT_FOUND_ISSUE();
+          return NOT_FOUND_ISSUE(chrome);
         }
         const form = await readForm(request);
         return route.kind === 'comment'
@@ -591,8 +593,8 @@ async function handleRepoIssues(
     }
   } catch (error) {
     console.error('Issue route error:', route.kind, error);
-    if (route.kind === 'list' || route.kind === 'new' || route.kind === 'detail') return LOAD_ERROR();
-    return page('Error', '<p>could not complete this request</p><p><a href="/app">Back to dashboard</a></p>', 502);
+    if (route.kind === 'list' || route.kind === 'new' || route.kind === 'detail') return LOAD_ERROR(chrome);
+    return statusPage(chrome, 502, 'Error', 'could not complete this request. <a href="/app">Back to dashboard</a>');
   }
 }
 
@@ -691,12 +693,12 @@ function writeFailure(result: { status: number; error: string }, fallback: strin
  * 404 before any redirect, so a private issue's canonical URL is never disclosed. If the
  * repository cannot be resolved the issue renders in place.
  */
-async function legacyIssue(id: string, url: URL, session: Session, viewer: IssueViewer, doReader: DoReader): Promise<Response> {
+async function legacyIssue(id: string, url: URL, session: Session, viewer: IssueViewer, doReader: DoReader, chrome: ChromeSource): Promise<Response> {
   const issue = await doReader.get(`/api/issues/${encodeURIComponent(id)}`);
-  if (!issue || pick(issue, 'visibility') === 'private') return NOT_FOUND_ISSUE();
+  if (!issue || pick(issue, 'visibility') === 'private') return NOT_FOUND_ISSUE(chrome);
   const repoId = pick(issue, 'repository_id', 'repositoryId');
   const ref = repoId ? await resolveRepoRef(doReader, [repoId]) : null;
-  if (!ref) return issuePage(id, null, url, session, doReader, viewer);
+  if (!ref) return issuePage(id, null, url, session, doReader, viewer, chrome);
   return redirect(`${ref.repoUrl}/issues/${encodeURIComponent(id)}`);
 }
 

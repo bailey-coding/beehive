@@ -20,6 +20,10 @@ import {
   type ArtifactsUiEnv
 } from './ui-semantic';
 import { buildRepoUrl, type RepoRef } from './ui-repo-ref';
+import {
+  appPage, statusPage, dashboardCrumb, issuesCrumbs,
+  type ChromeSource,
+} from './ui-layout';
 
 // Session type (re-exported from ui.ts for tests)
 export interface Session {
@@ -1169,7 +1173,8 @@ export async function repoIssuesPage(
   ref: RepoRef,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   const { repo, repoUrl } = ref;
   const repoId = getId(repo);
@@ -1189,10 +1194,6 @@ export async function repoIssuesPage(
   const issueRows = publicIssues.map((i) => renderIssueRow(i, repoUrl));
 
   const body = `
-    ${subHeader(`Issues for ${getName(repo)}`, repoUrl)}
-
-    ${flash(url)}
-
     <section class="action-bar">
       <a href="${repoUrl}/issues/new" class="button">New Issue</a>
     </section>
@@ -1211,24 +1212,26 @@ export async function repoIssuesPage(
       <p><a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a> (${esc(getStage(spec))})</p>
     </section>
     ` : ''}
-
-    <p><a href="${repoUrl}">Back to repository</a></p>
   `;
 
-  return page(`Issues - ${getName(repo)}`, body);
+  return appPage(chrome, {
+    title: `Issues - ${getName(repo)}`,
+    heading: `Issues for ${getName(repo)}`,
+    crumbs: issuesCrumbs(ref),
+    section: 'issues',
+    orgId: ref.org ? getId(ref.org) : undefined,
+    repoUrl,
+    searchAction: `${repoUrl}#search`,
+  }, body);
 }
 
 /**
  * Form to create a new issue for a repository. The number is assigned by the Spec DO.
  */
-export function newIssuePage(ref: RepoRef, url: URL, _session: Session): Response {
+export function newIssuePage(ref: RepoRef, _url: URL, _session: Session, chrome: ChromeSource): Promise<Response> {
   const { repo, repoUrl } = ref;
 
   const body = `
-    ${subHeader(`New Issue for ${getName(repo)}`, repoUrl)}
-
-    ${flash(url)}
-
     <form method="POST" action="${repoUrl}/issues" class="stack">
       <div class="form-group">
         <label for="title">Title *</label>
@@ -1250,11 +1253,17 @@ export function newIssuePage(ref: RepoRef, url: URL, _session: Session): Respons
         <a href="${repoUrl}/issues" class="button">Cancel</a>
       </div>
     </form>
-
-    <p><a href="${repoUrl}">Back to repository</a></p>
   `;
 
-  return page(`New Issue - ${getName(repo)}`, body);
+  return appPage(chrome, {
+    title: `New Issue - ${getName(repo)}`,
+    heading: `New Issue for ${getName(repo)}`,
+    crumbs: issuesCrumbs(ref, undefined, 'New'),
+    section: 'issues',
+    orgId: ref.org ? getId(ref.org) : undefined,
+    repoUrl,
+    searchAction: `${repoUrl}#search`,
+  }, body);
 }
 
 /** Who is looking at the page: decides which buttons and forms are offered (the DO still decides). */
@@ -1274,10 +1283,11 @@ export async function issuePage(
   url: URL,
   session: Session,
   doReader: DoReader,
-  viewer: IssueViewer
+  viewer: IssueViewer,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(issueId)) {
-    return page('Not found', '<p>Invalid issue ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid issue ID.');
   }
 
   const [issue, comments] = await Promise.all([
@@ -1286,11 +1296,11 @@ export async function issuePage(
   ]);
 
   if (!issue || isPrivateIssue(issue)) {
-    return page('Not found', '<p>Issue not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Issue not found. <a href="/app">Back to dashboard</a>');
   }
   const repoId = getRepositoryId(issue);
   if (ref && getId(ref.repo) !== repoId) {
-    return page('Not found', '<p>Issue not found in this repository. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Issue not found in this repository. <a href="/app">Back to dashboard</a>');
   }
 
   const repo = ref?.repo;
@@ -1331,10 +1341,6 @@ export async function issuePage(
   }
 
   const body = `
-    ${repoUrl ? subHeader(title, `${repoUrl}/issues`, 'Back to issues') : `<h1>${esc(title)}</h1>`}
-
-    ${flash(url)}
-
     <section class="details-section">
       <dl>
         <dt>Status</dt><dd>${isOpen ? '<span class="badge open">Open</span>' : '<span class="badge closed">Closed</span>'} ${toggleForm}</dd>
@@ -1378,9 +1384,19 @@ export async function issuePage(
 
       ${commentForm}
     </section>
-
-    <p><a href="${repoUrl ? repoUrl + '/issues' : '/app'}">Back to issues</a></p>
   `;
 
-  return page(`Issue #${getIssueNumber(issue)} - ${getIssueTitle(issue)}`, body);
+  const number = getIssueNumber(issue);
+  const fallbackName = `Issue ${getId(issue).slice(0, 8)}`;
+  const tail = number ? `#${number}` : fallbackName;
+  return appPage(chrome, {
+    title: `Issue #${number} - ${getIssueTitle(issue)}`,
+    heading: title,
+    // Legacy render without a resolvable repository: no repo, no Issues item, a short trail.
+    crumbs: ref ? issuesCrumbs(ref, undefined, tail) : [dashboardCrumb(), { label: number ? `Issue #${number}` : fallbackName }],
+    section: ref ? 'issues' : null,
+    orgId: ref?.org ? getId(ref.org) : undefined,
+    repoUrl: repoUrl ?? undefined,
+    searchAction: repoUrl ? `${repoUrl}#search` : undefined,
+  }, body);
 }
