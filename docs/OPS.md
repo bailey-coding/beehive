@@ -300,6 +300,8 @@ Builds API from `scripts/builds-watch-paths.json` (maintainer's host only; it ch
   appears, record it in `docs/OPEN-QUESTIONS.md`; do not work around it.
 - Mixed-version window: workers can now sit at different versions for longer, so changes must stay additive.
 - Upstream: if the Terraform provider gains a Workers Builds resource, replace the script with it.
+- GitHub CI has the same filter: `ci.yml` and `ci-enhanced.yml` skip pushes and PRs that touch only `docs/**`
+  or `*.md` (`.github/workflows/README.md`). A docs-only push to `main` therefore shows no Actions run.
 
 ### Last resort: wipe the whole ledger
 
