@@ -10,7 +10,7 @@ computed with the WCAG 2.x relative-luminance formula (script outside the repo).
 
 - **B1 L2 wiring breaks the M8 "origin before any DO read" invariant and taxes every POST.** Plan 2.1/3 step (2): `loadChrome`
   is "wired in `handleUi` after the actor check" (`ui.ts:126-131`). It does a DO read (`/api/organizations`), so wired eagerly it runs
-  before `handleRepoIssues`' origin check (`ui.ts:551`) and before the POST block's check (`ui.ts:219`). The existing test
+  before `handleRepoIssues`' origin check (`ui.ts:550`) and before the POST block's check (`ui.ts:219`). The existing test
   `workers/api/tests/ui-issues.test.ts:354-362` asserts that a cross-origin comment POST reads only `/api/actors`: L2 goes red, so
   "each step green" is false, and the fix-by-loosening-the-test path would weaken a reviewed security property. It also adds a read
   to every create/comment/status POST, the legacy 302 (`ui.ts:694-701`) and `/logout`-less fall-throughs, none of which render.
@@ -59,3 +59,62 @@ computed with the WCAG 2.x relative-luminance formula (script outside the repo).
   `page()`; issue pages (`ui-pages.ts:1194,1230,1336`) and the repo page (`:380`) change output at L1, and plan section 3 says `page()`
   is untouched until L7. Harmless but the claim is what reviewers will check. **Change:** reword to "L1 changes only `flash`/`tabs`
   markup and shared CSS; existing tests must stay green unchanged"; keep the contrast helper in the test file, not shipped code.
+
+### Nits
+
+- N1 Memoising reader: cache the in-flight *promise*, not the result; the dashboard's `Promise.all` (`ui.ts:360-364`) races the nav
+  read. The reuse list is off: trial does not list orgs (`ui-pages.ts:980-984`), org uses `get` (`:169`); dashboard and the 2/3-part
+  `resolveRepoRef` (`ui-repo-ref.ts:136`) do benefit.
+- N2 `buildRepoUrl` already returns escaped output (`ui-repo-ref.ts:30,41`); rule 2.4.2 "then `esc()`" double-escapes the UUID
+  fallback (its id is not `isValidId`-checked). Say "use as is".
+- N3 Crumb guard `startsWith('/app')` accepts `/appx`; use `href === '/app' || /^\/app[/?#]/.test(href)`.
+- N4 Bidi controls (U+202E) survive `esc()` and can reorder switcher/crumb text visually; wrap dynamic labels in `<bdi>`.
+  Truncating by code points can split ZWJ emoji; acceptable.
+- N5 Badge contrast (challenges answer 5): `.badge.passed/active/public/full/promoted` `#238636` on `#12261a` = **3.44**,
+  `.failed/private/train` `#da3633` on `#2d1417` = **3.72**, both fail 4.5 (`ui-html.ts:296-321`). `#3fb950` -> 6.27, `#f85149` -> 5.12:
+  two colour values in CSS L1 already edits, and the visibility badge is on every issue page. Cheaper than a FOCUS entry.
+- N6 Risk 10 understates CSP: inline `style=""` attributes exist (`ui-pages.ts:258,531,584,765,895,915-916`), so a CSP needs
+  `style-src 'unsafe-inline'` for attributes too. Layout markup should add none.
+- N7 Once the layout owns `<h1>`, `<h3>Details</h3>` right after the title (`ui-pages.ts:226,367,724,909,1032`) skips h2; make it h2
+  in the step that migrates the page.
+- N8 Leave M10/M12 slots cheaply: render login + sign-out in one `renderAccount(chrome)` and keep `Chrome` an interface M10 can
+  extend (user menu, notification count). RFC-0008 (`origin/agent/m12-rfc`) plans `/app/settings/tokens`: it must use `appPage`.
+- N9 Switcher summary text when no org is current (dashboard, status pages) is unspecified; use "Organizations".
+- N10 `reader.list` maps a success reply with non-array `data` to `[]` (`ui.ts:79`), which the switcher would show as "No
+  organizations". Low risk; mention in the L2 test list.
+- N11 Plan contrast estimates are slightly off (link 7.49 not ~7.9; ok-flash 3.44 not ~3.3); every pass/fail conclusion holds.
+
+## Verified correct
+
+- Inventory: spot-checked `ui.ts:104,114,134,138-142,146-175,179-215,229,358,366-367,416-423,434,451,524-529,566-572,580,595,608,
+  694,876` and `ui-pages.ts:78,158,223,303,364,380,600,721,796,906,969,1029,1168,1192-1194,1224-1230,1271,1288,1334-1336,1382`: accurate
+  apart from S3. Only body `<h1>` is the legacy issue render (`:1334`).
+- "No CSP": true. grep of `workers/` finds no security headers outside the comparator's header normaliser; `index.ts:86-91` returns
+  the `handleUi` response unwrapped; `page()` sets only `Content-Type`/`Cache-Control` (`ui-html.ts:371`). No `<script>` or inline
+  handlers. No tournament pages in `ui*.ts`. Cookie `SameSite=Lax` (`ui.ts:857`) already blunts framing of the new sign-out button.
+- Sign-out stays `POST /logout` with the same-origin check before the session read (`ui.ts:113-115`).
+- R1/R3: rule at `ui.ts:66-70`, `docs/UI-DASHBOARD-PLAN.md:90`, enforced by the stub (`ui-issues.test.ts:27-35`); `loadChrome`'s
+  unfiltered `list('/api/organizations', 500)` obeys it. The DO does not clamp `limit` (`spec-do/index.ts:3130`), so "500+" works.
+  `list` throws on any DO error incl. 404 (`ui.ts:72-76`), so `{ok:false}` -> "unavailable" is reachable and correct.
+- Authorisation: no per-user org scoping exists; every allow-listed login already sees all orgs (`ui.ts:360-364`, note
+  `ui-pages.ts:258-260`), so the switcher adds no exposure. Only issues are private: detail 404s before render (`ui-pages.ts:1288`),
+  comment/status (`ui.ts:583`), legacy (`:696`); number-only crumbs leak nothing. Tombstoned rows leave lists (`deleted_at IS NULL`,
+  `spec-do/index.ts:468`): their crumb drops and `buildRepoUrl` falls back to the UUID URL (`ui-repo-ref.ts:32`).
+- Escaping: `esc` covers `& < > " '` (`ui-html.ts:38-46`); the query never reaches `action`; flash text escaped (`:151-157`).
+- `mockedLabel` is real text (`ui-html.ts:162-164`), so screen readers announce it; pill `#8b949e`/`#211c13` = 5.51 passes; new flash
+  text `#e6edf3` on `#12261a`/`#2d1417` = 13.5/14.5.
+- Tests: none pin the old header (`Beehive</h1>`, `subbar`, `Signed in as`: no hits in `ui*.test.ts`); all go through `handleUi`, so
+  page-function signature changes stay internal. The E2E_UI dummy-OAuth harness exists (`scripts/start-e2e-workers.sh:24-29,87-89`).
+- Conflicts: no `origin/*` branch ahead of `main` touches `workers/api/ui*` or `tests/e2e/ui*`; `agent/m12-rfc` touches only
+  `docs/rfcs/`. The plan leaves the Spec DO, schema, CLI, session cookie and signing (`ui.ts:318,834`, M12's target) alone.
+  Mixed-version: one worker, no new route; tolerable.
+
+## Section 9 answers
+
+Q1, Q2, Q4, Q6, Q8, Q9: agree. Q1: when ticking M9, say "Issues" is contextual (MILESTONES lists an issues link). Q3: change per S5
+(one search control per page). Q5: extend to the badge colours (N5). Q7: agree, with the brand linking to `/about` (S6).
+
+## Verdict
+
+**Approve with changes.** Fix B1 in the plan text before L2 starts (lazy chrome, plus the two proofs). S1-S8 fold into the
+existing tasks without reordering: S1, S2, S8 and N5 into L1; S3, S4 into L3; S5 into L5/L6; S6 into L7; S7 into L8.
