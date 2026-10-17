@@ -1,0 +1,20 @@
+name: CI
+
+# Companion to ci.yml. ci.yml skips docs-only changes via paths-ignore, which would
+# leave a required "Typecheck and unit tests" check Pending forever. This reports the
+# same check name as passed on exactly those paths. Keep the paths in sync with
+# ci.yml's paths-ignore and keep the job name identical.
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '**.md'
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    name: Typecheck and unit tests
+
+    steps:
+      - name: Skipped (docs-only change)
+        run: echo "No code paths changed; typecheck and unit tests not needed."
