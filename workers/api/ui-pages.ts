@@ -638,18 +638,18 @@ export async function specPage(
   }
   
   const [spec, orgs, repos, candidates, trials, promotions, issues] = await Promise.all([
-    doReader.get(`/api/specs/${encodeURIComponent(id)}`),
-    doReader.list('/api/organizations', 500),
-    doReader.list('/api/repositories', 500),
-    doReader.list('/api/candidates', 500),
-    doReader.list('/api/trials', 500),
-    doReader.list('/api/promotions', 500),
-    doReader.list('/api/issues', 500),
-  ]);
-  
-  if (!spec) {
-    return page('Not found', '<p>Spec not found. <a href="/app">Back to dashboard</a></p>', 404);
-  }
+      doReader.get(`/api/specs/${encodeURIComponent(id)}`),
+      doReader.list('/api/organizations', 500),
+      doReader.list('/api/repositories', 500),
+      doReader.list('/api/candidates', 500),
+      doReader.list('/api/trials', 500),
+      doReader.list('/api/promotions', 500),
+      doReader.list('/api/issues', 500),
+    ]);
+    
+    if (!spec) {
+      return page('Not found', '<p>Spec not found. <a href="/app">Back to dashboard</a></p>', 404);
+    }
   
   const specOrg = orgs.find((o) => getId(o) === getOrganizationId(spec));
   const linkedRepos = repos.filter((r) => getSpecId(r) === id);
@@ -813,7 +813,7 @@ export async function specPage(
     </section>
   `;
   
-  return page(getName(spec), body);
+    return page(getName(spec), body);
 }
 
 // ============================================================================
@@ -1324,7 +1324,7 @@ export async function issuePage(
     doReader.get(`/api/issues/${encodeURIComponent(issueId)}`),
     doReader.list('/api/repositories', 500),
     doReader.list('/api/organizations', 500),
-    doReader.list('/api/issue_comments', 500),
+    doReader.list(`/api/issues/${encodeURIComponent(issueId)}/comments`, 500),
   ]);
   
   if (!issue) {
@@ -1337,8 +1337,8 @@ export async function issuePage(
   const orgId = repo ? getOrganizationId(repo) : undefined;
   const org = orgId ? orgs.find((o) => getId(o) === orgId) : undefined;
   
-  // Get comments for this issue
-  const issueComments = comments.filter((c) => pick(c, 'issue_id', 'issueId') === issueId);
+  // Get comments for this issue (already filtered by issue_id from the route)
+  const issueComments = comments;
   
   // Get spec for this repo if any
   const specs = await doReader.list('/api/specs', 500);
