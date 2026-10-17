@@ -23,8 +23,10 @@ Completed items are removed, not struck through; history lives in git.*
 - M8 is on `main` but **not deployed** (2026-10-17): the Spec DO issue changes (atomic numbering, comment
   rules, close/reopen, actor validation), the repo issue pages UI, and the CLI default actor
   (`BEEHIVE_ACTOR` / `defaultActor` / `--actor`, an admin stopgap until M12). Plan and reviews: `docs/M8-*.md`.
-- Local checks on `main` (2026-10-17): 743 unit tests pass, typecheck clean; local e2e 63 passed / 5 skipped /
-  0 failed (run on the UI branch with `E2E_UI=1`, see `docs/SETUP.md`).
+- M9 (site navigation) is implemented on `agent/m9-nav` (2026-10-17), **not merged or deployed**; the independent
+  review (L9, `docs/M9-REVIEW.md`) is still to do. Plan and plan review: `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`.
+- Local checks on `agent/m9-nav` (2026-10-17): 832 unit tests pass, typecheck clean; local e2e result in the M9 PR
+  (run with `E2E_UI=1`, see `docs/SETUP.md`). On `main`: 743 unit tests, e2e 63 passed / 5 skipped / 0 failed.
 
 ## Next session, first (needs the maintainer)
 
@@ -49,6 +51,13 @@ Completed items are removed, not struck through; history lives in git.*
    ledger writes answer 403 (`docs/OPS.md` "CLI actor attribution").
 3. Defect 11 (a Spec DO catch-all 404 reads as "not found") stays open on purpose, pinned by a test.
    Details: `docs/OPEN-QUESTIONS.md` 2026-10-17 (review of `39a2669`, with corrections).
+
+## Deploy M9 (needs the maintainer, after the L9 review and merge)
+
+One `beehive` worker change, UI only: `git pull origin main && git push cf main` (together with M8 if that is still undeployed).
+Then check `scripts/prod-health.sh` and click through `/app` (navbar on each page type, org switcher, one flash after
+creating an org, sign-out). Rollback is a normal revert push. The manual visual checklist (360/640/960px wrap, focus ring,
+`details` open, skip link on focus, `#search` kept by the GET form) is in `docs/M9-NAV-PLAN.md` section 5.
 
 ## Cleanup
 

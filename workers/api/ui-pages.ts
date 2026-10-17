@@ -11,7 +11,7 @@
  * Any allowlisted user can see all orgs - this is existing behavior (R9).
  */
 
-import { esc, str, table, tableHtml, page, appLink, badge, stageBadge, visibilityBadge, mockedLabel, isValidId, pick, tabs, flash } from './ui-html';
+import { esc, str, table, tableHtml, appLink, badge, stageBadge, visibilityBadge, mockedLabel, isValidId, pick, tabs } from './ui-html';
 import { 
   semanticSearch, renderSearch, 
   semanticChangelog, renderChangelog,
@@ -74,18 +74,6 @@ function formatDate(ts: number | string | undefined): string {
   const num = typeof ts === 'string' ? parseInt(ts, 10) : ts;
   if (isNaN(num)) return '';
   return new Date(num).toLocaleString();
-}
-
-/**
- * Create a subheader with back link and title.
- */
-function subHeader(title: string, backHref: string = '/app', backText: string = 'Back to dashboard'): string {
-  return `
-    <div class="subbar">
-      <a href="${esc(backHref)}" class="link">&larr; ${esc(backText)}</a>
-      <h2>${esc(title)}</h2>
-    </div>
-  `;
 }
 
 // ============================================================================

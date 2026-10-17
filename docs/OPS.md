@@ -109,7 +109,10 @@ Ten Workers on `*.bz23711.workers.dev`, deployed from the Cloudflare Artifacts r
 
 **Web UI** (verified 2026-10-13): served by the `beehive` worker itself, not a separate
 app. `/`, `/about` and `/roadmap` are public; `/login` -> GitHub OAuth -> `/app` (create orgs, repos, specs).
-Code: `workers/api/ui.ts`. Access is limited to `ALLOWED_GITHUB_USERS` (var in root
+Code: `workers/api/ui.ts`, layout in `workers/api/ui-layout.ts` (M9). Every rendered `/app` GET page makes one extra
+Spec DO read (`GET /api/organizations`, for the org switcher; shared with the page's own read when it lists orgs);
+writes, refused writes and the cross-origin 403 add none. A failed read shows "Organizations unavailable" and never
+fails the page. UI only: no schema or route change, so a rollback needs no cleanup. Access is limited to `ALLOWED_GITHUB_USERS` (var in root
 `wrangler.toml`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
 Sessions are HMAC-signed with `API_AUTH_TOKEN`. The React app in `ui/` is **not built or
 deployed** (no build config); don't assume it is live.

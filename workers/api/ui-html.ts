@@ -263,8 +263,6 @@ export const PAGE_CSS = `  body { font-family: system-ui, sans-serif; background
   a { color: #58a6ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
   :focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
-  .bar { display: flex; justify-content: space-between; align-items: center; }
-  .subbar { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }
 
   /* Site header, breadcrumb and skip link (ui-layout.ts) */
   .site-skip { position: absolute; left: -9999px; top: 0; background: #161b22; padding: 8px 12px; z-index: 10; }
@@ -389,7 +387,10 @@ export const PAGE_CSS = `  body { font-family: system-ui, sans-serif; background
   .contract-display { background: #161b22; padding: 16px; border-radius: 6px; border: 1px solid #30363d; overflow-x: auto; }`;
 
 /**
- * Wrap content in a full HTML page with styling.
+ * The pre-session shell (login failures, access denied, not configured, the logout 403): a skip
+ * link, a brand link to the public `/about` (`/app` would redirect a denied user to `/login` and a
+ * 503 back to itself), the title as the one h1. No navbar and no switcher: there is no session to
+ * read with. Session pages use `appPage` in `ui-layout.ts`.
  * @param title Page title (escaped)
  * @param body HTML body content (must be SafeHtml or already escaped)
  * @param status HTTP status code
@@ -402,7 +403,9 @@ export function page(title: string, body: string, status = 200, cookies: string[
 <style>
 ${PAGE_CSS}
 </style></head>
-<body><main><h1>Beehive</h1>${body}</main></body></html>`;
+<body><a class="site-skip" href="#main">Skip to content</a>
+<header class="site-header"><a class="site-brand" href="/about">Beehive</a></header>
+<main id="main" tabindex="-1"><h1>${esc(title)}</h1>${body}</main></body></html>`;
   const headers = new Headers({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   for (const c of cookies) headers.append('Set-Cookie', c);
   return new Response(html, { status, headers });

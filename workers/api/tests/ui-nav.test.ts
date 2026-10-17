@@ -442,3 +442,51 @@ describe('spec, candidate and trial pages (L6)', () => {
     }
   });
 });
+
+// ============================================================================
+
+describe('pre-session shell (L7)', () => {
+  const shell = async (res: Response | null, status: number, title: string) => {
+    expect(res?.status).toBe(status);
+    const html = await (res as Response).text();
+    expect(html).toContain('<a class="site-skip" href="#main">');
+    expect(html).toContain('<a class="site-brand" href="/about">Beehive</a>');
+    expect(html).toContain('<main id="main" tabindex="-1">');
+    expect(count(html, '<h1>')).toBe(1);
+    expect(html).toContain(`<h1>${title}</h1>`);
+    expect(html).not.toContain('aria-label="Primary"');
+    expect(html).not.toContain('<details');
+    expect(html).not.toContain('<nav');
+    expect(html).not.toContain('href="/app"');
+    return html;
+  };
+
+  it('login failure (400): brand links to /about, a retry link to /login, no navbar', async () => {
+    const res = await handleUi(new Request('http://localhost/auth/callback'), env, stub as never);
+    const html = await shell(res, 400, 'Login failed');
+    expect(html).toContain('<a href="/login">Try again</a>');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('not configured (503)', async () => {
+    const res = await handleUi(new Request('http://localhost/app'), {}, stub as never);
+    await shell(res, 503, 'Not configured');
+  });
+
+  it('cross-origin /logout (403) is the pre-session shell and reads nothing', async () => {
+    const token = await signSession({ login: 'testuser', actorId: userId, exp: Math.floor(Date.now() / 1000) + 3600 }, TOKEN);
+    const res = await handleUi(
+      new Request('http://localhost/logout', { method: 'POST', headers: { Cookie: `__Host-beehive_session=${token}`, Origin: 'http://evil.example' } }),
+      env,
+      stub as never
+    );
+    await shell(res, 403, 'Forbidden');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('no subHeader markup is left on any migrated page', async () => {
+    for (const path of ['/app', `/app/orgs/${orgId}`, '/app/nothing']) {
+      expect(await (await ui(path)).text(), path).not.toMatch(/class="(subbar|bar)"/);
+    }
+  });
+});
