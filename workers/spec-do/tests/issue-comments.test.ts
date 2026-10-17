@@ -133,3 +133,60 @@ describe('D2 comments', () => {
     expect(commentCount()).toBe(1);
   });
 });
+
+describe('D3 PATCH /api/issues/:id/status', () => {
+  const setStatus = (status: unknown, actorId?: string, id = issueId) =>
+    call(`/api/issues/${id}/status`, 'PATCH', { status }, actorId);
+  const row = () =>
+    store.raw.prepare('SELECT status, closed_at, closed_by, stage FROM issues WHERE id = ?').get(issueId) as {
+      status: string;
+      closed_at: number | null;
+      closed_by: string | null;
+      stage: string;
+    };
+  const history = () =>
+    store.raw.prepare(`SELECT stage, changed_by, notes FROM entity_history WHERE entity_id = ? AND notes LIKE 'Issue %' ORDER BY changed_at, rowid`).all(
+      issueId
+    ) as { stage: string; changed_by: string; notes: string }[];
+
+  it('lets the creator close and reopen; reopen clears closed_at and closed_by', async () => {
+    expect((await setStatus('closed', user)).status).toBe(200);
+    expect(row()).toMatchObject({ status: 'closed', closed_by: user, stage: 'reported' });
+    expect(row().closed_at).toBeGreaterThan(0);
+    expect((await setStatus('open', user)).status).toBe(200);
+    expect(row()).toMatchObject({ status: 'open', closed_at: null, closed_by: null, stage: 'reported' });
+    expect(history().map((h) => [h.notes, h.stage, h.changed_by])).toEqual([
+      ['Issue created', 'reported', user],
+      ['Issue closed', 'reported', user],
+      ['Issue reopened', 'reported', user],
+    ]);
+  });
+
+  it('lets a maintainer close an issue they did not create', async () => {
+    expect((await setStatus('closed', maintainer)).status).toBe(200);
+    expect(row().closed_by).toBe(maintainer);
+  });
+
+  it('refuses another actor, a service actor and a missing actor with 403', async () => {
+    const other = spec.createActor('human', 'other').id;
+    for (const who of [other, serviceActor, undefined]) expect((await setStatus('closed', who)).status).toBe(403);
+    expect(row().status).toBe('open');
+  });
+
+  it('is idempotent: the same status again is 200 and adds no history', async () => {
+    await setStatus('closed', user);
+    const before = history().length;
+    const closedAt = row().closed_at;
+    expect((await setStatus('closed', user)).status).toBe(200);
+    expect(history().length).toBe(before);
+    expect(row().closed_at).toBe(closedAt);
+  });
+
+  it('answers a bad value with 400 and an unknown or tombstoned issue with 404', async () => {
+    expect((await setStatus('merged', user)).status).toBe(400);
+    expect((await setStatus(undefined, user)).status).toBe(400);
+    expect((await setStatus('closed', user, 'no-such-issue')).status).toBe(404);
+    store.raw.prepare('UPDATE issues SET deleted_at = ? WHERE id = ?').run(Date.now(), issueId);
+    expect((await setStatus('closed', user)).status).toBe(404);
+  });
+});

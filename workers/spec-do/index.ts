@@ -274,6 +274,7 @@ import type {
   CreateIssueRequest,
   UpdateIssueStageRequest,
   UpdateIssueCommentPolicyRequest,
+  UpdateIssueStatusRequest,
   CreateIssueCommentRequest,
   CreateIssueSpecLinkRequest,
   CreateIssueCandidateLinkRequest,
@@ -3545,6 +3546,15 @@ export class SpecDO {
         });
       }
       
+      if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
+        const id = this.extractParentId(path);
+        const body: UpdateIssueStatusRequest = await request.json();
+        return this.issueRoute(200, () => {
+          this.setIssueStatus(id, body.status, actorId);
+          return this.getIssue(id);
+        });
+      }
+
       if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
         const body: UpdateIssueCommentPolicyRequest = await request.json();
@@ -4161,9 +4171,31 @@ export class SpecDO {
     });
   }
 
+  /**
+   * Close or reopen: the issue's creator or a maintainer (403 otherwise). The same status again
+   * is a no-op. `stage` is left alone; the history row carries the current one.
+   */
+  setIssueStatus(id: string, status: string, changedBy: string): void {
+    if (!this.db) throw new Error('Database not initialized');
+    if (status !== 'open' && status !== 'closed') throw new BadRequestError("status must be 'open' or 'closed'");
+    this.state.storage.transactionSync(() => {
+      const issue = this.requireLiveIssue(id);
+      if (issue.created_by !== changedBy && !this.isMaintainer(changedBy)) {
+        throw new ForbiddenError('only the issue creator or a maintainer may close or reopen it');
+      }
+      if (issue.status === status) return;
+      const closing = status === 'closed';
+      const stmt = this.db!.prepare(`UPDATE issues SET status = ?, closed_at = ?, closed_by = ? WHERE id = ?`);
+      stmt.bind(status, closing ? now() : null, closing ? changedBy : null, id);
+      stmt.step();
+      stmt.free();
+      this.recordHistory('issue', id, issue.stage as EntityStage, changedBy, closing ? 'Issue closed' : 'Issue reopened');
+    });
+  }
+
   /** The issue row, or NotFoundError when it is unknown or tombstoned */
   private requireLiveIssue(id: string): Record<string, unknown> {
-    const issue = this.queryAll(`SELECT comment_policy, status, created_by FROM issues WHERE id = ? AND deleted_at IS NULL`, id)[0];
+    const issue = this.queryAll(`SELECT comment_policy, status, created_by, stage FROM issues WHERE id = ? AND deleted_at IS NULL`, id)[0];
     if (!issue) throw new NotFoundError('issue not found');
     return issue;
   }

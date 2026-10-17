@@ -571,6 +571,10 @@ export interface UpdateIssueStageRequest {
   notes?: string;
 }
 
+export interface UpdateIssueStatusRequest {
+  status: 'open' | 'closed';
+}
+
 export interface UpdateIssueCommentPolicyRequest {
   commentPolicy: 'open' | 'maintainers_only' | 'locked';
 }
