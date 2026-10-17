@@ -1,16 +1,19 @@
 ---
-RFO-2026-10-14
+RFO-2026-10-14-schema-sync-drift
 ---
 
 # RFO: Schema Sync Drift - schema.sql vs schema-inline.ts
 
-**Date:** 2026-10-14  
-**Author:** Maintainer / Agent Team  
+**Date:** 2026-10-16 (filename and index say 2026-10-14; 0fa4abb is 2026-10-16 06:52)  
+**Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** Near-Miss (Data consistency risk)  
 **Related:** AGENTS.md#state-management, 0fa4abb, 48a5f54, fbc9fb5
 
 ---
+
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** "Manual copy-paste" as the cause is inference (0fa4abb says only that the lifecycle comment block was missing from the inline copy);
+> no generator exists, so the inline file is still hand-synced. Severity, lessons and action items are unsupported by repo evidence.
 
 ## Summary
 
@@ -20,12 +23,14 @@ The Spec DO schema was defined in two places: `schema.sql` (the source of truth)
 
 ## Timeline
 
-| Time (UTC) | Event | Actor | Notes |
-|------------|-------|-------|-------|
-| ~2026-10-12 | Spec DO schema updated in schema.sql | Agent Team | Added lifecycle fields for M4→M5 migration |
-| ~2026-10-13 | schema-inline.ts not updated | Agent Team | Manual copy-paste missed lifecycle comment |
-| 2026-10-14 | Drift discovered during review | Agent Team | "lifecycle comment block missing from the inline copy" |
-| 2026-10-14 | Unit test added and drift fixed (commit 0fa4abb) | Agent Team | Test ensures byte-for-byte agreement |
+> Rewritten by the 2026-10-17 audit; the earlier ~10-12/~10-13 rows had no repo evidence. Whether the 48a5f54 diff is the one that
+> introduced the drift was not checked.
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 2026-10-15 22:16 | 48a5f54 adds the lifecycle section to `schema.sql` (+31 lines) and `schema-inline.ts` (+39 lines) | `git show 48a5f54` |
+| 2026-10-16 06:52 | 0fa4abb adds a unit test that `schema.sql` and `schema-inline.ts` agree byte for byte and fixes the drift (lifecycle comment block missing from the inline copy); task name `review-fix-5-schema-sync` | `git show 0fa4abb` |
+| 2026-10-16 20:04 | fbc9fb5 (m8) states both files "stay byte-identical" | `git show fbc9fb5` |
 
 ### Key Moments
 
