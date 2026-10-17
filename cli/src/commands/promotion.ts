@@ -7,7 +7,7 @@ import { printOutput, formatSuccess } from '../utils/output';
 
 export function registerPromotionCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const promotion = program.command('promotion').description('Promotion operations');
 

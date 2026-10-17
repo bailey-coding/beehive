@@ -7,7 +7,7 @@ import { printOutput, formatSuccess, formatError } from '../utils/output';
 
 export function registerIssueCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const issue = program.command('issue').description('Issue management');
 

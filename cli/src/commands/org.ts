@@ -98,7 +98,7 @@ export function registerOrgCommands(
   program: Command,
   createHandler: (
     action: (state: CliState, ...args: unknown[]) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const org = program.command('org').description('Organization management');
 

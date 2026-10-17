@@ -7,7 +7,7 @@ import { printOutput, formatSuccess, formatError } from '../utils/output';
 
 export function registerRepoCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const repo = program.command('repo').description('Repository management');
   repo.command('create <name>').description('Create a new repository').requiredOption('--organization <id>', 'Organization ID').requiredOption('--remote-url <url>', 'Remote URL').requiredOption('--namespace <ns>', 'Namespace').requiredOption('--type <type>', 'Repository type (baseline|candidate)').option('--spec <id>', 'Spec ID').option('--agent <id>', 'Agent ID').option('--default-branch <branch>', 'Default branch').action(createHandler(async (state, ..._args) => {

@@ -151,7 +151,7 @@ export function registerActorCommands(
   program: Command,
   createHandler: (
     action: (state: CliState, ...args: unknown[]) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const actor = program.command('actor').description('Actor management');
 

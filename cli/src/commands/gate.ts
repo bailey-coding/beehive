@@ -7,7 +7,7 @@ import { printOutput, formatSuccess, formatError } from '../utils/output';
 
 export function registerGateCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const gate = program.command('gate').description('Gate workflow operations');
 

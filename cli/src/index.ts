@@ -156,10 +156,13 @@ async function createCliState(opts: GlobalOptions): Promise<CliState> {
  */
 function createActionHandler<T extends unknown[]>(
   action: (state: CliState, ...args: T) => Promise<void> | void
-): (opts: GlobalOptions, ...args: T) => Promise<void> {
-  return async (opts: GlobalOptions, ...args: T) => {
+): (...commanderArgs: unknown[]) => Promise<void> {
+  // Commander calls actions as (...positionals, localOptions, command).
+  return async (...commanderArgs: unknown[]) => {
     try {
-      const state = await createCliState(opts);
+      const command = commanderArgs[commanderArgs.length - 1] as Command;
+      const args = commanderArgs.slice(0, -1) as T;
+      const state = await createCliState(command.optsWithGlobals<GlobalOptions>());
 
       // Print verbose info if enabled
       if (state.verbose) {
@@ -199,7 +202,7 @@ function registerPhase1Commands(
   program: Command,
   createHandler: <T extends unknown[]>(
     action: (state: CliState, ...args: T) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: T) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   // Phase 1: Core entities with custom command implementations
   registerAuthCommands(program, createHandler);
@@ -230,7 +233,7 @@ function registerGeneratedCommands(
   program: Command,
   createHandler: <T extends unknown[]>(
     action: (state: CliState, ...args: T) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: T) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   // Phase 2 and Phase 3 entities - currently none are auto-registered
   // as workflow, deployment, and environment have been removed
