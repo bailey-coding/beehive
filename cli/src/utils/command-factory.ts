@@ -476,7 +476,7 @@ export function registerEntityCommands(
   entityConfig: EntityConfig,
   createHandler: <T extends unknown[]>(
     action: (state: CliState, ...args: T) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: T) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const commandName = getCommandName(entityConfig);
   const entityGroup = program.command(commandName).description(getDescription(entityConfig));
@@ -613,7 +613,7 @@ export function registerAllEntityCommands(
   program: Command,
   createHandler: <T extends unknown[]>(
     action: (state: CliState, ...args: T) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: T) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   for (const [entityName, entityConfig] of Object.entries(ENTITIES)) {
     registerEntityCommands(program, entityName as EntityName, entityConfig, createHandler);
@@ -669,7 +669,7 @@ export function registerCustomCommandGroups(
   program: Command,
   createHandler: <T extends unknown[]>(
     action: (state: CliState, ...args: T) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: T) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   // This would be implemented to register custom commands
   // For now, custom commands are still registered manually in their respective files

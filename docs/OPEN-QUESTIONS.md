@@ -560,6 +560,20 @@ and report `durableObject: 'error'` with a 503 when it fails, so monitors see a 
 
 ---
 
+## CLI Parity Fixes - Implementation Findings (2026-10-16)
+
+**Status**: Resolved in `agent/parity-cli-fixes` branch
+
+- Promotion get: No GET /api/promotions/:id route exists (confirmed in workers/api/index.ts and workers/spec-do/index.ts) - removed command
+- Health extended: Base URL appends /api, so /api/health became /api/api/health (404) - fixed to /health in api-client.ts:181
+- Trial decide: API expects winnerId/comparisonMetrics, not winner/notes (workers/api/types.ts:446-448) - updated CLI
+- Promotion create: API requires fromRung/toRung (workers/api/types.ts:522-523) - added required options
+- Dead groups: No routes for workflow/deployment/environment (confirmed absent) - removed from ENTITIES
+- Debug methods: No /api/debug/* routes (confirmed absent) - removed from api-client.ts
+- Type mismatches: Aligned cli/src/types/api.ts with workers/api/types.ts
+
+---
+
 ## Three workers did not redeploy on the Artifacts push (2026-10-16)
 
 **Status**: Cause found (builds failed with `Could not resolve "zod"`), fix committed 2026-10-16 and verified in

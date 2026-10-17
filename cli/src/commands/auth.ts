@@ -150,7 +150,7 @@ export function registerAuthCommands(
   program: Command,
   createHandler: (
     action: (state: CliState, ...args: unknown[]) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const auth = program.command('auth').description('Authentication management');
 

@@ -273,20 +273,17 @@ beehive trial list --spec spec-abc123
 beehive trial get trial-abc123
 
 # Decide trial
-beehive trial decide trial-abc123 candidate-abc123 --notes "Candidate A performed better"
+beehive trial decide trial-abc123 candidate-abc123 --comparison-metrics '{"score":0.9}'
 ```
 
 #### Promotions
 
 ```bash
 # Create promotion
-beehive promotion create candidate-abc123 --notes "Ready for production"
+beehive promotion create candidate-abc123 --from-rung shadow --to-rung train
 
 # List promotions
 beehive promotion list
-
-# Get promotion
-beehive promotion get promotion-abc123
 ```
 
 #### Issues

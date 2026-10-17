@@ -7,16 +7,19 @@ import { printOutput, formatSuccess } from '../utils/output';
 
 export function registerPromotionCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const promotion = program.command('promotion').description('Promotion operations');
 
-  promotion.command('create <candidate-id>').description('Create promotion').action(createHandler(async (state, ..._args) => {
+  promotion.command('create <candidate-id>').description('Create promotion').requiredOption('--from-rung <rung>', 'From rung (pre-merge, shadow, train, canary, full)').requiredOption('--to-rung <rung>', 'To rung (pre-merge, shadow, train, canary, full)').action(createHandler(async (state, ..._args) => {
     const candidateId = _args[0] as string;
-    const opts = _args[1] as { notes?: string } || {};
-    const notes = opts.notes;
+    const opts = _args[1] as { fromRung: string; toRung: string };
     
-    const result = await state.client.createPromotion({ candidateId, notes });
+    const result = await state.client.createPromotion({
+      candidateId,
+      fromRung: opts.fromRung as 'pre-merge' | 'shadow' | 'train' | 'canary' | 'full',
+      toRung: opts.toRung as 'pre-merge' | 'shadow' | 'train' | 'canary' | 'full',
+    });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 
@@ -27,10 +30,5 @@ export function registerPromotionCommands(
     } else {
       console.log(formatSuccess(`Found ${response.data.length} promotion(s)`));
     }
-  }));
-
-  promotion.command('get <id>').description('Get promotion').action(createHandler(async (state, id) => {
-    const p = await state.client.getPromotion(id as string);
-    printOutput(p, { format: state.outputFormat, pretty: true });
   }));
 }

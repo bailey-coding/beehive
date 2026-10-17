@@ -644,7 +644,7 @@ export function registerDebugCommands(
   program: Command,
   createHandler: (
     action: (state: CliState, ...args: unknown[]) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const debug = program.command('debug').description('Debugging utilities for e2e testing');
 

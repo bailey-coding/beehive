@@ -7,17 +7,40 @@ import { printOutput, formatSuccess, formatError } from '../utils/output';
 
 export function registerSpecCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const spec = program.command('spec').description('Spec management');
 
-  spec.command('create <name>').description('Create a new spec').action(createHandler(async (state, ..._args) => {
-    const args = _args as [{ organization?: string; contract?: string; declaredDeltaSurface?: string }];
-    if (!args[0]?.organization || !args[0]?.declaredDeltaSurface) {
-      console.error(formatError('Organization and declared-delta-surface are required'));
+  spec.command('create <name>').description('Create a new spec').requiredOption('--organization <id>', 'Organization ID').requiredOption('--contract <path>', 'Contract as JSON string, or @path to a JSON file').requiredOption('--declared-delta-surface <surface>', 'Declared delta surface (comma-separated)').option('--description <desc>', 'Spec description').action(createHandler(async (state, ..._args) => {
+    const name = _args[0] as string;
+    const opts = _args[1] as { organization: string; contract: string; declaredDeltaSurface: string; description?: string };
+    
+    let contract: string;
+    if (opts.contract.startsWith('@')) {
+      const fs = await import('fs');
+      const path = opts.contract.substring(1);
+      contract = await fs.promises.readFile(path, 'utf-8');
+    } else {
+      contract = opts.contract;
+    }
+    
+    try {
+      JSON.parse(contract);
+    } catch {
+      console.error(formatError('--contract must be valid JSON (inline or @file)'));
       process.exit(1);
     }
-    console.log(formatError('Spec creation not fully implemented'));
+
+    const declaredDeltaSurface = opts.declaredDeltaSurface.split(',').map(s => s.trim());
+    
+    const result = await state.client.createSpec({
+      name,
+      organizationId: opts.organization,
+      contract,
+      declaredDeltaSurface,
+      description: opts.description,
+    });
+    printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 
   spec.command('list').description('List specs').action(createHandler(async (state) => {
@@ -34,7 +57,7 @@ export function registerSpecCommands(
     printOutput(s, { format: state.outputFormat, pretty: true });
   }));
 
-  spec.command('claim <spec-id>').description('Claim a spec').action(createHandler(async (state, ..._args) => {
+  spec.command('claim <spec-id>').description('Claim a spec').option('--actor <id>', 'Actor ID to claim as').option('--dry-run', 'Dry run without claiming').action(createHandler(async (state, ..._args) => {
     const specId = _args[0] as string;
     const opts = _args[1] as { actor?: string; dryRun?: boolean } || {};
     

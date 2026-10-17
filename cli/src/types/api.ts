@@ -114,7 +114,7 @@ export interface RepositoryResponse {
 export interface CreateSpecRequest {
   name: string;
   description?: string;
-  contract: string | object; // JSON string or object
+  contract: string; // JSON string
   declaredDeltaSurface: string[];
   organizationId: string;
 }
@@ -218,6 +218,12 @@ export interface GateVerdictResponse {
 // TRIALS
 // ============================================================================
 
+export interface ComparisonMetrics {
+  conformance_score?: { a: number; b: number };
+  complexity_delta?: { a: number; b: number };
+  performance?: { a: number; b: number };
+}
+
 export interface CreateTrialRequest {
   candidateAId: string;
   candidateBId: string;
@@ -231,7 +237,8 @@ export interface TrialResponse {
   candidateBId: string;
   specId: string;
   decidedBy: string;
-  winner?: string;
+  winnerId?: string;
+  comparisonMetrics?: ComparisonMetrics;
   status: 'pending' | 'decided' | 'active';
   createdAt: number;
   decidedAt?: number;
@@ -239,23 +246,29 @@ export interface TrialResponse {
 }
 
 export interface DecideTrialRequest {
-  winner: string;
-  notes?: string;
+  winnerId: string;
+  comparisonMetrics?: ComparisonMetrics;
+  decidedBy?: string;
 }
 
 // ============================================================================
 // PROMOTIONS
 // ============================================================================
 
+export type PromotionRung = 'pre-merge' | 'shadow' | 'train' | 'canary' | 'full';
+
 export interface CreatePromotionRequest {
   candidateId: string;
+  fromRung: PromotionRung;
+  toRung: PromotionRung;
   promotedBy?: string;
-  notes?: string;
 }
 
 export interface PromotionResponse {
   id: string;
   candidateId: string;
+  fromRung: PromotionRung;
+  toRung: PromotionRung;
   promotedBy: string;
   notes?: string;
   createdAt: number;
@@ -271,12 +284,12 @@ export type IssueStatus = 'open' | 'in-progress' | 'resolved' | 'closed';
 export type IssueStage = 'triage' | 'specified' | 'implemented' | 'verified' | 'merged';
 
 export interface CreateIssueRequest {
-  title: string;
+  number: number;
   repositoryId: string;
-  description?: string;
-  changeType?: ChangeType;
-  complexityEstimate?: number;
-  reporterTrust?: number;
+  title: string;
+  body?: string;
+  labels?: string[];
+  createdBy?: string;
 }
 
 export interface IssueResponse {
@@ -310,23 +323,6 @@ export interface EntityHistoryResponse {
     changes: Record<string, unknown>;
     metadata?: Record<string, unknown>;
   }>;
-}
-
-// ============================================================================
-// DEBUG / STATE DUMP
-// ============================================================================
-
-export interface StateDumpResponse {
-  organizations: OrganizationResponse[];
-  actors: ActorResponse[];
-  repositories: RepositoryResponse[];
-  specs: SpecResponse[];
-  candidates: CandidateResponse[];
-  gateVerdicts: GateVerdictResponse[];
-  trials: TrialResponse[];
-  promotions: PromotionResponse[];
-  issues: IssueResponse[];
-  timestamp: number;
 }
 
 // ============================================================================
