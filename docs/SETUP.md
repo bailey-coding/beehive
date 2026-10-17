@@ -77,6 +77,12 @@ checks for workers with no local port (gate-workflow, sandbox-runner, queue-cons
 candidate-service, scientist-comparator). Before canary deploy/rollback
 (spine item 2) it was 44 passed, 7 skipped, 6 failed.
 
+UI issue pages (2026-10-17, branch `agent/m8-issues-ui`): start the workers with `E2E_UI=1 scripts/start-e2e-workers.sh`,
+which gives the `beehive` worker (only) dummy `GITHUB_CLIENT_ID/SECRET` and `ALLOWED_GITHUB_USERS`, so `/app` answers
+instead of 503. OAuth is never exercised; `tests/e2e/ui-issues.test.ts` forges the session cookie with `signSession`
+and the local `API_AUTH_TOKEN`. Without `E2E_UI=1` that file skips itself. With it: **63 passed, 5 skipped, 0 failed**
+(the same 5 skips; 7 of the passes are `ui-issues`). Local only, never production.
+
 Worker routes the tests use (the old `/canary/*`, `/shadow/*`, `/promotion/*` prefixes do not exist):
 
 | Worker | Routes |
