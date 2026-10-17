@@ -114,7 +114,7 @@ closer to the platform vision with semantic intelligence at its core, even if mo
 **Exit criteria:** Semantic UI concepts visible and navigable; all existing `/app` functions
 (creating orgs/repos/specs) still work; mocked semantic sections clearly labeled as such.
 
-**M6.2 — OCAP CI Security (merged with M3 capability minting, do after M5a).** Service-scoped object-capability model for CI workflows. **NOTE: Capability validation and OCAP model merged with M3 capability minting and M5's OCAP items into a single capability system.** See full plan in `docs/OCAP-CI-PLAN.md`.
+**M6.2 — OCAP CI Security (merged with M3 capability minting, do after M5a and M12 verified identity).** Service-scoped object-capability model for CI workflows. **NOTE: Capability validation and OCAP model merged with M3 capability minting and M5's OCAP items into a single capability system.** See full plan in `docs/OCAP-CI-PLAN.md`.
 - **Service registry** — Services as first-class entities in Spec DO, with path prefixes for monorepos
 - **Capability validation in gate workflow** — PRs can only modify services the actor has capabilities for. **Unified with M5 capability model.**
 - **Scoped token generation** — CI workflows receive tokens limited to specific services and resources
@@ -203,6 +203,20 @@ spine work, a human reviews.
   distinct entity-404 error, number-based issue URLs.
 - **Exit criteria:** migration applied with an old and a new DO both serving; `migrations.test.ts` and
   `schema-sync.test.ts` green; org purge still works; local e2e green.
+
+**M12 — Verified identity and user tokens (proposed 2026-10-17, future; capability minting (M3 + M6.2) depends on it).**
+Today `authenticate()` (`workers/api/principal.ts`) knows only the master token, whose actor is the client-sent
+`X-Actor-ID`, and read-only service tokens; UI users arrive through a GitHub session. A capability granted to an
+actor that anyone holding the master token can claim proves nothing, so minting needs a verified principal first.
+Spine work: a human designs it; start from the 2026-10-17 proposal in `docs/OPEN-QUESTIONS.md`.
+- **User tokens:** `authenticate()` returns a `kind: 'user'` principal; where tokens are minted, stored (hashed),
+  scoped, expired and revoked; how a token maps to an `actors` row.
+- **Master token:** what happens to actor assertion once user tokens exist (keep for break-glass admin only?).
+- **CLI:** login/token storage replaces the default-actor stopgap below.
+- **Stopgap until then (small, CLI only):** apply `defaultActor` (config) or `BEEHIVE_ACTOR` (env) to every request
+  as `X-Actor-ID`, `--actor` still overriding; the actor must be a real `actors` row. This is attribution, not
+  authentication; document it as an admin stopgap in `docs/OPS.md`.
+- **Exit criteria:** to be set in the design; at minimum, a write by a user token cannot name a different actor.
 
 ---
 
