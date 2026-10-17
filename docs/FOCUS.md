@@ -39,8 +39,9 @@ Completed items are removed, not struck through; history lives in git.*
 ## Decide first
 
 1. **Repo-level issue pages (`39a2669`): fixed on `agent/m8-issues-ui` (M8 PR 2), pending merge and the maintainer's deploy.**
-   Reachable in 2-part, 3-part and UUID URL forms; Spec DO assigns the number; close/reopen, lock-aware comment form. Order for the
-   deploy window: the DO half (already on `main`) and this PR deploy together; new UI against an old DO fails on create until both are live.
+   Reachable in 2-part, 3-part and UUID URL forms; Spec DO assigns the number; close/reopen, lock-aware comment form. The DO half is
+   already on `main`; both halves ship in the one `beehive` worker (`wrangler.toml`), so one push deploys them together and there is no
+   new-UI-on-old-DO window within it. Defect 11 stays open (pinned by a test).
    Details: `docs/OPEN-QUESTIONS.md` 2026-10-17 (review of `39a2669`, with corrections).
 
 ## Cleanup

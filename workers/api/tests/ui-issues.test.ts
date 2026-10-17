@@ -179,6 +179,21 @@ describe('GET list / new / detail', () => {
     expect((await ui(`/app/repos/acme/widgets/issues/${id}/status`)).status).toBe(405);
   });
 
+  it.each(['PUT', 'DELETE', 'PATCH'])('%s on list, new and detail is 405 and writes nothing', async (method) => {
+    const id = newIssue('widgets');
+    for (const path of ['/app/repos/acme/widgets/issues', '/app/repos/acme/widgets/issues/new', `/app/repos/acme/widgets/issues/${id}`]) {
+      calls = [];
+      const res = await ui(path, { method });
+      expect(res.status, `${method} ${path}`).toBe(405);
+      expect(writes()).toHaveLength(0);
+    }
+    expect(count('issues')).toBe(1);
+  });
+
+  it('HEAD is still allowed on the pages', async () => {
+    expect((await ui('/app/repos/acme/widgets/issues', { method: 'HEAD' })).status).toBe(200);
+  });
+
   it('does not double-escape the repository name in the header', async () => {
     const html = await (await ui(`/app/repos/${repos['R&D']}/issues`)).text();
     expect(html).toContain('Issues for R&amp;D');
@@ -420,6 +435,26 @@ describe('comments', () => {
     const res = await ui(`/app/repos/acme/other/issues/${id}/comments`, { form: { body: 'x' } });
     expect(res.status).toBe(404);
     expect(count('issue_comments')).toBe(0);
+  });
+
+  it('internal identity wording from the DO never reaches the flash', async () => {
+    const id = newIssue('widgets');
+    overrides.push((req) =>
+      req.method === 'POST' && new URL(req.url).pathname.endsWith('/comments')
+        ? Response.json({ success: false, error: 'X-Actor-ID must name an existing actor' }, { status: 403 })
+        : undefined
+    );
+    const res = await ui(`/app/repos/acme/widgets/issues/${id}/comments`, { form: { body: 'x' } });
+    expect(decodedMessage(res, 'error')).toBe('Your session is out of date; log in again.');
+    expect(res.headers.get('Location')).not.toContain('Actor');
+  });
+
+  it('a create response without a number does not say "#"', async () => {
+    overrides.push((req) =>
+      req.method === 'POST' && new URL(req.url).pathname === '/api/issues' ? Response.json({ success: true, data: { id: 'abc' } }, { status: 201 }) : undefined
+    );
+    const res = await ui('/app/repos/acme/widgets/issues', { form: { title: 't' } });
+    expect(decodedMessage(res, 'ok')).toBe('Created issue');
   });
 
   it('an unexpected DO status shows generic text, not the DO message', async () => {

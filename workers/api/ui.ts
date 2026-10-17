@@ -558,7 +558,8 @@ async function handleRepoIssues(
   }
   if (!ref) return null;
 
-  if (isPostKind !== (method === 'POST')) return METHOD_NOT_ALLOWED();
+  const allowed = isPostKind ? method === 'POST' : method === 'GET' || method === 'HEAD';
+  if (!allowed) return METHOD_NOT_ALLOWED();
 
   try {
     switch (route.kind) {
@@ -636,7 +637,7 @@ async function createIssue(form: FormData, ref: RepoRef, session: Session, stub:
     console.error('Create issue returned no id');
     return flashRedirect(newUrl, 'error', 'Could not create issue');
   }
-  return flashRedirect(`${ref.repoUrl}/issues/${encodeURIComponent(id)}`, 'ok', `Created issue #${pick(issue as Row, 'number')}`);
+  return flashRedirect(`${ref.repoUrl}/issues/${encodeURIComponent(id)}`, 'ok', createdMessage(pick(issue as Row, 'number')));
 }
 
 /** Add a comment. The DO enforces the comment policy; its 4xx text is shown, anything else is generic. */
@@ -673,9 +674,16 @@ async function setStatus(form: FormData, ref: RepoRef, issueId: string, session:
   return flashRedirect(issueUrl, 'ok', status === 'closed' ? 'Issue closed' : 'Issue reopened');
 }
 
+function createdMessage(number: string): string {
+  return number ? `Created issue #${number}` : 'Created issue';
+}
+
 /** The DO's own refusal text (fixed strings for 400/403/409) is user-facing; everything else is a generic message. */
 function writeFailure(result: { status: number; error: string }, fallback: string): string {
-  return [400, 403, 409].includes(result.status) && result.error ? result.error : fallback;
+  if (![400, 403, 409].includes(result.status) || !result.error) return fallback;
+  // Identity checks are internal wording (header names, service accounts); the user only needs to log in again.
+  if (/X-Actor-ID|service account|createdBy/i.test(result.error)) return 'Your session is out of date; log in again.';
+  return result.error;
 }
 
 /**
