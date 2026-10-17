@@ -8,7 +8,7 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-16
+**Last updated:** 2026-10-17
 
 ## Where we are
 
@@ -20,8 +20,11 @@ Completed items are removed, not struck through; history lives in git.*
   `beehive-promotion-worker`, `-canary-worker` and `-shadow-router`); the Spec DO is on m8 after the empty legacy
   `service_accounts` table was dropped (`docs/OPEN-QUESTIONS.md` 2026-10-16); `bailey-coding` is the only
   maintainer; `scripts/prod-health.sh` passes.
-- Local checks on `main` (with promotion-routes-fix merged): 559 unit tests pass, typecheck clean; local e2e
-  56 passed / 5 skipped / 0 failed (run on the routes branch).
+- M8 is on `main` but **not deployed** (2026-10-17): the Spec DO issue changes (atomic numbering, comment
+  rules, close/reopen, actor validation), the repo issue pages UI, and the CLI default actor
+  (`BEEHIVE_ACTOR` / `defaultActor` / `--actor`, an admin stopgap until M12). Plan and reviews: `docs/M8-*.md`.
+- Local checks on `main` (2026-10-17): 743 unit tests pass, typecheck clean; local e2e 63 passed / 5 skipped /
+  0 failed (run on the UI branch with `E2E_UI=1`, see `docs/SETUP.md`).
 
 ## Next session, first (needs the maintainer)
 
@@ -36,25 +39,31 @@ Completed items are removed, not struck through; history lives in git.*
    `BEEHIVE_API_TOKEN=... MAINTAINER_ACTOR_ID=... CONFIRM_PROD_WRITE=yes ./scripts/prod-verify-promotion.sh` once (it
    writes a `test-org-e2e-prodcheck-*` tree, restores the promotion mode and tombstones the org; purge by prefix later).
 
-## Decide first
+## Deploy M8 (needs the maintainer)
 
-1. **Repo-level issue pages (`39a2669`): fixed on `agent/m8-issues-ui` (M8 PR 2), pending merge and the maintainer's deploy.**
-   Reachable in 2-part, 3-part and UUID URL forms; Spec DO assigns the number; close/reopen, lock-aware comment form. The DO half is
-   already on `main`; both halves ship in the one `beehive` worker (`wrangler.toml`), so one push deploys them together and there is no
-   new-UI-on-old-DO window within it. Defect 11 stays open (pinned by a test).
+1. **Push M8 to `cf`** (`git pull origin main && git push cf main`). The issue pages UI and the Spec DO change ship in the one `beehive`
+   worker, so there is no new-UI-on-old-DO window within the push. Then check: `scripts/prod-health.sh`, `wrangler deployments list`
+   shows a code deployment newer than the push for all ten workers, and a new issue through `/app/repos/<org>/<repo>/issues/new` gets
+   number 1 (production has no issues today).
+2. **Set `BEEHIVE_ACTOR` (or `defaultActor`) for CLI admin use** to a real maintainer actor id, or `issue create` and the other
+   ledger writes answer 403 (`docs/OPS.md` "CLI actor attribution").
+3. Defect 11 (a Spec DO catch-all 404 reads as "not found") stays open on purpose, pinned by a test.
    Details: `docs/OPEN-QUESTIONS.md` 2026-10-17 (review of `39a2669`, with corrections).
 
 ## Cleanup
 
-- Ten merged local `agent/*` branches (and their `origin` copies) can be deleted once nothing needs them.
+- Merged `agent/*` branches (16 on 2026-10-17; `git branch --merged main --list 'agent/*'`), the unmerged M8 plan/review
+  branches (their docs are now on `main`) and the `scratch/m8-*` refs, with their `origin` copies, can be deleted once
+  nothing needs them.
 - `scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers (ArtifactFS is not built).
 - The 5 skipped local e2e tests are m3 health checks for workers with no local port.
 
 ## Open work
 
-- **No CI step builds a worker from a clean per-worker install,** which is how the zod failure reached production
-  (every local check resolves zod from the repo root). Add one: copy the repo without `node_modules`, `npm install` in
-  each worker folder, `wrangler deploy --dry-run`.
+- **The clean per-worker install CI step may not catch the zod failure.** `ci-enhanced.yml` runs a per-worker
+  `npm install` and `wrangler deploy --dry-run`, but only after `npm install` at the repo root, so zod still resolves
+  from the root `node_modules`, which is how the failure reached production. To make it a real check, build from a
+  `git archive` copy with no root `node_modules` and install only in each worker folder. Unverified until tried.
 - **Tournament creation race:** two requests creating a tournament for the same spec at the same moment make
   two rows (ids are random); readers take the newest. The CAS covers replacing a record, not creating one.
 - **Migration tests only see this repo's own SQL.** A ledger carrying a table of another design passed every
