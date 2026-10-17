@@ -22,7 +22,8 @@ npm run test:e2e:local   # e2e against local workers (start them first, below)
 ```
 
 Every worker fails closed without `API_AUTH_TOKEN` (`workers/shared/auth.ts`), including
-locally. Create a `.dev.vars` (gitignored) next to each wrangler config you run:
+locally. For plain `wrangler dev`, create a `.dev.vars` (gitignored) next to each wrangler config you run.
+`scripts/start-e2e-workers.sh` does not need them: it passes `API_AUTH_TOKEN` to every worker as a `--var`:
 
 ```bash
 printf 'API_AUTH_TOKEN=test-auth-token-12345\n' > .dev.vars
@@ -59,7 +60,7 @@ Give each its own `--inspector-port`, otherwise concurrent `wrangler dev` runs c
 `scripts/start-e2e-workers.sh` starts all five (and the probe) in order (beehive first: it hosts the Spec DO,
 and local bindings only connect to running `wrangler dev` sessions). It refuses to start if
 any of 8787-8792 is taken, and a worker counts as healthy only on a 2xx (`curl -f`; a missing
-`.dev.vars` answers 503). PIDs go to `.e2e-workers.pids`; `scripts/stop-e2e-workers.sh` stops
+token answers 503). PIDs go to `.e2e-workers.pids`; `scripts/stop-e2e-workers.sh` stops
 only those processes and their children. `WORKER_VERSIONS_MODE=stub` together with
 `BEEHIVE_LOCAL_DEV=1` (the local-only signal, set only by the start script) makes preview-manager's
 canary route mint a local stub version (`stub-<uuid>`) instead of answering 501; nothing calls
@@ -70,9 +71,8 @@ not use mocks; with no workers running you get `ECONNREFUSED`.
 ### Local e2e status
 
 Verified 2026-10-16 (`main` after the ledger CAS change, schema m8) with `scripts/start-e2e-workers.sh`
-and `npm run test:e2e:local`: **56 passed, 5 skipped, 0 failed**. (`workers/preview-manager/.dev.vars`,
-gitignored, must hold `API_AUTH_TOKEN=test-auth-token-12345` like the other workers', or the start
-script stops at preview-manager with a 503.) The 5 skips are the m3 health
+and `npm run test:e2e:local`: **56 passed, 5 skipped, 0 failed**. (No `.dev.vars` files are needed: the
+script passes `API_AUTH_TOKEN` as a `--var`, which is also how CI runs it.) The 5 skips are the m3 health
 checks for workers with no local port (gate-workflow, sandbox-runner, queue-consumer,
 candidate-service, scientist-comparator). Before canary deploy/rollback
 (spine item 2) it was 44 passed, 7 skipped, 6 failed.

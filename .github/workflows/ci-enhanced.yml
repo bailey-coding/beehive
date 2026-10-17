@@ -232,7 +232,26 @@ jobs:
             fi
           done
 
+      - name: Start local workers
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          # The script passes API_AUTH_TOKEN and the Spec DO tokens as --var, so no .dev.vars files are needed.
+          setsid nohup bash scripts/start-e2e-workers.sh > /tmp/e2e-workers.log 2>&1 &
+          for i in $(seq 1 150); do
+            if grep -q "All workers started successfully" /tmp/e2e-workers.log; then exit 0; fi
+            if grep -q "not healthy\|already in use" /tmp/e2e-workers.log; then cat /tmp/e2e-workers.log; exit 1; fi
+            sleep 2
+          done
+          echo "Timed out waiting for workers"; cat /tmp/e2e-workers.log; exit 1
+
       - name: Run local E2E tests
         run: npm run test:e2e:local
         env:
           E2E_ENVIRONMENT: local
+
+      - name: Stop local workers and show their log
+        if: always()
+        run: |
+          ./scripts/stop-e2e-workers.sh || true
+          tail -60 /tmp/e2e-workers.log || true

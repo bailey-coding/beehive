@@ -17,8 +17,9 @@
 #
 # The API worker must start first because the Spec DO is bound to it, and the
 # other workers reach it (and each other) only while their wrangler dev runs.
-# Every worker needs API_AUTH_TOKEN in its .dev vars file: ./.dev.vars for the API
-# worker, workers/<name>/.dev.vars for the others (docs/SETUP.md).
+# Every worker gets API_AUTH_TOKEN (the fixed local test token below) as a --var from
+# start_worker, so no .dev.vars file is needed here. A .dev.vars file is still read by plain
+# `wrangler dev`; --var wins over it when both are present.
 #
 # PIDs go to .e2e-workers.pids; scripts/stop-e2e-workers.sh stops only those.
 
@@ -65,7 +66,7 @@ wait_healthy() {
 start_worker() {
     local step="$1" name="$2" port="$3"; shift 3
     echo "[$step] Starting $name on port $port..."
-    npx wrangler dev "$@" --port "$port" &
+    npx wrangler dev "$@" --var "API_AUTH_TOKEN:$TOKEN" --port "$port" &
     local pid=$!
     echo "$pid" >> "$PID_FILE"
     echo "      $name PID: $pid"
@@ -96,7 +97,7 @@ start_worker "5/6" "Preview manager" 8791 --config workers/preview-manager/wrang
 wait_healthy "Preview manager" http://localhost:8791/health workers/preview-manager/.dev.vars
 
 # Local-only probe: holds the tier-1 token and nothing else (tests/e2e/spec-do-auth.test.ts)
-start_worker "6/6" "E2E probe (tier-1 only)" 8792 --config tests/e2e/probe/wrangler.toml --inspector-port 9235 --var BEEHIVE_LOCAL_DEV:1 --var "API_AUTH_TOKEN:$TOKEN" --var "SPEC_DO_INTERNAL_TOKEN:$DO_INTERNAL_TOKEN"
+start_worker "6/6" "E2E probe (tier-1 only)" 8792 --config tests/e2e/probe/wrangler.toml --inspector-port 9235 --var BEEHIVE_LOCAL_DEV:1 --var "SPEC_DO_INTERNAL_TOKEN:$DO_INTERNAL_TOKEN"
 wait_healthy "E2E probe" http://localhost:8792/health tests/e2e/probe
 
 echo ""
