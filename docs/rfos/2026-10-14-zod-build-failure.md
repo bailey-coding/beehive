@@ -1,16 +1,19 @@
 ---
-RFO-2026-10-14
+RFO-2026-10-14-zod-build-failure
 ---
 
 # RFO: Zod Dependency Resolution Failure in Worker Builds
 
-**Date:** 2026-10-14  
-**Author:** Maintainer / Agent Team  
+**Date:** 2026-10-16 (filename and index say 2026-10-14; f847f75 is 2026-10-16 21:54)  
+**Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** SEV-2 (Build failures blocking deployment)  
 **Related:** AGENTS.md#deployment-topology-ops, f847f75, RFC-0002 (Workers-Native Stores)
 
 ---
+
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** The rule cited from AGENTS.md ("Validation = Sandboxes...") is rule 6 but does not explain a dependency-resolution fault.
+> The 1-day duration, action-item owners/dates and lessons are unsupported by repo evidence.
 
 ## Summary
 
@@ -20,16 +23,18 @@ The promotion, canary, and shadow-router worker builds failed due to **zod being
 
 ## Timeline
 
-| Time (UTC) | Event | Actor | Notes |
-|------------|-------|-------|-------|
-| ~2026-10-13 | Worker builds start failing with zod resolution errors | CI System | Builds for promotion, canary, shadow-router workers failing |
-| ~2026-10-14 | Root cause identified: workers/shared dependencies not installed | Agent Team | Zod in shared wasn't available to worker builds |
-| 2026-10-14 | Fix implemented (commit f847f75) | Agent Team | Added shared package.json + per-worker postinstall |
-| 2026-10-14 | Verification complete | Agent Team | All worker builds passing |
+> Rewritten by the 2026-10-17 audit. The failing builds were Cloudflare Workers Builds, not a "CI System"; GitHub CI (`ci.yml`) never built the workers.
+
+| Time (UTC) | Event | Evidence |
+|---|---|---|
+| 2026-10-16 (before 21:47) | The Artifacts push did not redeploy shadow-router, canary-worker and promotion-worker; they kept running pre-stack code | `docs/OPEN-QUESTIONS.md` "Three workers did not redeploy on the Artifacts push (2026-10-16)"; c34e644 |
+| 2026-10-16 21:54 | f847f75 declares zod in `workers/shared/package.json`; each of the three workers runs `npm install --prefix ../shared` in `postinstall` (shadow-router gains the package.json it lacked); verified with `wrangler deploy --dry-run` from a clean archive | `git show f847f75` |
+| 2026-10-16 21:58 | All ten workers have a code deployment | `docs/FOCUS.md` |
+| 2026-10-16 22:36 | 69c62aa adds `ci-enhanced.yml` (a separate, later change) | `git show 69c62aa` |
 
 ### Key Moments
 
-- **Detected:** CI build failures in promotion, canary, and shadow-router workers
+- **Detected:** Workers Builds failures / no redeploy of the three workers after the Artifacts push
 - **Root Cause Identified:** Zod dependency in `workers/shared` was not resolvable during worker builds
 - **Mitigated:** Added `workers/shared/package.json` and per-worker postinstall scripts
 - **Resolved:** All worker builds successful
@@ -40,9 +45,9 @@ The promotion, canary, and shadow-router worker builds failed due to **zod being
 
 ### Affected Components
 
-- `workers/beehive-promotion` - Promotion Worker
-- `workers/beehive-canary` - Canary Worker
-- `workers/beehive-shadow-router` - Shadow Router Worker
+- `workers/promotion-worker` - Promotion Worker
+- `workers/canary-worker` - Canary Worker
+- `workers/shadow-router` - Shadow Router Worker
 - `workers/shared` - Shared code with zod dependency
 
 ### User Impact
@@ -75,7 +80,7 @@ The workers (promotion, canary, shadow-router) import from `workers/shared`, whi
 1. **Missing package.json** - `workers/shared` directory lacked a `package.json` file
 2. **No per-worker postinstall** - Workers didn't have postinstall scripts to ensure shared dependencies
 3. **Build system assumption** - Assumed npm would hoist all dependencies automatically
-4. **No build validation** - CI didn't catch this because it wasn't running clean installs per worker
+4. **No build validation** - `ci.yml` does not build workers; `ci-enhanced.yml` came afterwards
 
 ### Root Cause
 
@@ -98,7 +103,7 @@ This is a deployment topology issue that falls under AGENTS.md rule #6: "Validat
 ### Detection Improvements
 
 To catch similar issues earlier:
-- ✅ **Per-worker clean install** - CI now runs clean `npm install` in each worker directory
+- ✅ **Per-worker clean install** - `ci-enhanced.yml` (69c62aa, later) runs clean installs per worker
 - ✅ **Postinstall scripts** - Added per-worker postinstall to ensure shared dependencies
 - ✅ **Enhanced CI workflow** - Created `ci-enhanced.yml` to catch build/schema issues
 
@@ -108,7 +113,7 @@ To catch similar issues earlier:
 
 ### Initial Response
 
-1. **Build Failure Alert** - CI system reported build failures
+1. **Build failure** - Workers Builds failed; the three workers did not redeploy
 2. **Investigation** - Agent team traced the error to zod resolution from workers/shared
 
 ### Mitigation
@@ -117,7 +122,7 @@ To catch similar issues earlier:
 
 Changes:
 - Added `workers/shared/package.json` with zod dependency
-- Added per-worker `postinstall` scripts to copy or link shared dependencies
+- Added per-worker `postinstall` scripts running `npm install --prefix ../shared`
 - Recorded the cause in commit message for future reference
 
 ### Resolution
@@ -128,7 +133,7 @@ Changes:
 
 ### Verification
 
-- CI builds passing for all workers
+- Workers Builds: all ten workers had a code deployment from 2026-10-16 21:58 UTC (`docs/FOCUS.md`)
 - Manual deployment verification completed
 - Added to AGENTS.md as a known pattern
 
