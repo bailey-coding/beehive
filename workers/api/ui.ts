@@ -19,7 +19,7 @@ export interface UiEnv {
 import { page, esc, str, table, tableHtml, isValidId } from './ui-html';
 import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, type DoReader, type DoRow, type Session, type IssueViewer } from './ui-pages';
 import { parseRepoIssuesPath, resolveRepoRef, buildRepoUrl, validComponent, type RepoIssuesRoute, type RepoRef } from './ui-repo-ref';
-import { makeChromeSource, memoizeReader } from './ui-layout';
+import { appPage, makeChromeSource, memoizeReader, statusPage, type ChromeSource } from './ui-layout';
 import type { SpecDoStub } from '../shared/spec-do-auth';
 
 // Re-export Session for use by tests
@@ -138,7 +138,7 @@ export async function handleUi(
   const chrome = makeChromeSource(method, doReader, session, url);
 
   // Dashboard route
-  if (path === '/app' && method === 'GET') return dashboard(url, session, stub, doReader);
+  if (path === '/app' && method === 'GET') return dashboard(doReader, chrome);
 
   // Issue routes come first, GET and POST together (docs/M8-UI-ISSUES-PLAN.md section 2). When the
   // ref does not resolve they fall through, so repos named "issues" or "new" keep working.
@@ -153,7 +153,7 @@ export async function handleUi(
   const repoHierarchicalMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/);
   if (repoHierarchicalMatch) {
     if (method !== 'GET') {
-      return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Method not allowed. <a href="/app">Back to dashboard</a>');
     }
     const segments: string[] = [];
     for (const part of repoHierarchicalMatch.slice(1)) {
@@ -161,23 +161,23 @@ export async function handleUi(
       try {
         segments.push(decodeURIComponent(part));
       } catch {
-        return page('Not found', '<p>Invalid path format. <a href="/app">Back to dashboard</a></p>', 404);
+        return statusPage(chrome, 404, 'Not found', 'Invalid path format. <a href="/app">Back to dashboard</a>');
       }
     }
     if (!segments.every(validComponent)) {
-      return page('Not found', '<p>Invalid path format. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Invalid path format. <a href="/app">Back to dashboard</a>');
     }
 
     try {
       const ref = await resolveRepoRef(doReader, segments);
       if (!ref) {
-        return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+        return statusPage(chrome, 404, 'Not found', 'Repository not found. <a href="/app">Back to dashboard</a>');
       }
       // Render using UUID (all existing page code works unchanged)
       return await repoPage(pick(ref.repo, 'id'), url, session, doReader, env);
     } catch (error) {
       console.error('Repo page error:', error);
-      return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+      return statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
     }
   }
 
@@ -189,13 +189,13 @@ export async function handleUi(
     
     // Detail pages are GET-only (R9)
     if (method !== 'GET') {
-      return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Method not allowed. <a href="/app">Back to dashboard</a>');
     }
-    
+
     // Validate ID format (R5)
     // Reject anything that doesn't match alphanumeric/hyphen/underscore pattern
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
-      return page('Not found', '<p>Invalid ID format. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Invalid ID format. <a href="/app">Back to dashboard</a>');
     }
     
     try {
@@ -213,17 +213,17 @@ export async function handleUi(
         case 'trials':
           return await trialPage(id, url, session, doReader);
         default:
-          return page('Not found', '<p>Unknown entity type. <a href="/app">Back to dashboard</a></p>', 404);
+          return statusPage(chrome, 404, 'Not found', 'Unknown entity type. <a href="/app">Back to dashboard</a>');
       }
     } catch (error) {
       console.error('Detail page error:', error);
-      return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+      return statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
     }
   }
 
   // POST routes for create forms (unchanged)
   if (method === 'POST') {
-    if (!sameOrigin(request)) return page('Forbidden', '<p>Cross-origin request blocked.</p>', 403);
+    if (!sameOrigin(request)) return statusPage(chrome, 403, 'Forbidden', 'Cross-origin request blocked.');
     const form = await request.formData();
     if (path === '/app/organizations') return createOrganization(form, session, stub);
     if (path === '/app/repositories') return createRepository(form, session, stub);
@@ -233,8 +233,10 @@ export async function handleUi(
     if (path === '/app/issue_comments') return legacyIssueComment(form, session, doReader, stub);
   }
 
-  return page('Not found', '<p>This page does not exist. <a href="/app">Back to dashboard</a></p>', 404);
+  return statusPage(chrome, 404, 'Not found', 'This page does not exist. <a href="/app">Back to dashboard</a>');
 }
+
+const LOAD_ERROR_MESSAGE = 'could not load this page. <a href="/app">Back to dashboard</a>';
 
 // ============================================================================
 // OAuth
@@ -362,7 +364,7 @@ function formatDate(ts: number | string | undefined): string {
   return new Date(num).toLocaleString();
 }
 
-async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader: DoReader): Promise<Response> {
+async function dashboard(doReader: DoReader, chrome: ChromeSource): Promise<Response> {
   try {
     const [orgs, repos, specs] = await Promise.all([
       doReader.list('/api/organizations'),
@@ -370,9 +372,6 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       doReader.list('/api/specs'),
     ]);
 
-  const notice = url.searchParams.get('ok');
-  const error = url.searchParams.get('error');
-  
   // Build name lookup maps
   const orgName = new Map(orgs.map((o) => [pick(o, 'id'), pick(o, 'name')]));
   const repoName = new Map(repos.map((r) => [pick(r, 'id'), pick(r, 'name')]));
@@ -419,15 +418,9 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
     ];
   });
 
+  // The layout renders the sign-out form and the flash; the section ids are the nav's anchors.
   const body = `
-    <header class="bar">
-      <span>Signed in as <strong>${esc(session.login)}</strong></span>
-      <form method="POST" action="/logout"><button class="link">Sign out</button></form>
-    </header>
-    ${notice ? `<p class="flash ok">${esc(notice)}</p>` : ''}
-    ${error ? `<p class="flash err">${esc(error)}</p>` : ''}
-
-    <section>
+    <section id="organizations">
       <h2>Organizations (${orgs.length})</h2>
       ${tableHtml(['Name', 'Type', 'ID'], orgRows)}
       <form method="POST" action="/app/organizations" class="inline">
@@ -438,7 +431,7 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       </form>
     </section>
 
-    <section>
+    <section id="repositories">
       <h2>Repositories (${repos.length})</h2>
       ${tableHtml(
         ['Name', 'Org', 'Type', 'Spec'],
@@ -455,7 +448,7 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       </form>
     </section>
 
-    <section>
+    <section id="specs">
       <h2>Specs (${specs.length})</h2>
       ${tableHtml(
         ['Name', 'Org', 'Stage', 'ID'],
@@ -471,10 +464,10 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       </form>
     </section>`;
 
-    return page('Dashboard', body);
+    return await appPage(chrome, { title: 'Dashboard', crumbs: [], section: null }, body);
   } catch (error) {
     console.error('Dashboard error:', error);
-    return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+    return statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
   }
 }
 

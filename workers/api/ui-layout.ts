@@ -68,6 +68,9 @@ export interface LayoutOpts {
 // Chrome source (lazy, method-aware)
 // ============================================================================
 
+const SWITCHER_LIMIT = 20;
+/** Rows read for the switcher; also the reader's default list limit (`createDoReader` in ui.ts). */
+const ORG_READ_LIMIT = 500;
 
 /** Memoise an async function: the in-flight promise is shared, rejections included. */
 export function once<T>(fn: () => Promise<T>): () => Promise<T> {
@@ -123,16 +126,14 @@ export function memoizeReader(reader: DoReader): DoReader {
       return p;
     },
     list: (path, limit) => {
-      const key = `${path}|${limit ?? ''}`;
+      // An omitted limit is the reader's default (500), so it shares the read with an explicit 500.
+      const key = `${path}|${limit ?? ORG_READ_LIMIT}`;
       let p = lists.get(key);
       if (!p) lists.set(key, (p = reader.list(path, limit)));
       return p;
     },
   };
 }
-
-const SWITCHER_LIMIT = 20;
-const ORG_READ_LIMIT = 500;
 
 // ============================================================================
 // Text and href rules (plan 2.4)

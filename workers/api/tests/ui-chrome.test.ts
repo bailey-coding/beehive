@@ -96,7 +96,8 @@ describe('memoizeReader', () => {
     await r.get('/api/x/1');
     await expect(r.list('/api/bad')).rejects.toThrow('bad');
     await expect(r.list('/api/bad')).rejects.toThrow('bad');
-    expect(lists).toEqual(['/api/organizations|500', '/api/organizations|undefined', '/api/bad|undefined']);
+    // an omitted limit is the reader's default 500, so it shares the explicit-500 read
+    expect(lists).toEqual(['/api/organizations|500', '/api/bad|undefined']);
     expect(gets).toEqual(['/api/x/1']);
   });
 });
