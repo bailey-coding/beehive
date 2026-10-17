@@ -611,3 +611,36 @@ lifecycle scripts (the default). Alternative if it does not: set those three bui
 **Next**: after the push, check `wrangler deployments list` shows a code deployment newer than the push for all ten.
 **Want**: a CI step that builds each worker from a clean per-worker install, since nothing else catches this.
 
+---
+
+## Review of 39a2669 (repo-level issue pages + promotion-mode persistence) (2026-10-17)
+
+**Status**: Reviewed after it shipped unreviewed with the agent stack. Persistence half is fine; the UI half is
+unreachable code with six defects. Evidence is from reading the code and evaluating the route regexes; the handler
+was not run end to end (a scratch harness kept redirecting to `/login`, cause not found).
+
+**Promotion-mode persistence (fine)**: `/promotion-mode` GET/POST on the Spec DO, `setPromotionMode` validates the
+value server-side, tier-1 auth guards it, 122 lines of tests (`workers/promotion-worker/tests/mode-persistence.test.ts`).
+
+**UI repo-issue pages (`workers/api/ui.ts`)**:
+1. **Unreachable.** The three issue routes (`/issues`, `/issues/new`, `/issues/:id`) sit inside the existing
+   `if (repoHierarchicalMatch)` block, whose regex `^/app/repos/([^/]+)/([^/]+)(?:/([^/]+))?$` allows at most three
+   segments. `/app/repos/acme/acme/widgets/issues` (and `/issues/new`, `/issues/:id`) do not match it, so the inner
+   code never runs; the 2-part form `/app/repos/acme/widgets/issues` matches as repo `issues` and answers
+   "Repository not found". They need their own top-level matches before the repo route.
+2. **Comments cannot work.** `createIssueComment` posts to `/api/issue_comments`; the DO serves only
+   `/api/issues/:id/comments` (also in `docs/FEATURE-PARITY.md`).
+3. **Issue numbers.** `createIssue` takes `max(number) + 1` from a 500-row list and sends it as `number`: not atomic
+   (two creates get the same number) and wrong past 500. It also makes a filtered call (`/api/issues?repositoryId=`),
+   which the UI's own rule R1/R3 forbids because filtered routes returned empty in production (bind-order bug); if that
+   holds for issues, every issue is numbered 1. Unverified for issues.
+4. **Broken redirect.** `redirect(`${repoUrl}/issues?ok=Created issue #${n}`)` is unencoded: `#` starts a fragment and
+   the message is cut off. `back()` encodes; this one does not.
+5. **Not scoped.** `issuePage(issueId, ...)` resolves the repo from the URL and then ignores it, so any issue id renders
+   under any repo's URL.
+6. **Duplication.** The org/namespace/repo resolution is copied four times (three routes plus `createIssue`).
+No tests cover any of it.
+
+**Not fixed here**: `agent/parity-ui` is editing `ui.ts` (M8: comments route, `doReader` swallowing errors), so these go
+to that work to avoid a conflict. Until then the pages are dead code with no production exposure.
+

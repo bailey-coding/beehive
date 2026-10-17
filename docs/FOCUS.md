@@ -36,7 +36,11 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Decide first
 
-1. **Commit `39a2669` (repo-level issue pages) shipped unreviewed** with the stack. Review it.
+1. **Repo-level issue pages (`39a2669`) are unreachable dead code with six defects** (routes nested inside a regex
+   that cannot match them, comments post to a missing route, racy and probably wrong issue numbers, an unencoded
+   redirect, issue not scoped to repo, four copies of the repo lookup). The persistence half of that commit is fine.
+   Fix them in the M8 UI work (`agent/parity-ui` is editing `ui.ts`) or delete the pages until then.
+   Details: `docs/OPEN-QUESTIONS.md` 2026-10-17.
 
 ## Cleanup
 

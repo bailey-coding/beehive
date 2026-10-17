@@ -156,7 +156,8 @@ API, CLI and UI agree, and remove calls to routes that do not exist. Source of t
   nonexistent Spec DO routes now use `GET /api/candidates/:id` and `PATCH /api/candidates/:id/stage`
   (`docs/OPEN-QUESTIONS.md` 2026-10-16). Deployed once the merge is pushed and `git push cf main` runs.
 - **UI:** issue comments route (`/api/issues/:id/comments`); `doReader` surfaces errors
-  instead of turning 404/500 into empty lists.
+  instead of turning 404/500 into empty lists; make the repo issue pages reachable and fix the defects
+  listed in `docs/OPEN-QUESTIONS.md` 2026-10-17 (they are dead code today).
 - **CLI fixes:** `promotion create`/`trial decide` bodies, `health extended` path, `promotion get`;
   register missing options and implement the create stubs; delete dead `workflow`,
   `deployment`, `environment` groups.
