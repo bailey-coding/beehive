@@ -237,3 +237,25 @@ Also deferred: unique `(repository_id, number)` index (re-run the duplicate chec
 | S8 `flash()` in `ui-html.ts` | Accepted; U3 |
 | N1 fixed error text | Accepted; section 5. N2 encode issue id: accepted, section 6. N3 400 for bad numbers: accepted, D1. N4 line drift: accepted, lines updated. N5 UUID 404 pin: accepted, section 5/8. N6 CLI `--number` 409: accepted, U5 |
 | Not verified | Whether the `listIssues` bind-order fix is deployed; tombstoned issues in production; every `NotFoundError` throw site reachable from the main fetch catch |
+
+## 15. Final maintainer answers (2026-10-17) - these override section 12's "remaining questions"
+
+1. Close/reopen: the issue's creator or a maintainer (as planned in D3).
+2. `locked`: only maintainers may comment (not "blocks everyone"). `maintainers_only` is the same rule for the comment form; `locked` additionally hides the form
+   from non-maintainers and shows "Locked". Update D2b and the tests: a maintainer comment on a locked issue succeeds; any other actor gets the explicit 4xx.
+3. M11 (issue-to-issue links + closed-issue comment setting) is confirmed as a milestone in `docs/MILESTONES.md`, after M9.
+4. PR 1 (D1-D3) is implemented by a Sonnet 5.5 agent at medium thinking. Review by the maintainer plus an independent review agent stays.
+5. **Actor validation (new scope for D1/D2/D3):** the actor must be a validated identity, with a user token as the focus. Facts to design from:
+   `authenticate()` (`workers/api/principal.ts:36-109`) only knows the master token (actor = client-sent `X-Actor-ID`, line 44) and read-only service
+   tokens (actor from the service account). There is no user-bound API token today; UI requests carry a GitHub session whose login becomes the actor.
+   Required in PR 1, additive and mixed-version safe:
+   - The DO resolves the header actor against the `actors` table. An unknown actor id cannot create issues, comment, change status or change the
+     comment policy (403, explicit); `'unknown'` (no header) is rejected for these writes. Check how `'unknown'` and existing agent callers
+     (`queue-consumer`, `sandbox-runner` send fixed ids) are handled so no existing worker caller breaks; list each in the PR description.
+   - Service-account actors stay excluded from maintainer status (already in the plan) and from these writes.
+   - For UI requests the actor is derived server-side from the session, never from form fields; verify the session login maps to an `actors` row (and
+     what happens for a first-time login with no row) and write a test.
+   - Do NOT build a new user-token type in PR 1. If a user-bound token is wanted for API/CLI callers, write it up as a proposal (where tokens are minted,
+     how `authenticate()` would return `kind: 'user'`, scopes, and the spine/capability-minting overlap in M3/M6.2) in `docs/OPEN-QUESTIONS.md` and stop;
+     it needs a human.
+   - Document the remaining limit: a master-token holder can still assert any existing actor id until user tokens exist.
