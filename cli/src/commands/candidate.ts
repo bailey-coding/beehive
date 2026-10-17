@@ -11,15 +11,15 @@ export function registerCandidateCommands(
 ): void {
   const candidate = program.command('candidate').description('Candidate management');
 
-  candidate.command('create').description('Create candidate').requiredOption('--spec <id>', 'Spec ID').requiredOption('--repository <id>', 'Repository ID').requiredOption('--commit <sha>', 'Commit SHA').requiredOption('--base-commit <sha>', 'Base commit SHA').option('--agent <id>', 'Agent ID').action(createHandler(async (state, ..._args) => {
-    const opts = _args[0] as { spec: string; repository: string; commit: string; baseCommit: string; agent?: string };
+  candidate.command('create').description('Create candidate').requiredOption('--spec <id>', 'Spec ID').requiredOption('--repository <id>', 'Repository ID').requiredOption('--commit <sha>', 'Commit SHA').requiredOption('--base-commit <sha>', 'Base commit SHA').option('--agent <id>', 'Agent ID').option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)').action(createHandler(async (state, ..._args) => {
+    const opts = _args[0] as { spec: string; repository: string; commit: string; baseCommit: string; agent?: string; actor?: string };
     const result = await state.client.createCandidate({
       specId: opts.spec,
       repositoryId: opts.repository,
       commitSha: opts.commit,
       baseCommitSha: opts.baseCommit,
       agentId: opts.agent,
-    });
+    }, { actorId: opts.actor });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 

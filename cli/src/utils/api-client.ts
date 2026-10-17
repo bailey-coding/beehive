@@ -136,10 +136,12 @@ export class BeehiveClient {
       config.data = data;
     }
 
-    if (options?.actorId) {
+    // Per-call actor (--actor) wins; BEEHIVE_ACTOR is folded into defaultActor by loadConfig.
+    const actorId = options?.actorId || this.config.defaultActor;
+    if (actorId) {
       config.headers = {
         ...config.headers,
-        'X-Actor-ID': options.actorId,
+        'X-Actor-ID': actorId,
       };
     }
 

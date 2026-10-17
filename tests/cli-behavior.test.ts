@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -57,7 +57,7 @@ beforeEach(() => {
   recorded = [];
 });
 
-function runCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runCli(args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(TSX, [ENTRY, ...args], {
       cwd: ROOT,
@@ -67,6 +67,7 @@ function runCli(args: string[]): Promise<{ code: number | null; stdout: string; 
         XDG_CONFIG_HOME: join(home, '.config'),
         BEEHIVE_API_URL: `http://127.0.0.1:${port}`,
         BEEHIVE_API_TOKEN: 'test',
+        ...extraEnv,
       },
     });
     let stdout = '';
@@ -88,6 +89,44 @@ async function expectRequest(args: string[], method: string, path: string, body?
   expect(r.headers.authorization).toBe('Bearer test');
   if (body !== undefined) expect(r.body).toEqual(body);
 }
+
+describe('X-Actor-ID attribution', () => {
+  const issueArgs = ['issue', 'create', 'T', '--repository', 'r1', '--number', '1'];
+  const cfgFile = () => {
+    const f = join(home, 'actor-config.json');
+    writeFileSync(f, JSON.stringify({ defaultActor: 'from-config' }));
+    return ['--config', f];
+  };
+  const actorHeader = async (args: string[], env: Record<string, string> = {}) => {
+    const { code, stderr } = await runCli(args, env);
+    expect(stderr).toBe('');
+    expect(code).toBe(0);
+    expect(recorded).toHaveLength(1);
+    return recorded[0].headers['x-actor-id'];
+  };
+
+  it('sends no header when nothing is set', async () => {
+    expect(await actorHeader(issueArgs)).toBeUndefined();
+  });
+
+  it('config defaultActor applies to commands without --actor', async () => {
+    expect(await actorHeader([...cfgFile(), ...issueArgs])).toBe('from-config');
+  });
+
+  it('BEEHIVE_ACTOR beats config', async () => {
+    expect(await actorHeader([...cfgFile(), ...issueArgs], { BEEHIVE_ACTOR: 'from-env' })).toBe('from-env');
+  });
+
+  it('--actor beats env and config', async () => {
+    expect(
+      await actorHeader([...cfgFile(), ...issueArgs, '--actor', 'from-flag'], { BEEHIVE_ACTOR: 'from-env' })
+    ).toBe('from-flag');
+  });
+
+  it('applies to reads too', async () => {
+    expect(await actorHeader(['issue', 'list'], { BEEHIVE_ACTOR: 'from-env' })).toBe('from-env');
+  });
+});
 
 describe('CLI requests', () => {
   it('trial create', async () => {

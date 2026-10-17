@@ -13,6 +13,7 @@ import { BeehiveConfig, ConfigOptions, DEFAULT_CONFIG_PATH } from '../types/conf
 const ENV_API_TOKEN = 'BEEHIVE_API_TOKEN';
 const ENV_API_URL = 'BEEHIVE_API_URL';
 const ENV_VERBOSE = 'BEEHIVE_VERBOSE';
+const ENV_ACTOR = 'BEEHIVE_ACTOR';
 
 // Default configuration
 export const DEFAULT_CONFIG: BeehiveConfig = {
@@ -49,6 +50,9 @@ export function loadConfig(options?: ConfigOptions): BeehiveConfig {
   }
   if (process.env[ENV_API_URL]) {
     config.apiUrl = process.env[ENV_API_URL];
+  }
+  if (process.env[ENV_ACTOR]) {
+    config.defaultActor = process.env[ENV_ACTOR];
   }
   if (process.env[ENV_VERBOSE] === 'true') {
     config.verbose = true;
