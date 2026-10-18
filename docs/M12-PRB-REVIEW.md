@@ -181,7 +181,45 @@ found'`. Tested with an old-DO stub (`api/tests/user-tokens.test.ts:373-382`).
 Findings from this section: none.
 
 ### 2.4 Mixed versions and rollback
-_pending_
+
+The edge, the UI and the Spec DO class are all in the `beehive` script. The other nine workers compile only the
+changed `shared/*` files:
+- `principal.ts` types;
+- the `authedSpecDoStub` refactor into `toDoRequest`, which behaves the same;
+- one more `ADMIN_PATTERNS` row.
+
+The nine workers do not hold `SPEC_DO_ADMIN_TOKEN` and call no user-token route, so they are unaffected in every cell.
+A = push A on `main` (floor `8de5485`, `docs/OPS.md:78-81`). B = this PR. Each cell was re-derived from the code of
+both trees.
+
+| | **old DO (A)** | **new DO (B)** |
+|---|---|---|
+| **old edge/UI (A)** | today | `bh_usr_` is neither master nor `bh_svc_` (`main:workers/api/principal.ts:52`), so it falls through to **401** (`:91`). An old edge never sends the cap; with no header the DO uses today's power. `/api/admin/user-tokens*` passes the old `authorize` for master, no handler matches it, and it gets the router's 404. The old UI has no settings route, and the new DO's routes go unused |
+| **new edge/UI (B)** | **user token**: verify reaches the old router's `'Not found'` 404, so the edge answers **503** (`principal.ts:126`), never 401, anonymous or master. **Admin routes**: mint 404 → 503 (`user-tokens.ts:128`), list → 503 (`:146`), revoke and revoke-all: the 404 lacks the marker → 503 (`:171-172`, `:247-248`). **UI**: list/mint/revoke → "Token service unavailable" 503 page (`ui-tokens.ts:129`, `:173`, `:201`). Master, service and session paths are unchanged. **Cap**: never reaches an old DO in the normal flow, because a user principal needs a successful verify first | the PR |
+
+Cookies: a new UI reads an old cookie with no `iat` as "not fresh", so mint asks the user to sign in again
+(`ui-tokens.ts:54-58`). An old UI ignores the extra `iat` field (`main` `readSession` just `JSON.parse`s it).
+
+**Race (accepted N7 in the plan, R3).** Within one request, a new edge's verify can hit a B instance while the
+handler's call hits an A instance (a DO restart between calls). That one write ignores the cap. It needs a deploy or
+rollback in the same milliseconds, and the next request fails closed (503 or 401). I agree it is acceptable.
+
+**Rollback B → A with an m9 ledger:**
+- A's `runMigrations` matches `m9` with `/^m([1-9]\d{0,5})$/`, warns and returns before any step or assertion
+  (`main:workers/spec-do/index.ts:845-849`). A's own test covers `m9` explicitly
+  (`main:workers/spec-do/tests/migrations.test.ts:180`).
+- A has no code that enumerates `sqlite_master`, drops a table or deletes actors, so `user_tokens` sits idle.
+- Clients: every `bh_usr_` request → 401; `/app/settings/tokens` → A's not-found; admin user-token routes → 404; the
+  stage-1 log stops; master, service and sessions are unchanged.
+- Revocations cannot be made while on A. Redeploying B skips m9, and tokens that were valid become valid again. The OPS
+  runbook covers this (§2.7).
+- Rolling back below A is a full outage (`Unknown schema_version`). The plan and OPS both say never to do it.
+
+**Verdict for check 4:** every cell fails closed. No combination gives anonymous or master-like access to a `bh_usr_`
+bearer. Tests: an old-DO stub where every user-token route answers 404 (`api/tests/user-tokens.test.ts:373-382`), and
+the S15 outcome table (`:305-372`).
+
+Findings from this section: none.
 
 ### 2.5 UI `/app/settings/tokens` and the T5 mutations
 _pending_
