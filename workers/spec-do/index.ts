@@ -841,7 +841,8 @@ export class SpecDO {
     // Every step is additive, so the tables this code uses are intact: serve, run nothing, assert nothing.
     // Any other unknown value (not m<N>) still throws below.
     const stored = this.readSchemaVersion();
-    const newer = /^m(\d+)$/.exec(stored);
+    // 1 to 6 digits, no leading zero: bounded, so the warning below never prints more than 7 characters.
+    const newer = /^m([1-9]\d{0,5})$/.exec(stored);
     if (newer && Number(newer[1]) > Number(LATEST_SCHEMA_VERSION.slice(1))) {
       console.warn(`[SpecDO] schema_version '${stored}' is newer than '${LATEST_SCHEMA_VERSION}': skipping migrations`);
       return;
@@ -3883,13 +3884,16 @@ export class SpecDO {
     return rows;
   }
 
-  /** `githubUserId` narrows the list; the order stays newest first, so the first row is the newest duplicate. */
+  /**
+   * `githubUserId` narrows the list; the order stays newest first, so the first row is the newest duplicate.
+   * `rowid DESC` breaks a same-millisecond tie by insertion order (as the promotion tables do).
+   */
   listActors(limit: number, offset: number, githubUserId: string | null = null): ActorRow[] {
     if (!this.db) return [];
     const stmt = this.db.prepare(
       githubUserId === null
-        ? `SELECT * FROM actors ORDER BY created_at DESC LIMIT ? OFFSET ?`
-        : `SELECT * FROM actors WHERE github_user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+        ? `SELECT * FROM actors ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
+        : `SELECT * FROM actors WHERE github_user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
     );
     if (githubUserId === null) stmt.bind(limit, offset);
     else stmt.bind(githubUserId, limit, offset);

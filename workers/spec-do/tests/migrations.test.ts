@@ -177,7 +177,7 @@ describe('a ledger newer than this code (m<N> above m8)', () => {
       })
     );
 
-  it.each(['m9', 'm10', 'm99', 'm100', 'm09999999999999999999'])(
+  it.each(['m9', 'm10', 'm99', 'm100', 'm999999'])(
     'init() at %s warns once, runs no step, and leaves the version and the extra table alone',
     async (v) => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -247,7 +247,7 @@ describe('a ledger newer than this code (m<N> above m8)', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each(['mx', 'm', 'm9a', 'x9', 'M9', '9', 'm-1', 'm1.5', 'm 9', 'm0', 'm08', 'm8x', '', 'm9\n'])(
+  it.each(['mx', 'm', 'm9a', 'x9', 'M9', '9', 'm-1', 'm1.5', 'm 9', 'm0', 'm08', 'm8x', '', 'm9\n', 'm09', 'm1000000', `m${'9'.repeat(400)}`])(
     'the unparseable or unknown version %j still fails closed, with no warning',
     async (v) => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
