@@ -222,7 +222,61 @@ the S15 outcome table (`:305-372`).
 Findings from this section: none.
 
 ### 2.5 UI `/app/settings/tokens` and the T5 mutations
-_pending_
+
+**Code** (`workers/api/ui.ts`, `workers/api/ui-tokens.ts`):
+
+*Request ordering.* After `readSession` (no DO call) and the `!session` redirect, `parseTokenRoute` and `tokenPrecheck`
+run **before** `findSessionActor`, the first DO read (`ui.ts:124-128` vs `:133`). The navigation chrome is lazy
+(`:148-149`), so nothing reads the DO before the origin check.
+
+*Same origin.* Every POST needs `Origin` equal to the request origin, and a missing `Origin` is refused
+(`ui-tokens.ts:66`; `sameOrigin` `ui.ts:905-909`). The cookie is `SameSite=Lax; HttpOnly; Secure` (`ui.ts:897-899`).
+Revoke is CSRF-checked by the same line.
+
+*Freshness.*
+- Server-side: `isFresh` needs `0 <= now - iat <= 600` (`ui-tokens.ts:54-59`). A missing, non-numeric or future `iat`
+  is not fresh.
+- `iat` comes from the HMAC-signed session payload: `signSession` signs the whole JSON (`ui.ts:861-865`) and `iat` is
+  set at sign-in (`:338-340`). A client cannot change it without the key.
+- Revoke deliberately needs no freshness (plan S14).
+
+*Actor.*
+- Mint passes `session.actorId` as both minter and target, `createdVia:'session'` (`ui-tokens.ts:171`). The form is
+  read only for `name`, `scope` and `expiresInDays` (`:164-165`).
+- The DO adds defence in depth: a session mint needs `X-Actor-ID === actorId` (`spec-do/index.ts:878-880`).
+- List: the DO filters by `actorId` and the page filters again (`ui-tokens.ts:127`, `:133`).
+- Revoke is owner-scoped through `{actorId: session.actorId}` (`:200`).
+
+*Escaping.* Every DO-sourced value goes through `esc` (`:140`, `:185-186`, `:179`). This includes the token name,
+which master can set through the admin route, so another principal can control it. The revoke action URL uses
+`encodeURIComponent(t.id)` inside a double-quoted attribute (`:139`).
+
+*Show once.* The mint answer is a 200 page with `Cache-Control: no-store` (also set by `appPage`,
+`ui-layout.ts:306`) and `Referrer-Policy: no-referrer` (`ui-tokens.ts:190-191`). The list shows the prefix only.
+
+*Old DO.* List, mint or revoke against an old DO all give the 503 "Token service unavailable" page, never "no tokens"
+(`:129`, `:173`, `:201`).
+
+**Mutation results.** I ran each mutation alone in this worktree against `workers/api/tests/ui-tokens.test.ts` (19
+tests, all green before) and reverted it after the run. After the last revert the tree was clean.
+
+| # | Mutation | Result |
+|---|---|---|
+| T5-1 | freshness check removed from `tokenPrecheck` | **killed**: "a stale, missing or future iat…" |
+| T5-1b | future `iat` accepted (`age >= 0` removed) | **killed**: 2 tests |
+| T5-2a | mint target read from a form field `actorId` | **killed**: "ignores any actor named in the form (S5)" |
+| T5-2b | minter **and** target from the form (defeats the DO's `created_by = actor_id` check) | **killed**: same test |
+| T5-3a | the explicit `Cache-Control: no-store` on the mint page removed | **survived**: `appPage` sends it too. The guard is redundant, not untested |
+| T5-3b | no-store removed from both the mint page and `appPage` | **killed**: 2 tests, including the S13 header test |
+| T5-4 | origin check removed | **killed**: mint and revoke cross-origin tests |
+| T5-5 | a DO read (`findSessionActor`) moved before the precheck | **killed**: 3 "zero DO calls" tests |
+| T5-6a/b/c | `esc` removed from the token name (list), the plaintext (mint page), or the DO refusal text | **all survived**: no test puts markup in a token name or an error (**S1**) |
+| T5-7 | `Referrer-Policy` removed | **killed** |
+| T5-8 | revoke not owner-scoped | **killed** |
+| T5-9 | list not filtered by actor | **killed** |
+| T5-10 | sign-in stops writing `iat` | **killed** |
+
+Findings from this section: **S1** (no escaping test).
 
 ### 2.6 Tests and mutations
 _pending_
