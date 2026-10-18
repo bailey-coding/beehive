@@ -145,10 +145,8 @@ workers compile `shared/*` but call no new route, so their behaviour is unchange
 
 **Push B (PR-B), only after A is live.**
 0. No new secret (`API_AUTH_TOKEN`, `SPEC_DO_INTERNAL_TOKEN`, `SPEC_DO_ADMIN_TOKEN` are already on `beehive`). Read-only
-   checks: `wrangler deployments list --name beehive` shows push A's version live, and `schema_version` is `m8`. Run a
-   duplicate check: `SELECT github_user_id, COUNT(*) FROM actors WHERE github_user_id IS NOT NULL GROUP BY 1 HAVING
-   COUNT(*) > 1` (see Q3). In the dashboard, look at one invocation log on `beehive` and confirm that `Authorization` and
-   `Cookie` are redacted (Q4).
+   checks: `wrangler deployments list --name beehive` shows push A's version live, and `schema_version` is `m8`. There is
+   no actor precondition (A3) and no log-redaction gate (A4).
 1. Push. 2. `prod-health.sh`. 3. Read `schema_version` = `m9` and confirm `user_tokens` is in `sqlite_master`.
 4. Bootstrap: `POST /api/admin/user-tokens` with the master token, `X-Actor-ID: <maintainer actor>`, `{actorId: <own
    actor>, name, scope:"read_write", expiresInDays: 30}`. `GET /api/whoami` with the token shows `kind:"user"`. Then
@@ -169,7 +167,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 |---|---|---|---|
 | S1 | Format and entropy | `bh_usr_` + base64url of 32 bytes from `crypto.getRandomValues` (256 bits). Generated at the edge; the DO never sees plaintext | 43-char body, charset, two mints differ [helpers] |
 | S2 | Hashing and compare | SHA-256 hex stored, looked up through a unique index. With 256-bit input no salt or slow hash is needed, and an index lookup on the hash leaks nothing useful. The master compare stays `constantTimeEqual` and runs first (`principal.ts:38-41`) | the DO stores `token_hash` = hash(plaintext) and never plaintext; the list view has no `token_hash` [DO] |
-| S3 | Never log tokens | No log line, error body or DO row carries the plaintext or the hash: only `id` and the 12-char prefix. Tokens never go in a URL (`redact_query_string = false`, `wrangler.toml:50`). The Q4 dashboard check covers invocation logs | spy on `console.*` during mint, verify and revoke, with a bad token, asserting neither plaintext nor hash appears [edge, DO, UI] |
+| S3 | Never log tokens | No log line, error body or DO row carries the plaintext or the hash: only `id` and the 12-char prefix. Tokens never go in a URL (`redact_query_string = false`, `wrangler.toml:50`). Header capture in invocation logs and traces is covered by assumption A4 | spy on `console.*` during mint, verify and revoke, with a bad token, asserting neither plaintext nor hash appears [edge, DO, UI] |
 | S4 | No existence leak | Unknown, revoked, expired, deleted-actor, service-actor and malformed tokens all give the identical `401 {"error":"Unauthorized"}`. UI revoke of another actor's token or an unknown id is 404 for both | byte-equal bodies across the six cases [edge]; another actor's token id gives 404 [DO, UI] |
 | S5 | Who mints for whom | The real guards are at the edge: `ui-tokens.ts` takes `actorId` from `session.actorId` only (no form field is read), and `user-tokens.ts` is master-only. Both reach the same tier-2 DO route, so the DO cannot tell them apart; its `created_via='session'` ⇒ `created_by = actor_id` check is defence in depth (N1). In both cases the DO requires the target to be `type='human'`, `github_user_id IS NOT NULL` and not a service actor. A user token cannot mint: `/app/*` takes cookies only, and `/api/admin/*` is master-only | a form field naming another actor is ignored [UI]; agent, service and no-GitHub targets give 400/403 [DO]; a user token on `/api/admin/user-tokens` gives 403 [edge] |
 | S6 | Maintainer scope | Mintable only while `actors.role='maintainer'` (DO check in the mint transaction). At use time `isMaintainer` still reads the role live, so a demoted maintainer's token loses the power at once. The UI offers the option only to maintainers | non-maintainer mint of `maintainer` gives 403; demote, then comment-policy PATCH gives 403 [DO] |
@@ -191,8 +189,8 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | `GET /health`, `/api/health`, `/api/whoami`, non-admin `GET /api/*` | yes | yes | yes |
 | Writes: `POST` organizations, repositories, specs, candidates; `PATCH /api/specs/:id/stage` (spec lifecycle, not a rung), `claim`; issues create, `stage`, `status`, comments; issue-spec/candidate links; `gate/pre-merge` (it only starts the real gate workflow, `spec-do/index.ts:3794`) | 403 | yes, cap | yes |
 | `PATCH /api/issues/:id/comment-policy` | 403 | 403 at the edge | yes (the DO re-checks the role) |
-| `POST /api/actors`, `PATCH .../trust`, `PATCH .../promotion-authority`, `POST /api/gate-verdicts`, `POST /api/trials`, `.../decide`, `POST /api/promotions`, **`PATCH /api/candidates/:id/stage`**, **`POST /api/candidates/:id/execute`** | 403 | 403 | 403 (Q2) |
-| Lifecycle (`DELETE` tombstones, `?include_deleted=1`), `/api/admin/*` incl. purge, roles, user-token admin | 403 | 403 | 403 (Q1) |
+| `POST /api/actors`, `PATCH .../trust`, `PATCH .../promotion-authority`, `POST /api/gate-verdicts`, `POST /api/trials`, `.../decide`, `POST /api/promotions`, **`PATCH /api/candidates/:id/stage`**, **`POST /api/candidates/:id/execute`** | 403 | 403 | 403 (A2) |
+| Lifecycle (`DELETE` tombstones, `?include_deleted=1`), `/api/admin/*` incl. purge, roles, user-token admin | 403 | 403 | 403 (A1) |
 
 ## 5. Rollback per push (rule 7: a ref operation; the maintainer redeploys the good ref through the `cf` flow, `docs/OPS.md`)
 
@@ -205,7 +203,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | D1 | B | new-key cookies are refused, so users re-login (302, not 401); the API is unaffected |
 | D2 | D1 | nothing breaks; D1 accepts both keys |
 
-## 6. Risks and open questions
+## 6. Risks
 
 **Risks**
 - R1 Spine authorship: agent-written auth and DO code. Mitigation: heavy tier with a plan per task, maintainer plus
@@ -223,21 +221,24 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 - R6 The verify contract differs from the service branch (`principal.ts:67` maps 404 to 401). This is deliberate for user
   tokens (RFC section 3.A). The service branch is left alone, and the difference is noted in FOCUS.
 
-**Open questions for the maintainer** (each has a default that the plan already follows; answer before the task named)
-- Q1 (before T4): decision 3 lists lifecycle/purge and role changes as maintainer-scope routes. The plan keeps them, and
-  `include_deleted`, **master-only in M12**: a strict reading, no widening, consistent with decision 4's break-glass.
-  Opening them to `maintainer` tokens later is an edge-only change. Confirm, or should T4 open them now?
-- Q2 (before T4): user tokens are denied gate-verdict, trial, promotion and actor-admin writes (oracle and spine outcomes
-  stay machine or master), and also (review B1) `PATCH /api/candidates/:id/stage` and `POST /api/candidates/:id/execute`.
-  The stage PATCH has no transition guard: `transitionCandidate` (`spec-do/index.ts:1209-1219`) writes any value the CHECK
-  allows (`schema.sql:113-116`), `passed_canary` and `promoted` included. It is the route the promotion worker uses to
-  record rung outcomes (`promotion-worker/spec-do.ts:96-111`). `execute` takes `sandboxRunnerUrl` from the client body
-  (`api/index.ts:1885-1889`); the DO fetches it (`:4337`, `:4411`) and sets `passed_premerge` from the answer (`:4366`).
-  That is an oracle bypass and an SSRF from the DO. Widening later needs no schema change.
-- Q3 (before push B): `actors.github_user_id` has no UNIQUE index, so two concurrent first logins can create duplicate
-  actors. T0 picks the oldest. If the section 3 duplicate check finds any, decide which row to keep before tokens bind to
-  one of them; a unique index belongs in M11's `m10` batch.
-- Q4 (before push B): Workers Logs invocation logs capture request headers (`invocation_logs = true`, `wrangler.toml:55`),
-  and the docs do not say whether `Authorization` or `Cookie` is redacted. This affects the master and service tokens
-  today too. Check one log in the dashboard; if they are not redacted, record it in `docs/OPEN-QUESTIONS.md` and decide
-  whether to set `invocation_logs = false` on `beehive`.
+## 7. Maintainer answers (2026-10-18; these replace the earlier open questions Q1-Q4)
+
+- **A1 (Q1): yes.** Lifecycle (tombstones, `include_deleted`), `/api/admin/*`, purge and role routes stay **master-only in
+  M12** (`lifecycle.ts:76` unchanged). This is a strict subset of decision 3. **Note for later:** master stage 2 (the
+  master token can no longer act as a human) requires opening these routes to `maintainer` tokens first. T6d records
+  that prerequisite in FOCUS.
+- **A2 (Q2): confirmed**, with the two routes from review B1 added. User tokens of every scope are denied gate-verdict,
+  trial, promotion and actor-admin writes, `PATCH /api/candidates/:id/stage` (no transition guard:
+  `transitionCandidate`, `spec-do/index.ts:1209-1219`, writes any CHECK value including `passed_canary`/`promoted`, and
+  the promotion worker records rung outcomes through it) and `POST /api/candidates/:id/execute` (client-supplied
+  `sandboxRunnerUrl`, `api/index.ts:1885-1889`, fetched by the DO at `:4337`/`:4411`, which then sets `passed_premerge`,
+  `:4366`: an oracle bypass and an SSRF). Widening later is edge-only.
+- **A3 (Q3): no actor precondition for push B.** The maintainer ran the read-only duplicate check on production on
+  2026-10-17: 1 actor, a human with a GitHub id, 0 duplicates. T0 still ships F2 (no create on a failed lookup) and F3
+  (newest wins). There is still **no unique index in m9**; it goes in M11's `m10`, after the check is re-run.
+- **A4 (Q4): assume, unverified.** Per the maintainer's instruction, the plan **assumes** that Cloudflare invocation logs
+  and Honeycomb traces drop `Authorization`, `Cookie` and PII headers (including `X-API-Token` and the edge→DO
+  `X-Beehive-Internal`/`X-Beehive-Admin`). It is recorded as an unverified assumption in one line each in `docs/OPS.md` and
+  `docs/FOCUS.md` (a verification task), plus `docs/OPEN-QUESTIONS.md` (T6d). **Push B does not wait on it.** If it
+  later proves false: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
+  secrets (FOCUS task text).
