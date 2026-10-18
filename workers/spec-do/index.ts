@@ -226,7 +226,7 @@ import { seedDatabase, isSeeded } from './seed';
 
 // Artifacts client
 import { createFork, createRepoToken, type ArtifactsConfig } from '../shared/artifacts';
-import { specDoAuthGate, MAINTAINER_CAP_HEADER } from '../shared/spec-do-auth';
+import { specDoAuthGate, MAINTAINER_CAP_HEADER, USER_TOKEN_NOT_FOUND, USER_TOKEN_ACTOR_NOT_FOUND } from '../shared/spec-do-auth';
 
 // Promotion ledger contract (shared with the promotion worker)
 import type { ZodType } from 'zod';
@@ -2134,7 +2134,7 @@ export class SpecDO {
         const body = await readBody();
         if (typeof body.actorId !== 'string' || body.actorId === '') throw new BadRequestError('actorId must be a non-empty string');
         const result = this.revokeAllUserTokens(body.actorId, actorId);
-        return result ? json(result) : fail('Not found', 404);
+        return result ? json(result) : fail(USER_TOKEN_ACTOR_NOT_FOUND, 404);
       }
       const userTokenRevoke = path.match(/^\/internal\/user-tokens\/([^\/]+)\/revoke$/);
       if (userTokenRevoke && method === 'POST') {
@@ -2144,7 +2144,7 @@ export class SpecDO {
           throw new BadRequestError('actorId must be a non-empty string');
         }
         const token = this.revokeUserToken(decodeURIComponent(userTokenRevoke[1]), actorId, (body.actorId as string | undefined) ?? null);
-        return token ? json({ revoked: true, token }) : fail('Not found', 404);
+        return token ? json({ revoked: true, token }) : fail(USER_TOKEN_NOT_FOUND, 404);
       }
       // Always 200 for a well-formed hash: an old DO without this route answers 404, so the edge
       // can tell "no such token" (401) from "no such route" (503) and never fails open.

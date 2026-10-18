@@ -26,6 +26,14 @@ export const ADMIN_TOKEN_HEADER = 'X-Beehive-Admin';
  */
 export const MAINTAINER_CAP_HEADER = 'X-Beehive-Maintainer-Cap';
 
+/**
+ * The `error` of the user-token routes' own 404s. A DO without those routes (an older
+ * deploy) answers 404 'Not found' instead, which the edge must treat as 503, never as
+ * "no such token" or "no tokens".
+ */
+export const USER_TOKEN_NOT_FOUND = 'user token not found';
+export const USER_TOKEN_ACTOR_NOT_FOUND = 'actor not found';
+
 const SPEC_DO_ORIGIN = 'https://spec-do.internal';
 const DEFAULT_SPEC_DO_NAME = 'main';
 
@@ -115,17 +123,34 @@ export function specDoAuthGate(request: Request, env: SpecDoAuthEnv | undefined)
  * strings, URLs or Requests (DO stubs require absolute URLs, so relative ones resolve against
  * an internal origin).
  */
+function toDoRequest(input: RequestInfo | URL, init?: RequestInit): Request {
+  return typeof input === 'string' || input instanceof URL
+    ? new Request(new URL(input.toString(), SPEC_DO_ORIGIN), init)
+    : new Request(input, init);
+}
+
 export function authedSpecDoStub(stub: SpecDoStub, env: SpecDoAuthEnv): SpecDoStub {
   return {
     fetch: (input: RequestInfo | URL, init?: RequestInit) => {
-      const request =
-        typeof input === 'string' || input instanceof URL
-          ? new Request(new URL(input.toString(), SPEC_DO_ORIGIN), init)
-          : new Request(input, init);
+      const request = toDoRequest(input, init);
       if (env.SPEC_DO_INTERNAL_TOKEN) request.headers.set(INTERNAL_TOKEN_HEADER, env.SPEC_DO_INTERNAL_TOKEN);
       if (env.SPEC_DO_ADMIN_TOKEN && isAdminRoute(request.method, new URL(request.url).pathname)) {
         request.headers.set(ADMIN_TOKEN_HEADER, env.SPEC_DO_ADMIN_TOKEN);
       }
+      return stub.fetch(request);
+    },
+  };
+}
+
+/**
+ * The same stub with MAINTAINER_CAP_HEADER on every request, whatever its input form (the edge
+ * wraps its stub once for a user token without the maintainer scope, so no handler can forget).
+ */
+export function maintainerCappedStub(stub: SpecDoStub): SpecDoStub {
+  return {
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = toDoRequest(input, init);
+      request.headers.set(MAINTAINER_CAP_HEADER, '1');
       return stub.fetch(request);
     },
   };
