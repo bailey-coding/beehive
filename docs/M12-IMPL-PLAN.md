@@ -103,3 +103,48 @@ Tiers per `docs/AGENT-ROUTING.md`. Every task ends with a push of its own `agent
 
 PR-B is reviewed as one stack (`docs/AGENT-ROUTING.md` "Branches and review"): T2-T6 are commits on one branch, never
 separate branches stacked on each other. M11 rebases onto PR-B and takes `m10`.
+
+## 3. Mixed versions and the maintainer's deploy steps
+
+One push to `cf` deploys all ten workers in no order (`docs/OPS.md` "Deploy flow"). The edge, the UI and the Spec DO class
+all live in the `beehive` script (`workers/api/index.ts:72`), so a single deploy carries old and new together. The window
+that remains is a request that meets a DO instance still running the previous class, plus a rollback. The other nine
+workers compile `shared/*` but call no new route, so their behaviour is unchanged in every combination.
+
+| Change | New edge/UI, old DO | Old edge/UI, new DO | Old UI vs new UI (cookies, pages) |
+|---|---|---|---|
+| T0 lookup | `?github_user_id` is ignored and the old DO returns ≤500 rows; the kept `.find` gives today's result. `GET /api/actors/:id` already exists | unchanged: the old UI never sends the filter | none |
+| T1 tolerance | n/a (DO-only) | n/a | none |
+| T3/T4 user tokens | verify 404 → **503** for `bh_usr_` (fail closed, never 401 or anonymous); admin mint/list/revoke → DO 404 → edge 503; master, service and session unchanged | `bh_usr_` is neither master nor `bh_svc_` → **401** (`principal.ts:91`); the new DO routes go unused; the m9 table sits idle | none |
+| Maintainer cap | never sent with a user principal (verify already failed) | an old edge never sends it; the DO's absent-header path is today's behaviour | n/a |
+| T5 settings page | list/mint → DO 404 → "Token service unavailable" page, never "no tokens" (Response.ok rule) | the old UI has no page; `/app/settings/tokens` falls through to the old UI's not-found | a new UI reads an old cookie without `iat` as "not fresh": the user must sign in again before minting. The old UI ignores `iat` |
+| Stage-1 log | the log line is edge-only | no log | n/a |
+| T7 CLI | an old CLI with a user token works: the edge overwrites its `X-Actor-ID` | n/a | n/a |
+| T8 session key | n/a | n/a | the new code accepts old-key and new-key cookies; on rollback, the old code refuses new-key cookies → re-login |
+| T9 drop old key | n/a | n/a | an old-key cookie (≤ 12 h old at most) → re-login |
+
+**Push A (PR-0 + PR-A).** No new secret.
+1. Read-only: `SELECT value FROM metadata WHERE key='schema_version'` gives `m8`.
+2. `git pull origin main && git push cf main`.
+3. `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh` (the last check reaches the DO); log in to `/app` once (T0 path).
+4. Re-read `schema_version`: still `m8`. Record push A's commit in `docs/OPS.md` as the **rollback floor**: from push B
+   on, never deploy anything older than it.
+
+**Push B (PR-B), only after A is live.**
+0. No new secret (`API_AUTH_TOKEN`, `SPEC_DO_INTERNAL_TOKEN`, `SPEC_DO_ADMIN_TOKEN` are already on `beehive`). Read-only
+   checks: `wrangler deployments list --name beehive` shows push A's version live, and `schema_version` is `m8`. Run a
+   duplicate check: `SELECT github_user_id, COUNT(*) FROM actors WHERE github_user_id IS NOT NULL GROUP BY 1 HAVING
+   COUNT(*) > 1` (see Q3). In the dashboard, look at one invocation log on `beehive` and confirm that `Authorization` and
+   `Cookie` are redacted (Q4).
+1. Push. 2. `prod-health.sh`. 3. Read `schema_version` = `m9` and confirm `user_tokens` is in `sqlite_master`.
+4. Bootstrap: `POST /api/admin/user-tokens` with the master token, `X-Actor-ID: <maintainer actor>`, `{actorId: <own
+   actor>, name, scope:"read_write", expiresInDays: 30}`. `GET /api/whoami` with the token shows `kind:"user"`. Then
+   revoke that token or keep it. No production e2e without the maintainer's explicit approval.
+
+**PR-C (CLI).** No worker change. If it rides in a push, CI is the only check; then release the CLI as usual.
+
+**PR-D1.** 0. `openssl rand -hex 32 | wrangler secret put SESSION_SIGNING_KEY --name beehive` **before** pushing (the
+key is used by `beehive` alone). If forgotten, `/app` answers 503 "not configured" until it is put; the API is unaffected.
+1. Push. 2. An existing session still works; a new login works.
+**PR-D2.** Push at least `SESSION_TTL_SECONDS` (12 h, `ui.ts:30`) after D1 went live. Sessions still signed with the old
+key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a leaked copy can no longer forge sessions.
