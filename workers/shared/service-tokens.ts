@@ -6,6 +6,7 @@
  */
 
 export const SERVICE_TOKEN_PREFIX = 'bh_svc_';
+export const USER_TOKEN_PREFIX = 'bh_usr_';
 const TOKEN_PREFIX_DISPLAY_LENGTH = 12;
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -14,10 +15,18 @@ function toBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export function generateServiceToken(): string {
+function generateToken(prefix: string): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
-  return SERVICE_TOKEN_PREFIX + toBase64Url(bytes);
+  return prefix + toBase64Url(bytes);
+}
+
+export function generateServiceToken(): string {
+  return generateToken(SERVICE_TOKEN_PREFIX);
+}
+
+export function generateUserToken(): string {
+  return generateToken(USER_TOKEN_PREFIX);
 }
 
 export async function hashToken(plaintext: string): Promise<string> {
@@ -32,6 +41,10 @@ export function tokenPrefix(plaintext: string): string {
 /** Cheap edge pre-check: exact length and base64url charset, before any DO round-trip. */
 export function looksLikeServiceToken(value: string): boolean {
   return /^bh_svc_[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+export function looksLikeUserToken(value: string): boolean {
+  return /^bh_usr_[A-Za-z0-9_-]{43}$/.test(value);
 }
 
 /** Constant-time string compare via digests (equal length, so no early exit on length). */
