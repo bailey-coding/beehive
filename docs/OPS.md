@@ -129,7 +129,8 @@ Spec DO read (`GET /api/organizations`, for the org switcher; shared with the pa
 writes, refused writes and the cross-origin 403 add none. A failed read shows "Organizations unavailable" and never
 fails the page. UI only: no schema or route change, so a rollback needs no cleanup. Access is limited to `ALLOWED_GITHUB_USERS` (var in root
 `wrangler.toml`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
-Sessions are HMAC-signed with `API_AUTH_TOKEN`. The React app in `ui/` is **not built or
+Sessions are HMAC-signed with `API_AUTH_TOKEN` and carry their sign-in time (`iat`, M12; older cookies
+lack it and must sign in again before minting an API token at `/app/settings/tokens`). The React app in `ui/` is **not built or
 deployed** (no build config); don't assume it is live.
 
 ### Spec DO internal tokens (two-tier, 2026-10-16)
@@ -144,9 +145,10 @@ checks tokens of its own (`workers/shared/spec-do-auth.ts`), independent of `API
 
 Privileged routes (`isAdminRoute`): `POST /internal/tombstone`, `/internal/purge`,
 `/internal/actors/:id/role`; every `/internal/service-accounts*` route (list, mint, revoke, token
-mint/rotate/revoke); `PATCH /api/actors/:id/promotion-authority`. Not privileged:
-`/internal/service-tokens/verify` (the edge's per-request token check), `/promotion-mode` (the
-promotion worker writes it), and the rest.
+mint/rotate/revoke); every `/internal/user-tokens*` route except verify (M12: mint, list, revoke,
+revoke-all); `PATCH /api/actors/:id/promotion-authority`. Not privileged:
+`/internal/service-tokens/verify` and `/internal/user-tokens/verify` (the edge's per-request token
+checks), `/promotion-mode` (the promotion worker writes it), and the rest.
 
 Answers: DO's own secret unset -> **503** (also for an admin route when only the admin secret is
 unset); missing or wrong tier-1 token -> **401**; valid tier-1 token without the admin token on a
@@ -254,6 +256,79 @@ Expired tokens are 401. If the Spec DO cannot verify a token, the edge answers 5
 anonymous, never master). Accounts from before m6 (if any) have no actor and no token rows,
 so they cannot authenticate: revoke them and mint new ones. The old `/api/service-accounts*`
 routes are retired (410).
+
+### User tokens: mint, rotate, revoke (M12, RFC-0008)
+
+Live once push B (schema `m9`, table `user_tokens`) reaches the deploy flow. A user token
+(`bh_usr_...`, `Authorization: Bearer` only) acts as **one human actor** that has a GitHub id; the edge
+overwrites any `X-Actor-ID` the client sends. Agent and service actors never hold one. Scopes, one per
+token: `read` (like a service token), `read_write` (the write allow-list in `workers/api/principal.ts`:
+orgs, repos, specs, spec stage and claim, candidates, pre-merge gate start, issues, issue stage and
+status, comments, links), `maintainer` (adds the comment-policy PATCH). Every scope gets 403 on actor
+admin, gate verdicts, trials, promotions, candidate `stage` and `execute`, lifecycle routes and
+`/api/admin/*` (those stay master-only in M12). Without the `maintainer` scope the edge sends
+`X-Beehive-Maintainer-Cap: 1` on every DO request, so a maintainer's `read_write` token cannot close
+other people's issues or comment on locked ones. The DO reads the role live: demoting a maintainer
+takes the power away from their `maintainer` tokens at once. At most 90 days, at most 10 live tokens
+per actor (409 beyond), plaintext shown once, only the SHA-256 hash stored.
+
+1. **Mint (user).** `/app/settings/tokens` (the "API tokens" link in the header). The token is always
+   for the signed-in actor. Minting needs a sign-in from the last 10 minutes, otherwise the page asks
+   to sign in again. That bounds a stolen Beehive cookie only: GitHub re-authorises silently when the
+   OAuth app is already approved. The page shows the plaintext once (`no-store`, `no-referrer`);
+   reloading it resubmits the form and mints a second token (the browser asks first), which is
+   listed and can be revoked.
+2. **Mint (maintainer, bootstrap or break-glass).** `POST /api/admin/user-tokens` with the master token,
+   `X-Actor-ID: <your actor id>` and `{"actorId":"<target>","name":"laptop","scope":"read_write",
+   "expiresInDays":30}` (`scope` defaults to `read`, `expiresInDays` 1-90, default 30). The plaintext is
+   in `data.token.plaintext`, once. `GET /api/whoami` with the token shows `kind: "user"`.
+3. **List.** `GET /api/admin/user-tokens[?actorId=<id>]` (master): prefix, scope, created, expires,
+   revoked, last used (at most once a minute). Never plaintext or hashes.
+4. **Rotate.** Mint a new token, switch the client, revoke the old one.
+5. **Revoke.** One: the settings page, or `POST /api/admin/user-tokens/<tokenId>/revoke` (idempotent;
+   the first revocation is kept). All of an actor's: `POST /api/admin/user-tokens/revoke-all
+   {"actorId":"<id>"}`. 401 from the next request (no edge cache).
+   **Removing a login from `ALLOWED_GITHUB_USERS` blocks UI sign-in only: also run `revoke-all` for that
+   actor.**
+6. **After a rollback of push B and a re-deploy of it**, tokens that were valid before work again unless
+   expired, and nothing could be revoked in between: re-check the list and revoke as needed.
+
+Failure answers: an unknown, revoked or expired token, or one of a deleted, non-human, GitHub-less or
+service actor, is the same `401 Unauthorized`. A Spec DO that cannot answer (including an older DO
+without `/internal/user-tokens/verify`, which answers 404) is **503**, never anonymous or master;
+the admin routes and the settings page answer 503 ("Token service unavailable") the same way. Note
+the difference from service tokens, whose verify 404 means "unknown token" (401).
+
+**Push B deploy checks** (no new secret): before, `schema_version` is `m8` and push A (the rollback
+floor) is live; after the push and `prod-health.sh`, `schema_version` is `m9` and
+`SELECT name FROM sqlite_master WHERE name = 'user_tokens'` returns one row. Then mint the first token
+as in step 2. No production e2e without the maintainer's approval.
+
+**Master token, stage 1 (log, change nothing).** Every master request that sends an `X-Actor-ID` other
+than `unknown` writes one Workers Logs line
+`{"event":"master_actor_assertion","method","path","actorId","ray"}` (pathname only; actor truncated to
+128 chars; never the query, headers, body or token) and one Analytics Engine point in the
+`beehive-metrics` dataset (index `master_actor_assertion`, blobs: actor, method, path class with ids
+replaced by `:id`). Workers Logs keep 7 days; use AE for the stage-2 evidence:
+
+```sql
+-- Analytics Engine SQL API (account-scoped token with Account Analytics: Read)
+SELECT blob1 AS actor, blob2 AS method, blob3 AS path, SUM(_sample_interval) AS requests
+FROM "beehive-metrics"
+WHERE index1 = 'master_actor_assertion' AND timestamp > NOW() - INTERVAL '30' DAY
+GROUP BY actor, method, path ORDER BY requests DESC
+```
+
+In Workers Logs (dashboard, `beehive`, Observability): filter on `event = master_actor_assertion`.
+Human versus agent is resolved afterwards against `actors.type`. Stage 2 (master can no longer act as a
+human actor) is a separate decision, and it first needs lifecycle routes open to `maintainer` tokens
+(`docs/FOCUS.md`).
+
+**Assumption A4 (unverified, 2026-10-18):** Cloudflare invocation logs and the Honeycomb traces of
+`beehive` drop `Authorization`, `Cookie`, `X-API-Token` and the edge-to-DO `X-Beehive-Internal` /
+`X-Beehive-Admin` values. If a check shows otherwise: set `invocation_logs = false` and turn header
+capture off for traces on `beehive`, then rotate the exposed secrets (`docs/FOCUS.md`,
+`docs/OPEN-QUESTIONS.md` 2026-10-18).
 
 ### Canary deploy and rollback (deploy refs)
 

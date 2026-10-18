@@ -666,6 +666,10 @@ to that work to avoid a conflict. Until then the pages are dead code with no pro
 ## Issue writes trust a client-asserted actor until a user-bound token exists (2026-10-17)
 
 **Status**: Open - proposal only, needs a human (spine; overlaps M3/M6.2 capability minting).
+**Update 2026-10-18**: decided in RFC-0008 and built in M12 PR-B (`agent/m12-pr-b`, not yet deployed): `bh_usr_` tokens,
+scopes `read` / `read_write` / `maintainer`, the edge rewrites `X-Actor-ID` for every non-master principal. The master
+token still names any actor until master stage 2 (`docs/OPS.md` "User tokens"). The 500-actor lookup limit below was
+fixed in PR-0.
 
 **Done (M8 PR 1, `agent/m8-issues-do`)**: the Spec DO resolves the `X-Actor-ID` header against the `actors` table for issue create, comment, status and comment-policy. An unknown id, `unknown` (no header) and any service-account actor get 403 (`requireIssueActor`, `workers/spec-do/index.ts`). Maintainer status stays ledger-global `actors.role` (`isMaintainer`), service actors excluded. UI requests derive the actor from the signed session, never from a form field (`workers/api/tests/ui-actor.test.ts`); a session whose actor row is gone is sent to `/login`, and a first login creates the row (`ensureActor`).
 
@@ -690,3 +694,21 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 
 **Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
 (404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
+
+
+## M12 user tokens: assumption A4 and what was not verified (2026-10-18)
+
+**Status**: Open - assumption recorded by the maintainer's instruction; verification task in `docs/FOCUS.md` (M12).
+
+**A4 (unverified)**: Cloudflare invocation logs (`invocation_logs = true`, `wrangler.toml`) and the Honeycomb traces of
+`beehive` are assumed to drop the values of `Authorization`, `Cookie`, `X-API-Token` and the edge-to-DO
+`X-Beehive-Internal` / `X-Beehive-Admin` headers. Push B does not wait on it, but it already matters for the master
+token. The code never logs a token or its hash itself (unit tests spy on `console.*` at the edge, the DO and the UI), and
+the user-token verify body carries only the SHA-256 hash, which a 256-bit token makes useless to a reader. If the check
+finds an unredacted value: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
+secrets.
+
+**Not verified locally (PR-B)**: the Analytics Engine point for the master stage-1 log is unit-tested against a fake
+binding only; local `wrangler dev` was not checked for an AE write, and the SQL in `docs/OPS.md` has not been run
+against the real `beehive-metrics` dataset. Check both after push B (one master request with `X-Actor-ID`, then the
+query). No undocumented Artifacts behaviour came up in PR-B.
