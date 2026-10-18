@@ -146,3 +146,118 @@ describe('m3 -> m8 on a populated ledger', () => {
     for (const [t, n] of Object.entries(before)) expect(count(restarted, t)).toBe(n);
   });
 });
+
+// ============================================================================
+// Rollback floor (M12 T1, push A): this code over a ledger a newer deploy migrated
+// ============================================================================
+
+describe('a ledger newer than this code (m<N> above m8)', () => {
+  const FUTURE_TABLE = `CREATE TABLE future_tokens (
+    id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL,
+    FOREIGN KEY (actor_id) REFERENCES actors(id))`;
+
+  /** An m8 ledger with one actor, then a hypothetical later migration: an extra table that references actors, a higher version. */
+  async function newerLedger(v: string): Promise<{ s: SqliteState; actorId: string }> {
+    const first = makeSqliteState();
+    const spec = makeSpecDo(first);
+    await spec.init();
+    const actorId = spec.createActor('human', 'alice', '4242').id;
+    first.raw.exec(FUTURE_TABLE);
+    first.raw.prepare("INSERT INTO future_tokens (id, actor_id, name, created_at) VALUES ('t1', ?, 'laptop', 1)").run(actorId);
+    first.raw.prepare("UPDATE metadata SET value = ? WHERE key = 'schema_version'").run(v);
+    return { s: makeSqliteState(first.raw, first.kv), actorId };
+  }
+
+  const call = (spec: ReturnType<typeof makeSpecDo>, path: string, method = 'GET', body?: unknown, actorId?: string) =>
+    spec.fetch(
+      new Request(`https://spec-do.internal${path}`, {
+        method,
+        headers: actorId ? { 'X-Actor-ID': actorId } : {},
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+    );
+
+  it.each(['m9', 'm10', 'm99', 'm100', 'm999999'])(
+    'init() at %s warns once, runs no step, and leaves the version and the extra table alone',
+    async (v) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { s } = await newerLedger(v);
+      const snapshot = () => JSON.stringify(s.raw.prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name').all());
+      const stamp = () => s.raw.prepare("SELECT updated_at FROM metadata WHERE key = 'schema_version'").get();
+      const [schemaBefore, stampBefore] = [snapshot(), stamp()];
+
+      await makeSpecDo(s).init();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain(`'${v}'`);
+      expect(version(s)).toBe(v);
+      expect(snapshot()).toBe(schemaBefore);
+      expect(stamp()).toEqual(stampBefore);
+      expect(count(s, 'future_tokens')).toBe(1);
+    }
+  );
+
+  it('serves reads over an m99 ledger, including rows that reference the extra table', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { s, actorId } = await newerLedger('m99');
+    const spec = makeSpecDo(s);
+    // No init() call: the router initialises on the first request, as in production
+    const actor = await call(spec, `/api/actors/${actorId}`);
+    expect(actor.status).toBe(200);
+    expect(((await actor.json()) as { data: { id: string } }).data.id).toBe(actorId);
+    const list = await call(spec, '/api/actors?github_user_id=4242');
+    expect(((await list.json()) as { data: unknown[] }).data).toHaveLength(1);
+    expect((await call(spec, '/api/organizations')).status).toBe(200);
+    expect((await call(spec, '/health')).status).toBe(200);
+  });
+
+  it('serves writes over an m99 ledger: an actor, an organization, an issue, a comment', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { s, actorId } = await newerLedger('m99');
+    const spec = makeSpecDo(s);
+
+    const bob = await call(spec, '/api/actors', 'POST', { type: 'human', name: 'bob', githubUserId: '7' });
+    expect(bob.status).toBe(201);
+    const bobId = ((await bob.json()) as { data: { id: string } }).data.id;
+
+    await spec.init();
+    const org = spec.createOrganization('acme', 'artifacts');
+    const repo = spec.createRepository('r', org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'ns');
+    const issue = await call(spec, '/api/issues', 'POST', { repositoryId: repo.id, title: 'first' }, bobId);
+    expect(issue.status).toBe(201);
+    const issueId = ((await issue.json()) as { data: { id: string } }).data.id;
+    const comment = await call(spec, `/api/issues/${issueId}/comments`, 'POST', { body: 'hello' }, actorId);
+    expect(comment.status).toBe(201);
+
+    expect(count(s, 'actors')).toBe(2);
+    expect(count(s, 'issues')).toBe(1);
+    expect(count(s, 'issue_comments')).toBe(1);
+    // The extra table and its row are untouched, and its reference into actors still resolves
+    expect(count(s, 'future_tokens')).toBe(1);
+    expect(s.raw.prepare('SELECT COUNT(*) AS n FROM future_tokens t JOIN actors a ON a.id = t.actor_id').get()).toEqual({ n: 1 });
+    expect(version(s)).toBe('m99');
+  });
+
+  it('an m8 ledger is unchanged: no warning, no step, still m8', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const s = makeSqliteState();
+    await makeSpecDo(s).init();
+    await makeSpecDo(makeSqliteState(s.raw, s.kv)).init();
+    expect(version(s)).toBe('m8');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(['mx', 'm', 'm9a', 'x9', 'M9', '9', 'm-1', 'm1.5', 'm 9', 'm0', 'm08', 'm8x', '', 'm9\n', 'm09', 'm1000000', `m${'9'.repeat(400)}`])(
+    'the unparseable or unknown version %j still fails closed, with no warning',
+    async (v) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { s } = await newerLedger(v);
+      const spec = makeSpecDo(s);
+      await expect(spec.init()).rejects.toThrow(`Unknown schema_version '${v}'`);
+      expect(spec.db).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+      expect(version(s)).toBe(v);
+    }
+  );
+});

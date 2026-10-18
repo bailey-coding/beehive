@@ -806,7 +806,8 @@ export class SpecDO {
    * Every step is additive and idempotent (IF NOT EXISTS, or an ALTER behind a PRAGMA
    * check), so a step that failed halfway is safe to retry. A failing step is logged and
    * rethrown: init() then fails and leaves this.db unset, so the next request retries.
-   * Ends with an assertion that the ledger is at LATEST_SCHEMA_VERSION.
+   * Ends with an assertion that the ledger is at LATEST_SCHEMA_VERSION, except that a stored
+   * m<N> above it is tolerated (warn and return): see "Rollback floor" in docs/OPS.md.
    */
   async runMigrations(): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
@@ -835,6 +836,17 @@ export class SpecDO {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
     }
     const order = ['m1', ...steps.map(([v]) => v)];
+
+    // Rollback floor: a newer deploy migrated this ledger and this code was redeployed over it.
+    // Every step is additive, so the tables this code uses are intact: serve, run nothing, assert nothing.
+    // Any other unknown value (not m<N>) still throws below.
+    const stored = this.readSchemaVersion();
+    // 1 to 6 digits, no leading zero: bounded, so the warning below never prints more than 7 characters.
+    const newer = /^m([1-9]\d{0,5})$/.exec(stored);
+    if (newer && Number(newer[1]) > Number(LATEST_SCHEMA_VERSION.slice(1))) {
+      console.warn(`[SpecDO] schema_version '${stored}' is newer than '${LATEST_SCHEMA_VERSION}': skipping migrations`);
+      return;
+    }
 
     for (const [target, apply] of steps) {
       const current = this.readSchemaVersion();
@@ -3165,7 +3177,7 @@ export class SpecDO {
       if (path === '/api/actors' && method === 'GET') {
         const limit = parseInt(url.searchParams.get('limit') || '50');
         const offset = parseInt(url.searchParams.get('offset') || '0');
-        const actors = this.listActors(limit, offset);
+        const actors = this.listActors(limit, offset, url.searchParams.get('github_user_id'));
         return new Response(JSON.stringify({ success: true, data: actors, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -3872,12 +3884,19 @@ export class SpecDO {
     return rows;
   }
 
-  listActors(limit: number, offset: number): ActorRow[] {
+  /**
+   * `githubUserId` narrows the list; the order stays newest first, so the first row is the newest duplicate.
+   * `rowid DESC` breaks a same-millisecond tie by insertion order (as the promotion tables do).
+   */
+  listActors(limit: number, offset: number, githubUserId: string | null = null): ActorRow[] {
     if (!this.db) return [];
     const stmt = this.db.prepare(
-      `SELECT * FROM actors ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      githubUserId === null
+        ? `SELECT * FROM actors ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
+        : `SELECT * FROM actors WHERE github_user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
     );
-    stmt.bind(limit, offset);
+    if (githubUserId === null) stmt.bind(limit, offset);
+    else stmt.bind(githubUserId, limit, offset);
     const rows: ActorRow[] = [];
     while (stmt.step()) {
       const row = this.rowToActor(stmt);

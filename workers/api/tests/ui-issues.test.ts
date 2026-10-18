@@ -354,11 +354,11 @@ describe('CSRF: one sameOrigin check on every new POST', () => {
   it('the origin is checked before any DO read on the new routes', async () => {
     const id = newIssue('widgets');
     calls = [];
-    // session check reads /api/actors; nothing about repos or issues may be read
+    // session check reads /api/actors/<id>; nothing about repos or issues may be read
     const res = await ui(`/app/repos/acme/widgets/issues/${id}/comments`, { form: { body: 'x' }, origin: null });
     expect(res.status).toBe(403);
     const paths = calls.map((c) => new URL(c.url).pathname);
-    expect(paths.every((p) => p === '/api/actors')).toBe(true);
+    expect(paths).toEqual([`/api/actors/${userId}`]);
   });
 });
 

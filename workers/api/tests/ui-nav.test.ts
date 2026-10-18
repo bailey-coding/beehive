@@ -163,13 +163,13 @@ describe('handleUi status pages (L3)', () => {
     expect(orgListReads()).toHaveLength(0);
   });
 
-  it('cross-origin POST: 403 inside the layout, only /api/actors read', async () => {
+  it('cross-origin POST: 403 inside the layout, only the session actor read', async () => {
     const res = await ui('/app/organizations', { form: { name: 'x', type: 'github' }, origin: 'http://evil.example' });
     expect(res.status).toBe(403);
     const html = await res.text();
     expect(html).toContain('Cross-origin request blocked.');
     expect(html).toContain('<li aria-current="page"><bdi>Forbidden</bdi></li>');
-    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/api/actors']);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([`/api/actors/${userId}`]);
   });
 
   it('a successful create redirects without an organization list read', async () => {

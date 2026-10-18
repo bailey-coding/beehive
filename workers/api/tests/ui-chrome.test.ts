@@ -163,9 +163,9 @@ describe('handleUi reads', () => {
     expect(calls.filter((c) => c.method !== 'GET').map((c) => new URL(c.url).pathname)).toEqual(['/api/organizations']);
   });
 
-  it('a refused cross-origin POST reads only /api/actors', async () => {
+  it('a refused cross-origin POST reads only the session actor', async () => {
     const res = await post('/app/organizations', { name: 'Acme', type: 'github' }, 'http://evil.example');
     expect(res.status).toBe(403);
-    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/api/actors']);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([`/api/actors/${actorId}`]);
   });
 });
