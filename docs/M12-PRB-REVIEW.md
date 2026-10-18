@@ -36,8 +36,8 @@ _pending_
 | Expiry check | Only in the DO, per request: `ut.expires_at > ?` (`index.ts:968`); no edge cache (`principal.ts:107-108`) | ok |
 | Unknown vs revoked vs expired | One query for all three, and all three give `null` → `{found:false}` (`index.ts:2156-2157`) → the identical `401 {"error":"Unauthorized"}` the malformed case gives (`principal.ts:110`, `:133`). The one difference is the `last_used_at` write, which happens only for a *valid* token (`:975-977`), so it reveals nothing about an invalid one. Malformed tokens skip the DO round trip, a difference based on shape only, never on a secret | ok |
 
-Findings from this section: **S2** (admin revoke and revoke-all turn a client error into 503) and **N1** (the revoke-all
-count). Both are in §1.
+Findings from this section: **S2** (admin revoke and revoke-all turn a client error into 503). I checked the revoke-all
+count and it is accurate: the `COUNT` and the `UPDATE` use the same `WHERE` inside one transaction (`index.ts:948-949`).
 
 ### 2.2 Edge
 
@@ -343,10 +343,69 @@ This is finding **S2**.
 Findings from this section: S2 (confirmed), N2 (confirmed), N4.
 
 ### 2.7 Docs
-_pending_
+
+**`docs/OPS.md` "User tokens: mint, rotate, revoke"** (`:260-331`). I checked each statement against the code:
+- Scopes and the allow-list match `principal.ts:169-190`.
+- The deny list matches S9/A2. The cap behaviour matches `index.ts:115-116`.
+- The live role read matches `spec-do/index.ts:2188-2195`. The 90-day, 10-token and show-once rules match.
+- Mint steps:
+  - (1) session: freshness, plus the note that GitHub re-auth is silent (plan N3);
+  - (2) admin: the body fields and the `scope`/`expiresInDays` defaults match `user-tokens.ts:52-64`.
+- (3) list, (4) rotate, (5) revoke, revoke-all, and the allowlist-removal line in bold.
+- (6) re-check after a B rollback and re-deploy.
+- Failure answers, including the deliberate service 404→401 vs user 404→503 difference.
+
+The steps are in the right order.
+
+**Deploy steps** (`:302-306`): before the push, `schema_version = m8` and A is live. After it, `prod-health.sh`,
+then `m9`, then the `user_tokens` row in `sqlite_master`, then the first mint. No new secret, and no production e2e
+without approval. This matches plan §3 push B.
+
+**Rollback:** the floor block on `main` (`:78-92`) is unchanged and still correct for m9:
+- m9 is a new table that references only `actors`;
+- the floor never hard-deletes from `actors`;
+- no new constraint is added on an old table.
+
+The user-token section covers only the re-deploy after a rollback (step 6). It does not say how to roll back B
+(redeploy `8de5485` or later, never earlier) or what clients then see. **N1**.
+
+**Stage-1 log**: the log line, the AE point and the query are documented (`:307-325`). I did not run the AE SQL. The
+implementer says the same in OPEN-QUESTIONS (`:711-714`).
+
+**A4 line**: present in OPS (`:327-331`), headed "**Assumption A4 (unverified, 2026-10-18)**". It is also in FOCUS (a
+verification task with the steps) and OPEN-QUESTIONS (`:699-709`, "Status: Open … unverified"). All three name traces
+and the internal headers, as review F6 asked.
+
+**`docs/OPEN-QUESTIONS.md` after the heredoc append:**
+- The diff is +22/−0.
+- The status update on the 2026-10-17 entry (`:669-672`) and the new entry (`:699-714`) both keep their backtick code
+  spans. An unquoted heredoc would have run them as command substitutions, and it did not.
+- The file ends with a single `\n`, with no stray `EOF` line, no truncation, and no change above the insertion points.
+- One cosmetic blemish: two blank lines before the new heading (`:697-698`, **N5**).
+
+**FOCUS / MILESTONES**: the M12 section lists everything T6d asked for:
+- the A4 task;
+- rate limiting deferred;
+- the `authGate ===` follow-up;
+- the verify-404 difference;
+- the M11 handoff (m10 only after a clean duplicate check);
+- the stage-2 prerequisite.
+
+MILESTONES says PR-B is not reviewed or deployed and lists exit criteria (1)-(6). Accurate.
 
 ### 2.8 Scope
-_pending_
+
+`git diff --name-only origin/main...origin/agent/m12-pr-b` touches no `cli/`, no wrangler config and no script.
+`SESSION_SIGNING_KEY` appears only in FOCUS/MILESTONES as future work (PR-D1/D2). There is no M11 work: no `m10` and no
+`actors` index, and `schema-sync.test.ts` asserts the latter. The sessions are still signed with `API_AUTH_TOKEN`
+(`ui.ts:338-341`), as planned for PR-B.
+
+Small additions beyond the plan's letter, all in scope:
+- the capped-bootstrap refusal (`spec-do/index.ts:2490-2491`): a correct tightening;
+- the `toDoRequest` extraction (`spec-do-auth.ts:126-130`), required by F1(b);
+- a FOCUS note about snake_case vs camelCase in `IssueResponse`.
+
+Nothing to remove.
 
 ## 3. Verified correct
 _pending_
