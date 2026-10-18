@@ -4,7 +4,7 @@ RFC-0008
 
 # RFC: Verified identity and user tokens (M12)
 
-**Status:** Proposed
+**Status:** Accepted (2026-10-17; decisions in section 9)
 **Date:** 2026-10-17
 **Author:** the agent (Claude Opus 5.5, task m12-rfc); spine work, so the decisions in section 8 are the maintainer's
 **Related:** RFC-0003 (service tokens), RFC-0007 (Spec DO tier tokens), ADR-0007 (fail-closed edge auth), `docs/MILESTONES.md` M12, M3, M6.2
@@ -254,3 +254,26 @@ request matters (rule 1: measure first).
 8. Rate limiting on failed verifications: in M12, or deferred.
 9. Should `ensureActor`'s 500-actor lookup limit (`ui.ts:122`, `:324`) be fixed first? The settings page and the session
    check both depend on it.
+
+## 9. Decisions (2026-10-17)
+
+Decided by the maintainer (asked directly):
+
+| # | Decision |
+|---|---|
+| 1 | **Option A**: per-user tokens in a Spec DO `user_tokens` table, minted from a UI settings page, with the master admin route for bootstrap. |
+| 3 | Scopes `read`, `read_write` and `maintainer`. Maintainer-only routes (comment-policy PATCH, lifecycle/purge, role changes) require the `maintainer` scope, so a leaked everyday token cannot act as a maintainer. |
+| 4 | Master token: **log first, stop later.** Stage 1 logs every master request that names a human actor. Stage 2 (master can no longer act as a human; the reserved `master` actor is the break-glass on lifecycle routes) is a separate decision after the logs show no such traffic. |
+| 7 | **Own `SESSION_SIGNING_KEY` in M12**: put the secret first (OPS step 0), accept both keys, then drop the old one. |
+
+Defaults chosen by the orchestrating agent, because the maintainer asked for the plan, review, implement, review pipeline to continue; the maintainer can override any of them before the task that depends on it starts:
+
+| # | Default |
+|---|---|
+| 2 | Human actors with a `github_user_id` only. Agent actors stay excluded until the M3/M6.2 capability work. |
+| 5 | Maximum lifetime 90 days; minting needs a session under 10 minutes old; no device-code or GitHub-token exchange login in M12 (it needs an exception to ADR-0007). |
+| 6 | Share push A (tolerate a newer `schema_version`) with M11. M12 takes schema `m9` and M11 takes `m10`, because M12 ships first. |
+| 8 | Rate limiting on failed verifications is deferred; record it in `docs/FOCUS.md`. |
+| 9 | Yes: fix the 500-actor lookup limit first, as the first task, because the settings page and the session check depend on it. |
+
+Status becomes **Accepted** with these decisions. Implementation order, per section 7: the lookup-limit fix, push A, then push B, then the CLI release and OPS section, then the session key, with master stage 2 left as its own later decision.
