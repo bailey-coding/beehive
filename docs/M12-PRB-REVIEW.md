@@ -112,7 +112,73 @@ and a write failure is caught (`:424-428`). `pathClass` keeps any all-lowercase 
 Findings from this section: N2 and N3. No blocker.
 
 ### 2.3 Spec DO
-_pending_
+
+**m9 migration** (`workers/spec-do/index.ts:1011-1012`, `LATEST_SCHEMA_VERSION = 'm9'` `:28`):
+- The step is a single `exec(USER_TOKENS_SQL)`: `CREATE TABLE IF NOT EXISTS` plus two `CREATE [UNIQUE] INDEX IF NOT
+  EXISTS`, so a half-applied step re-runs cleanly.
+- The fresh branch runs the same SQL (`:562-563`) and starts at `m9` (`:577`).
+- The text in `schema.sql` and `schema-inline.ts` is byte-identical (`schema-sync.test.ts` concatenation check).
+- The step guard is unchanged: the steps must end at `LATEST` (`:1014-1016`), and push A's newer-version tolerance is
+  unchanged (`:1022-1028`).
+- Tests (`migrations.test.ts`):
+  - a populated m8 ledger gains `user_tokens` with exactly its two indexes and keeps every row;
+  - the `actors` DDL is unchanged;
+  - a second init leaves `sqlite_master` byte-identical (idempotent);
+  - a migrated ledger and a fresh one produce the same `user_tokens` DDL;
+  - m3→m9 keeps rows;
+  - the push-A tolerance list moves to `m10`+.
+  
+  All of these follow from the bump. None of them loosens a check.
+
+**The unique index on `user_tokens.token_hash`.** "m9 adds no unique index" in the brief meant `actors`, and the code
+matches it: `schema-sync.test.ts` asserts that the only `ON` targets are `user_tokens` and that the SQL has no
+`DROP|ALTER|DELETE|UPDATE|INSERT`. The `token_hash` index is safe under the floor rule (`docs/OPS.md` rollback floor:
+every step above the floor is additive and harmless to code that ignores it):
+- The table is new and empty when the index is built, so `CREATE UNIQUE INDEX` cannot fail on existing data, unlike an
+  `actors.github_user_id` index on a ledger with duplicates.
+- Push A's code never reads or writes `user_tokens`.
+- Nothing in A or B deletes actors or drops tables. `git grep` on both trees finds only a message string mentioning
+  `DROP TABLE service_accounts` (`index.ts:1084`). `ORG_PURGE_ORDER` (`:93`) has no `actors`, so the FKs from
+  `user_tokens` can never block a purge.
+- A B→A→B redeploy skips m9, because the version is already `m9`.
+
+**References actors only:** three FKs, all to `actors(id)`. Test: `schema-sync.test.ts` new case.
+
+**Routes** (`index.ts:2124-2160`, inside `handleInternal`, after `handleLifecycle`, whose regexes match none of these
+paths, `:2509-2513`):
+- Mint takes `createdBy` from `X-Actor-ID`, never from the body (`:2128`).
+- Revoke takes an optional `{actorId}` owner filter (`:2139-2148`).
+- Revoke-all and list.
+- Verify answers **200 `{found:false}`** for every well-formed hash that does not verify (`:2151-2158`). Only a
+  malformed hash is 400, and the edge always sends a valid one. The edge treats any non-200 as 503, so 400 never
+  becomes 401 either.
+- Tier: `ADMIN_PATTERNS` puts every `/internal/user-tokens*` path except exactly `/verify` at tier 2
+  (`spec-do-auth.ts:63`). The `internal-auth.test.ts` additions cover `verify/`, `verifyx`, `verify/revoke` and
+  `x/verify` as tier 2.
+
+**The distinct 404s** (`spec-do-auth.ts:34-35`): `'user token not found'` and `'actor not found'`, against an old DO's
+`'Not found'` (`index.ts:2172`). The edge maps a 404 to "no such token / actor" only on an exact match of those strings
+(`user-tokens.ts:171`, `:247`), and every other 404 to 503 (`:172`, `:248`). Nothing else in these routes throws
+`NotFoundError` (mint uses `BadRequestError` for an unknown actor, `:873`), so a real "not found" always carries the
+marker. On an old DO, `/internal/user-tokens*` passes the old gate as tier 1 and reaches the old router's final `'Not
+found'`. Tested with an old-DO stub (`api/tests/user-tokens.test.ts:373-382`).
+
+**All 7 `isMaintainer` call sites take the cap** (the signature requires it, `index.ts:2188`):
+
+| # | Site | Line | How `capped` arrives |
+|---|---|---|---|
+| 1 | mint `maintainer` scope | `:884` | `handleInternal` → `mintUserToken(…, capped)` `:2128` |
+| 2 | purge | `:2422` | `handleLifecycle` `:2539` |
+| 3 | role change | `:2492` | `:2543`. The self-grant bootstrap is also refused when capped (`:2491`), which the plan did not ask for and is correct |
+| 4 | `include_deleted` | `:3355` | read in `fetch` `:3326` |
+| 5 | comment policy | `:4446` | `:3841` |
+| 6 | close another's issue | `:4468` | `:3833` |
+| 7 | comment on a restricted issue | `:4499` | `:3854` |
+
+`capped` is computed per request from the header (`:3326`) and is never stored on the instance. The only other
+`role = 'maintainer'` SQL is the bootstrap's maintainer count (`:2489`), which is not an authority decision.
+
+Findings from this section: none.
 
 ### 2.4 Mixed versions and rollback
 _pending_
