@@ -695,7 +695,6 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 **Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
 (404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
 
-
 ## M12 user tokens: assumption A4 and what was not verified (2026-10-18)
 
 **Status**: Open - assumption recorded by the maintainer's instruction; verification task in `docs/FOCUS.md` (M12).

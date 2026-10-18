@@ -89,6 +89,9 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   (`docs/OPS.md`, the AE query).
 - Small drift seen in T4: the Spec DO's `POST /api/issues` answers snake_case fields (`created_by`), while
   `workers/api/types.ts` `IssueResponse` says `createdBy`. Clients should read both until one is fixed.
+- **e2e first-maintainer race** (review N4, `docs/M12-PRB-REVIEW.md`): on a fresh local ledger four e2e files race for the
+  one-time maintainer self-grant, so `tests/e2e/user-tokens.test.ts` can fail its `beforeAll` with 403; on a non-200 grant,
+  re-list and use the winner, or bootstrap once in a global setup.
 
 ## Cleanup
 

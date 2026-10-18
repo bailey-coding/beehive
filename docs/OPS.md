@@ -289,8 +289,13 @@ per actor (409 beyond), plaintext shown once, only the SHA-256 hash stored.
    the first revocation is kept). All of an actor's: `POST /api/admin/user-tokens/revoke-all
    {"actorId":"<id>"}`. 401 from the next request (no edge cache).
    **Removing a login from `ALLOWED_GITHUB_USERS` blocks UI sign-in only: also run `revoke-all` for that
-   actor.**
-6. **After a rollback of push B and a re-deploy of it**, tokens that were valid before work again unless
+   actor.** A mistyped or service-actor `X-Actor-ID` on either revoke route is a 400/403 with the reason, and
+   nothing is revoked; 503 means the Spec DO could not answer.
+6. **Roll back push B** (a ref operation through the `cf` flow): redeploy the rollback floor `8de5485` or any later
+   commit, **never anything earlier** (that is `Unknown schema_version 'm9'`, a full outage). Clients then see every
+   `bh_usr_` request answer 401, `/app/settings/tokens` not found, and the `/api/admin/user-tokens*` routes 404; stage-1
+   logging stops. Master, service tokens and sessions are unchanged, and `user_tokens` stays at m9, ignored.
+7. **After a rollback of push B and a re-deploy of it**, tokens that were valid before work again unless
    expired, and nothing could be revoked in between: re-check the list and revoke as needed.
 
 Failure answers: an unknown, revoked or expired token, or one of a deleted, non-human, GitHub-less or
