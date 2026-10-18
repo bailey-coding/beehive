@@ -39,6 +39,7 @@ A Request for Comments (RFC) is a formal proposal document that describes a new 
 | [RFC-0005](./0005-shadow-router-cache.md) | Shadow Router In-Isolate Caching | Implemented (Retrospective) | 2026-10-16 | unattributed |
 | [RFC-0006](./0006-ledger-compare-and-swap.md) | Ledger Compare-and-Swap with Tournament State | Implemented (Retrospective) | 2026-10-16 | unattributed |
 | [RFC-0007](./0007-two-tier-token-authentication.md) | Two-Tier Internal Token Authentication | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFC-0008](./0008-verified-identity-user-tokens.md) | Verified identity and user tokens (M12) | Accepted | 2026-10-17 | agent (m12-rfc) |
 
 ---
 
