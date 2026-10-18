@@ -209,7 +209,7 @@ Vitest only; no DOM library, so string/regex assertions (no new dev dependency).
 | L6 | Spec, candidate, trial: same (search form, `h3`->`h2`) | `ui-pages.ts`, `tests/ui.test.ts` | Default | L5 | trails incl. missing spec/org; XSS in names | No |
 | L7 | Cleanup: delete `subHeader`; `page()` becomes the pre-session shell (skip link, brand link to `/about`, `<main id=main>`, no navbar, no switcher, no `<h1>Beehive</h1>`); tick M9 ("Issues" is contextual), `FOCUS.md`, `OPS.md` | `ui-html.ts`, `ui-pages.ts`, docs | Light | L6 | grep: no `subHeader`; pre-session pages link brand to `/about`; `npm test` | No |
 | L8 | Local e2e `ui-nav.test.ts` (isLocal guard, own-prefix link following, 25-org cap by count) | `tests/e2e/ui-nav.test.ts` | Default | L6 | `npm run test:e2e:local` with `E2E_UI=1` | No |
-| L9 | Independent review of the whole diff (a11y, escaping, Response.ok, flash count, read counts) + manual visual checklist | `docs/M9-REVIEW.md` | Heavy (review only) | L7, L8 | review doc, findings closed | Yes: merge decision |
+| L9 | Independent review of the whole diff (a11y, escaping, Response.ok, flash count, read counts) + manual visual checklist | `docs/M9-NAV-CODE-REVIEW.md` | Heavy (review only) | L7, L8 | review doc, findings closed | Yes: merge decision |
 
 None touches the spine. Review items map to tasks: B1 -> L2; S1, S2, S8, N5 -> L1; S3, S4 -> L3; S5 -> L5/L6; S6 -> L7; S7 -> L8.
 

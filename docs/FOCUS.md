@@ -24,7 +24,11 @@ Completed items are removed, not struck through; history lives in git.*
   rules, close/reopen, actor validation), the repo issue pages UI, and the CLI default actor
   (`BEEHIVE_ACTOR` / `defaultActor` / `--actor`, an admin stopgap until M12). Plan and reviews: `docs/M8-*.md`.
 - M9 (site navigation) is implemented on `agent/m9-nav` (2026-10-17), **not merged or deployed**; the independent
-  review (L9, `docs/M9-REVIEW.md`) is still to do. Plan and plan review: `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`.
+  code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
+  `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`.
+- Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
+  `.../issues/:id`) reads organizations and repositories before answering 405, because the origin check covers only the
+  write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
 - Local checks on `agent/m9-nav` (2026-10-17): 832 unit tests pass, typecheck clean; local e2e 70 passed / 5 skipped /
   0 failed (run with `E2E_UI=1`, see `docs/SETUP.md`). On `main`: 743 unit tests, e2e 63 passed / 5 skipped / 0 failed.
 
