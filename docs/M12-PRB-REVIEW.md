@@ -33,7 +33,7 @@ reaches every DO request, and every mixed-version or rollback cell answers 401 o
 - `revokeUserToken` and the revoke-all handler map every status other than 200 and the marked 404 to 503
   (`workers/api/user-tokens.ts:171-172`, `:247-248`).
 - The DO answers 400 when `X-Actor-ID` names no actor, and 403 when it names a service actor (`resolveMinter`,
-  `workers/spec-do/index.ts:686-701`, reached from `:936` and `:946`).
+  `workers/spec-do/index.ts:686-701`, reached from `:936` and `:947`).
 - Confirmed with a scratch test against the real DO: with master and `X-Actor-ID: typo-actor`, mint → 400 with the
   DO's message, but revoke → **503** and revoke-all → **503** (§2.6).
 - These are the incident-response routes. The OPS runbook pairs `revoke-all` with removing a login from the allowlist
@@ -52,7 +52,7 @@ reaches every DO request, and every mixed-version or rollback cell answers 401 o
   (mutation N2b survived). Enforcement is unaffected, because `authorize()` is an allow-list and that route still gets
   403. Optionally, also fail the test when `index.ts` contains a `method === '(POST|PATCH|PUT|DELETE)'` that the scan
   did not match.
-- **N3** `pathClass` (`workers/api/index.ts:396-402`) keeps any all-lowercase path segment, so an id like `alice` in
+- **N3** `pathClass` (`workers/api/index.ts:397-403`) keeps any all-lowercase path segment, so an id like `alice` in
   `/api/actors/alice` stays in the AE blob instead of becoming `:id`. It is cosmetic, because the actor is already a
   blob. An allow-list of known route words would be exact.
 - **N4** On a fresh local ledger, `tests/e2e/user-tokens.test.ts` `beforeAll` failed once with 403 at `:52`. It races
@@ -451,7 +451,72 @@ Small additions beyond the plan's letter, all in scope:
 Nothing to remove.
 
 ## 3. Verified correct
-_pending_
+
+Evidence for each item is in §2.
+
+**Tokens and DO storage:**
+- Token format and entropy.
+- Hash-only storage; views never select `token_hash`.
+- Master compared first in constant time.
+- The 90-day ceiling at the edge and in the DO.
+- The 10-live-token cap in one `transactionSync`.
+- Human actors with a `github_user_id` only, checked at mint and again at verify.
+- Scope validation at three layers.
+- Revoke is idempotent; revoke-all is exact.
+- Expiry is checked only in the DO, per request.
+- The identical 401 for unknown, revoked, expired, deleted-actor, service-actor and malformed tokens.
+
+**Authentication:**
+- Every `authenticate()` outcome: shape → 401, `found:false` → 401, and 404, other statuses, a throw, a bad body or an
+  unknown scope → 503.
+- Never anonymous, never master.
+- `bh_usr_` is accepted as Bearer only.
+
+**Authorization and actor:**
+- The `authorize()` user allow-list matches the dispatch regexes exactly.
+- Candidate `stage` and `execute`, actor admin, verdicts, trials, promotions, lifecycle and `/api/admin/*` are 403 for
+  all three scopes, with zero handler DO calls.
+- `X-Actor-ID` is rewritten for every non-master principal, and edge-set body fields use the rewritten actor.
+
+**Maintainer cap:**
+- The stub is wrapped once after `authorize()`, and the unwrapped stub is never used again.
+- Every DO request carries the cap for `read` and `read_write`, and none for `maintainer`, master or service.
+- A client cannot strip the cap. A forged one only removes power.
+- All 7 `isMaintainer` sites take the required `capped` argument, and the capped bootstrap is refused.
+- The tier-2 user-token routes need `SPEC_DO_ADMIN_TOKEN`, which only `beehive` holds; verify alone is tier 1.
+
+**Schema, mixed versions and rollback:**
+- m9 is additive and idempotent, and a fresh ledger and a migrated one build the same DDL.
+- The unique index sits on the new empty table only. Nothing on `actors`. Compliant with the OPS floor invariant.
+- The distinct 404 markers.
+- Every old/new edge × old/new DO cell fails closed.
+- B→A rollback on an m9 ledger is served by the floor's tolerance.
+
+**UI:**
+- The origin check and the freshness check (signed `iat`, `0 ≤ age ≤ 600`, future rejected) both run before any DO
+  read.
+- The actor always comes from the session.
+- List and revoke are owner-scoped.
+- The mint page sends no-store and no-referrer.
+- An old DO gives the 503 page.
+
+**Stage-1 log and docs:**
+- The stage-1 log line and AE point carry exactly method, pathname, truncated actor and ray.
+- The docs are accurate. The A4 line is present and marked unverified. OPEN-QUESTIONS is intact.
+
+**Tests:**
+- No assertion was loosened.
+- typecheck clean; `npm test` 988/988; local e2e 74 passed, 5 skipped (after N4's race).
 
 ## 4. Verdict
-_pending_
+
+**Approve with changes.** PR-B is safe to merge and deploy as far as access control is concerned. I found no blocker,
+and the implementation follows the plan, including every response to the plan review (B1, F1-F8).
+
+Before merge:
+- **S2** is a small edge change, two lines plus tests, and it matters during incident response.
+- **S1** is test-only.
+
+The nits can land with PR-C or later. The deploy order is unchanged: push B only after the push-A floor is confirmed
+live, with the OPS "Push B deploy checks". After the deploy, run the A4 verification and the AE query that OPS and
+FOCUS list. Neither the implementer nor I could run them locally.
