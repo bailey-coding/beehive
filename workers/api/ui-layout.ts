@@ -217,6 +217,7 @@ export function trialCrumbs(trial: DoRow, spec?: DoRow | null, org?: DoRow | nul
 export function renderAccount(chrome: Chrome): SafeHtml {
   return safe(
     `<div class="site-account"><span>Signed in as <strong>${labelHtml(chrome.login)}</strong></span>` +
+      `<a href="/app/settings/tokens">API tokens</a>` +
       `<form method="POST" action="/logout"><button class="link">Sign out</button></form></div>`
   );
 }

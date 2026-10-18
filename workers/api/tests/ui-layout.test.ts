@@ -283,6 +283,12 @@ describe('flash, tabs, account', () => {
     expect(html).toContain('Signed in as <strong><bdi>testuser</bdi></strong>');
     expect(html).toContain('action="/logout"');
   });
+
+  it('renderAccount links to the API tokens settings page (M12), before sign-out', () => {
+    const html = renderAccount(chrome());
+    expect(html).toContain('<a href="/app/settings/tokens">API tokens</a>');
+    expect(html.indexOf('/app/settings/tokens')).toBeLessThan(html.indexOf('action="/logout"'));
+  });
 });
 
 describe('PAGE_CSS', () => {
