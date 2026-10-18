@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
-import { SCHEMA_SQL, SERVICE_TOKENS_SQL, DEPLOY_REFS_SQL, LEDGER_CAS_SQL } from '../schema-inline';
+import { SCHEMA_SQL, SERVICE_TOKENS_SQL, DEPLOY_REFS_SQL, LEDGER_CAS_SQL, IDEMPOTENCY_KEYS_SQL } from '../schema-inline';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
 import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 
@@ -380,7 +380,7 @@ describe('m5 -> m6 migration', () => {
     spec = makeSpecDo(restarted);
     store = restarted;
     await spec.init();
-    expect(version(restarted)).toBe('m8');
+    expect(version(restarted)).toBe('m9');
     expect(columns(restarted, 'service_accounts')).toContain('actor_id');
     expect(columns(restarted, 'service_tokens').length).toBeGreaterThan(0);
     expect(raw.prepare("SELECT actor_id, token_hash FROM service_accounts WHERE id = 'legacy'").get()).toEqual({
@@ -392,7 +392,7 @@ describe('m5 -> m6 migration', () => {
     expect((await verify(hash)).status).toBe(200);
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m8');
+    expect(version(restarted)).toBe('m9');
     expect(count("SELECT COUNT(*) AS n FROM service_accounts WHERE name = 'after-migration'")).toBe(1);
   });
 
@@ -400,6 +400,6 @@ describe('m5 -> m6 migration', () => {
     const file = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
     expect(file.startsWith(SCHEMA_SQL)).toBe(true);
     // m8 (ledger versions) is the last section, after m7 (deploy refs) and m6
-    expect(file.endsWith(SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL)).toBe(true);
+    expect(file.endsWith(SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL + IDEMPOTENCY_KEYS_SQL)).toBe(true);
   });
 });

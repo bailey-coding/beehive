@@ -347,12 +347,14 @@ export default {
         console.log(`[QueueConsumer] Gate workflow triggered: ${JSON.stringify(result)}`);
 
         // Record event in Spec DO history
-        await specDoStub.fetch(
+        // Queue delivery is at-least-once: the event id is the idempotency key, so a redelivery replays
+        const historyResp = await specDoStub.fetch(
           new Request(`https://spec-do.internal/api/entities/candidate/${candidate.id}/history`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-Actor-ID': 'queue-consumer',
+              'Idempotency-Key': `${queueName}:${event.id}`,
             },
             body: JSON.stringify({
               stage: 'push_received',
@@ -361,6 +363,9 @@ export default {
             }),
           })
         );
+        if (!historyResp.ok) {
+          console.error(`[QueueConsumer] History write for ${event.id} failed: ${historyResp.status}`);
+        }
 
         console.log(`[QueueConsumer] Processed push event ${event.id} successfully`);
 

@@ -615,7 +615,8 @@ export const IDEMPOTENCY_KEYS_SQL = `
 -- ============================================================================
 -- IDEMPOTENCY KEYS (m8 -> m9, additive)
 -- Prevents double-writes from at-least-once Queue delivery.
--- Stores idempotency key hashes with their request/response metadata.
+-- key_hash is SHA-256 of [actor, method, path, key], so a key cannot be replayed across actors or routes.
+-- The row is written in the same transaction as the mutation it guards.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
@@ -631,7 +632,6 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   expires_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_idempotency_keys_hash ON idempotency_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires ON idempotency_keys(expires_at);
 CREATE INDEX IF NOT EXISTS idx_idempotency_keys_endpoint ON idempotency_keys(endpoint, created_at);
 `;

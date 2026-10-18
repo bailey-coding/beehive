@@ -492,3 +492,26 @@ CREATE INDEX IF NOT EXISTS idx_canary_deployments_spec ON canary_deployments(spe
 --       attempts counts entries into 'failed'; workers/shared/ledger-state-machine.ts
 --       holds the status transition rules the DO enforces
 -- ============================================================================
+
+-- ============================================================================
+-- IDEMPOTENCY KEYS (m8 -> m9, additive)
+-- Prevents double-writes from at-least-once Queue delivery.
+-- key_hash is SHA-256 of [actor, method, path, key], so a key cannot be replayed across actors or routes.
+-- The row is written in the same transaction as the mutation it guards.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  id TEXT PRIMARY KEY,
+  key_hash TEXT NOT NULL UNIQUE,
+  endpoint TEXT NOT NULL,
+  method TEXT NOT NULL CHECK(method IN ('POST', 'PATCH', 'PUT', 'DELETE')),
+  request_hash TEXT NOT NULL,
+  response_status INTEGER NOT NULL,
+  response_body TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires ON idempotency_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_endpoint ON idempotency_keys(endpoint, created_at);

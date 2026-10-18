@@ -690,3 +690,9 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 
 **Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
 (404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
+
+## Idempotency keys: two callers target Spec DO routes that do not exist (2026-10-18)
+
+**Status**: Open - found while wiring `Idempotency-Key` for M5a; not fixed.
+
+`workers/queue-consumer/index.ts` POSTs `/api/entities/candidate/:id/history`, and `workers/scientist-comparator/storage/spec-do.ts` POSTs `/api/gate-verdicts/shadow`. The Spec DO has neither route (history is GET-only), so both calls 404. The queue consumer ignored the response; it now logs a non-ok status and sends `Idempotency-Key: <queue>:<event id>`, which the DO ignores until the route exists and is added to `IDEMPOTENT_ROUTES` (`workers/spec-do/index.ts`). Today the at-least-once double-write is closed for the eight wired POST routes only. The scientist-comparator call is untouched.
