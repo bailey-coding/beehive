@@ -88,13 +88,11 @@ to T6 (light).
 - N3 S14: also treat an `iat` in the future as not fresh. `/login` lands on `/app`; a return path from an allow-list
   to the settings page saves a step. GitHub re-auth is often silent, so freshness bounds a stolen *Beehive cookie*
   only. Say so in the OPS section.
-- N4 PR-C: `chmodSync` after `writeFileSync` leaves a short window at 0644. Write a temp file with mode 0600, then
-  rename.
-- N5 S12: `actorId` is client-controlled. Truncate it (for example to 128 chars) before logging.
-- N6 Deviations from the RFC to name explicitly: a single hierarchical `scope` instead of `scopes` (fine); Q1 narrows
-  decision 3; the 10-token cap is new (small, fine).
-- N7 Rollback race: a write that a new edge verified can land on a just-rolled-back DO that ignores the cap. That is
-  a millisecond window, and the old edge then answers 401. Accept it, and note it in R3.
+- N4 PR-C: write the config to a temp file with mode 0600 and rename it, because `chmodSync` after the write leaves a
+  0644 window. N5 S12: truncate the client-controlled `actorId` (for example to 128 chars) before logging it.
+- N6 Name the deviations from the RFC: a single `scope` instead of `scopes` (fine), Q1 narrowing decision 3, and the
+  new 10-token cap. N7 Rollback race: a write that a new edge verified can land on a just-rolled-back DO that ignores
+  the cap. The window is milliseconds and the old edge then answers 401. Accept it, and note it in R3.
 
 ## 2. Verified correct (path:line on e9e680d)
 - `principal.ts`: master compare first and constant-time (`:38-41`); the service branch is Bearer only (`:52`);
@@ -136,3 +134,32 @@ DO**: the user branch gives 503, and master, service and session are unchanged. 
 re-deploying B skips the m9 step because the version is already m9. **D1 without the secret**: `/app` 503, API
 unaffected (fail closed, ADR-0007). **D1/D2 with old isolates**: a refused cookie redirects to login (no 401, no
 open path). **C** has no worker effect. I found no combination that fails open once B1 is fixed.
+
+## 4. Tasks and open questions
+**Tasks.** The dependencies, tiers and PR split are sound: T3 and T4 are heavy, T0 goes first (decision 9), and
+T5→T8 is ordered on `ui.ts`. Proving tests that need tightening: T1 (F4a); T4 (F1c, B1 rows); T0 (F2, and the
+lookup order from F3). A mental mutation that the planned tests would *not* catch is passing the unwrapped stub to one
+write handler. F1(a) and F1(c) catch it. No scope creep beyond the RFC apart from N6.
+
+- **Q1: confirm master-only in M12.** It satisfies decision 3 ("require the maintainer scope") as a strict subset and
+  keeps `lifecycle.ts:76` unchanged. Opening lifecycle to `maintainer` tokens is a prerequisite for master stage 2, so
+  record it as such in FOCUS.
+- **Q2: confirm the deny-list, and add candidate `stage` PATCH and `execute` (B1).**
+- **Q3: no unique index in m9.** Ship F2 and F3 in T0, and let M11's m10 add a partial unique index only after a clean
+  check. The human's read-only check, through the usual DO SQL access, before push B:
+  `SELECT id, name, github_user_id, role, created_at FROM actors WHERE github_user_id IN (SELECT github_user_id FROM
+  actors WHERE github_user_id IS NOT NULL GROUP BY 1 HAVING COUNT(*) > 1) ORDER BY github_user_id, created_at;`
+  If it returns rows, count what each one owns (`SELECT created_by, COUNT(*) FROM issues WHERE created_by IN (...)
+  GROUP BY 1`, the same for `issue_comments`) and pick the row to keep before any token is minted. Write nothing.
+- **Q4: settle it before push B, because it already affects the master token.** The human's read-only check:
+  dashboard → Workers & Pages → `beehive` → Observability → Logs. Open one invocation log for an authenticated
+  `/api/*` request (the `prod-health.sh` run), expand the request headers, and check whether the values of
+  `Authorization`, `X-API-Token` and `Cookie` (from one `/app` visit) are redacted. Then open the same request's trace
+  in the Honeycomb trace destination and check the span attributes, including the edge→DO subrequest span
+  (`X-Beehive-Internal`, `X-Beehive-Admin`). Never copy a value seen. If anything is unredacted: an OPEN-QUESTIONS
+  entry, `invocation_logs = false` (and header capture off for traces) on `beehive`, then rotate the exposed secrets.
+
+## 5. Verdict
+**Approve with changes.** The design follows RFC §9, its claims about the code are accurate, and it fails closed in
+every mixed-version cell I checked. B1 must be fixed in the plan before T4 starts. F1-F4 should be folded into
+T0, T1, T3 and T4 before those tasks start. F5-F8 and the nits can land with T6.
