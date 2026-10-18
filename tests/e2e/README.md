@@ -15,7 +15,7 @@ tests/e2e/
 ├── config.ts              # Environment configuration
 ├── auth.ts                # Authentication utilities
 ├── helpers.ts             # Test helper functions
-├── m3-features.test.ts    # M3 feature tests (with mocks)
+├── m3-features.test.ts    # M3 feature tests
 ├── oracle-ladder.test.ts  # Oracle ladder tests
 ├── cross-worker-flows.test.ts  # Cross-worker integration tests
 ├── PRODUCTION_E2E_PLAN.md  # Detailed test plan
@@ -28,19 +28,19 @@ The E2E tests support three environments:
 
 | Environment | Base URL | Token Variable | Description |
 |-------------|----------|----------------|-------------|
-| local | `http://localhost:*` | `BEEHIVE_API_TOKEN` (mock) | Local development with mocks |
+| local | `http://localhost:*` | `BEEHIVE_API_TOKEN` | Local development with local workers |
 | staging | `*.staging.workers.dev` | `STAGING_API_TOKEN` | Staging environment |
 | production | `beehive.bz23711.workers.dev` | `BEEHIVE_API_TOKEN` | Production environment |
 
 ## Quick Start
 
-### Local Development (with mocks)
+### Local Development
 
 ```bash
 # Install dependencies
 npm install
 
-# Run E2E tests with local mocks
+# Run E2E tests with local workers
 npm run test:e2e:local
 
 # Or with watch mode
@@ -73,9 +73,9 @@ npm run test:e2e:production
 
 | Script | Description |
 |--------|-------------|
-| `npm test` | Run all tests (unit + E2E with mocks) |
+| `npm test` | Run all tests (unit only; E2E tests are separate) |
 | `npm run test:e2e` | Run E2E tests (environment from E2E_ENVIRONMENT) |
-| `npm run test:e2e:local` | Run E2E tests with local mocks |
+| `npm run test:e2e:local` | Run E2E tests with local workers |
 | `npm run test:e2e:staging` | Run E2E tests against staging |
 | `npm run test:e2e:production` | Run E2E tests against production |
 | `npm run test:e2e:watch` | Run E2E tests with watch mode (local) |
@@ -132,15 +132,13 @@ Provides test utilities:
 
 ### `m3-features.test.ts`
 
-Tests M3-specific features using mock handlers:
+Tests M3-specific features:
 - Statsig traffic splitting configuration
 - Request classification
 - Canary deployment lifecycle
 - SLO metrics and compliance
 - Promotion worker modes
 - Tournament and merge-train functionality
-
-**Note**: This file uses mock handlers by default. To test against real endpoints, the tests need to be updated to use the config and auth utilities.
 
 ### `cross-worker-flows.test.ts`
 
@@ -370,7 +368,7 @@ afterEach(async () => {
 
 **Solution**:
 1. Start workers with `npm run dev:shadow`, `npm run dev:canary`, etc.
-2. Or use mock handlers for local testing
+2. Or start the local workers with `scripts/start-e2e-workers.sh`
 
 ## Performance Considerations
 
