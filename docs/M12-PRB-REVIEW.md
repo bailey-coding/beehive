@@ -40,7 +40,76 @@ Findings from this section: **S2** (admin revoke and revoke-all turn a client er
 count). Both are in §1.
 
 ### 2.2 Edge
-_pending_
+
+**`authenticate()` paths** (`workers/api/principal.ts`):
+- `API_AUTH_TOKEN` unset → 503 before any branch (`:47`). Master (Bearer or `X-API-Token`) uses `constantTimeEqual` and
+  is checked first (`:52-55`). The service branch is unchanged.
+- User branch, `Authorization: Bearer` only (`:109`). A `bh_usr_` value in `X-API-Token` is not master, `bearer` is null,
+  so it falls through to 401 (`:156`; tested at `workers/api/tests/user-tokens.test.ts:366`).
+  - Bad shape → 401 with no DO call (`:110`).
+  - `stub.fetch` throws → 503 (`:121-123`).
+  - Any status other than 200, including an old DO's 404 → 503 (`:126`).
+  - JSON parse throws → 503 (`:150-152`).
+  - `success !== true` → `d` undefined → 503 (`:131`, `:135-143`).
+  - `found === false` → 401 (`:132`).
+  - `found !== true`, or a missing or empty `actorId`/`userTokenId`, or an unknown scope → 503 (`:134-143`).
+  - Otherwise a `user` principal with `promotionAuthority:false` and `organizationId:null` (`:144-151`).
+  - No path gives anonymous or master.
+
+**`authorize()`** (`principal.ts:199-212`):
+- Master returns early. Reads (GET/HEAD with `read`) behave as for service.
+- A non-read request is allowed only when the principal is `kind === 'user'` and the route matches `USER_WRITE_ROUTES`
+  with `write`, or `USER_MAINTAINER_ROUTES` with `maintainer` (`:206-210`). Everything else is 403.
+- The allow-list regexes (`:171-185`) are character-for-character the dispatch regexes in `workers/api/index.ts:137-343`.
+  A route that matches an allowed regex reaches the handler that regex names and no other.
+- Candidate `stage` (`index.ts:217`) and `execute` (`:343`) appear in neither list, so they are 403 for all three scopes.
+  The worker-level test proves it with zero handler DO calls and a hostile `sandboxRunnerUrl` in the body
+  (`tests/user-tokens.test.ts:520-538`).
+- Lifecycle `DELETE`s and every `/api/admin/*` route are not in either list, so they are 403. The handlers repeat
+  `kind !== 'master'` (`lifecycle.ts:76`, `service-accounts.ts:80`, `user-tokens.ts:219`).
+- Path traversal: ids go into DO URLs un-decoded inside one segment (`sendToSpecDo`, `index.ts:453-470`;
+  `extractParentId`, `:384-388`). The edge's URL parser has already resolved `..`/`%2e%2e`, so an allowed spec-stage path
+  cannot be steered to the candidate-stage DO route.
+
+**Default deny, adding a write route mentally.** The enumeration test (`tests/user-tokens.test.ts:460-470`) scans
+`index.ts` for `if (path === '...' && method === 'POST|PATCH|PUT|DELETE')` and `path.match(/^...$/) && method === ...`.
+A new route written in that style that is missing from `WRITE_ROUTES` fails the test (confirmed by mutation, §2.6).
+A route written another way (`method === 'POST' && path === ...`, `startsWith`, or in a new module) escapes the scan.
+It is still 403 for users, because `authorize()` is an allow-list, so the gap is in the test's coverage, not in
+enforcement (**N2**).
+
+**`X-Actor-ID` rewrite** (`index.ts:104-111`): the condition is now `principal.kind === 'master'` → log, **else**
+rewrite. Service, user and the reserved `session` kind are all rewritten before any handler runs. Handlers read only
+the rewritten header (`request.headers.get('X-Actor-ID')`, for example `index.ts:1607`, `:1878`), and the edge also puts
+it into the body fields it sets (`createdBy`, `:1879`; test `:543-556`).
+
+**Maintainer cap, and whether it can be forged:**
+- The edge wraps the stub once, after `authorize()`, for `kind==='user'` without `maintainer` (`index.ts:115-116`). The
+  unwrapped `authStub` is not referenced again (`grep` shows only `:99`, `:100`, `:116`). No handler calls
+  `getSpecDoStub` or `env.SPEC_DO` itself.
+- The wrapper sets the header on whatever input it gets (`spec-do-auth.ts:149-157`), and `toDoRequest` handles the
+  string input `/health` (`:126-130`).
+- A client cannot remove the header: it is set on the outgoing request after the handler built it. A client-sent cap
+  header never reaches the DO, because every handler builds fresh headers (`sendToSpecDo` `index.ts:460-469`; `toDo`
+  `user-tokens.ts:69-77`). The only `new Request(request, ...)` is the rewrite (`index.ts:110`).
+- Who can send the header: anything that passes `specDoAuthGate` (tier-1 `SPEC_DO_INTERNAL_TOKEN`, `spec-do-auth.ts`),
+  meaning the edge and the nine internal workers. Presence only *removes* power (`isMaintainer` returns false,
+  `spec-do/index.ts:2188-2189`), so an internal worker that sends it harms only itself.
+- The tier-2 user-token routes need `SPEC_DO_ADMIN_TOKEN`, which only `beehive` holds (`wrangler.toml:21`;
+  `scripts/start-e2e-workers.sh:91`). The admin regex leaves out exactly `/internal/user-tokens/verify`
+  (`spec-do-auth.ts:63`).
+
+**Master-only admin routes**: `/api/admin/user-tokens*` is refused by `authorize()` for users and service principals
+(`principal.ts:204`), and by `handleUserTokenRoutes` (`user-tokens.ts:219`). Tests: `tests/user-tokens.test.ts:231`, `:520`.
+
+**Stage-1 log** (`index.ts:411-429`): it fires only for master with an `X-Actor-ID` other than `unknown`. The line is
+`JSON.stringify({event, method, path: url.pathname, actorId (128 chars), ray})`, with no query string, no headers other
+than `cf-ray`, no body, no `Authorization` and no `Cookie`. `JSON.stringify` keeps a hostile `actorId` from breaking the
+line. The AE point has blobs `[actorId, method, pathClass]` on the existing `ANALYTICS` binding (`wrangler.toml:32-34`),
+and a write failure is caught (`:424-428`). `pathClass` keeps any all-lowercase segment, so an id like `alice` in
+`/api/actors/alice` is kept, not replaced by `:id` (**N3**, cosmetic: the actor is already a blob).
+
+Findings from this section: N2 and N3. No blocker.
 
 ### 2.3 Spec DO
 _pending_
