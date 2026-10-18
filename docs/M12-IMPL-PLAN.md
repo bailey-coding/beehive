@@ -94,7 +94,7 @@ Tiers per `docs/AGENT-ROUTING.md`. Every task ends with a push of its own `agent
 | T1 | Push A: tolerate `m<N>` above the newest version | default | none | `migrations.test`: an `m99` ledger inits and serves a read, with no steps run; `mx` still throws; m8 is a no-op | review; deploy push A (PR-0 may ride along); record the floor | PR-A |
 | T2 | Token helpers and `Principal` types | light | T1 deployed | helper tests: shape, prefix length, `bh_svc_` unchanged | review | PR-B |
 | T3 | m9 table, DO routes, verify, maintainer cap | heavy | T2 | `user-tokens.test` (S1-S16 rows), `migrations.test` "fresh ledger starts at m9" and "m8→m9 keeps rows", `schema-sync`, `internal-auth` (new routes are tier 2, verify is tier 1), capped maintainer in issue tests | review | PR-B |
-| T4 | Edge: `authenticate` branch, `authorize` table, rewrite, cap wrapper, admin routes, whoami, stage-1 log | heavy | T3 | `api/tests/user-tokens.test`: every verify outcome to its status; the full route-class matrix; a spoofed `X-Actor-ID` is rewritten; the cap header is present only for non-maintainer user tokens; the log line has no token, hash or `Authorization` | review | PR-B |
+| T4 | Edge: `authenticate` branch, `authorize` table, rewrite, cap wrapper, admin routes, whoami, stage-1 log | heavy | T3 | `api/tests/user-tokens.test`: every verify outcome to its status; the full route-class matrix, with 403 for candidate `stage` and `execute` under all three scopes (B1); the default-deny enumeration test (S9); a spoofed `X-Actor-ID` is rewritten; the cap header is present only for non-maintainer user tokens; the log line has no token, hash or `Authorization` | review | PR-B |
 | T5 | UI settings page, `iat`, nav link | default | T4 | `ui-tokens.test` (S5, S13, S14 rows), `ui-layout.test` link | review | PR-B |
 | T6 | Local e2e + OPS/FOCUS docs | default (docs light) | T5 | `tests/e2e/user-tokens.test.ts` (local only): admin mint; issue created with a spoofed `X-Actor-ID` is attributed to the token's actor; revoke, then 401 | review; deploy push B after A is live (section 3) | PR-B |
 | T7 | CLI token support and docs | default | T4 merged | `cli/tests`: config mode 0600 (new and existing file); `--actor`/`BEEHIVE_ACTOR` ignored with a warning for `bh_usr_`; `auth whoami` output; login fails on 401 | review; release the CLI | PR-C |
@@ -161,7 +161,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | S6 | Maintainer scope | Mintable only while `actors.role='maintainer'` (DO check in the mint transaction). At use time `isMaintainer` still reads the role live, so a demoted maintainer's token loses the power at once. The UI offers the option only to maintainers | non-maintainer mint of `maintainer` gives 403; demote, then comment-policy PATCH gives 403 [DO] |
 | S7 | Expiry | The DO decides (`expires_at > now` in the verify SQL); the edge never caches. Mint: `expiresInDays` an integer 1-90 (default 30); the DO rejects `expires_at > now + 90 d + 1 min` | an expired token gives 401 with no edge change; 91 days gives 400 at the edge and at the DO directly [DO, edge] |
 | S8 | Revoke | One `UPDATE ... SET revoked_at, revoked_by WHERE revoked_at IS NULL`; idempotent (200; the first revocation is kept). Session revokes only its own; admin revokes any, plus `revoke-all` per actor. OPS: removing a login from `ALLOWED_GITHUB_USERS` must be paired with `revoke-all` | revoke twice keeps `revoked_at`; `revoke-all` covers every live token of that actor only [DO] |
-| S9 | Scope per route class | See the matrix below. `authorize()` is an allow-list for user writes; anything unlisted is 403 | the full matrix for read, read_write and maintainer [edge] |
+| S9 | Scope per route class | See the matrix below. `authorize()` is an allow-list for user writes; anything unlisted is 403 | the full matrix for read, read_write and maintainer; **default-deny test**: a table lists every non-GET route the edge dispatches (`index.ts:123-331`, `lifecycle.ts`, `service-accounts.ts`, `user-tokens.ts`), each with its class. The test fails if a dispatched write route is missing from the table, and checks that each one denied to users gives 403 for all three scopes [edge] |
 | S10 | Replay of a revoked token | No edge cache, and every request verifies in the DO, so the next request after revoke is 401 | revoke, then the same bearer gives 401 [DO, edge, e2e] |
 | S11 | Concurrent mint | Mint is synchronous inside one `transactionSync` (no `await`): a cap of 10 live tokens per actor (409 beyond it) and the hash insert cannot interleave. A hash collision gives a unique violation, then 409 | 12 parallel mints give exactly 10 created and 2 conflicts [DO] |
 | S12 | Master stage-1 log | When `kind==='master'` and the client sent `X-Actor-ID` other than `unknown`, log one JSON line `{event:"master_actor_assertion", method, path: url.pathname, actorId, ray: cf-ray}`. No query string, headers, body or token. Logged for any actor (no extra DO read on the master path); human vs agent is resolved afterwards against `actors` | the line has exactly those keys; no line without the header [edge] |
@@ -175,9 +175,9 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | Route class | read | read_write | maintainer |
 |---|---|---|---|
 | `GET /health`, `/api/health`, `/api/whoami`, non-admin `GET /api/*` | yes | yes | yes |
-| Writes: `POST` organizations, repositories, specs, candidates; specs/candidates `stage` PATCH, `claim`; issues create, `stage`, `status`, comments; issue-spec/candidate links; `gate/pre-merge`, `execute` | 403 | yes, cap | yes |
+| Writes: `POST` organizations, repositories, specs, candidates; `PATCH /api/specs/:id/stage` (spec lifecycle, not a rung), `claim`; issues create, `stage`, `status`, comments; issue-spec/candidate links; `gate/pre-merge` (it only starts the real gate workflow, `spec-do/index.ts:3794`) | 403 | yes, cap | yes |
 | `PATCH /api/issues/:id/comment-policy` | 403 | 403 at the edge | yes (the DO re-checks the role) |
-| `POST /api/actors`, `PATCH .../trust`, `PATCH .../promotion-authority`, `POST /api/gate-verdicts`, `POST /api/trials`, `.../decide`, `POST /api/promotions` | 403 | 403 | 403 (Q2) |
+| `POST /api/actors`, `PATCH .../trust`, `PATCH .../promotion-authority`, `POST /api/gate-verdicts`, `POST /api/trials`, `.../decide`, `POST /api/promotions`, **`PATCH /api/candidates/:id/stage`**, **`POST /api/candidates/:id/execute`** | 403 | 403 | 403 (Q2) |
 | Lifecycle (`DELETE` tombstones, `?include_deleted=1`), `/api/admin/*` incl. purge, roles, user-token admin | 403 | 403 | 403 (Q1) |
 
 ## 5. Rollback per push (rule 7: a ref operation; the maintainer redeploys the good ref through the `cf` flow, `docs/OPS.md`)
@@ -210,7 +210,12 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
   `include_deleted`, **master-only in M12**: a strict reading, no widening, consistent with decision 4's break-glass.
   Opening them to `maintainer` tokens later is an edge-only change. Confirm, or should T4 open them now?
 - Q2 (before T4): user tokens are denied gate-verdict, trial, promotion and actor-admin writes (oracle and spine outcomes
-  stay machine or master). Confirm the deny-list; widening later needs no schema change.
+  stay machine or master), and also (review B1) `PATCH /api/candidates/:id/stage` and `POST /api/candidates/:id/execute`.
+  The stage PATCH has no transition guard: `transitionCandidate` (`spec-do/index.ts:1209-1219`) writes any value the CHECK
+  allows (`schema.sql:113-116`), `passed_canary` and `promoted` included. It is the route the promotion worker uses to
+  record rung outcomes (`promotion-worker/spec-do.ts:96-111`). `execute` takes `sandboxRunnerUrl` from the client body
+  (`api/index.ts:1885-1889`); the DO fetches it (`:4337`, `:4411`) and sets `passed_premerge` from the answer (`:4366`).
+  That is an oracle bypass and an SSRF from the DO. Widening later needs no schema change.
 - Q3 (before push B): `actors.github_user_id` has no UNIQUE index, so two concurrent first logins can create duplicate
   actors. T0 picks the oldest. If the section 3 duplicate check finds any, decide which row to keep before tokens bind to
   one of them; a unique index belongs in M11's `m10` batch.
