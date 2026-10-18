@@ -29,7 +29,7 @@ Completed items are removed, not struck through; history lives in git.*
 - Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
   `.../issues/:id`) reads organizations and repositories before answering 405, because the origin check covers only the
   write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
-- Local checks on `agent/m9-nav` (2026-10-17): 832 unit tests pass, typecheck clean; local e2e 70 passed / 5 skipped /
+- Local checks on `agent/m9-nav` (2026-10-17): 836 unit tests pass, typecheck clean; local e2e 70 passed / 5 skipped /
   0 failed (run with `E2E_UI=1`, see `docs/SETUP.md`). On `main`: 743 unit tests, e2e 63 passed / 5 skipped / 0 failed.
 
 ## Next session, first (needs the maintainer)
