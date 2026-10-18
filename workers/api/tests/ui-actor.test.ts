@@ -285,9 +285,22 @@ describe('actor lookup (M12 T0)', () => {
     const other = spec.createActor('human', 'someone', '1').id;
     store.raw.prepare('UPDATE actors SET created_at = 100 WHERE id = ?').run(older);
     store.raw.prepare('UPDATE actors SET created_at = 300 WHERE id = ?').run(newer);
-    store.raw.prepare('UPDATE actors SET created_at = 200 WHERE id = ?').run(other);
+    // Another user's row is the newest of all: only the client-side match keeps a login off it
+    // when the Spec DO ignores the filter.
+    store.raw.prepare('UPDATE actors SET created_at = 400 WHERE id = ?').run(other);
     const count = () => (store.raw.prepare('SELECT COUNT(*) AS n FROM actors').get() as { n: number }).n;
-    return { spec, older, newer, count };
+    return { spec, older, newer, other, count };
+  }
+
+  /** An old DO: the filter parameter is dropped, so the unfiltered newest-first list comes back. */
+  function ignoringFilter(spec: Stub): Stub {
+    return {
+      fetch(req: Request) {
+        const url = new URL(req.url);
+        url.searchParams.delete('github_user_id');
+        return spec.fetch(new Request(url, req));
+      },
+    };
   }
 
   function sessionActor(sessionCookie: string): string {
@@ -308,19 +321,23 @@ describe('actor lookup (M12 T0)', () => {
   it('two rows with one GitHub id resolve to the newest against an old Spec DO that ignores the filter', async () => {
     const { spec, newer, count } = await twoRowsOneGithubId();
     stubGithub(4242);
-    // An old DO: the filter parameter is dropped, so the unfiltered newest-first list comes back.
-    const oldDo: Stub = {
-      fetch(req: Request) {
-        const url = new URL(req.url);
-        url.searchParams.delete('github_user_id');
-        return spec.fetch(new Request(url, req));
-      },
-    };
-    const stub = recording(oldDo);
+    const stub = recording(ignoringFilter(spec));
     const res = await callback(stub);
     expect(res.status).toBe(302);
     expect(sessionActor(sessionIdOf(res))).toBe(newer);
     expect(stub.posts()).toHaveLength(0);
     expect(count()).toBe(3);
   });
+
+  it('against an old Spec DO that ignores the filter, a GitHub id with no row creates one actor and never binds to another user', async () => {
+    const { spec, older, newer, other, count } = await twoRowsOneGithubId();
+    stubGithub(9999);
+    const stub = recording(ignoringFilter(spec));
+    const res = await callback(stub);
+    expect(res.status).toBe(302);
+    expect(stub.posts()).toHaveLength(1);
+    expect(count()).toBe(4);
+    expect([older, newer, other]).not.toContain(sessionActor(sessionIdOf(res)));
+  });
+
 });
