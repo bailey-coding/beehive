@@ -18,6 +18,14 @@
 export const INTERNAL_TOKEN_HEADER = 'X-Beehive-Internal';
 export const ADMIN_TOKEN_HEADER = 'X-Beehive-Admin';
 
+/**
+ * Sent by the edge on every DO request made for a user token without the `maintainer` scope.
+ * Its presence (any value) makes every isMaintainer decision of that request false. No header
+ * means full power, as for the UI session, an old edge and the nine other workers, so a
+ * spoofed header can only remove power.
+ */
+export const MAINTAINER_CAP_HEADER = 'X-Beehive-Maintainer-Cap';
+
 const SPEC_DO_ORIGIN = 'https://spec-do.internal';
 const DEFAULT_SPEC_DO_NAME = 'main';
 
@@ -42,6 +50,9 @@ const ADMIN_PATTERNS: Array<{ method: string; path: RegExp }> = [
   // Service accounts and tokens: list, mint, revoke, token mint/rotate/revoke.
   // /internal/service-tokens/verify (the edge's per-request token check) is tier 1.
   { method: '*', path: /^\/internal\/service-accounts(?:\/.*)?$/ },
+  // User tokens: mint, list, revoke, revoke-all (RFC-0008). /internal/user-tokens/verify is
+  // tier 1, like the service-token verify; the lookahead excludes exactly that path.
+  { method: '*', path: /^\/internal\/user-tokens(?!\/verify$)(?:\/.*)?$/ },
   // Sets the flag that lets an actor promote; the edge allows it for the master principal only
   { method: 'PATCH', path: /^\/api\/actors\/[^/]+\/promotion-authority$/ },
 ];
