@@ -13,6 +13,13 @@ import { handleUi, signSession, type UiEnv } from '../ui';
 import { isFresh, MINT_FRESHNESS_SECONDS } from '../ui-tokens';
 import { generateUserToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 
+// A real token is base64url and can hold no markup; the escaping test swaps in a hostile one
+const fakeToken = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock('../../shared/service-tokens', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../shared/service-tokens')>();
+  return { ...real, generateUserToken: () => fakeToken.value ?? real.generateUserToken() };
+});
+
 const TOKEN = 'test-auth-token';
 const env: UiEnv = { API_AUTH_TOKEN: TOKEN, GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret', ALLOWED_GITHUB_USERS: 'testuser' };
 const ORIGIN = 'http://localhost';
@@ -105,7 +112,57 @@ beforeEach(async () => {
   store.raw.prepare(`UPDATE actors SET role = 'maintainer' WHERE id = ?`).run(maint);
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  fakeToken.value = null;
+});
+
+// ============================================================================
+// Escaping (review S1): every DO-sourced or generated value on these pages goes through esc()
+// ============================================================================
+
+describe('HTML escaping on /app/settings/tokens (review S1)', () => {
+  const HOSTILE = `<script>x</script>"'`;
+  const ESCAPED = '&lt;script&gt;x&lt;/script&gt;&quot;&#39;';
+  /** A stub answer for the DO mint route */
+  const mintAnswer = (status: number, body: unknown) => (req: Request) =>
+    new URL(req.url).pathname === '/internal/user-tokens' && req.method === 'POST'
+      ? new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+      : undefined;
+
+  it('a token name set by the master (admin mint) is escaped in the list', async () => {
+    await seed(alice, HOSTILE);
+    const html = await (await ui(PATH)).text();
+    expect(html).toContain(ESCAPED);
+    expect(html).not.toContain('<script>x</script>');
+  });
+
+  it('the show-once page escapes the plaintext and the name', async () => {
+    fakeToken.value = 'bh_usr_"><script>tok()</script>';
+    overrides.push(
+      mintAnswer(201, {
+        success: true,
+        data: { id: 't1', actorId: alice, name: '<img src=x onerror=nm()>', prefix: 'bh_usr_"><sc', scope: 'read', expiresAt: Date.now() + 86_400_000 },
+      })
+    );
+    const res = await ui(PATH, { form: mintForm() });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('bh_usr_&quot;&gt;&lt;script&gt;tok()&lt;/script&gt;');
+    expect(html).not.toContain('<script>tok()</script>');
+    expect(html).toContain('&lt;img src=x onerror=nm()&gt;');
+    expect(html).not.toContain('<img src=x');
+  });
+
+  it.each([400, 403, 409])("the DO's %s refusal text is escaped", async (status) => {
+    overrides.push(mintAnswer(status, { success: false, error: `<script>err${status}()</script>` }));
+    const res = await ui(PATH, { form: mintForm() });
+    expect(res.status).toBe(status);
+    const html = await res.text();
+    expect(html).toContain(`&lt;script&gt;err${status}()&lt;/script&gt;`);
+    expect(html).not.toContain(`<script>err${status}()</script>`);
+  });
+});
 
 describe('GET /app/settings/tokens', () => {
   it("lists the session actor's own tokens by prefix and offers the mint form to a fresh session", async () => {

@@ -169,8 +169,20 @@ export async function revokeUserToken(
     return { ok: false, status: 503, error: UNAVAILABLE };
   }
   if (res.status === 404 && (await errorOf(res)) === USER_TOKEN_NOT_FOUND) return { ok: false, status: 404, error: 'Not found' };
+  const refused = await clientError(res);
+  if (refused) return refused;
   if (res.status !== 200) return { ok: false, status: 503, error: UNAVAILABLE };
   return dataOf(res);
+}
+
+/**
+ * The DO's 400/403 (a bad body, or an X-Actor-ID that names no actor or a service actor) with its
+ * message, so a mistyped revoker gets a clear 4xx and not "service unavailable". Null for any other
+ * status: an unmarked 404 (an older DO without the route) and 5xx stay 503.
+ */
+async function clientError(res: Response): Promise<{ ok: false; status: number; error: string } | null> {
+  if (res.status !== 400 && res.status !== 403) return null;
+  return { ok: false, status: res.status, error: (await errorOf(res)) ?? 'Invalid request' };
 }
 
 function json(data: unknown, status = 200, extra: Record<string, string> = {}): Response {
@@ -245,6 +257,8 @@ export async function handleUserTokenRoutes(
       return err(UNAVAILABLE, 503);
     }
     if (res.status === 404 && (await errorOf(res)) === USER_TOKEN_ACTOR_NOT_FOUND) return err('Not found', 404);
+    const refused = await clientError(res);
+    if (refused) return err(refused.error, refused.status);
     if (res.status !== 200) return err(UNAVAILABLE, 503);
     return relay(await dataOf(res));
   }

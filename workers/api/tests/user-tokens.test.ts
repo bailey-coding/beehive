@@ -228,6 +228,31 @@ describe('with the real Spec DO', () => {
     expect(((await (await send(ctx.env, '/api/admin/user-tokens', 'GET', { token: MASTER })).json()) as any).data).toHaveLength(3);
   });
 
+  it('revoke and revoke-all pass a client error through: a mistyped X-Actor-ID is 400, a service actor 403, never 503 (review S2)', async () => {
+    const t = await token(alice);
+    const svc = await send(ctx.env, '/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'mon', scopes: ['read'] } });
+    const svcActor = ((await svc.json()) as any).data.account.actorId as string;
+    const revoke = (actor: string) =>
+      send(ctx.env, `/api/admin/user-tokens/${t.id}/revoke`, 'POST', { token: MASTER, headers: { 'X-Actor-ID': actor } });
+    const revokeAll = (actor: string) =>
+      send(ctx.env, '/api/admin/user-tokens/revoke-all', 'POST', { token: MASTER, headers: { 'X-Actor-ID': actor }, body: { actorId: alice } });
+
+    for (const [call, label] of [[revoke, 'revoke'], [revokeAll, 'revoke-all']] as const) {
+      const typo = await call('typo-actor');
+      expect(typo.status, label).toBe(400);
+      expect(((await typo.json()) as any).error, label).toMatch(/must be an existing actor/);
+      const bySvc = await call(svcActor);
+      expect(bySvc.status, label).toBe(403);
+      expect(((await bySvc.json()) as any).error, label).toMatch(/service account/);
+    }
+    // Nothing was revoked, and the token still works
+    expect(store.raw.prepare('SELECT revoked_at FROM user_tokens WHERE id = ?').get(t.id)).toEqual({ revoked_at: null });
+    expect((await send(ctx.env, '/api/whoami', 'GET', { token: t.plaintext })).status).toBe(200);
+    // With a real actor both work
+    expect((await revoke(maint)).status).toBe(200);
+    expect((await revokeAll(maint)).status).toBe(200);
+  });
+
   it('a user or service token cannot reach the admin routes or mint (S5)', async () => {
     const m = await token(maint, 'maintainer');
     const svc = await send(ctx.env, '/api/admin/service-accounts', 'POST', { token: MASTER, body: { name: 'mon', scopes: ['read'] } });
@@ -379,6 +404,25 @@ describe('authenticate: every verify outcome to its status (S15)', () => {
     expect((await send(ctx.env, '/api/admin/user-tokens/revoke-all', 'POST', { token: MASTER, body: { actorId: 'a' } })).status).toBe(503);
     // and a user token against it is 503 (the verify route is missing too)
     expect((await send(ctx.env, '/api/whoami', 'GET', { token: T })).status).toBe(503);
+  });
+
+  it('revoke and revoke-all: a DO 5xx stays 503, a DO 400/403 passes through with its message', async () => {
+    const answer = (status: number, error: string): DoLike => ({
+      fetch: async () => new Response(JSON.stringify({ success: false, error }), { status }),
+    });
+    const routes = [
+      ['/api/admin/user-tokens/t1/revoke', undefined],
+      ['/api/admin/user-tokens/revoke-all', { actorId: 'a' }],
+    ] as const;
+    for (const [path, body] of routes) {
+      for (const [status, expected] of [[500, 503], [502, 503], [400, 400], [403, 403]] as const) {
+        const ctx = env(answer(status, `do says ${status}`));
+        const res = await send(ctx.env, path, 'POST', { token: MASTER, body });
+        expect(res.status, `${path} ${status}`).toBe(expected);
+        const text = ((await res.json()) as any).error;
+        expect(text, `${path} ${status}`).toBe(expected === 503 ? 'Token service unavailable' : `do says ${status}`);
+      }
+    }
   });
 });
 
