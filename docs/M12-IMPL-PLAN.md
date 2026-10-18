@@ -242,3 +242,24 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
   `docs/FOCUS.md` (a verification task), plus `docs/OPEN-QUESTIONS.md` (T6d). **Push B does not wait on it.** If it
   later proves false: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
   secrets (FOCUS task text).
+
+## 8. Review responses (`docs/M12-IMPL-PLAN-REVIEW.md` on `agent/m12-review`; each finding re-checked against the code)
+
+| Finding | Response | Where |
+|---|---|---|
+| B1 candidate `stage` PATCH and `execute` open to `read_write` | **Accepted.** Confirmed: no transition guard (`spec-do/index.ts:1209-1219`); client `sandboxRunnerUrl` fetched by the DO (`:4337`, `:4411`) | S9 matrix, S9 default-deny test, T4, A2 |
+| F1 fail-open cap, a missed call site | **Accepted.** Six `isMaintainer` sites confirmed; required `capped` argument; wrap once after `authorize()`; string-input normalisation (`index.ts:1365`); cap test on every allowed write route | §1 DO and edge bullets, T4 |
+| F2 `ensureActor` creates on a failed lookup | **Accepted.** Confirmed (`ui.ts:333-335`) | §1 T0, T0 test |
+| F3 ordering `ASC` vs today's `DESC` | **Accepted: keep `DESC`** (newest wins, as today and as an old DO). A3 shows no duplicates exist, so there is no reason to change it | §1 T0, T0 test |
+| F4 push-A test and invariant | **Accepted.** Write test on an `m99` ledger with an FK table; floor invariant in OPS; m10 unique-index handoff | §1 push A, T1, m9 note, T6d |
+| F5 log retention | **Accepted** with the AE data point (not the "document only" alternative) | S12 |
+| F6 traces and subrequest headers | **Accepted as scope; verification not done** (A4: the maintainer said to assume redaction). The assumption names traces and the internal headers | A4, T6d |
+| F7 D2 wait | **Accepted.** 12 h + 1 h from the last moment pre-D1 code served | §3 PR-D2, T9 |
+| F8 docs tasks | **Accepted** as a separate task T6d | §2 |
+| N1 S5 guard labelling | **Accepted** | S5 |
+| N2 refresh mints twice | **Accepted in part: documented, no nonce.** A nonce adds server state to the UI; the browser warns before resubmitting, the cap bounds it, and the extra token is visible and revocable | S13 |
+| N3 future `iat`, return path, freshness scope | **Accepted in part.** A future `iat` is not fresh, and the OPS note explains what freshness bounds. **Rejected: the return path to the settings page.** It changes the OAuth state flow (`startLogin`/`finishLogin`, `ui.ts:245-330`), which M12 does not need; the "sign in again" page links there afterwards | S14, T6d |
+| N4 temp file + rename | **Accepted** | §1 PR-C, T7 |
+| N5 truncate `actorId` | **Accepted** (128 chars) | S12 |
+| N6 name the RFC deviations | **Accepted** | R7 |
+| N7 rollback race | **Accepted** as a known risk | R3 |
