@@ -78,7 +78,9 @@ retries), so a bad deploy is loud rather than half-migrated.
    **Rollback floor (M12 push A):** from the commit that adds the tolerance (`runMigrations` skips migrations and
    logs a warning when `schema_version` is `m<N>` (1 to 6 digits, no leading zero) with N above its own newest; any other unknown value still throws), a
    rollback to that commit or later survives a later `m9`+ ledger. Record the floor commit here when it is deployed:
-   `rollback floor: <commit, filled in at the deploy>`. Never deploy anything older once a later push has migrated.
+   `rollback floor: 8de5485` (all ten workers deployed 2026-10-18 09:17 UTC; the tolerance itself is `adb86bd`, and `8de5485` is the
+   first push where `beehive-sandbox-runner` also redeployed: it had no `package-lock.json`, so `npm ci` failed in Workers Builds).
+   Never deploy anything older once a later push has migrated.
    Invariant for every step above the floor: it must be additive and harmless to code that ignores it.
    - It never rebuilds, drops or deletes from a table the floor's code uses.
    - A new table may reference only tables the floor never hard-deletes from: today `actors`, and never a table in
