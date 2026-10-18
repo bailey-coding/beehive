@@ -75,6 +75,12 @@ retries), so a bad deploy is loud rather than half-migrated.
    Migrations are additive and not undone by rolling a worker back, so old code would then run against
    the newer schema. For the Spec DO that fails: old code throws `Unknown schema_version` and every request errors
    (`workers/spec-do/index.ts:842`; `docs/OPEN-QUESTIONS.md` 2026-10-17). Rolling back across a schema bump is an outage.
+   **Rollback floor (M12 push A):** from the commit that adds the tolerance (`runMigrations` skips migrations and
+   logs a warning when `schema_version` is `m<N>` with N above its own newest; any other unknown value still throws), a
+   rollback to that commit or later survives a later `m9`+ ledger. Record the floor commit here when it is deployed:
+   `rollback floor: <commit, filled in at the deploy>`. Never deploy anything older once a later push has migrated.
+   Invariant for every step above the floor: it must be additive and harmless to code that ignores it. It never
+   rebuilds, drops or deletes from a table the floor's code uses, and a new table only references old ones.
 6. After deploy: `./scripts/prod-health.sh` passes (`GET /health` answers 200 on each worker with the
    bearer token, and the Spec DO check answers 200);
    `GET /api/service-accounts` answers 410; mint a service token

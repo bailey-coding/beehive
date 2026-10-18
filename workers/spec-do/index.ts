@@ -806,7 +806,8 @@ export class SpecDO {
    * Every step is additive and idempotent (IF NOT EXISTS, or an ALTER behind a PRAGMA
    * check), so a step that failed halfway is safe to retry. A failing step is logged and
    * rethrown: init() then fails and leaves this.db unset, so the next request retries.
-   * Ends with an assertion that the ledger is at LATEST_SCHEMA_VERSION.
+   * Ends with an assertion that the ledger is at LATEST_SCHEMA_VERSION, except that a stored
+   * m<N> above it is tolerated (warn and return): see "Rollback floor" in docs/OPS.md.
    */
   async runMigrations(): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
@@ -835,6 +836,16 @@ export class SpecDO {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
     }
     const order = ['m1', ...steps.map(([v]) => v)];
+
+    // Rollback floor: a newer deploy migrated this ledger and this code was redeployed over it.
+    // Every step is additive, so the tables this code uses are intact: serve, run nothing, assert nothing.
+    // Any other unknown value (not m<N>) still throws below.
+    const stored = this.readSchemaVersion();
+    const newer = /^m(\d+)$/.exec(stored);
+    if (newer && Number(newer[1]) > Number(LATEST_SCHEMA_VERSION.slice(1))) {
+      console.warn(`[SpecDO] schema_version '${stored}' is newer than '${LATEST_SCHEMA_VERSION}': skipping migrations`);
+      return;
+    }
 
     for (const [target, apply] of steps) {
       const current = this.readSchemaVersion();
