@@ -175,17 +175,21 @@ API, CLI and UI agree, and remove calls to routes that do not exist. Source of t
 - **UI issue pages (plan):** `docs/M8-UI-ISSUES-PLAN.md`, reviewed in
   `docs/M8-UI-ISSUES-PLAN-REVIEW.md`, `docs/M8-PR1-REVIEW.md`, `docs/M8-PR1-RECHECK.md`, `docs/M8-PR2-REVIEW.md` and, for the CLI actor stopgap, `docs/CLI-DEFAULT-ACTOR-REVIEW.md`. Two PRs: Spec DO changes first, then the UI (both done, see above).
 
-**M9 — Site navigation (proposed 2026-10-17, not started; after the M8 UI issue-pages fix).** Give the
-logged-in `/app` UI one shared layout with real navigation. Both this and the issue pages edit the page
-layout in `workers/api/ui-html.ts`, so do the issue pages first. Plan before any code.
-- **Navbar:** brand/home link, org switcher, links to repos, specs and issues, signed-in user and sign-out.
-- **Breadcrumbs:** a trail such as `org › repo › issues › #12` on every detail page; a shared layout helper.
-- **Search box:** placeholder over the mocked M6 semantic search, labelled with `mockedLabel()` until M6.5.
-- **Shared layout pieces:** one flash/error area (today `ui.ts` renders its own), current-page highlight,
-  skip link for keyboard users.
+**M9 — Site navigation (implemented 2026-10-17 on `agent/m9-nav`; not yet merged or deployed, independent review L9 pending).** Give the
+logged-in `/app` UI one shared layout with real navigation. Plan: `docs/M9-NAV-PLAN.md` (v2), reviewed in `docs/M9-NAV-PLAN-REVIEW.md`.
+Code: `workers/api/ui-layout.ts` (`appPage`, `statusPage`, trail builders, lazy chrome source).
+- **Navbar: done.** Brand link, org switcher (20 orgs, then "All organizations (N)"), Dashboard / Repositories / Specs
+  (dashboard anchors), signed-in user and sign-out. "Issues" is contextual: it appears only inside a repo (no cross-repo
+  issue index exists).
+- **Breadcrumbs: done.** `Dashboard › org › repo › Issues › #12` and the spec, candidate, trial and status-page trails.
+- **Search box: done.** One mocked search box per page (navbar), labelled "Search (mocked)"; the in-page search forms are
+  gone, the results sections stay. Disabled where a page has no results.
+- **Shared layout pieces: done.** One flash area with live-region roles, current-page marks, skip link, landmarks,
+  contrast fixes (flash text, status badges), focus ring.
 - **Out of scope (see M10):** user menu, notifications, command palette.
-- **Exit criteria:** every `/app` page uses the shared layout; existing `/app` functions (create org, repo,
-  spec, issue) still work; no new fetch maps an error to an empty list; local e2e green.
+- **Exit criteria:** every `/app` session page uses the layout (pre-login pages use a minimal shell); existing `/app`
+  functions (create org, repo, spec, issue) still work; no new fetch maps an error to an empty list (a failed nav read says
+  "unavailable"); local e2e green. Manual visual checklist: `docs/M9-NAV-PLAN.md` section 5.
 
 **M10 — Account menu and notifications (proposed 2026-10-17, future).** Needs the M9 layout.
 - **User menu:** profile, API tokens and service accounts, sign-out.
