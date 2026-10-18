@@ -41,9 +41,7 @@ Completed items are removed, not struck through; history lives in git.*
    workers deploy at once.
 3. Heads-up (promotion-routes-fix, deployed 2026-10-16 22:08 UTC, all ten workers verified): tournament mode now
    records the winner on a real candidate and fails the tournament when that is rejected, so a request naming a
-   candidate the Spec DO does not know ends `failed`. That is intended. Not yet exercised in production: run
-   `BEEHIVE_API_TOKEN=... MAINTAINER_ACTOR_ID=... CONFIRM_PROD_WRITE=yes ./scripts/prod-verify-promotion.sh` once (it
-   writes a `test-org-e2e-prodcheck-*` tree, restores the promotion mode and tombstones the org; purge by prefix later).
+   candidate the Spec DO does not know ends `failed`. That is intended. Verified in production 2026-10-18 with `scripts/prod-verify-promotion.sh`: a two-candidate tournament completed, the winner's stage is `passed_train`, the promotion mode was restored. It left a tombstoned `test-org-e2e-prodcheck-*` org (purge by prefix after `PURGE_MIN_AGE_HOURS`, `docs/OPS.md`).
 
 ## Deploy M8 (needs the maintainer)
 
