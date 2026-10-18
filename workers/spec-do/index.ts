@@ -21,10 +21,16 @@ import {
   LIFECYCLE_COLUMNS,
   SERVICE_TOKENS_SQL,
   DEPLOY_REFS_SQL,
+  IDEMPOTENCY_KEYS_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm8';
+const LATEST_SCHEMA_VERSION = 'm9';
+
+// Idempotency key constants
+const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
+const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 
 class ConflictError extends Error {}
 
@@ -831,6 +837,8 @@ export class SpecDO {
       ['m7', () => this.db!.exec(DEPLOY_REFS_SQL)],
       // m7 -> m8: version columns on tournaments + merge_trains, tournament failure columns
       ['m8', () => this.applyLedgerCas()],
+      // m8 -> m9: idempotency keys table for preventing double-writes from at-least-once queue delivery
+      ['m9', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -3057,6 +3065,165 @@ export class SpecDO {
     });
   }
 
+  // ============================================================================
+  // IDEMPOTENCY KEYS
+  // Prevents double-writes from at-least-once Queue delivery
+  // ============================================================================
+
+  /**
+   * Hash a string to SHA-256 hex.
+   */
+  private async hashString(input: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(input);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /**
+   * Cleanup expired idempotency keys.
+   */
+  private cleanupExpiredIdempotencyKeys(): void {
+    if (!this.db) return;
+    const at = now();
+    const stmt = this.db.prepare('DELETE FROM idempotency_keys WHERE expires_at < ?');
+    stmt.bind(at);
+    stmt.step();
+    stmt.free();
+  }
+
+  /**
+   * Check if path is a mutation endpoint that supports idempotency.
+   */
+  private isMutationEndpoint(method: string, path: string): boolean {
+    const mutationMethods = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
+    if (!mutationMethods.has(method)) return false;
+    
+    const mutationEndpoints = [
+      '/api/organizations', '/api/actors', '/api/repositories',
+      '/api/specs', '/api/candidates', '/api/gate-verdicts',
+      '/api/trials', '/api/promotions', '/api/issues',
+      '/api/issue-spec-links', '/api/issue-candidate-links', '/api/flags',
+    ];
+    
+    for (const endpoint of mutationEndpoints) {
+      if (path === endpoint || path.startsWith(endpoint + '/')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check idempotency key and return cached response if exists.
+   * Returns null if key is new or not present.
+   */
+  private async checkIdempotencyKey(
+    key: string,
+    endpoint: string,
+    method: string,
+    requestBody: string,
+    actorId: string
+  ): Promise<Response | null> {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    // Cleanup expired keys
+    this.cleanupExpiredIdempotencyKeys();
+    
+    // Generate hashes
+    const keyHash = await this.hashString(key);
+    const requestHash = await this.hashString(requestBody);
+    const at = now();
+    
+    // Check if key exists
+    const stmt = this.db.prepare(
+      'SELECT response_status, response_body, request_hash FROM idempotency_keys WHERE key_hash = ? LIMIT 1'
+    );
+    stmt.bind(keyHash);
+    
+    let existing: Record<string, unknown> | null = null;
+    while (stmt.step()) {
+      existing = stmt.getRow();
+      if (existing) break;
+    }
+    stmt.free();
+    
+    if (!existing) {
+      return null; // Key not found, proceed with mutation
+    }
+    
+    // Key exists - check if request matches
+    if (existing.request_hash === requestHash) {
+      // Same request - return cached response
+      return new Response(existing.response_body as string, {
+        status: existing.response_status as number,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } else {
+      // Different request with same key - 409 Conflict
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Idempotency key conflict: same key used with different request',
+          timestamp: at,
+        }),
+        {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+  }
+
+  /**
+   * Store response for idempotency key.
+   */
+  private async storeIdempotencyResponse(
+    key: string,
+    endpoint: string,
+    method: string,
+    requestBody: string,
+    actorId: string,
+    response: Response
+  ): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const keyHash = await this.hashString(key);
+    const requestHash = await this.hashString(requestBody);
+    const at = now();
+    const expiresAt = at + IDEMPOTENCY_KEY_TTL_MS;
+    const responseBody = await response.clone().text();
+    
+    this.state.storage.transactionSync(() => {
+      this.run(
+        `INSERT INTO idempotency_keys 
+         (id, key_hash, endpoint, method, request_hash, response_status, response_body, actor_id, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        generateId(),
+        keyHash,
+        endpoint,
+        method,
+        requestHash,
+        response.status,
+        responseBody,
+        actorId,
+        at,
+        expiresAt
+      );
+    });
+  }
+
+  /**
+   * Extract idempotency key from request headers.
+   */
+  private getIdempotencyKey(request: Request): string | null {
+    const key = request.headers.get(IDEMPOTENCY_KEY_HEADER);
+    if (!key) return null;
+    if (key.length > MAX_IDEMPOTENCY_KEY_LENGTH) return null;
+    return key;
+  }
+
   // Fetch from Durable Object
   async fetch(request: Request): Promise<Response> {
     // Internal token check first: before routing, before the schema is touched
@@ -3125,6 +3292,37 @@ export class SpecDO {
         );
       }
       
+      // Handle idempotency for mutation requests
+      const idempotencyKey = this.getIdempotencyKey(request);
+      let idempotencyRequestBody: string | null = null;
+      
+      if (idempotencyKey && this.isMutationEndpoint(method, path)) {
+        const requestBody = await request.clone().text();
+        
+        // Check for cached response
+        const cachedResponse = await this.checkIdempotencyKey(
+          idempotencyKey,
+          path,
+          method,
+          requestBody,
+          actorId
+        );
+        
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        
+        // Store the body for later storage
+        idempotencyRequestBody = requestBody;
+        
+        // Re-create request with body for handlers
+        request = new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: requestBody,
+        });
+      }
+      
       // ============================================================================
       // ORGANIZATIONS
       // ============================================================================
@@ -3132,10 +3330,22 @@ export class SpecDO {
       if (path === '/api/organizations' && method === 'POST') {
         const body: CreateOrganizationRequest = await request.json();
         const org = this.createOrganization(body.name, body.type, body.externalId);
-        return new Response(JSON.stringify({ success: true, data: org, timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: org, timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/organizations' && method === 'GET') {
@@ -3168,10 +3378,22 @@ export class SpecDO {
       if (path === '/api/actors' && method === 'POST') {
         const body: CreateActorRequest = await request.json();
         const actor = this.createActor(body.type, body.name, body.githubUserId);
-        return new Response(JSON.stringify({ success: true, data: actor, timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: actor, timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/actors' && method === 'GET') {
@@ -3232,10 +3454,22 @@ export class SpecDO {
           body.namespace,
           body.defaultBranch
         );
-        return new Response(JSON.stringify({ success: true, data: repo, timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: repo, timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/repositories' && method === 'GET') {
@@ -3275,10 +3509,22 @@ export class SpecDO {
           body.organizationId,
           actorId
         );
-        return new Response(JSON.stringify({ success: true, data: spec, timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: spec, timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/specs' && method === 'GET') {
@@ -3348,10 +3594,22 @@ export class SpecDO {
           body.baseCommitSha,
           body.agentId || actorId
         );
-        return new Response(JSON.stringify({ success: true, data: this.candidateRowToResponse(candidate), timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: this.candidateRowToResponse(candidate), timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/candidates' && method === 'GET') {
@@ -3432,10 +3690,22 @@ export class SpecDO {
           body.decidedBy || actorId,
           body.notes
         );
-        return new Response(JSON.stringify({ success: true, data: verdict, timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: verdict, timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/gate-verdicts' && method === 'GET') {
@@ -3470,10 +3740,22 @@ export class SpecDO {
           body.candidateBId,
           body.decidedBy || actorId
         );
-        return new Response(JSON.stringify({ success: true, data: trial, timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: trial, timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/trials' && method === 'GET') {
@@ -3523,10 +3805,22 @@ export class SpecDO {
           body.toRung,
           body.promotedBy || actorId
         );
-        return new Response(JSON.stringify({ success: true, data: promotion, timestamp: Date.now() }), {
+        const response = new Response(JSON.stringify({ success: true, data: promotion, timestamp: Date.now() }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
+        
+        // Store idempotency response if key was provided
+        if (idempotencyRequestBody && idempotencyKey) {
+          try {
+            const requestBodyStr = JSON.stringify(body);
+            await this.storeIdempotencyResponse(idempotencyKey, path, method, requestBodyStr, actorId, response);
+          } catch (e) {
+            console.error('[SpecDO] Failed to store idempotency response:', e);
+          }
+        }
+        
+        return response;
       }
       
       if (path === '/api/promotions' && method === 'GET') {

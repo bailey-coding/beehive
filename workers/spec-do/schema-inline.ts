@@ -609,3 +609,29 @@ export const LEDGER_CAS_SQL = `
 --       holds the status transition rules the DO enforces
 -- ============================================================================
 `;
+
+// Idempotency keys table (m8 -> m9, additive). Prevents double-writes from at-least-once queue delivery.
+export const IDEMPOTENCY_KEYS_SQL = `
+-- ============================================================================
+-- IDEMPOTENCY KEYS (m8 -> m9, additive)
+-- Prevents double-writes from at-least-once Queue delivery.
+-- Stores idempotency key hashes with their request/response metadata.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  id TEXT PRIMARY KEY,
+  key_hash TEXT NOT NULL UNIQUE,
+  endpoint TEXT NOT NULL,
+  method TEXT NOT NULL CHECK(method IN ('POST', 'PATCH', 'PUT', 'DELETE')),
+  request_hash TEXT NOT NULL,
+  response_status INTEGER NOT NULL,
+  response_body TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_hash ON idempotency_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires ON idempotency_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_endpoint ON idempotency_keys(endpoint, created_at);
+`;
