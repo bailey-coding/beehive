@@ -5,18 +5,61 @@
 commits 0a8785f T2, af1165f T3, fbe9cc4 T4, cafea14 T5, 6805377 T6, c623045 T6d). Line numbers are on c623045. Every claim
 was checked against the code. None was taken from the implementer's report.
 
-Status: in progress. Sections are filled in and pushed one at a time.
+Status: complete. Verdict in §4: **approve with changes** (no blocker, two should-fix).
 
 ## 1. Findings
 
 ### Blocker
-_pending_
+
+None. Every authentication path fails closed, and the write allow-list really is default-deny. Candidate `stage` and
+`execute` are refused to every scope. `X-Actor-ID` is rewritten for every non-master principal, the maintainer cap
+reaches every DO request, and every mixed-version or rollback cell answers 401 or 503. I mutated 32 guards in T3/T4 and
+14 in T5, and a test caught each one that matters (§2.5, §2.6).
 
 ### Should-fix
-_pending_
+
+**S1. No test covers HTML escaping on `/app/settings/tokens`.**
+- Today the code escapes every DO-sourced value: the token name and prefix in the list, the plaintext and name on the
+  mint page, and the DO's refusal text (`workers/api/ui-tokens.ts:140`, `:179`, `:185-186`).
+- With `esc` removed from any of those three places, all 19 UI tests still pass (mutations T5-6a/b/c, §2.5).
+- The name is not only self-supplied. Master can set it through `POST /api/admin/user-tokens` (`user-tokens.ts:226-228`),
+  and it then renders in that user's settings page. A later refactor that drops `esc` would be stored XSS on the page
+  that shows plaintext tokens.
+- **Change:** in `workers/api/tests/ui-tokens.test.ts`, admin-mint (or seed) a token named `<script>x</script>"'` and
+  assert that the list page contains the escaped form and not the raw form. Do the same for a 400/403 refusal whose
+  error text holds markup (a stub DO answer).
+
+**S2. Admin revoke and revoke-all answer 503 "Token service unavailable" for a client error.**
+- `revokeUserToken` and the revoke-all handler map every status other than 200 and the marked 404 to 503
+  (`workers/api/user-tokens.ts:171-172`, `:247-248`).
+- The DO answers 400 when `X-Actor-ID` names no actor, and 403 when it names a service actor (`resolveMinter`,
+  `workers/spec-do/index.ts:686-701`, reached from `:936` and `:946`).
+- Confirmed with a scratch test against the real DO: with master and `X-Actor-ID: typo-actor`, mint → 400 with the
+  DO's message, but revoke → **503** and revoke-all → **503** (§2.6).
+- These are the incident-response routes. The OPS runbook pairs `revoke-all` with removing a login from the allowlist
+  (`docs/OPS.md` step 5). A maintainer who mistypes their own `X-Actor-ID` is told the service is down, and nothing is
+  revoked. It is fail-closed, so no access is granted, but it is misleading at the worst moment.
+- **Change:** pass 400/403 through with the DO's message, as `mintUserToken` already does (`user-tokens.ts:125-127`).
+  Keep every other status, including the unmarked 404, as 503. Add the two cases to `api/tests/user-tokens.test.ts`.
 
 ### Nits
-_pending_
+
+- **N1** `docs/OPS.md` "User tokens" has no "roll back push B" step: redeploy the floor `8de5485` or later, never earlier,
+  and what clients then see (`bh_usr_` → 401, settings page not found, admin routes 404). Plan §5 has this text. One
+  line in OPS would make the runbook stand alone. Step 6 covers only the re-deploy.
+- **N2** The S9 enumeration test (`workers/api/tests/user-tokens.test.ts:460-470`) finds routes with a regex over
+  `index.ts` source in one style. A write route written as `method === 'POST' && path.startsWith(...)` escapes it
+  (mutation N2b survived). Enforcement is unaffected, because `authorize()` is an allow-list and that route still gets
+  403. Optionally, also fail the test when `index.ts` contains a `method === '(POST|PATCH|PUT|DELETE)'` that the scan
+  did not match.
+- **N3** `pathClass` (`workers/api/index.ts:396-402`) keeps any all-lowercase path segment, so an id like `alice` in
+  `/api/actors/alice` stays in the AE blob instead of becoming `:id`. It is cosmetic, because the actor is already a
+  blob. An allow-list of known route words would be exact.
+- **N4** On a fresh local ledger, `tests/e2e/user-tokens.test.ts` `beforeAll` failed once with 403 at `:52`. It races
+  three other files (`ledger-lifecycle`, `ui-nav`, `ui-issues`) for the maintainer self-grant bootstrap, which the DO
+  allows only once. The pattern pre-dates this PR, which adds a fourth racer. A green run needs an already seeded
+  ledger. Fix: on a non-200 grant, re-list and use the maintainer that won, or bootstrap once in a global setup.
+- **N5** `docs/OPEN-QUESTIONS.md:697-698`: two blank lines before the new heading. The file is otherwise intact (§2.7).
 
 ## 2. Checks
 
