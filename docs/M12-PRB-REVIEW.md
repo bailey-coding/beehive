@@ -279,7 +279,68 @@ tests, all green before) and reverted it after the run. After the last revert th
 Findings from this section: **S1** (no escaping test).
 
 ### 2.6 Tests and mutations
-_pending_
+
+**Runs (this worktree, c623045, local only):**
+- `npm run typecheck`: clean.
+- `npm test`: **988 passed, 0 failed** (42 files). The first run had 28 failures, all in `tests/cli-behavior.test.ts`,
+  because a fresh worktree has no `cli/node_modules`. After `npm ci` in `cli/`, that file passes 28/28. This is
+  environmental, not the PR.
+- Local e2e (`E2E_UI=1 scripts/start-e2e-workers.sh`, then `npm run test:e2e:local`):
+  - **First run on a fresh ledger: 1 suite failed.** `tests/e2e/user-tokens.test.ts` `beforeAll` got 403 at `:52`
+    (the maintainer bootstrap self-grant).
+  - The cause is a pre-existing pattern: `ledger-lifecycle.test.ts:35-44`, `ui-nav.test.ts:83-89` and `ui-issues.test.ts`
+    each bootstrap a maintainer with the same "find one, otherwise self-grant" code. vitest runs files in parallel
+    (`threads: true`). On an empty ledger another file wins the bootstrap between this file's list and its grant, and the
+    DO refuses a second bootstrap.
+  - The file run alone: 4/4. Full suite again: **74 passed, 5 skipped, 0 failed**, including all 4 user-token e2e tests.
+    Workers stopped afterwards. Nothing touched production; no deploy, no push to `cf` or `main`.
+  - Finding **N4**.
+- Loosened assertions: none. Every change to an existing test is either the `m8`→`m9` version bump or the new required
+  `isMaintainer(…, false)` argument (`ledger-lifecycle`, `service-tokens`, `issue-comments` seed call). The push-A
+  tolerance list moves from `m9…` to `m10…` (m9 is now known), and the `internal-auth` admin loop strips `?actorId=`
+  before `isAdminRoute`, which takes a pathname. Additions only otherwise.
+
+**My mutations on T3/T4 guards** (each applied alone, run against the five user-token, issue-comments, internal-auth and
+ledger-lifecycle files, 159 tests, then reverted; the tree was clean after every one). All of these go beyond the
+implementer's list:
+
+| # | Guard mutated | Result (a test that failed) |
+|---|---|---|
+| E1 | old DO 404 on verify → 401 instead of 503 | killed: "an old DO without the route (404) -> 503" |
+| E2 | `found === true` no longer required | killed: "found missing / found \"true\" -> 503" |
+| E3 | any write for a `write` token (allow-list removed) | killed: 5 S9 tests |
+| E4 / E4b | candidate `stage` / `execute` added to the allow-list | killed: S9 matrix and through-the-worker tests |
+| E5 | rewrite only for `service` (the old condition) | killed: M12 exit attribution and 2 more |
+| E6 / E6b | `/health` / issue-status handler given the unwrapped stub | killed: the cap loop (and the real-DO close test for E6b) |
+| E7 | `read` tokens not capped | killed: "read token of a maintainer actor … carries the cap" |
+| E8 | comment-policy route open to the `write` scope | killed: S9 tests |
+| E9 / E10 / E11 | stage-1 log gets the query string / `Authorization` / an untruncated actor | killed each |
+| E12 | unknown stored scope mapped to read_write | killed: "an unknown scope / inherited scope name -> 503" |
+| D1 / D2 / D3 | verify ignores revocation / expiry / service actor | killed: DO and edge S4 tests |
+| D4 | mint for any actor type | killed: S5 tests (DO and edge) |
+| D5 | live cap `>=` → `>` | killed: the cap test and the 12-parallel-mints test |
+| D6 | `maintainer` scope minted without the role | killed: S6 |
+| D7 | `isMaintainer` ignores the cap | killed: 8 tests |
+| D8 / D8b / D8c | one call site passes `false` (status, comment, `include_deleted`) | killed each, by its own test |
+| D9 | capped self-grant bootstrap allowed | killed |
+| D10 | user-token routes made tier 1 | killed: 2 `internal-auth` tests |
+| D11 | DO revoke ignores the owner | killed |
+| D12 | verify not-found → 404 | killed: 7 tests |
+| D13 | session mint for another actor | killed (N1 defence in depth) |
+| D14 | 90-day ceiling removed in the DO | killed: 2 tests |
+| D15 | `token_hash` added to `USER_TOKEN_COLUMNS` only | **survived**: it is harmless, because `userTokenView` copies named fields only |
+| D15b | `token_hash` added to the columns **and** the view | killed: 3 "never a hash" tests |
+| N2a | a new write route in the dispatch style, missing from the table | killed: the enumeration test |
+| N2b | a new write route in another style (`method === 'POST' && path.startsWith(...)`) | **survived**: the scan misses it, but `authorize()` still answers 403 (N2) |
+
+**Confirmed by a scratch test** (deleted afterwards). With master and `X-Actor-ID: typo-actor`:
+- admin mint → `400 "createdBy (X-Actor-ID) must be an existing actor"`;
+- admin revoke → `503 "Token service unavailable"`;
+- admin revoke-all → `503 "Token service unavailable"`.
+
+This is finding **S2**.
+
+Findings from this section: S2 (confirmed), N2 (confirmed), N4.
 
 ### 2.7 Docs
 _pending_
