@@ -22,8 +22,19 @@ audience: human,agent
 - **There is no deploy-order control** (stated 2026-10-16): one push deploys all ten workers at once.
   You cannot deploy `beehive` alone first and check its migration before the others go out. The checklist
   below is written for that: secrets first, one push, a short window of mixed versions, then verification.
-- TODO(maintainer): document where `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and
-  `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used).
+- **Rollback when all ten deploy at once:** Since all workers deploy together, rolling back means
+  reverting the commit in the Artifacts repo and pushing again (there is no partial deploy). If the
+  rollback crosses a schema bump in the Spec DO, old code throws `Unknown schema_version` and every
+  request errors; use the rollback floor commit (see below) or later to survive a later ledger. For
+  non-schema changes, a second push of the previous commit returns all workers to the old version.
+  The short mixed-version window (old code calling new `beehive`, new code calling old `beehive`) is
+  transient and resolves on the next request retry.
+- The `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, Workers Queues:Edit scopes),
+  `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live as environment variables on the
+  maintainer's host for manual deploys (the GitHub Actions secrets are no longer used). For
+  production deploys via the Cloudflare Artifacts repo, these are not needed: the push to
+  `cf` (the Artifacts repo `default/beehive` in the maintainer's Cloudflare account) triggers the
+  native Artifacts integration without any `wrangler deploy` command.
 - Queues: nothing creates them at deploy time any more. The maintainer confirmed on 2026-10-16
   that the four queues of the checklist's step 2 exist (created by hand).
 
