@@ -148,3 +148,73 @@ key is used by `beehive` alone). If forgotten, `/app` answers 503 "not configure
 1. Push. 2. An existing session still works; a new login works.
 **PR-D2.** Push at least `SESSION_TTL_SECONDS` (12 h, `ui.ts:30`) after D1 went live. Sessions still signed with the old
 key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a leaked copy can no longer forge sessions.
+
+## 4. Security checklist (each row has a test; file in brackets)
+
+| # | Item | Design | Test |
+|---|---|---|---|
+| S1 | Format and entropy | `bh_usr_` + base64url of 32 bytes from `crypto.getRandomValues` (256 bits). Generated at the edge; the DO never sees plaintext | 43-char body, charset, two mints differ [helpers] |
+| S2 | Hashing and compare | SHA-256 hex stored, looked up through a unique index. With 256-bit input no salt or slow hash is needed, and an index lookup on the hash leaks nothing useful. The master compare stays `constantTimeEqual` and runs first (`principal.ts:38-41`) | the DO stores `token_hash` = hash(plaintext) and never plaintext; the list view has no `token_hash` [DO] |
+| S3 | Never log tokens | No log line, error body or DO row carries the plaintext or the hash: only `id` and the 12-char prefix. Tokens never go in a URL (`redact_query_string = false`, `wrangler.toml:50`). The Q4 dashboard check covers invocation logs | spy on `console.*` during mint, verify and revoke, with a bad token, asserting neither plaintext nor hash appears [edge, DO, UI] |
+| S4 | No existence leak | Unknown, revoked, expired, deleted-actor, service-actor and malformed tokens all give the identical `401 {"error":"Unauthorized"}`. UI revoke of another actor's token or an unknown id is 404 for both | byte-equal bodies across the six cases [edge]; another actor's token id gives 404 [DO, UI] |
+| S5 | Who mints for whom | Session: `actorId` = `session.actorId` only (no form field is read), `created_via='session'`, and the DO requires `created_by = actor_id`. Admin: master only. In both cases the DO requires the target to be `type='human'`, `github_user_id IS NOT NULL` and not a service actor. A user token cannot mint: `/app/*` takes cookies only, and `/api/admin/*` is master-only | a form field naming another actor is ignored; agent, service and no-GitHub targets give 400/403; a user token on `/api/admin/user-tokens` gives 403 [DO, edge, UI] |
+| S6 | Maintainer scope | Mintable only while `actors.role='maintainer'` (DO check in the mint transaction). At use time `isMaintainer` still reads the role live, so a demoted maintainer's token loses the power at once. The UI offers the option only to maintainers | non-maintainer mint of `maintainer` gives 403; demote, then comment-policy PATCH gives 403 [DO] |
+| S7 | Expiry | The DO decides (`expires_at > now` in the verify SQL); the edge never caches. Mint: `expiresInDays` an integer 1-90 (default 30); the DO rejects `expires_at > now + 90 d + 1 min` | an expired token gives 401 with no edge change; 91 days gives 400 at the edge and at the DO directly [DO, edge] |
+| S8 | Revoke | One `UPDATE ... SET revoked_at, revoked_by WHERE revoked_at IS NULL`; idempotent (200; the first revocation is kept). Session revokes only its own; admin revokes any, plus `revoke-all` per actor. OPS: removing a login from `ALLOWED_GITHUB_USERS` must be paired with `revoke-all` | revoke twice keeps `revoked_at`; `revoke-all` covers every live token of that actor only [DO] |
+| S9 | Scope per route class | See the matrix below. `authorize()` is an allow-list for user writes; anything unlisted is 403 | the full matrix for read, read_write and maintainer [edge] |
+| S10 | Replay of a revoked token | No edge cache, and every request verifies in the DO, so the next request after revoke is 401 | revoke, then the same bearer gives 401 [DO, edge, e2e] |
+| S11 | Concurrent mint | Mint is synchronous inside one `transactionSync` (no `await`): a cap of 10 live tokens per actor (409 beyond it) and the hash insert cannot interleave. A hash collision gives a unique violation, then 409 | 12 parallel mints give exactly 10 created and 2 conflicts [DO] |
+| S12 | Master stage-1 log | When `kind==='master'` and the client sent `X-Actor-ID` other than `unknown`, log one JSON line `{event:"master_actor_assertion", method, path: url.pathname, actorId, ray: cf-ray}`. No query string, headers, body or token. Logged for any actor (no extra DO read on the master path); human vs agent is resolved afterwards against `actors` | the line has exactly those keys; no line without the header [edge] |
+| S13 | Show once | The mint answer is a 200 page (not a redirect or flash) with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; the list shows the prefix only | headers; the plaintext is absent from the next list page [UI] |
+| S14 | CSRF and freshness | POSTs check `sameOrigin` before any DO call (as `ui.ts:226`, `:552`); `SameSite=Lax` cookie. Mint requires `now - session.iat ≤ 600 s`, otherwise a "sign in again" page and no DO call | cross-origin POST gives 403 with zero DO calls; a stale or missing `iat` gives no mint [UI] |
+| S15 | Fail closed | `API_AUTH_TOKEN` unset gives 503 before any branch; DO 404, 5xx, throw or a bad body gives 503; never anonymous, never master | stub each outcome [edge] |
+| S16 | Session forgery | After D2 the cookie HMAC uses `SESSION_SIGNING_KEY` only (same `beehive-ui-session:` label), so the master token cannot forge a session | a cookie signed with `API_AUTH_TOKEN` gives a redirect to `/login` [UI] |
+
+**S9 route-class matrix** (master unchanged: everything). `cap` = the DO sees `X-Beehive-Maintainer-Cap: 1`.
+
+| Route class | read | read_write | maintainer |
+|---|---|---|---|
+| `GET /health`, `/api/health`, `/api/whoami`, non-admin `GET /api/*` | yes | yes | yes |
+| Writes: `POST` organizations, repositories, specs, candidates; specs/candidates `stage` PATCH, `claim`; issues create, `stage`, `status`, comments; issue-spec/candidate links; `gate/pre-merge`, `execute` | 403 | yes, cap | yes |
+| `PATCH /api/issues/:id/comment-policy` | 403 | 403 at the edge | yes (the DO re-checks the role) |
+| `POST /api/actors`, `PATCH .../trust`, `PATCH .../promotion-authority`, `POST /api/gate-verdicts`, `POST /api/trials`, `.../decide`, `POST /api/promotions` | 403 | 403 | 403 (Q2) |
+| Lifecycle (`DELETE` tombstones, `?include_deleted=1`), `/api/admin/*` incl. purge, roles, user-token admin | 403 | 403 | 403 (Q1) |
+
+## 5. Rollback per push (rule 7: a ref operation; the maintainer redeploys the good ref through the `cf` flow, `docs/OPS.md`)
+
+| Push | Revert to | What changes for clients |
+|---|---|---|
+| A (+ PR-0) | the commit before A, **only while** `schema_version` is still `m8` | nothing becomes 401; the UI lookup is limited to 500 again |
+| B | push A (the floor) | **every `bh_usr_` request becomes 401**; `/app/settings/tokens` becomes not-found; the admin user-token routes give 404; stage-1 logging stops. Master, service tokens and sessions are unchanged. `user_tokens` stays at m9 and A ignores it. **Never revert below A**: that is `Unknown schema_version`, a full outage |
+| B, re-deploy | B again | tokens that were valid before work again unless expired. Tokens could not be revoked during the rollback: the maintainer re-checks the list and revokes as needed (OPS line) |
+| C | the previous CLI release | nothing becomes 401; user tokens still work through `BEEHIVE_API_TOKEN` or `auth login` |
+| D1 | B | new-key cookies are refused, so users re-login (302, not 401); the API is unaffected |
+| D2 | D1 | nothing breaks; D1 accepts both keys |
+
+## 6. Risks and open questions
+
+**Risks**
+- R1 Spine authorship: agent-written auth and DO code. Mitigation: heavy tier with a plan per task, maintainer plus
+  independent review, mutation-style checks as in `docs/M8-PR1-REVIEW.md` (each S-row test must fail with its guard
+  removed).
+- R2 The master token is still all-powerful until stage 2 (a separate decision). M12 makes user writes verified, not master
+  writes, and the internal tier-1 trust is unchanged (RFC non-goal).
+- R3 Revocations are lost during a B rollback (section 5).
+- R4 Rate limiting is deferred (decision 8): a flood of well-formed fake `bh_usr_` tokens is DO load. Recorded in FOCUS.
+- R5 `ui.ts` is touched by T0, T5 and T8, and later by M11's UI: land them in that order; M11 rebases onto PR-B (`m10`).
+- R6 The verify contract differs from the service branch (`principal.ts:67` maps 404 to 401). This is deliberate for user
+  tokens (RFC section 3.A). The service branch is left alone, and the difference is noted in FOCUS.
+
+**Open questions for the maintainer** (each has a default that the plan already follows; answer before the task named)
+- Q1 (before T4): decision 3 lists lifecycle/purge and role changes as maintainer-scope routes. The plan keeps them, and
+  `include_deleted`, **master-only in M12**: a strict reading, no widening, consistent with decision 4's break-glass.
+  Opening them to `maintainer` tokens later is an edge-only change. Confirm, or should T4 open them now?
+- Q2 (before T4): user tokens are denied gate-verdict, trial, promotion and actor-admin writes (oracle and spine outcomes
+  stay machine or master). Confirm the deny-list; widening later needs no schema change.
+- Q3 (before push B): `actors.github_user_id` has no UNIQUE index, so two concurrent first logins can create duplicate
+  actors. T0 picks the oldest. If the section 3 duplicate check finds any, decide which row to keep before tokens bind to
+  one of them; a unique index belongs in M11's `m10` batch.
+- Q4 (before push B): Workers Logs invocation logs capture request headers (`invocation_logs = true`, `wrangler.toml:55`),
+  and the docs do not say whether `Authorization` or `Cookie` is redacted. This affects the master and service tokens
+  today too. Check one log in the dashboard; if they are not redacted, record it in `docs/OPEN-QUESTIONS.md` and decide
+  whether to set `invocation_logs = false` on `beehive`.
