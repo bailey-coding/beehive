@@ -78,6 +78,22 @@ describe('makeChromeSource', () => {
   });
 });
 
+describe('memoizeReader keys', () => {
+  it('a different limit is a different read (the key includes the limit)', async () => {
+    const seen: Array<number | undefined> = [];
+    const r = memoizeReader({
+      get: async () => null,
+      list: async (_p, limit) => {
+        seen.push(limit);
+        return [];
+      },
+    });
+    await r.list('/api/organizations', 500);
+    await r.list('/api/organizations', 100);
+    expect(seen).toEqual([500, 100]);
+  });
+});
+
 describe('memoizeReader', () => {
   it('shares identical reads by path and limit, in flight, rejections included', async () => {
     const lists: string[] = [];

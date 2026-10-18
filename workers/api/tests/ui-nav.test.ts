@@ -105,6 +105,17 @@ describe('dashboard (L3)', () => {
   });
 });
 
+describe('lazy navigation (L2 proof)', () => {
+  it('a GET that redirects without rendering never reads the organization list', async () => {
+    const repo = spec.createRepository('widgets', orgId, 'baseline', undefined, undefined, 'https://example.invalid/w.git', 'acme').id;
+    const issue = spec.createIssue(undefined, repo, 'bug', 'x', userId).id;
+    const res = await ui(`/app/issues/${issue}`);
+    expect(res.status).toBe(302);
+    // an eagerly loaded navigation would have listed organizations before redirecting
+    expect(orgListReads()).toHaveLength(0);
+  });
+});
+
 describe('navigation read failures never fail a page (L2 proof d)', () => {
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
