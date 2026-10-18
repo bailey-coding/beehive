@@ -157,7 +157,7 @@ paths, `:2509-2513`):
   `x/verify` as tier 2.
 
 **The distinct 404s** (`spec-do-auth.ts:34-35`): `'user token not found'` and `'actor not found'`, against an old DO's
-`'Not found'` (`index.ts:2172`). The edge maps a 404 to "no such token / actor" only on an exact match of those strings
+`'Not found'` (`index.ts:2171`). The edge maps a 404 to "no such token / actor" only on an exact match of those strings
 (`user-tokens.ts:171`, `:247`), and every other 404 to 503 (`:172`, `:248`). Nothing else in these routes throws
 `NotFoundError` (mint uses `BadRequestError` for an unknown actor, `:873`), so a real "not found" always carries the
 marker. On an old DO, `/internal/user-tokens*` passes the old gate as tier 1 and reaches the old router's final `'Not
