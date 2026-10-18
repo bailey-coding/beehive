@@ -224,6 +224,17 @@ Spine work: a human designs it; start from the 2026-10-17 proposal in `docs/OPEN
   as `X-Actor-ID`, `--actor` still overriding; the actor must be a real `actors` row. This is attribution, not
   authentication; document it as an admin stopgap in `docs/OPS.md`.
 - **Exit criteria:** to be set in the design; at minimum, a write by a user token cannot name a different actor.
+- **Status (2026-10-18):** designed in RFC-0008 (Accepted), planned in `docs/M12-IMPL-PLAN.md`. PR-0 (actor lookup) and
+  push A (rollback floor `8de5485`) are live. PR-B (T2-T6d: `bh_usr_` tokens in the Spec DO, schema `m9`, the edge
+  branch and write allow-list, the maintainer cap, admin routes, `/app/settings/tokens`, master stage-1 logging) is on
+  `agent/m12-pr-b`, reviewed by neither the maintainer nor an independent agent yet, and not deployed. Left: PR-C (CLI,
+  T7), PR-D1/PR-D2 (`SESSION_SIGNING_KEY`, T8/T9). Master stage 2 is a separate later decision.
+- **Exit criteria (from the plan):** (1) a write with a user token is attributed to the token's actor whatever
+  `X-Actor-ID` says (local e2e `tests/e2e/user-tokens.test.ts`); (2) user tokens are hashed at rest, at most 90 days,
+  revocable from the next request, minted only for human actors with a GitHub id; (3) every failure is fail-closed (401
+  for a bad token, 503 when the DO cannot answer, including an older DO); (4) no user-token scope writes oracle outcomes
+  (verdicts, trials, promotions, candidate stage, execute) or reaches lifecycle and admin routes; (5) the CLI acts as its
+  user without the master token (PR-C); (6) the master token can no longer forge a UI session (PR-D2).
 
 ---
 

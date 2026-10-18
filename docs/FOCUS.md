@@ -8,7 +8,7 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-18 (M12 section only; the rest is as of 2026-10-17)
 
 ## Where we are
 
@@ -62,6 +62,36 @@ One `beehive` worker change, UI only: `git pull origin main && git push cf main`
 Then check `scripts/prod-health.sh` and click through `/app` (navbar on each page type, org switcher, one flash after
 creating an org, sign-out). Rollback is a normal revert push. The manual visual checklist (360/640/960px wrap, focus ring,
 `details` open, skip link on focus, `#search` kept by the GET form) is in `docs/M9-NAV-PLAN.md` section 5.
+
+## M12 verified identity (plan: `docs/M12-IMPL-PLAN.md`)
+
+- PR-0 and push A are live (rollback floor `8de5485`, `docs/OPS.md`). PR-B (T2-T6d: user tokens, schema `m9`, the
+  settings page, the master stage-1 log) is on `agent/m12-pr-b`, **not merged or deployed**; it needs the maintainer's
+  and an independent review. Deploy steps: `docs/OPS.md` "User tokens" (push B deploy checks) and the plan, section 3.
+- Next: PR-C (T7, CLI token support and the "CLI actor attribution" rewrite), then PR-D1/PR-D2 (T8/T9,
+  `SESSION_SIGNING_KEY`).
+- **Verify assumption A4** (task): open one `beehive` invocation log for an authenticated `/api/*` request and one
+  `/app` visit, and the same request's Honeycomb trace including the edge-to-DO subrequest span. Check that
+  `Authorization`, `Cookie`, `X-API-Token`, `X-Beehive-Internal` and `X-Beehive-Admin` are redacted; never copy a value
+  seen. If any is not: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
+  secrets, and record the result in `docs/OPEN-QUESTIONS.md` (2026-10-18 entry).
+- **Rate limiting on failed user-token verifications is deferred** (RFC-0008 decision 8): every well-formed fake
+  `bh_usr_` token costs one DO request. A per-IP limit via the Workers rate-limiting binding is the proposal.
+- **`authGate` on the nine other workers compares the master token with `===`** (`workers/shared/auth.ts`), not in
+  constant time. Follow-up, out of M12 scope.
+- **Verify 404 differs by token type, on purpose:** a service-token verify 404 is "unknown token" (401); the user-token
+  verify route always answers 200 for a well-formed hash, so its 404 means an older DO (503).
+- **M11 handoff:** M11 rebases onto PR-B and takes `m10`. A UNIQUE index on `actors.github_user_id` goes in `m10` only
+  after the duplicate check is re-run and comes back clean: on a ledger with duplicates it throws, `init()` rethrows,
+  and that is a full outage.
+- **Prerequisite of master stage 2:** open the lifecycle routes (tombstone, purge, roles, `include_deleted`) to
+  `maintainer` user tokens first; in M12 they stay master-only (plan A1). Stage 2 itself waits for the stage-1 evidence
+  (`docs/OPS.md`, the AE query).
+- Small drift seen in T4: the Spec DO's `POST /api/issues` answers snake_case fields (`created_by`), while
+  `workers/api/types.ts` `IssueResponse` says `createdBy`. Clients should read both until one is fixed.
+- **e2e first-maintainer race** (review N4, `docs/M12-PRB-REVIEW.md`): on a fresh local ledger four e2e files race for the
+  one-time maintainer self-grant, so `tests/e2e/user-tokens.test.ts` can fail its `beforeAll` with 403; on a non-200 grant,
+  re-list and use the winner, or bootstrap once in a global setup.
 
 ## Cleanup
 
