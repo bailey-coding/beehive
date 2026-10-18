@@ -3165,7 +3165,7 @@ export class SpecDO {
       if (path === '/api/actors' && method === 'GET') {
         const limit = parseInt(url.searchParams.get('limit') || '50');
         const offset = parseInt(url.searchParams.get('offset') || '0');
-        const actors = this.listActors(limit, offset);
+        const actors = this.listActors(limit, offset, url.searchParams.get('github_user_id'));
         return new Response(JSON.stringify({ success: true, data: actors, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -3872,12 +3872,16 @@ export class SpecDO {
     return rows;
   }
 
-  listActors(limit: number, offset: number): ActorRow[] {
+  /** `githubUserId` narrows the list; the order stays newest first, so the first row is the newest duplicate. */
+  listActors(limit: number, offset: number, githubUserId: string | null = null): ActorRow[] {
     if (!this.db) return [];
     const stmt = this.db.prepare(
-      `SELECT * FROM actors ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      githubUserId === null
+        ? `SELECT * FROM actors ORDER BY created_at DESC LIMIT ? OFFSET ?`
+        : `SELECT * FROM actors WHERE github_user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
     );
-    stmt.bind(limit, offset);
+    if (githubUserId === null) stmt.bind(limit, offset);
+    else stmt.bind(githubUserId, limit, offset);
     const rows: ActorRow[] = [];
     while (stmt.step()) {
       const row = this.rowToActor(stmt);
