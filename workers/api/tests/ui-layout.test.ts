@@ -213,6 +213,21 @@ describe('breadcrumb trail', () => {
     expect(html).toContain('<li><bdi>Bad Org</bdi></li>');
   });
 
+  it('renders a crumb with an unsafe href as text, not a link (guard applied at render time)', async () => {
+    const crumbs = [
+      { label: 'js', href: 'javascript:alert(1)' },
+      { label: 'proto', href: '//evil.example/x' },
+      { label: 'prefix', href: '/appx' },
+      { label: 'quote', href: '/app/x"onmouseover="y' },
+      { label: 'End' },
+    ];
+    const html = await render(chrome(), { crumbs });
+    const trail = html.slice(html.indexOf('<nav class="site-crumbs"'), html.indexOf('</nav>', html.indexOf('<nav class="site-crumbs"')));
+    expect(trail).not.toContain('href=');
+    expect(trail).not.toContain('evil.example');
+    for (const label of ['js', 'proto', 'prefix', 'quote']) expect(trail).toContain(`<li><bdi>${label}</bdi></li>`);
+  });
+
   it('escapes crumb labels', async () => {
     const html = await render(chrome(), { crumbs: [dashboardCrumb(), { label: '<script>1</script>' }] });
     expect(html).not.toContain('<script>1');
