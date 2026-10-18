@@ -34,7 +34,7 @@ _pending_
 | Scope validation | Edge allow-list (`user-tokens.ts:56-59`); DO list (`index.ts:177`, `:860-862`); table CHECK; `maintainer` needs the target's live role and an uncapped request (`:884-886`). At use the edge maps the stored scope through `Object.hasOwn` (`principal.ts:134`), so `__proto__`/`constructor` cannot slip through, and an unknown scope gives 503 | ok |
 | Revoke / revoke-all | Revoke is `UPDATE ... WHERE revoked_at IS NULL`, so it is idempotent and keeps the first `revoked_at`/`revoked_by` (`index.ts:931-940`). With the owner given (UI), another actor's token is the same `null` (404) as an unknown id (`:934`). Revoke-all covers that actor's unrevoked tokens only, and an unknown actor gives 404 (`:943-952`). `revoked_by` goes through `resolveMinter`, which refuses a service actor (`:686-701`) | ok, see S2 |
 | Expiry check | Only in the DO, per request: `ut.expires_at > ?` (`index.ts:968`); no edge cache (`principal.ts:107-108`) | ok |
-| Unknown vs revoked vs expired | One query for all three, and all three give `null` → `{found:false}` (`index.ts:2156-2157`) → the identical `401 {"error":"Unauthorized"}` the malformed case gives (`principal.ts:111`, `:133`). The one difference is the `last_used_at` write, which happens only for a *valid* token (`:975-977`), so it reveals nothing about an invalid one. Malformed tokens skip the DO round trip, a difference based on shape only, never on a secret | ok |
+| Unknown vs revoked vs expired | One query for all three, and all three give `null` → `{found:false}` (`index.ts:2156-2157`) → the identical `401 {"error":"Unauthorized"}` the malformed case gives (`principal.ts:110`, `:133`). The one difference is the `last_used_at` write, which happens only for a *valid* token (`:975-977`), so it reveals nothing about an invalid one. Malformed tokens skip the DO round trip, a difference based on shape only, never on a secret | ok |
 
 Findings from this section: **S2** (admin revoke and revoke-all turn a client error into 503) and **N1** (the revoke-all
 count). Both are in §1.
@@ -42,16 +42,16 @@ count). Both are in §1.
 ### 2.2 Edge
 
 **`authenticate()` paths** (`workers/api/principal.ts`):
-- `API_AUTH_TOKEN` unset → 503 before any branch (`:47`). Master (Bearer or `X-API-Token`) uses `constantTimeEqual` and
+- `API_AUTH_TOKEN` unset → 503 before any branch (`:48`). Master (Bearer or `X-API-Token`) uses `constantTimeEqual` and
   is checked first (`:52-55`). The service branch is unchanged.
 - User branch, `Authorization: Bearer` only (`:109`). A `bh_usr_` value in `X-API-Token` is not master, `bearer` is null,
-  so it falls through to 401 (`:156`; tested at `workers/api/tests/user-tokens.test.ts:366`).
+  so it falls through to 401 (`:158`; tested at `workers/api/tests/user-tokens.test.ts:366`).
   - Bad shape → 401 with no DO call (`:110`).
   - `stub.fetch` throws → 503 (`:121-123`).
   - Any status other than 200, including an old DO's 404 → 503 (`:126`).
   - JSON parse throws → 503 (`:150-152`).
   - `success !== true` → `d` undefined → 503 (`:131`, `:135-143`).
-  - `found === false` → 401 (`:132`).
+  - `found === false` → 401 (`:133`).
   - `found !== true`, or a missing or empty `actorId`/`userTokenId`, or an unknown scope → 503 (`:134-143`).
   - Otherwise a `user` principal with `promotionAuthority:false` and `organizationId:null` (`:144-151`).
   - No path gives anonymous or master.
@@ -60,11 +60,11 @@ count). Both are in §1.
 - Master returns early. Reads (GET/HEAD with `read`) behave as for service.
 - A non-read request is allowed only when the principal is `kind === 'user'` and the route matches `USER_WRITE_ROUTES`
   with `write`, or `USER_MAINTAINER_ROUTES` with `maintainer` (`:206-210`). Everything else is 403.
-- The allow-list regexes (`:171-185`) are character-for-character the dispatch regexes in `workers/api/index.ts:137-343`.
+- The allow-list regexes (`:169-190`) are character-for-character the dispatch regexes in `workers/api/index.ts:137-343`.
   A route that matches an allowed regex reaches the handler that regex names and no other.
 - Candidate `stage` (`index.ts:217`) and `execute` (`:343`) appear in neither list, so they are 403 for all three scopes.
   The worker-level test proves it with zero handler DO calls and a hostile `sandboxRunnerUrl` in the body
-  (`tests/user-tokens.test.ts:520-538`).
+  (`tests/user-tokens.test.ts:518-540`).
 - Lifecycle `DELETE`s and every `/api/admin/*` route are not in either list, so they are 403. The handlers repeat
   `kind !== 'master'` (`lifecycle.ts:76`, `service-accounts.ts:80`, `user-tokens.ts:219`).
 - Path traversal: ids go into DO URLs un-decoded inside one segment (`sendToSpecDo`, `index.ts:453-470`;
@@ -100,7 +100,7 @@ it into the body fields it sets (`createdBy`, `:1879`; test `:543-556`).
   (`spec-do-auth.ts:63`).
 
 **Master-only admin routes**: `/api/admin/user-tokens*` is refused by `authorize()` for users and service principals
-(`principal.ts:204`), and by `handleUserTokenRoutes` (`user-tokens.ts:219`). Tests: `tests/user-tokens.test.ts:231`, `:520`.
+(`principal.ts:204`), and by `handleUserTokenRoutes` (`user-tokens.ts:219`). Tests: `tests/user-tokens.test.ts:231`, `:518`.
 
 **Stage-1 log** (`index.ts:411-429`): it fires only for master with an `X-Actor-ID` other than `unknown`. The line is
 `JSON.stringify({event, method, path: url.pathname, actorId (128 chars), ray})`, with no query string, no headers other
