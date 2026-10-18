@@ -327,7 +327,6 @@ export const PAGE_CSS = `  body { font-family: system-ui, sans-serif; background
   .badge.full { background: #12261a; color: #3fb950; border: 1px solid #238636; }
   .badge.promoted { background: #12261a; color: #3fb950; border: 1px solid #238636; }
   .badge.pending { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
-  .badge.rolled\\ back { background: #2d1417; color: #f85149; border: 1px solid #8b0000; }
   .badge.rolled-back { background: #2d1417; color: #f85149; border: 1px solid #8b0000; }
   .badge.visibility { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
   .badge.private { background: #2d1417; color: #f85149; border: 1px solid #8b0000; }
@@ -339,6 +338,9 @@ export const PAGE_CSS = `  body { font-family: system-ui, sans-serif; background
   .flash { padding: 10px 12px; border-radius: 6px; margin-bottom: 16px; color: #e6edf3; }
   .ok { background: #12261a; border: 1px solid #238636; }
   .err { background: #2d1417; border: 1px solid #da3633; }
+  /* Bold lead-in so ok and error differ by more than colour (WCAG 1.4.1); in CSS because the <p> markup is pinned by tests. */
+  .flash.ok::before { content: 'Done: '; font-weight: 700; }
+  .flash.err::before { content: 'Error: '; font-weight: 700; }
   .empty { color: #8b949e; font-style: italic; }
 
   /* Code and pre */
