@@ -699,7 +699,18 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 
 **Status**: Open - needs its own task; M5a closes the at-least-once double-write only for the eight `POST` routes in `IDEMPOTENT_ROUTES` (`workers/spec-do/index.ts`).
 
-There is no real route for the queue consumer to protect. `workers/queue-consumer/index.ts` POSTs `/api/entities/candidate/:id/history`, but the Spec DO serves that path for GET only, so the call 404s and the consumer ignores the response (no `Response.ok` check). `workers/scientist-comparator/storage/spec-do.ts` likewise POSTs `/api/gate-verdicts/shadow`, which does not exist. Neither sends an `Idempotency-Key`. The fix is to add the real write routes (or repoint the callers), put them in `IDEMPOTENT_ROUTES`, send a key derived from the queue event id, and check `Response.ok`.
+There is no real route for the queue consumer to protect. Investigation (agent 4e70962, continued by Mistral Vibe) reveals three blocking issues:
+
+### Issue 1: scientist-comparator POSTs to wrong route
+`workers/scientist-comparator/storage/spec-do.ts:127` POSTs to `/api/gate-verdicts/shadow`, which does not exist. The Spec DO has `POST /api/gate-verdicts` (line 3788), and the request body already contains `gate: 'shadow'`. The call silently fails (returns false, catches error). **Fix**: change URL to `/api/gate-verdicts`.
+
+### Issue 2: queue-consumer POSTs to GET-only route  
+`workers/queue-consumer/index.ts:354-364` POSTs to `/api/entities/candidate/:id/history`, but the Spec DO only implements GET for this path (line 4027). The POST 404s and the consumer ignores the response (no `Response.ok` check). **Fix**: either add POST support for entity history writes, or use an alternative endpoint.
+
+### Issue 3: FK constraint violation on 'queue-consumer' actor
+The `actors` table (`workers/spec-do/schema-inline.ts:69`) has `CHECK(type IN ('human', 'agent'))`. When queue-consumer sends `X-Actor-ID: queue-consumer`, any INSERT referencing this actor via FK (e.g., `gate_verdicts.decided_by`, `entity_history.changed_by`) will fail with a SQLite CONSTRAINT violation, returned as 500 by the Spec DO's fetch() try-catch (line 4206-4210). **Fix**: create a 'queue-consumer' actor of type 'agent' in the database, either during Spec DO init or via explicit setup.
+
+The complete fix requires: (1) create 'queue-consumer' actor as 'agent' type, (2) fix scientist-comparator route, (3) add POST route for entity history or use alternative, (4) add routes to `IDEMPOTENT_ROUTES`, (5) send `Idempotency-Key` headers derived from queue event IDs, and (6) check `Response.ok` with appropriate error handling (treat 409 as already-processed, not an error).
 
 ---
 
