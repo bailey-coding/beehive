@@ -8,7 +8,7 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-19
 
 ## Where we are
 
@@ -26,6 +26,12 @@ Completed items are removed, not struck through; history lives in git.*
 - M9 (site navigation) is implemented on `agent/m9-nav` (2026-10-17), **not merged or deployed**; the independent
   code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
   `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`.
+- **M5a (idempotency) is implemented on `agent/m5a-idempotency-fix` (2026-10-19).** The Spec DO idempotency keys
+  system (schema m10) is complete: all nine POST routes carry idempotency support, including the dynamic
+  `POST /api/entities/:entity_type/:entity_id/history` route via RegExp matching. The queue-consumer now sends
+  `Idempotency-Key: ${queueName}:${event.id}` for history writes and treats 409 as already-processed. This closes
+  the at-least-once double-write gap for Queue delivery. See `docs/MILESTONES.md` M5a section. Test: 42 new
+  idempotency tests in `workers/spec-do/tests/idempotency.test.ts` (all pass). **Not merged or deployed.**
 - Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
   `.../issues/:id`) reads organizations and repositories before answering 405, because the origin check covers only the
   write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
@@ -36,14 +42,16 @@ Completed items are removed, not struck through; history lives in git.*
 
 1. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
    command output); switch that remote to a credential helper.
-2. Fill the two remaining `TODO(maintainer)` items in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
-   `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys, and how to roll back when all ten
-   workers deploy at once.
+2. Fill the remaining `TODO(maintainer)` in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
+   `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys.
 3. Heads-up (promotion-routes-fix, deployed 2026-10-16 22:08 UTC, all ten workers verified): tournament mode now
    records the winner on a real candidate and fails the tournament when that is rejected, so a request naming a
-   candidate the Spec DO does not know ends `failed`. That is intended. Not yet exercised in production: run
-   `BEEHIVE_API_TOKEN=... MAINTAINER_ACTOR_ID=... CONFIRM_PROD_WRITE=yes ./scripts/prod-verify-promotion.sh` once (it
-   writes a `test-org-e2e-prodcheck-*` tree, restores the promotion mode and tombstones the org; purge by prefix later).
+   candidate the Spec DO does not know ends `failed`. That is intended. Verified in production 2026-10-18 with
+   `scripts/prod-verify-promotion.sh`: a two-candidate tournament completed, the winner's stage is `passed_train`,
+   the promotion mode was restored. It left a tombstoned `test-org-e2e-prodcheck-*` org (purge by prefix after
+   `PURGE_MIN_AGE_HOURS`, `docs/OPS.md`).
+4. Merge `agent/m5a-idempotency-fix` to `main` (M5a idempotency complete: idempotency keys schema m10, queue-consumer
+   fix closes at-least-once double-write for all nine POST routes).
 
 ## Deploy M8 (needs the maintainer)
 
@@ -115,7 +123,9 @@ agent-autonomy items (agent-created issues/specs, change-type classification).
 ## Queued milestones
 
 **Recommended order (per Opus agent):**
-1. M5a (idempotency + bootstrap schema + change-type classification + two-person rule)
+1. **M5a (idempotency partially complete on `agent/m5a-idempotency-fix`)** — Idempotency keys schema m10
+   and queue-consumer fix are done (closes at-least-once double-write for all nine POST routes); remaining:
+   bootstrap schema fields, change-type classification, two-person merge rule.
 2. M7 (session provenance)
 3. Capability minting (M3 core + M6.2 merged)
 4. M5b (trust registry calibration)
