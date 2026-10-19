@@ -1031,7 +1031,7 @@ export class SpecDO {
       ['m7', () => this.db!.exec(DEPLOY_REFS_SQL)],
       // m7 -> m8: version columns on tournaments + merge_trains, tournament failure columns
       ['m8', () => this.applyLedgerCas()],
-      // m8 -> m9: user tokens (user_tokens; references actors only, no index on actors)
+      // m8 -> m9: reserved for user tokens (M12)
       ['m9', () => this.db!.exec(USER_TOKENS_SQL)],
       // m9 -> m10: idempotency keys table for preventing double-writes from at-least-once queue delivery
       ['m10', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
