@@ -58,7 +58,7 @@ or `DROP`/`ALTER TABLE actors` under `workers/spec-do`). Nothing else reads `sch
 `:808-866`). `user_tokens` only *references* `actors`. **Change:** (a) the T1 test creates an `m99` ledger with an
 extra table that has an FK to `actors` and a row, then does writes as well as reads (create an actor and an issue,
 add a comment). (b) The OPS "rollback floor" line states the invariant: every step above the floor must be additive
-and harmless to code that ignores it. (c) The M11 handoff: a UNIQUE index on `actors.github_user_id` in `m10` throws
+and harmless to code that ignores it. (c) The unique index handoff: a UNIQUE index on `actors.github_user_id` in `m10` throws
 on a ledger with duplicates, `init()` rethrows (`:497-506`), and that is a full outage. Q3's check must come back clean
 first.
 
@@ -145,7 +145,7 @@ write handler. F1(a) and F1(c) catch it. No scope creep beyond the RFC apart fro
   keeps `lifecycle.ts:76` unchanged. Opening lifecycle to `maintainer` tokens is a prerequisite for master stage 2, so
   record it as such in FOCUS.
 - **Q2: confirm the deny-list, and add candidate `stage` PATCH and `execute` (B1).**
-- **Q3: no unique index in m9.** Ship F2 and F3 in T0, and let M11's m10 add a partial unique index only after a clean
+- **Q3: no unique index in m9.** Ship F2 and F3 in T0, and let M12's m10 add a partial unique index only after a clean
   check. The human's read-only check, through the usual DO SQL access, before push B:
   `SELECT id, name, github_user_id, role, created_at FROM actors WHERE github_user_id IN (SELECT github_user_id FROM
   actors WHERE github_user_id IS NOT NULL GROUP BY 1 HAVING COUNT(*) > 1) ORDER BY github_user_id, created_at;`

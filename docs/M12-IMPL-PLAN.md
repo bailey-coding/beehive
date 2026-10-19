@@ -22,7 +22,7 @@ independent review agent. Line numbers are on `main` at e06cf48. No code here; m
   throws (`:842`). `initSchema`'s fresh-ledger branch is unchanged.
 - `docs/OPS.md` deploy checklist: a "rollback floor" line naming push A's commit, with its invariant: every step above
   the floor must be additive and harmless to code that ignores it. It never rebuilds, drops or deletes from a table the
-  floor's code uses. m9 qualifies: `user_tokens` only references `actors`, and no m8 code drops, alters or deletes from
+  floor's code uses. m9 qualifies: `idempotency_keys` only references existing tables, and no m8 code drops, alters or deletes from
   `actors`.
 
 **Push B (PR-B), one push, six reviewable commits T2-T6d**
@@ -45,9 +45,9 @@ independent review agent. Line numbers are on `main` at e06cf48. No code here; m
   ```
   The scope is a single hierarchical value (`maintainer` ⊃ `read_write` ⊃ `read`), so the CHECK never needs widening for
   a combination. The 90-day ceiling is enforced in code, not in the CHECK, so it can change without a table rebuild.
-  m9 adds **no** index on `actors`: a UNIQUE `github_user_id` index belongs to M11's `m10`, after a clean duplicate check
+  m9 (idempotency keys) adds no index on `actors`; the UNIQUE `github_user_id` index belongs to M12's `m10`, after a clean duplicate check
   (on a ledger with duplicates it throws, `init()` rethrows, and that is a full outage).
-- `workers/spec-do/index.ts`: `LATEST_SCHEMA_VERSION = 'm9'` (`:27`); step `['m9', () => this.db!.exec(USER_TOKENS_SQL)]`;
+- `workers/spec-do/index.ts`: `LATEST_SCHEMA_VERSION = 'm10'` (`:27`); step `['m10', () => this.db!.exec(USER_TOKENS_SQL)]`;
   the same exec in `initSchema` (`:515-531`). Actors are never purged (`ORG_PURGE_ORDER` `:92-107` has no actors), so
   purge order is unchanged. New methods and routes, next to the service-token ones (`:583-625`, `:1880-1932`):
   `mintUserToken`, `listUserTokens`, `revokeUserToken`, `revokeAllUserTokens`, `verifyUserTokenHash`. Routes:
@@ -103,19 +103,19 @@ Tiers per `docs/AGENT-ROUTING.md`. Every task ends with a push of its own `agent
 | Task | What | Tier | Depends on | Proving test | Maintainer action | PR |
 |---|---|---|---|---|---|---|
 | T0 | Actor lookup without the 500 limit; no create on a failed lookup | default | none | `ui-actor.test`: 501 actors, the newest-login user is found by id and by GitHub id, and no duplicate is created; first login creates the row (M8-PR1 S2); DO 500 on the session check gives a 503 page, not a redirect; **DO 500 on the `ensureActor` lookup gives zero `POST /api/actors`** (F2); two rows with one GitHub id resolve to the newest, both with the filter and with an old-DO stub that ignores it (F3). DO test for the filter | review | PR-0 |
-| T1 | Push A: tolerate `m<N>` above the newest version | default | none | `migrations.test`: an `m99` ledger with an extra table that has an FK to `actors` and a row inits with no steps run, serves reads, and serves **writes** (create an actor, an issue, a comment); `mx` still throws; m8 is a no-op (F4) | review; deploy push A (PR-0 may ride along); record the floor | PR-A |
+| T1 | Push A: tolerate `m<N>` above the newest version | default | none | `migrations.test`: an `m100` ledger with an extra table that has an FK to `actors` and a row inits with no steps run, serves reads, and serves **writes** (create an actor, an issue, a comment); `mx` still throws; m9 is a no-op (F4) | review; deploy push A (PR-0 may ride along); record the floor | PR-A |
 | T2 | Token helpers and `Principal` types | light | T1 deployed | helper tests: shape, prefix length, `bh_svc_` unchanged | review | PR-B |
-| T3 | m9 table, DO routes, verify, maintainer cap | heavy | T2 | `user-tokens.test` (S1-S16 rows), `migrations.test` "fresh ledger starts at m9" and "m8→m9 keeps rows", `schema-sync`, `internal-auth` (new routes are tier 2, verify is tier 1), capped maintainer in issue tests | review | PR-B |
+| T3 | m10 table, DO routes, verify, maintainer cap | heavy | T2 | `user-tokens.test` (S1-S16 rows), `migrations.test` "fresh ledger starts at m10" and "m9→m10 keeps rows", `schema-sync`, `internal-auth` (new routes are tier 2, verify is tier 1), capped maintainer in issue tests | review | PR-B |
 | T4 | Edge: `authenticate` branch, `authorize` table, rewrite, cap wrapper, admin routes, whoami, stage-1 log | heavy | T3 | `api/tests/user-tokens.test`: every verify outcome to its status; the full route-class matrix, with 403 for candidate `stage` and `execute` under all three scopes (B1); the default-deny enumeration test (S9); a spoofed `X-Actor-ID` is rewritten; **cap loop** (F1): for every allowed write route in S9 and for `/health`, a `read_write` token of a maintainer actor puts `X-Beehive-Maintainer-Cap: 1` on **every** DO request the handler makes, and a `maintainer` token on none; the log line has no token, hash or `Authorization` | review | PR-B |
 | T5 | UI settings page, `iat`, nav link | default | T4 | `ui-tokens.test` (S5, S13, S14 rows), `ui-layout.test` link | review | PR-B |
 | T6 | Local e2e | default | T5 | `tests/e2e/user-tokens.test.ts` (local only): admin mint; issue created with a spoofed `X-Actor-ID` is attributed to the token's actor; a `read_write` maintainer token cannot close another actor's issue; revoke, then 401 | review | PR-B |
-| T6d | Docs (F8): OPS "User tokens: mint, rotate, revoke" (allowlist removal = `revoke-all`; re-check after a B re-deploy; freshness bounds a stolen Beehive cookie only, since GitHub re-auth is often silent), the rollback floor and its invariant, the stage-1 query (Workers Logs and AE), the A4 assumption line; FOCUS: rate limiting deferred, `authGate` `===` follow-up, service 404→401 vs user 404→503, the M11 handoff (m10 unique index only after a clean check), lifecycle-to-`maintainer`-tokens as a prerequisite of master stage 2, the A4 verification task; OPEN-QUESTIONS: the A4 assumption (unverified); MILESTONES: M12 status and exit criteria | light | T6 | review only (doc links resolve; no code) | review; deploy push B after A is live (section 3) | PR-B |
+| T6d | Docs (F8): OPS "User tokens: mint, rotate, revoke" (allowlist removal = `revoke-all`; re-check after a B re-deploy; freshness bounds a stolen Beehive cookie only, since GitHub re-auth is often silent), the rollback floor and its invariant, the stage-1 query (Workers Logs and AE), the A4 assumption line; FOCUS: rate limiting deferred, `authGate` `===` follow-up, service 404→401 vs user 404→503, the unique index on `actors.github_user_id` in `m10` only after a clean check, lifecycle-to-`maintainer`-tokens as a prerequisite of master stage 2, the A4 verification task; OPEN-QUESTIONS: the A4 assumption (unverified); MILESTONES: M12 status and exit criteria | light | T6 | review only (doc links resolve; no code) | review; deploy push B after A is live (section 3) | PR-B |
 | T7 | CLI token support and docs | default | T4 merged | `cli/tests`: config mode 0600 from creation (temp file + rename; never 0644 on disk), also over an existing 0644 file; `--actor`/`BEEHIVE_ACTOR` ignored with a warning for `bh_usr_`; `auth whoami` output; login fails on 401 | review; release the CLI | PR-C |
 | T8 | Session key, phase 1: sign with new, accept both | default | T5 merged | `ui.test`: a new-key cookie is accepted; an old-key cookie is accepted; the key unset gives 503; `iat` survives | put `SESSION_SIGNING_KEY` **before** the push | PR-D1 |
 | T9 | Session key, phase 2: drop the old key | light | 12 h + margin after pre-D1 code last served (F7) | `ui.test`: an `API_AUTH_TOKEN`-signed cookie is refused (re-login) | push after the wait | PR-D2 |
 
 PR-B is reviewed as one stack (`docs/AGENT-ROUTING.md` "Branches and review"): T2-T6d are commits on one branch, never
-separate branches stacked on each other. M11 rebases onto PR-B and takes `m10`.
+separate branches stacked on each other. M12 takes `m10`.
 
 ## 3. Mixed versions and the maintainer's deploy steps
 
@@ -128,7 +128,7 @@ workers compile `shared/*` but call no new route, so their behaviour is unchange
 |---|---|---|---|
 | T0 lookup | `?github_user_id` is ignored and the old DO returns ≤500 rows; the kept `.find` gives today's result. `GET /api/actors/:id` already exists | unchanged: the old UI never sends the filter | none |
 | T1 tolerance | n/a (DO-only) | n/a | none |
-| T3/T4 user tokens | verify 404 → **503** for `bh_usr_` (fail closed, never 401 or anonymous); admin mint/list/revoke → DO 404 → edge 503; master, service and session unchanged | `bh_usr_` is neither master nor `bh_svc_` → **401** (`principal.ts:91`); the new DO routes go unused; the m9 table sits idle | none |
+| T3/T4 user tokens | verify 404 → **503** for `bh_usr_` (fail closed, never 401 or anonymous); admin mint/list/revoke → DO 404 → edge 503; master, service and session unchanged | `bh_usr_` is neither master nor `bh_svc_` → **401** (`principal.ts:91`); the new DO routes go unused; the m10 table sits idle | none |
 | Maintainer cap | never sent with a user principal (verify already failed) | an old edge never sends it; the DO's absent-header path is today's behaviour | n/a |
 | T5 settings page | list/mint → DO 404 → "Token service unavailable" page, never "no tokens" (Response.ok rule) | the old UI has no page; `/app/settings/tokens` falls through to the old UI's not-found | a new UI reads an old cookie without `iat` as "not fresh": the user must sign in again before minting. The old UI ignores `iat` |
 | Stage-1 log | the log line is edge-only | no log | n/a |
@@ -147,7 +147,7 @@ workers compile `shared/*` but call no new route, so their behaviour is unchange
 0. No new secret (`API_AUTH_TOKEN`, `SPEC_DO_INTERNAL_TOKEN`, `SPEC_DO_ADMIN_TOKEN` are already on `beehive`). Read-only
    checks: `wrangler deployments list --name beehive` shows push A's version live, and `schema_version` is `m8`. There is
    no actor precondition (A3) and no log-redaction gate (A4).
-1. Push. 2. `prod-health.sh`. 3. Read `schema_version` = `m9` and confirm `user_tokens` is in `sqlite_master`.
+1. Push. 2. `prod-health.sh`. 3. Read `schema_version` = `m10` and confirm `user_tokens` is in `sqlite_master`.
 4. Bootstrap: `POST /api/admin/user-tokens` with the master token, `X-Actor-ID: <maintainer actor>`, `{actorId: <own
    actor>, name, scope:"read_write", expiresInDays: 30}`. `GET /api/whoami` with the token shows `kind:"user"`. Then
    revoke that token or keep it. No production e2e without the maintainer's explicit approval.
@@ -197,7 +197,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | Push | Revert to | What changes for clients |
 |---|---|---|
 | A (+ PR-0) | the commit before A, **only while** `schema_version` is still `m8` | nothing becomes 401; the UI lookup is limited to 500 again |
-| B | push A (the floor) | **every `bh_usr_` request becomes 401**; `/app/settings/tokens` becomes not-found; the admin user-token routes give 404; stage-1 logging stops. Master, service tokens and sessions are unchanged. `user_tokens` stays at m9 and A ignores it. **Never revert below A**: that is `Unknown schema_version`, a full outage |
+| B | push A (the floor) | **every `bh_usr_` request becomes 401**; `/app/settings/tokens` becomes not-found; the admin user-token routes give 404; stage-1 logging stops. Master, service tokens and sessions are unchanged. `user_tokens` stays at m10 and A ignores it. **Never revert below A**: that is `Unknown schema_version`, a full outage |
 | B, re-deploy | B again | tokens that were valid before work again unless expired. Tokens could not be revoked during the rollback: the maintainer re-checks the list and revokes as needed (OPS line) |
 | C | the previous CLI release | nothing becomes 401; user tokens still work through `BEEHIVE_API_TOKEN` or `auth login` |
 | D1 | B | new-key cookies are refused, so users re-login (302, not 401); the API is unaffected |
@@ -217,7 +217,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 - R7 Deviations from the RFC, named (N6): a single `scope` column instead of `scopes`; the 10-live-token cap per actor
   (new); lifecycle stays master-only, a strict subset of decision 3 (A1).
 - R4 Rate limiting is deferred (decision 8): a flood of well-formed fake `bh_usr_` tokens is DO load. Recorded in FOCUS.
-- R5 `ui.ts` is touched by T0, T5 and T8, and later by M11's UI: land them in that order; M11 rebases onto PR-B (`m10`).
+- R5 `ui.ts` is touched by T0, T5 and T8: land them in that order.
 - R6 The verify contract differs from the service branch (`principal.ts:67` maps 404 to 401). This is deliberate for user
   tokens (RFC section 3.A). The service branch is left alone, and the difference is noted in FOCUS.
 
@@ -235,7 +235,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
   `:4366`: an oracle bypass and an SSRF). Widening later is edge-only.
 - **A3 (Q3): no actor precondition for push B.** The maintainer ran the read-only duplicate check on production on
   2026-10-17: 1 actor, a human with a GitHub id, 0 duplicates. T0 still ships F2 (no create on a failed lookup) and F3
-  (newest wins). There is still **no unique index in m9**; it goes in M11's `m10`, after the check is re-run.
+  (newest wins). There is still **no unique index in m9**; it goes in `m10`, after the check is re-run.
 - **A4 (Q4): assume, unverified.** Per the maintainer's instruction, the plan **assumes** that Cloudflare invocation logs
   and Honeycomb traces drop `Authorization`, `Cookie` and PII headers (including `X-API-Token` and the edge→DO
   `X-Beehive-Internal`/`X-Beehive-Admin`). It is recorded as an unverified assumption in one line each in `docs/OPS.md` and
@@ -251,7 +251,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | F1 fail-open cap, a missed call site | **Accepted.** Six `isMaintainer` sites confirmed; required `capped` argument; wrap once after `authorize()`; string-input normalisation (`index.ts:1365`); cap test on every allowed write route | §1 DO and edge bullets, T4 |
 | F2 `ensureActor` creates on a failed lookup | **Accepted.** Confirmed (`ui.ts:333-335`) | §1 T0, T0 test |
 | F3 ordering `ASC` vs today's `DESC` | **Accepted: keep `DESC`** (newest wins, as today and as an old DO). A3 shows no duplicates exist, so there is no reason to change it | §1 T0, T0 test |
-| F4 push-A test and invariant | **Accepted.** Write test on an `m99` ledger with an FK table; floor invariant in OPS; m10 unique-index handoff | §1 push A, T1, m9 note, T6d |
+| F4 push-A test and invariant | **Accepted.** Write test on an `m99` ledger with an FK table; floor invariant in OPS; unique-index handoff to `m10` | §1 push A, T1, m9 note, T6d |
 | F5 log retention | **Accepted** with the AE data point (not the "document only" alternative) | S12 |
 | F6 traces and subrequest headers | **Accepted as scope; verification not done** (A4: the maintainer said to assume redaction). The assumption names traces and the internal headers | A4, T6d |
 | F7 D2 wait | **Accepted.** 12 h + 1 h from the last moment pre-D1 code served | §3 PR-D2, T9 |

@@ -23,7 +23,7 @@ Line numbers are on the subject branch.
   only) purges fine (200), because the floor never hard-deletes actors (`ORG_PURGE_ORDER`, `spec-do/index.ts:92-106`). Fix the
   wording: a new table may reference only tables the floor never hard-deletes from (today `actors`; never an
   `ORG_PURGE_ORDER` table). New columns on old tables must be nullable or have a default. No new CHECK, UNIQUE or
-  trigger on an old table may reject a write the floor makes. Also note that M11's m10 unique index on
+  trigger on an old table may reject a write the floor makes. Also note that M12's m10 unique index on
   `actors.github_user_id` would turn a floor-side duplicate insert into a failed login (fail closed, acceptable).
 
 **Nits**

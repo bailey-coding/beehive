@@ -99,8 +99,8 @@ retries), so a bad deploy is loud rather than half-migrated.
      `specs`, `candidates` or `issues` makes the floor's `/internal/purge` stop with a 409 `FOREIGN KEY constraint failed`
      while rolled back. The batch rolls back and nothing is corrupted, but purge is unusable until the newer build returns.
    - New columns on old tables are nullable or have a default, so the floor's inserts still succeed.
-   - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. M11's planned unique index on
-     `actors.github_user_id` would turn a duplicate insert by the floor into a failed login (fail closed, acceptable).
+   - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. A future unique index on
+     `actors.github_user_id` (M12's `m10`) would turn a duplicate insert by the floor into a failed login (fail closed, acceptable).
 6. After deploy: `./scripts/prod-health.sh` passes (`GET /health` answers 200 on each worker with the
    bearer token, and the Spec DO check answers 200);
    `GET /api/service-accounts` answers 410; mint a service token
