@@ -23,7 +23,8 @@ audience: human,agent
   You cannot deploy `beehive` alone first and check its migration before the others go out. The checklist
   below is written for that: secrets first, one push, a short window of mixed versions, then verification.
 - TODO(maintainer): document where `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and
-  `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used).
+  `WORKERS_SUBDOMAIN` now live for deploys (the GitHub Actions secrets are no longer used; the push
+  to `cf` needs no `npm run deploy:*` script, above). Not confirmed by the maintainer, so not stated here.
 - Queues: nothing creates them at deploy time any more. The maintainer confirmed on 2026-10-16
   that the four queues of the checklist's step 2 exist (created by hand).
 
@@ -75,6 +76,8 @@ retries), so a bad deploy is loud rather than half-migrated.
    Migrations are additive and not undone by rolling a worker back, so old code would then run against
    the newer schema. For the Spec DO that fails: old code throws `Unknown schema_version` and every request errors
    (`runMigrations` in `workers/spec-do/index.ts`; `docs/OPEN-QUESTIONS.md` 2026-10-17). Rolling back across a schema bump is an outage.
+   **Rolling back when all ten deploy at once:** there is no partial deploy; push the earlier commit to `cf` and every worker
+   returns to it together. Never push a commit older than the rollback floor below.
    **Rollback floor (M12 push A):** from the commit that adds the tolerance (`runMigrations` skips migrations and
    logs a warning when `schema_version` is `m<N>` (1 to 6 digits, no leading zero) with N above its own newest; any other unknown value still throws), a
    rollback to that commit or later survives a later `m9`+ ledger. Record the floor commit here when it is deployed:
