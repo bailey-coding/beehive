@@ -44,7 +44,7 @@ function seedOrg(name: string) {
   const c1 = spec.createCandidate(s.id, repo.id, 'sha1', 'base', agent);
   const c2 = spec.createCandidate(s.id, repo.id, 'sha2', 'base', agent);
   const issue = spec.createIssue(1, repo.id, 'bug', 'body', agent);
-  spec.createIssueComment(issue.id, 'comment', agent);
+  spec.createIssueComment(issue.id, 'comment', agent, false);
   spec.createGateVerdict(c1.id, 'pre-merge', 'pass', 90, 0, agent);
   // Raw insert so the trial is already decided (createTrial makes a pending one)
   store.raw
@@ -109,14 +109,14 @@ describe('m4 -> m5 migration', () => {
 
     const restarted = makeSqliteState(raw, fresh.kv);
     await makeSpecDo(restarted).init();
-    // m5 -> m6 (service tokens) and m6 -> m7 (deploy refs) run in the same pass
-    expect(version(restarted)).toBe('m9');
+    // m5 -> m6 (service tokens) up to m9 -> m10 (idempotency keys) run in the same pass
+    expect(version(restarted)).toBe('m10');
     expect(columns(restarted, 'organizations')).toEqual(expect.arrayContaining(['deleted_at', 'deleted_by', 'delete_reason']));
     expect(columns(restarted, 'actors')).toContain('role');
     expect(raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org' AND deleted_at IS NULL").get()).toEqual({ n: 1 });
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m9');
+    expect(version(restarted)).toBe('m10');
   });
 
   it('does not touch the entity_history CHECK', () => {
@@ -260,9 +260,9 @@ describe('maintainer role', () => {
   it('a maintainer grants and revokes the role; a non-maintainer is 403', async () => {
     expect((await call(`/internal/actors/${agent}/role`, 'POST', { role: 'maintainer' }, agent)).status).toBe(403);
     expect((await call(`/internal/actors/${agent}/role`, 'POST', { role: 'maintainer' }, maintainer)).status).toBe(200);
-    expect(spec.isMaintainer(agent)).toBe(true);
+    expect(spec.isMaintainer(agent, false)).toBe(true);
     expect((await call(`/internal/actors/${agent}/role`, 'POST', { role: null }, maintainer)).status).toBe(200);
-    expect(spec.isMaintainer(agent)).toBe(false);
+    expect(spec.isMaintainer(agent, false)).toBe(false);
     expect(count(`SELECT COUNT(*) AS n FROM purge_log WHERE action = 'role_change'`)).toBe(2);
   });
 

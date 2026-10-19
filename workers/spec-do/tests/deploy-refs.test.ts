@@ -223,7 +223,7 @@ describe('m6 -> m7 migration', () => {
       await spec.init();
     }
     const version = store.raw.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get() as { value: string };
-    expect(version.value).toBe('m9');
+    expect(version.value).toBe('m10');
     expect(count("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('deploy_refs', 'canary_deployments')")).toBe(2);
     expect(count("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'")).toBe(1);
     await deploy('cand-a');

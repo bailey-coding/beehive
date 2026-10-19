@@ -284,7 +284,7 @@ describe('SQL adapter statement reuse', () => {
     const keys = (db.prepare('SELECT key, value FROM metadata').all() as any[]).map((r) => r.key).sort();
     expect(keys).toEqual(['initialized_at', 'schema_version']);
     const v = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as any;
-    expect(v.value).toBe('m9');
+    expect(v.value).toBe('m10');
   });
 });
 
