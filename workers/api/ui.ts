@@ -20,6 +20,7 @@ import { page, esc, str, table, tableHtml, isValidId } from './ui-html';
 import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, type DoReader, type DoRow, type Session, type IssueViewer } from './ui-pages';
 import { parseRepoIssuesPath, resolveRepoRef, buildRepoUrl, validComponent, type RepoIssuesRoute, type RepoRef } from './ui-repo-ref';
 import { appPage, makeChromeSource, memoizeReader, statusPage, type ChromeSource } from './ui-layout';
+import { handleTokenSettings, parseTokenRoute, tokenPrecheck } from './ui-tokens';
 import type { SpecDoStub } from '../shared/spec-do-auth';
 
 // Re-export Session for use by tests
@@ -118,6 +119,14 @@ export async function handleUi(
 
   if (!session) return redirect('/login');
 
+  // API tokens (M12): the origin check and the mint freshness check precede every DO call,
+  // the actor lookup below included.
+  const tokenRoute = parseTokenRoute(path, method);
+  if (tokenRoute) {
+    const early = tokenPrecheck(tokenRoute, method, session, sameOrigin(request));
+    if (early) return early;
+  }
+
   // A valid signature does not prove the actor still exists (the ledger can be wiped).
   // Force a fresh login so ensureActor re-creates it instead of failing on a foreign key.
   // Looked up by id, not in a capped list. Only a 404 means "gone"; any other failure is a 503, not a login loop.
@@ -141,6 +150,8 @@ export async function handleUi(
 
   // Dashboard route
   if (path === '/app' && method === 'GET') return dashboard(doReader, chrome);
+
+  if (tokenRoute) return handleTokenSettings(tokenRoute, request, session, viewer, stub, chrome);
 
   // Issue routes come first, GET and POST together (docs/M8-UI-ISSUES-PLAN.md section 2). When the
   // ref does not resolve they fall through, so repos named "issues" or "new" keep working.
@@ -324,8 +335,9 @@ async function finishLogin(
     return page('Login failed', '<p>Could not create your actor record.</p>', 500, [clearCookie(STATE_COOKIE)]);
   }
 
+  const iat = Math.floor(Date.now() / 1000);
   const token = await signSession(
-    { login: user.login, actorId, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS },
+    { login: user.login, actorId, iat, exp: iat + SESSION_TTL_SECONDS },
     env.API_AUTH_TOKEN as string
   );
   return redirect('/app', [cookie(SESSION_COOKIE, token, SESSION_TTL_SECONDS), clearCookie(STATE_COOKIE)]);

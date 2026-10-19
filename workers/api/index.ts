@@ -17,10 +17,13 @@ interface Env {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   ALLOWED_GITHUB_USERS?: string;
+  // wrangler.toml [[analytics_engine_datasets]]; optional so a missing binding never fails a request
+  ANALYTICS?: AnalyticsEngineDataset;
 }
 
 import { authenticate, authorize } from './principal';
 import { handleServiceAccountRoutes } from './service-accounts';
+import { handleUserTokenRoutes } from './user-tokens';
 import { handleLifecycleRoutes } from './lifecycle';
 import { handleUi } from './ui';
 
@@ -64,7 +67,7 @@ import type {
   ListFilter,
   HealthResponse,
 } from './types';
-import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
+import { getSpecDoStub, maintainerCappedStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 // Helper to generate ID for Spec DO lookup
 const DEFAULT_SPEC_DO_NAME = 'main';
@@ -91,21 +94,32 @@ export default {
     if (uiResponse) return uiResponse;
 
     // Auth - fail closed, applies to every other route including /health.
-    // Master token keeps full access; service tokens are read-only (deny by default).
-    const specDoStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
-    const principal = await authenticate(request, env, specDoStub);
+    // Master token keeps full access; service tokens are read-only; user tokens write through
+    // an allow-list (deny by default, workers/api/principal.ts).
+    const authStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
+    const principal = await authenticate(request, env, authStub);
     if (principal instanceof Response) return principal;
     const forbidden = authorize(principal, method, path);
     if (forbidden) return forbidden;
-    if (principal.kind === 'service') {
-      // Never trust a client-supplied actor: rewrite before any handler reads it.
+    if (principal.kind === 'master') {
+      logMasterActorAssertion(request, url, env);
+    } else {
+      // Never trust a client-supplied actor (service and user tokens): rewrite before any handler reads it.
       const headers = new Headers(request.headers);
       headers.set('X-Actor-ID', principal.actorId);
       request = new Request(request, { headers });
     }
+    // Maintainer cap (M12): a user token without the maintainer scope never exercises its actor's
+    // maintainer role. Wrapped once, here; only this stub is used below (handlers build fresh
+    // headers, so the stub is the one place that reaches every DO request).
+    const specDoStub =
+      principal.kind === 'user' && !principal.scopes.includes('maintainer') ? maintainerCappedStub(authStub) : authStub;
 
     const adminResponse = await handleServiceAccountRoutes(request, path, principal, specDoStub);
     if (adminResponse) return adminResponse;
+
+    const userTokenResponse = await handleUserTokenRoutes(request, path, principal, specDoStub);
+    if (userTokenResponse) return userTokenResponse;
 
     // Ledger lifecycle: tombstones, purge, maintainer role, ?include_deleted=1 reads
     const lifecycleResponse = await handleLifecycleRoutes(request, url, principal, specDoStub);
@@ -371,6 +385,47 @@ function extractParentId(urlOrPath: string): string {
   const path = pathnameOf(urlOrPath);
   const parts = path.split('/');
   return parts[parts.length - 2];
+}
+
+// ============================================================================
+// MASTER TOKEN STAGE 1 (RFC-0008 section 5): log, change nothing
+// ============================================================================
+
+const MAX_LOGGED_ACTOR_CHARS = 128;
+
+/** url.pathname with every segment that is not a lowercase word replaced by ':id' (ids stay out of the AE blob) */
+function pathClass(pathname: string): string {
+  return pathname
+    .split('/')
+    .map((s) => (s === '' || /^[a-z][a-z-]*$/.test(s) ? s : ':id'))
+    .join('/')
+    .slice(0, 256);
+}
+
+/**
+ * One Workers Logs line and one Analytics Engine point per master request that names an actor
+ * (the evidence for the stage-2 decision; Workers Logs keep 7 days, AE longer). Fields: method,
+ * pathname, the client's X-Actor-ID (truncated: it is client-controlled) and cf-ray. Never the
+ * query string, other headers, the body or any token. Never fails the request.
+ */
+function logMasterActorAssertion(request: Request, url: URL, env: Env): void {
+  const asserted = request.headers.get('X-Actor-ID');
+  if (!asserted || asserted === 'unknown') return;
+  const actorId = asserted.slice(0, MAX_LOGGED_ACTOR_CHARS);
+  console.log(
+    JSON.stringify({
+      event: 'master_actor_assertion',
+      method: request.method,
+      path: url.pathname,
+      actorId,
+      ray: request.headers.get('cf-ray'),
+    })
+  );
+  try {
+    env.ANALYTICS?.writeDataPoint({ indexes: ['master_actor_assertion'], blobs: [actorId, request.method, pathClass(url.pathname)] });
+  } catch (error) {
+    console.error('[master_actor_assertion] Analytics Engine write failed:', error instanceof Error ? error.message : String(error));
+  }
 }
 
 function makeApiResponse<T>(data: T, status = 200): Response {
