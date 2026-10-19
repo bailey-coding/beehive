@@ -691,25 +691,8 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 **Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
 (404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
 
-## Idempotency keys: two callers target Spec DO routes that do not exist (2026-10-18)
+## Queue-consumer double-write prevention is unfinished (2026-10-19)
 
-**Status**: Open - found while wiring `Idempotency-Key` for M5a; not fixed.
+**Status**: Open - needs its own task; M5a closes the at-least-once double-write only for the eight `POST` routes in `IDEMPOTENT_ROUTES` (`workers/spec-do/index.ts`).
 
-`workers/queue-consumer/index.ts` POSTs `/api/entities/candidate/:id/history`, and `workers/scientist-comparator/storage/spec-do.ts` POSTs `/api/gate-verdicts/shadow`. The Spec DO has neither route (history is GET-only), so both calls 404. The queue consumer ignored the response; it now logs a non-ok status and sends `Idempotency-Key: <queue>:<event id>`, which the DO ignores until the route exists and is added to `IDEMPOTENT_ROUTES` (`workers/spec-do/index.ts`). Today the at-least-once double-write is closed for the eight wired POST routes only. The scientist-comparator call is untouched.
-
----
-
-## Cloudflare Flagship for Beehive platform features (2026-10-18)
-
-**Status**: Open - deferred, no immediate need
-
-**Question**: Should Beehive adopt Cloudflare Flagship for gating platform-level features (new gate types, UI changes, promotion algorithms)?
-
-**Context**: Flagship is Cloudflare's native feature flag service (built on KV + Durable Objects, OpenFeature-compatible) that enables sub-millisecond flag evaluation at the edge. It provides the workflow we want: default off, enable, ramp up, remove once full on.
-
-**Assessment**: 
-- **Not for the Oracle Ladder** - the ladder is Beehive's coordination spine; Flagship is a feature toggle utility, not a promotion system. Our existing Spec DO + dedicated workers handle candidate progression better.
-- **Good fit for platform features** - useful when we have users and want to ship risky changes behind kill switches, A/B test new algorithms, or gradually roll out UI changes.
-- **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
-
-**Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.
+There is no real route for the queue consumer to protect. `workers/queue-consumer/index.ts` POSTs `/api/entities/candidate/:id/history`, but the Spec DO serves that path for GET only, so the call 404s and the consumer ignores the response (no `Response.ok` check). `workers/scientist-comparator/storage/spec-do.ts` likewise POSTs `/api/gate-verdicts/shadow`, which does not exist. Neither sends an `Idempotency-Key`. The fix is to add the real write routes (or repoint the callers), put them in `IDEMPOTENT_ROUTES`, send a key derived from the queue event id, and check `Response.ok`.
