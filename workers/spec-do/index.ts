@@ -25,7 +25,7 @@ import {
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm9';
+const LATEST_SCHEMA_VERSION = 'm10';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -854,8 +854,9 @@ export class SpecDO {
       ['m7', () => this.db!.exec(DEPLOY_REFS_SQL)],
       // m7 -> m8: version columns on tournaments + merge_trains, tournament failure columns
       ['m8', () => this.applyLedgerCas()],
-      // m8 -> m9: idempotency keys table for preventing double-writes from at-least-once queue delivery
-      ['m9', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
+      // m8 -> m9: reserved for user tokens (M12)
+      // m9 -> m10: idempotency keys table for preventing double-writes from at-least-once queue delivery
+      ['m10', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');

@@ -494,7 +494,7 @@ CREATE INDEX IF NOT EXISTS idx_canary_deployments_spec ON canary_deployments(spe
 -- ============================================================================
 
 -- ============================================================================
--- IDEMPOTENCY KEYS (m8 -> m9, additive)
+-- IDEMPOTENCY KEYS (m9 -> m10, additive)
 -- Prevents double-writes from at-least-once Queue delivery.
 -- key_hash is SHA-256 of [actor, method, path, key], so a key cannot be replayed across actors or routes.
 -- The row is written in the same transaction as the mutation it guards.

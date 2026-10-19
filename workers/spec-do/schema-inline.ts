@@ -610,10 +610,10 @@ export const LEDGER_CAS_SQL = `
 -- ============================================================================
 `;
 
-// Idempotency keys table (m8 -> m9, additive). Prevents double-writes from at-least-once queue delivery.
+// Idempotency keys table (m9 -> m10, additive). Prevents double-writes from at-least-once queue delivery.
 export const IDEMPOTENCY_KEYS_SQL = `
 -- ============================================================================
--- IDEMPOTENCY KEYS (m8 -> m9, additive)
+-- IDEMPOTENCY KEYS (m9 -> m10, additive)
 -- Prevents double-writes from at-least-once Queue delivery.
 -- key_hash is SHA-256 of [actor, method, path, key], so a key cannot be replayed across actors or routes.
 -- The row is written in the same transaction as the mutation it guards.

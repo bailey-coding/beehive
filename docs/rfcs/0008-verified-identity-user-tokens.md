@@ -136,8 +136,7 @@ two-push method (`docs/M8-UI-ISSUES-PLAN.md` §13):
 
 1. **Push A (no bump).** `runMigrations` accepts a stored `m<N>` with N above the newest version this code knows: it logs a
    warning and returns without running steps or the final assertion. Tests: an `m99` ledger initialises and serves; an
-   unknown non-`m<N>` value still throws. Add an OPS checklist line. Push A becomes the rollback floor. **If M11's push A
-   lands first, M12 reuses it.**
+   unknown non-`m<N>` value still throws. Add an OPS checklist line. Push A becomes the rollback floor.
 2. **Push B (only after A is live and a read shows `schema_version` unchanged).** Add step `m10`
    (decision 6): `CREATE TABLE IF NOT EXISTS user_tokens` plus its unique hash index and an index on `actor_id`. The same
    section goes in `initSchema` (`:515-531`), in `schema.sql` and `schema-inline.ts` together (`schema-sync.test.ts`), and
@@ -233,7 +232,7 @@ Reasons:
   option B.
 - The DO round trip costs no more than service tokens already do.
 - It meets R5, which option C cannot.
-- Its only real cost is the schema bump, and the two-push method makes that rollback-safe and can be shared with M11.
+- Its only real cost is the schema bump, and the two-push method makes that rollback-safe and can be shared with other milestones.
 
 Option C is worth doing only as a stopgap if A is postponed. Option B should be revisited only if profiling shows the verify
 request matters (rule 1: measure first).
@@ -248,7 +247,7 @@ request matters (rule 1: measure first).
    `master` actor treated as maintainer on lifecycle routes, or (b) lifecycle moves to maintainer user tokens.
 5. Minting rules: maximum lifetime (90 days proposed), whether minting needs a fresh session (10 minutes), and whether
    device-code or GitHub-token exchange login (an exception to ADR-0007) is ever allowed.
-6. Ordering with M12: M12 takes `m10`; M11 will take the next available version.
+6. Ordering with M12: M12 takes `m9` (user_tokens); idempotency (m5a) takes `m10`; M11 will take the next available version.
 7. Move the UI session to `SESSION_SIGNING_KEY` in M12 (recommended; it closes a forgery path the master token opens today)
    or as its own task.
 8. Rate limiting on failed verifications: in M12, or deferred.
@@ -272,7 +271,7 @@ Defaults chosen by the orchestrating agent, because the maintainer asked for the
 |---|---|
 | 2 | Human actors with a `github_user_id` only. Agent actors stay excluded until the M3/M6.2 capability work. |
 | 5 | Maximum lifetime 90 days; minting needs a session under 10 minutes old; no device-code or GitHub-token exchange login in M12 (it needs an exception to ADR-0007). |
-| 6 | Share push A (tolerate a newer `schema_version`) with M12. M12 takes schema `m10`, M11 will take the next available version. |
+| 6 | Share push A (tolerate a newer `schema_version`) with M12. M12 takes schema `m9` (user_tokens); idempotency (m5a) takes `m10`; M11 will take the next available version. |
 | 8 | Rate limiting on failed verifications is deferred; record it in `docs/FOCUS.md`. |
 | 9 | Yes: fix the 500-actor lookup limit first, as the first task, because the settings page and the session check depend on it. |
 
