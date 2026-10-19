@@ -33,9 +33,10 @@ const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 const IDEMPOTENCY_CLEANUP_EVERY = 50; // expired-key sweep runs on one keyed request in this many
 // Routes whose handlers run under idempotent(); the header is ignored everywhere else
-const IDEMPOTENT_ROUTES = new Set([
+const IDEMPOTENT_ROUTES: Set<string | RegExp> = new Set([
   'POST /api/organizations', 'POST /api/actors', 'POST /api/repositories', 'POST /api/specs',
   'POST /api/candidates', 'POST /api/gate-verdicts', 'POST /api/trials', 'POST /api/promotions',
+  /^POST \/api\/entities\/[^\/]+\/[^\/]+\/history$/, // Dynamic entity history POST
 ]);
 
 interface IdempotencyContext {
@@ -3111,7 +3112,25 @@ export class SpecDO {
     actorId: string
   ): Promise<IdempotencyContext | Response | null> {
     const key = request.headers.get(IDEMPOTENCY_KEY_HEADER);
-    if (!key || !IDEMPOTENT_ROUTES.has(`${method} ${path}`)) return null;
+    if (!key) return null;
+    
+    // Check if this route is idempotent
+    const routeKey = `${method} ${path}`;
+    let isIdempotentRoute = false;
+    for (const route of IDEMPOTENT_ROUTES) {
+      if (typeof route === 'string') {
+        if (route === routeKey) {
+          isIdempotentRoute = true;
+          break;
+        }
+      } else if (route instanceof RegExp) {
+        if (route.test(routeKey)) {
+          isIdempotentRoute = true;
+          break;
+        }
+      }
+    }
+    if (!isIdempotentRoute) return null;
     if (key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
       return new Response(
         JSON.stringify({
@@ -3801,6 +3820,24 @@ export class SpecDO {
         });
       }
 
+      if (path.match(/^\/api\/entities\/[^\/]+\/[^\/]+\/history$/) && method === 'POST') {
+        const pathParts = path.split('/');
+        const entityType = pathParts[pathParts.length - 3] as EntityType;
+        const entityId = pathParts[pathParts.length - 2];
+        const body = await request.json() as { stage: string; notes?: string; metadata?: string };
+        return this.idempotent(idem, 201, () => {
+          const history = this.createEntityHistory(
+            entityType,
+            entityId,
+            body.stage,
+            actorId,
+            body.notes,
+            body.metadata
+          );
+          return { success: true, data: history, timestamp: Date.now() };
+        });
+      }
+
       // ============================================================================
       // SANDBOX EXECUTION
       // ============================================================================
@@ -4299,6 +4336,31 @@ export class SpecDO {
     }
     stmt.free();
     return rows;
+  }
+
+  /**
+   * Create entity history entry. Returns the created row.
+   * Note: entity_type is validated by the table CHECK constraint.
+   */
+  createEntityHistory(
+    entityType: EntityType,
+    entityId: string,
+    stage: string,
+    changedBy: string,
+    notes?: string,
+    metadata?: string
+  ): EntityHistoryRow {
+    if (!this.db) throw new Error('Database not initialized');
+    const id = generateId();
+    const changedAt = now();
+    const stmt = this.db.prepare(
+      `INSERT INTO entity_history (id, entity_type, entity_id, stage, changed_by, changed_at, notes, metadata) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    stmt.bind(id, entityType, entityId, stage, changedBy, changedAt, notes || null, metadata || null);
+    stmt.step();
+    stmt.free();
+    return { id, entity_type: entityType, entity_id: entityId, stage, changed_by: changedBy, changed_at: changedAt, notes, metadata };
   }
 
   // ============================================================================

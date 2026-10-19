@@ -693,9 +693,19 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 
 ## Queue-consumer double-write prevention is unfinished (2026-10-19)
 
-**Status**: Open - needs its own task; M5a closes the at-least-once double-write only for the eight `POST` routes in `IDEMPOTENT_ROUTES` (`workers/spec-do/index.ts`).
+**Status**: Resolved - implemented in agent/m5a-idempotency-fix
 
-There is no real route for the queue consumer to protect. `workers/queue-consumer/index.ts` POSTs `/api/entities/candidate/:id/history`, but the Spec DO serves that path for GET only, so the call 404s and the consumer ignores the response (no `Response.ok` check). `workers/scientist-comparator/storage/spec-do.ts` likewise POSTs `/api/gate-verdicts/shadow`, which does not exist. Neither sends an `Idempotency-Key`. The fix is to add the real write routes (or repoint the callers), put them in `IDEMPOTENT_ROUTES`, send a key derived from the queue event id, and check `Response.ok`.
+The three blocking issues identified by agent 621993c have been addressed:
+
+1. **scientist-comparator route fix**: Changed POST from `/api/gate-verdicts/shadow` to `/api/gate-verdicts` with `gate: 'shadow'` in the body (matches existing Spec DO route).
+
+2. **Entity history POST route**: Added POST support for `/api/entities/:entity_type/:entity_id/history` in Spec DO, with the route pattern added to `IDEMPOTENT_ROUTES`.
+
+3. **queue-consumer actor**: Added 'queue-consumer' actor of type 'agent' to the seed data in `workers/spec-do/seed.ts`, allowing FK references to `changed_by` in entity_history.
+
+The queue-consumer now sends `Idempotency-Key: ${queueName}:${event.id}` header for history writes and properly handles response status (treats 409 as already-processed, not an error).
+
+M5a now closes the at-least-once double-write for all nine POST routes in `IDEMPOTENT_ROUTES`.
 
 ---
 

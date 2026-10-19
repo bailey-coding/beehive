@@ -236,6 +236,48 @@ describe('Idempotency Keys', () => {
     });
   });
 
+  describe('Entity history POST route', () => {
+    it('should support POST to /api/entities/candidate/:id/history with idempotency', async () => {
+      // First create a candidate
+      const org = (await (await call('/api/organizations', 'POST', { name: 'History Org', type: 'github' })).json()).data;
+      const actorId = (await (await call('/api/actors', 'POST', { type: 'human', name: 'alice' })).json()).data.id;
+      const specRes = await call('/api/specs', 'POST', {
+        name: 'History Spec', contract: '{}', declaredDeltaSurface: [], organizationId: org.id,
+      }, { 'X-Actor-ID': actorId });
+      expect(specRes.status).toBe(201);
+      const specId = (await specRes.json()).data.id;
+      const repoRes = await call('/api/repositories', 'POST', {
+        name: 'History Repo', organizationId: org.id, repoType: 'candidate', specId,
+        remoteUrl: 'https://example.invalid/r.git', namespace: 'ns',
+      });
+      expect(repoRes.status).toBe(201);
+      const repositoryId = (await repoRes.json()).data.id;
+      const candidateRes = await call('/api/candidates', 'POST', {
+        specId, repositoryId, commitSha: 'abc123', baseCommitSha: 'def456', agentId: actorId,
+      });
+      expect(candidateRes.status).toBe(201);
+      const candidateId = (await candidateRes.json()).data.id;
+
+      // Now test entity history POST with idempotency
+      const initialHistoryCount = rowCount('entity_history');
+      const key = makeIdempotencyKey();
+      const historyBody = { stage: 'push_received', notes: 'Test push event', metadata: '{}' };
+      const endpoint = `/api/entities/candidate/${candidateId}/history`;
+      
+      const response1 = await call(endpoint, 'POST', historyBody, { 'Idempotency-Key': key, 'X-Actor-ID': actorId });
+      expect(response1.status).toBe(201);
+      
+      const response2 = await call(endpoint, 'POST', historyBody, { 'Idempotency-Key': key, 'X-Actor-ID': actorId });
+      expect(response2.status).toBe(201);
+      expect(response2.headers.get('Idempotent-Replay')).toBe('true');
+      
+      const data1 = await response1.json();
+      const data2 = await response2.json();
+      expect(data1.data.id).toBe(data2.data.id);
+      expect(rowCount('entity_history')).toBe(initialHistoryCount + 1);
+    });
+  });
+
   describe('Edge cases', () => {
     it('should handle concurrent requests with same key gracefully', async () => {
       const key = makeIdempotencyKey();
