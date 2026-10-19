@@ -8,14 +8,15 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-18 (M12 section only; the rest is as of 2026-10-17)
+**Last updated:** 2026-10-19
 
 ## Where we are
 
 - The agent stack is merged and on `origin/main`: spine items 1 and 3 (promotion ledger routes,
   ledger lifecycle), CI-only workflow, service tokens, canary deploy/rollback as Spec DO refs, review
-  fixes, Spec DO internal auth, shadow-router ref cache, and the ledger compare-and-swap with the
-  tournament state machine (schema m8).
+  fixes, Spec DO internal auth, shadow-router ref cache, the ledger compare-and-swap with the tournament
+  state machine (schema m8), and **M5a idempotency** (queue-consumer double-write prevention, idempotency
+  keys moved to schema m10).
 - Production: all ten workers have a code deployment from 2026-10-16 21:58 UTC (the zod build fix unblocked
   `beehive-promotion-worker`, `-canary-worker` and `-shadow-router`); the Spec DO is on m8 after the empty legacy
   `service_accounts` table was dropped (`docs/OPEN-QUESTIONS.md` 2026-10-16); `bailey-coding` is the only
@@ -23,9 +24,14 @@ Completed items are removed, not struck through; history lives in git.*
 - M8 is on `main` but **not deployed** (2026-10-17): the Spec DO issue changes (atomic numbering, comment
   rules, close/reopen, actor validation), the repo issue pages UI, and the CLI default actor
   (`BEEHIVE_ACTOR` / `defaultActor` / `--actor`, an admin stopgap until M12). Plan and reviews: `docs/M8-*.md`.
+- **M5a idempotency is merged and on `main`** (2026-10-19): queue-consumer idempotency fix implemented, idempotency
+  keys moved from schema m9 to m10, legacy-shape migration tests added (production dump simulation for
+  `service_accounts`, `actors`, `entity`, `promotion` tables), and the `agent/m5a-idempotency-fix` branch
+  merged. See `docs/rfos/2026-10-14-migration-failures.md` for context.
 - M9 (site navigation) is implemented on `agent/m9-nav` (2026-10-17), **not merged or deployed**; the independent
   code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
-  `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`.
+  `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`. **Note:** schema m9 is now used by M5a idempotency
+  (the idempotency keys table), so M12 references have been updated from m9 to m10.
 - Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
   `.../issues/:id`) reads organizations and repositories before answering 405, because the origin check covers only the
   write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
@@ -72,6 +78,8 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   `Authorization`, `Cookie`, `X-API-Token`, `X-Beehive-Internal` and `X-Beehive-Admin` are redacted; never copy a value
   seen. If any is not: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
   secrets, and record the result in `docs/OPEN-QUESTIONS.md` (2026-10-18 entry).
+- **M12 PR-B T2 is merged** (2026-10-19): `bh_usr_` user token helpers added to `service-tokens.ts` (commit
+  `50728bc`, PR `e786f60`); independent review approved by `cc90f6a`. The full PR-B remains on `agent/m12-pr-b`.
 - **Rate limiting on failed user-token verifications is deferred** (RFC-0008 decision 8): every well-formed fake
   `bh_usr_` token costs one DO request. A per-IP limit via the Workers rate-limiting binding is the proposal.
 - **`authGate` on the nine other workers compares the master token with `===`** (`workers/shared/auth.ts`), not in
@@ -88,24 +96,25 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   `workers/api/types.ts` `IssueResponse` says `createdBy`. Clients should read both until one is fixed.
 - **e2e first-maintainer race** (review N4, `docs/M12-PRB-REVIEW.md`): on a fresh local ledger four e2e files race for the
   one-time maintainer self-grant, so `tests/e2e/user-tokens.test.ts` can fail its `beforeAll` with 403; on a non-200 grant,
-  re-list and use the winner, or bootstrap once in a global setup.
+  re-list and use the winner, or bootstrap once in a global setup. Fixed in `f1595c` (review nits N1 N5 and
+  N4 follow-up).
 
 ## Cleanup
 
-- Merged `agent/*` branches (16 on 2026-10-17; `git branch --merged main --list 'agent/*'`), the unmerged M8 plan/review
-  branches (their docs are now on `main`) and the `scratch/m8-*` refs, with their `origin` copies, can be deleted once
-  nothing needs them.
+- Merged `agent/*` branches: **15 merged agent/* remote branches deleted** (2026-10-19, `2dc02e`, `a78017c`),
+  plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). The unmerged M8 plan/review branches (their
+  docs are now on `main`) can be deleted once nothing needs them.
 - `scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers (ArtifactFS is not built).
 - The 5 skipped local e2e tests are m3 health checks for workers with no local port.
 
 ## Open work
 
-- **The clean per-worker install CI step may not catch the zod failure.** `ci-enhanced.yml` runs a per-worker
-  `npm install` and `wrangler deploy --dry-run`, but only after `npm install` at the repo root, so zod still resolves
-  from the root `node_modules`, which is how the failure reached production. To make it a real check, build from a
-  `git archive` copy with no root `node_modules` and install only in each worker folder. Unverified until tried.
+- **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci-enhanced.yml` now builds
+  from a `git archive` copy with no root `node_modules` and installs only in each worker folder (`d3b42ff`, 2026-10-19).
+  This prevents the root-level dependency resolution that allowed the zod failure to reach production.
 - **Tournament creation race:** two requests creating a tournament for the same spec at the same moment make
   two rows (ids are random); readers take the newest. The CAS covers replacing a record, not creating one.
+  Documented in OPEN-QUESTIONS.md with investigation findings (`3365259`, 2026-10-19).
 - **Migration tests only see this repo's own SQL.** A ledger carrying a table of another design passed every
   test and broke the live deploy; consider a test that seeds legacy shapes from the production schema dump.
 - **Self-hosting gaps** (details in `docs/SETUP.md` section 2):
@@ -114,8 +123,8 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
     `wrangler.toml`, `cli/`, `shadow-router/config.ts`, `tests/e2e/config.ts`, `scripts/`.
   - First deploy to an empty account is unverified (`beehive` <-> `beehive-gate-workflow`
     binding cycle may need two passes).
-- **README drift:** `tests/e2e/README.md` still says local e2e uses mocks (it makes real HTTP calls) and
-  `docs/SETUP.md` is the accurate reference; update `tests/e2e/README.md`.
+- **README drift — FIXED:** `tests/e2e/README.md` updated to match `docs/SETUP.md` (local e2e makes real HTTP
+  calls, no mocks) (`54808ae`, `30eb73`, `bc155e0`, 2026-10-19).
 - **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; canary
   `SLOMonitor.monitorAndTriggerRollback` is never called and `getMetric` returns 0
   (`canary-worker/slo.ts:67-78`); no producer for `canary-rollback-triggers` or
@@ -124,6 +133,8 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   client exists (OPEN-QUESTIONS 2026-10-16).
 - **M1 ledger lifecycle** is deployed with m8; the production purge is untested against real data. Use
   tombstone then purge (`docs/OPS.md` "Ledger cleanup"), never delete the worker.
+- **Cloudflare Flagship:** OPEN-QUESTIONS.md section restored (`c1039e5`, 2026-10-19) with adoption
+  open question (`b748902`, 2026-10-19).
 - **Spike: run all ten workers as one `wrangler dev` process** (`-c wrangler.toml -c workers/<name>/wrangler.toml ...`)
   instead of six processes on fixed ports (`scripts/start-e2e-workers.sh`). Probed 2026-10-17 with wrangler 4.151:
   all ten configs load in one process and the Spec DO is reached in-process (the edge `/health` got a 503 from the
@@ -132,6 +143,8 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   primary is on `--port`, so tests that call 8788-8792 directly must reach those workers through bindings or another
   route; (3) the binding table printed `[not connected]` for cross-worker bindings at startup, untested after it settled.
   Acceptance: the 56 local e2e tests pass. The six-process script is the working fallback and CI runs it today.
+- **New documentation:** Agent token optimization guide added (`e915e15`, 2026-10-19) per
+  `AGENTS.md#working-conventions`.
 
 ## Next demo (post-submission)
 
