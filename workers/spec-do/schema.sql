@@ -503,7 +503,7 @@ CREATE INDEX IF NOT EXISTS idx_canary_deployments_spec ON canary_deployments(spe
 -- the cap of 10 live tokens per actor are enforced in code
 -- (SpecDO.mintUserToken), so either can change without a table rebuild. The
 -- table references actors only, and m9 adds no index on actors (a unique
--- actors.github_user_id index is M11's m10). Timestamps are epoch milliseconds.
+-- actors.github_user_id index is M11's m11). Timestamps are epoch milliseconds.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS user_tokens (

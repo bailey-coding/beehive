@@ -28,7 +28,7 @@ describe('schema.sql vs schema-inline.ts', () => {
     expect(file).toBe(SCHEMA_SQL + LEDGER_LIFECYCLE_SQL + SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL + USER_TOKENS_SQL + IDEMPOTENCY_KEYS_SQL);
   });
 
-  it('m9 references actors only and adds no index on actors (a unique github_user_id index is m10)', () => {
+  it('m9 references actors only and adds no index on actors (a unique github_user_id index is m11)', () => {
     const sql = USER_TOKENS_SQL.replace(/--.*$/gm, '');
     expect(sql.match(/REFERENCES\s+\w+/g)).toEqual(['REFERENCES actors', 'REFERENCES actors', 'REFERENCES actors']);
     expect(sql.match(/\bON\s+\w+/gi)).toEqual(['ON user_tokens', 'ON user_tokens']);
