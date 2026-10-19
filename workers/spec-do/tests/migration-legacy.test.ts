@@ -207,11 +207,6 @@ describe('legacy schema shape detection - service_accounts', () => {
     old.raw.exec(LEGACY_SERVICE_ACCOUNTS);
     old.raw.exec('PRAGMA foreign_keys = ON');
     
-    // The legacy table needs data to test the migration - but we need an organization first
-    // Since we dropped service_accounts, we need to ensure the org exists
-    const orgId = old.raw.prepare("SELECT id FROM organizations LIMIT 1").get()?.id || 'org-1';
-    const actorId = old.raw.prepare("SELECT id FROM actors LIMIT 1").get()?.id || 'maint';
-    
     // Create the reserved actor that the legacy table references
     old.raw.exec(`
       INSERT OR IGNORE INTO actors (id, type, name, github_user_id, trust_score, promotion_authority, created_at) 
@@ -282,7 +277,7 @@ describe('legacy schema shape detection - service_accounts', () => {
     const restarted = makeSqliteState(old.raw, old.kv);
     const spec = makeSpecDo(restarted);
     
-    // Should succeed and reach m8
+    // Should succeed and reach the latest version
     await spec.init();
     expect(version(restarted)).toBe('m10');
     
@@ -343,7 +338,7 @@ describe('legacy schema shape detection - actors table', () => {
     // Migration to m5 should succeed (adds role column via ALTER)
     await spec.init();
     
-    // Should reach m8 since m5 adds role column idempotently
+    // Should reach the latest version; m5 adds the role column idempotently
     expect(version(restarted)).toBe('m10');
     
     // Verify role column was added
@@ -389,7 +384,7 @@ describe('legacy schema shape detection - entity tables', () => {
     // Migration to m5 should succeed (adds tombstone columns via ALTER)
     await spec.init();
     
-    // Should reach m8
+    // Should reach the latest version
     expect(version(restarted)).toBe('m10');
     
     // Verify tombstone columns were added
