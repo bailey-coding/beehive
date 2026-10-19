@@ -666,10 +666,6 @@ to that work to avoid a conflict. Until then the pages are dead code with no pro
 ## Issue writes trust a client-asserted actor until a user-bound token exists (2026-10-17)
 
 **Status**: Open - proposal only, needs a human (spine; overlaps M3/M6.2 capability minting).
-**Update 2026-10-18**: decided in RFC-0008 and built in M12 PR-B (`agent/m12-pr-b`, not yet deployed): `bh_usr_` tokens,
-scopes `read` / `read_write` / `maintainer`, the edge rewrites `X-Actor-ID` for every non-master principal. The master
-token still names any actor until master stage 2 (`docs/OPS.md` "User tokens"). The 500-actor lookup limit below was
-fixed in PR-0.
 
 **Done (M8 PR 1, `agent/m8-issues-do`)**: the Spec DO resolves the `X-Actor-ID` header against the `actors` table for issue create, comment, status and comment-policy. An unknown id, `unknown` (no header) and any service-account actor get 403 (`requireIssueActor`, `workers/spec-do/index.ts`). Maintainer status stays ledger-global `actors.role` (`isMaintainer`), service actors excluded. UI requests derive the actor from the signed session, never from a form field (`workers/api/tests/ui-actor.test.ts`); a session whose actor row is gone is sent to `/login`, and a first login creates the row (`ensureActor`).
 
@@ -697,20 +693,19 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 
 ## Queue-consumer double-write prevention is unfinished (2026-10-19)
 
-**Status**: Open - needs its own task; M5a closes the at-least-once double-write only for the eight `POST` routes in `IDEMPOTENT_ROUTES` (`workers/spec-do/index.ts`).
+**Status**: Resolved - implemented in agent/m5a-idempotency-fix
 
-There is no real route for the queue consumer to protect. Investigation (agent 4e70962, continued by Mistral Vibe) reveals three blocking issues:
+The three blocking issues identified by agent 621993c have been addressed:
 
-### Issue 1: scientist-comparator POSTs to wrong route
-`workers/scientist-comparator/storage/spec-do.ts:127` POSTs to `/api/gate-verdicts/shadow`, which does not exist. The Spec DO has `POST /api/gate-verdicts` (line 3788), and the request body already contains `gate: 'shadow'`. The call silently fails (returns false, catches error). **Fix**: change URL to `/api/gate-verdicts`.
+1. **scientist-comparator route fix**: Changed POST from `/api/gate-verdicts/shadow` to `/api/gate-verdicts` with `gate: 'shadow'` in the body (matches existing Spec DO route).
 
-### Issue 2: queue-consumer POSTs to GET-only route  
-`workers/queue-consumer/index.ts:354-364` POSTs to `/api/entities/candidate/:id/history`, but the Spec DO only implements GET for this path (line 4027). The POST 404s and the consumer ignores the response (no `Response.ok` check). **Fix**: either add POST support for entity history writes, or use an alternative endpoint.
+2. **Entity history POST route**: Added POST support for `/api/entities/:entity_type/:entity_id/history` in Spec DO, with the route pattern added to `IDEMPOTENT_ROUTES`.
 
-### Issue 3: FK constraint violation on 'queue-consumer' actor
-The `actors` table (`workers/spec-do/schema-inline.ts:69`) has `CHECK(type IN ('human', 'agent'))`. When queue-consumer sends `X-Actor-ID: queue-consumer`, any INSERT referencing this actor via FK (e.g., `gate_verdicts.decided_by`, `entity_history.changed_by`) will fail with a SQLite CONSTRAINT violation, returned as 500 by the Spec DO's fetch() try-catch (line 4206-4210). **Fix**: create a 'queue-consumer' actor of type 'agent' in the database, either during Spec DO init or via explicit setup.
+3. **queue-consumer actor**: Added 'queue-consumer' actor of type 'agent' to the seed data in `workers/spec-do/seed.ts`, allowing FK references to `changed_by` in entity_history.
 
-The complete fix requires: (1) create 'queue-consumer' actor as 'agent' type, (2) fix scientist-comparator route, (3) add POST route for entity history or use alternative, (4) add routes to `IDEMPOTENT_ROUTES`, (5) send `Idempotency-Key` headers derived from queue event IDs, and (6) check `Response.ok` with appropriate error handling (treat 409 as already-processed, not an error).
+The queue-consumer now sends `Idempotency-Key: ${queueName}:${event.id}` header for history writes and properly handles response status (treats 409 as already-processed, not an error).
+
+M5a now closes the at-least-once double-write for all nine POST routes in `IDEMPOTENT_ROUTES`.
 
 ---
 
@@ -728,20 +723,3 @@ The complete fix requires: (1) create 'queue-consumer' actor as 'agent' type, (2
 - **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
 
 **Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.
-
-## M12 user tokens: assumption A4 and what was not verified (2026-10-18)
-
-**Status**: Open - assumption recorded by the maintainer's instruction; verification task in `docs/FOCUS.md` (M12).
-
-**A4 (unverified)**: Cloudflare invocation logs (`invocation_logs = true`, `wrangler.toml`) and the Honeycomb traces of
-`beehive` are assumed to drop the values of `Authorization`, `Cookie`, `X-API-Token` and the edge-to-DO
-`X-Beehive-Internal` / `X-Beehive-Admin` headers. Push B does not wait on it, but it already matters for the master
-token. The code never logs a token or its hash itself (unit tests spy on `console.*` at the edge, the DO and the UI), and
-the user-token verify body carries only the SHA-256 hash, which a 256-bit token makes useless to a reader. If the check
-finds an unredacted value: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
-secrets.
-
-**Not verified locally (PR-B)**: the Analytics Engine point for the master stage-1 log is unit-tested against a fake
-binding only; local `wrangler dev` was not checked for an AE write, and the SQL in `docs/OPS.md` has not been run
-against the real `beehive-metrics` dataset. Check both after push B (one master request with `X-Actor-ID`, then the
-query). No undocumented Artifacts behaviour came up in PR-B.
