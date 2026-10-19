@@ -696,3 +696,20 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 **Status**: Open - needs its own task; M5a closes the at-least-once double-write only for the eight `POST` routes in `IDEMPOTENT_ROUTES` (`workers/spec-do/index.ts`).
 
 There is no real route for the queue consumer to protect. `workers/queue-consumer/index.ts` POSTs `/api/entities/candidate/:id/history`, but the Spec DO serves that path for GET only, so the call 404s and the consumer ignores the response (no `Response.ok` check). `workers/scientist-comparator/storage/spec-do.ts` likewise POSTs `/api/gate-verdicts/shadow`, which does not exist. Neither sends an `Idempotency-Key`. The fix is to add the real write routes (or repoint the callers), put them in `IDEMPOTENT_ROUTES`, send a key derived from the queue event id, and check `Response.ok`.
+
+---
+
+## Cloudflare Flagship for Beehive platform features (2026-10-18)
+
+**Status**: Open - deferred, no immediate need
+
+**Question**: Should Beehive adopt Cloudflare Flagship for gating platform-level features (new gate types, UI changes, promotion algorithms)?
+
+**Context**: Flagship is Cloudflare's native feature flag service (built on KV + Durable Objects, OpenFeature-compatible) that enables sub-millisecond flag evaluation at the edge. It provides the workflow we want: default off, enable, ramp up, remove once full on.
+
+**Assessment**: 
+- **Not for the Oracle Ladder** - the ladder is Beehive's coordination spine; Flagship is a feature toggle utility, not a promotion system. Our existing Spec DO + dedicated workers handle candidate progression better.
+- **Good fit for platform features** - useful when we have users and want to ship risky changes behind kill switches, A/B test new algorithms, or gradually roll out UI changes.
+- **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
+
+**Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.
