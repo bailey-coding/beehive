@@ -174,14 +174,20 @@ const actorRequest = withActor(authedRequest, principal);
 - Update handler calls to pass wrapped request
 
 ### Handler files (incremental)
-- `lifecycle.ts`: Update to use `MaintainerRequest` for maintainer-only routes
-- `user-tokens.ts`: Update to use `WriteRequest` or `MaintainerRequest`
-- `service-accounts.ts`: Update to use `WriteRequest`
-- `index.ts` handlers: Update signatures incrementally
+- `workers/api/lifecycle.ts`: Update to use `MaintainerRequest` for maintainer-only routes
+- `workers/api/user-tokens.ts`: Update to use `WriteRequest` or `MaintainerRequest`
+- `workers/api/service-accounts.ts`: Update to use `WriteRequest`
+- `workers/api/index.ts` handlers: Update signatures incrementally
 
 ---
 
 ## 6. Testing Strategy
+
+### Phase Verification Commands
+- **Phase 1 (Types only):** `npm run typecheck` (Expected: PASS)
+- **Phase 2 (Edge wrapper):** `npm run typecheck` + `npm test` (Expected: PASS)
+- **Phase 3 (Handler migration):** `npm run typecheck` per handler (Expected: FAIL if handler signature doesn't match required type)
+- **Phase 4 (Cleanup):** Full test suite: `npm run typecheck` + `npm test` + `npm run test:e2e:local` (Expected: PASS)
 
 ### Unit Tests
 - Add tests for wrapper functions (happy path and error cases)
@@ -222,26 +228,27 @@ handleOrg(plainRequest); // Error: Request is not AuthedRequest
 
 ---
 
-## 9. Open Questions
+## 9. Decisions
 
-1. **Type vs Interface**: Should we use `type` or `interface` for the custom request types? Interfaces allow extension; types are more flexible for unions.
+1. **Type vs Interface**: Use `type` for custom request types. Types are more flexible for unions and intersection types which we need for scope hierarchies.
 
-2. **Branding**: Should we use branded types to prevent accidental mixing?
+2. **Branding**: **Use branded types** to prevent accidental mixing of request types. This ensures compile-time safety:
    ```typescript
-   type AuthedRequest = Request & { __brand: 'AuthedRequest' };
+   declare const AuthedRequestBrand: unique symbol;
+   export type AuthedRequest = Request & { [AuthedRequestBrand]: never };
    ```
 
-3. **Handler grouping**: Should we create wrapper types for specific handler groups (e.g., `OrganizationRequest`, `IssueRequest`) that carry additional context?
+3. **Handler grouping**: Defer. Start with base types (`AuthedRequest`, `ActorRequest`, scope types). Add domain-specific types only if needed.
 
-4. **Error handling**: Should wrapper functions return `Response` on failure (current approach) or throw errors?
+4. **Error handling**: Wrapper functions return `Response` on failure (current approach). Maintains fail-closed behavior and consistent error handling.
 
-5. **Scope hierarchy**: Should we encode the hierarchy (`maintainer` > `write` > `read`) in the type system?
+5. **Scope hierarchy**: **Keep scope checks in `authorize()`** (defense in depth). Wrappers only assert, never enforce. This maintains existing runtime validation while adding compile-time safety.
 
 ---
 
 ## 10. Related Work
 
-- AGENTS.md#working-conventions: "Validate by parsing" principle
+- AGENTS.md: "Validate by parsing" principle (working conventions)
 - AGENTS-REVIEWER.md: Review standards for this implementation
 - M12-IMPL-PLAN.md: Principal and authorization patterns
 - `workers/api/principal.ts`: Current authentication/authorization logic

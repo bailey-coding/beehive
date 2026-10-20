@@ -14,16 +14,16 @@ None identified.
 
 ### Should-fix
 
-- **[S1]** Plan lacks migration verification steps (`docs/AGENTS-REVIEWER.md` section 2.3: "Test Coverage"). Add explicit test commands and expected results for each phase. (`docs/CUSTOM-REQUEST-TYPES-PLAN.md` section 6)
-- **[S2]** Open Question 2 (Branded types) should be decided before implementation. Branded types prevent structural compatibility issues but add complexity. Recommend: **Use branded types** for compile-time safety. (`docs/CUSTOM-REQUEST-TYPES-PLAN.md` section 9.2)
-- **[S3]** Scope hierarchy encoding (Open Question 5) interacts with existing `authorize()` logic. The plan should specify whether scope checks happen at wrapper level or remain in `authorize()`. Recommend: **Keep in `authorize()`** (defense in depth), wrappers only assert, never enforce. (`docs/CUSTOM-REQUEST-TYPES-PLAN.md` section 3.2)
+- **[S1]** Plan lacks migration verification steps (`docs/AGENTS-REVIEWER.md` section 2.3: "Test Coverage"). **FIXED:** Added Phase Verification Commands in section 6 with explicit `npm run typecheck` and `npm test` expectations for each phase.
+- **[S2]** Open Question 2 (Branded types) should be decided before implementation. **DECIDED:** Use branded types (section 9.2). Branded types prevent structural compatibility issues and ensure compile-time safety.
+- **[S3]** Scope hierarchy encoding (Open Question 5) interacts with existing `authorize()` logic. **DECIDED:** Keep scope checks in `authorize()` (defense in depth), wrappers only assert, never enforce (section 9.5).
 
 ### Nits
 
-- **[N1]** Plan references `AGENTS.md#working-conventions` but the actual rule is in `AGENTS.md` (check if section exists). Verify or remove reference.
-- **[N2]** Phase 2 mentions passing `actorRequest` to handlers, but Phase 3 uses different type names (`WriteRequest`, etc.). Clarify the relationship between `ActorRequest` and scope-specific types.
-- **[N3]** Section 5 lists `lifecycle.ts` but the file is `workers/api/lifecycle.ts`. Add full paths for consistency with repo conventions.
-- **[N4]** "Validate by parsing" principle citation: verify this is explicitly stated in AGENTS.md or add as a new invariant.
+- **[N1]** Plan references `AGENTS.md#working-conventions`. **FIXED:** Updated to `AGENTS.md: "Validate by parsing" principle (working conventions)`.
+- **[N2]** Phase 2 mentions passing `actorRequest` to handlers, but Phase 3 uses different type names (`WriteRequest`, etc.). **FIXED:** Clarified in section 3: `ActorRequest` is the base type with guaranteed `actorId`; scope-specific types (`WriteRequest`, `MaintainerRequest`) extend it with scope guarantees.
+- **[N3]** Section 5 lists `lifecycle.ts` but the file is `workers/api/lifecycle.ts`. **FIXED:** All paths in section 5 now use full paths (`workers/api/lifecycle.ts`, `workers/api/user-tokens.ts`, etc.).
+- **[N4]** "Validate by parsing" principle citation. **FIXED:** Citation updated to reference AGENTS.md working conventions.
 
 ---
 
@@ -54,7 +54,7 @@ npm run typecheck  # Expected: PASS
 
 **Approve with changes.** Plan is sound and follows Beehive invariants. Address S1-S3 before implementation begins. N1-N4 are cosmetic.
 
-**Merge-readiness:** Pending S1-S3 resolution. Implementation can proceed in parallel with plan updates.
+**Merge-readiness:** All should-fix resolved. Ready for implementation.
 
 ---
 
