@@ -168,7 +168,7 @@ export default {
       return handleUpdateActorTrust(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/actors\/[^\/]+\/promotion-authority$/) && method === 'PATCH') {
-      return handleGrantPromotionAuthority(request, specDoStub);
+      return handleGrantPromotionAuthority(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -190,19 +190,19 @@ export default {
     // ============================================================================
 
     if (path === '/api/specs' && method === 'POST') {
-      return handleCreateSpec(request, specDoStub);
+      return handleCreateSpec(actorRequest, specDoStub);
     }
     if (path === '/api/specs' && method === 'GET') {
-      return handleListSpecs(request, specDoStub);
+      return handleListSpecs(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/specs\/[^\/]+$/) && method === 'GET') {
-      return handleGetSpec(request, specDoStub);
+      return handleGetSpec(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/specs\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateSpecStage(request, specDoStub);
+      return handleUpdateSpecStage(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/specs\/[^\/]+\/claim$/) && method === 'POST') {
-      return handleClaimSpec(request, specDoStub);
+      return handleClaimSpec(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -210,16 +210,16 @@ export default {
     // ============================================================================
 
     if (path === '/api/candidates' && method === 'POST') {
-      return handleCreateCandidate(request, specDoStub);
+      return handleCreateCandidate(actorRequest, specDoStub);
     }
     if (path === '/api/candidates' && method === 'GET') {
-      return handleListCandidates(request, specDoStub);
+      return handleListCandidates(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/candidates\/[^\/]+$/) && method === 'GET') {
-      return handleGetCandidate(request, specDoStub);
+      return handleGetCandidate(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/candidates\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateCandidateStage(request, specDoStub);
+      return handleUpdateCandidateStage(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -227,13 +227,13 @@ export default {
     // ============================================================================
 
     if (path === '/api/gate-verdicts' && method === 'POST') {
-      return handleCreateGateVerdict(request, specDoStub);
+      return handleCreateGateVerdict(actorRequest, specDoStub);
     }
     if (path === '/api/gate-verdicts' && method === 'GET') {
-      return handleListGateVerdicts(request, specDoStub);
+      return handleListGateVerdicts(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/candidates\/[^\/]+\/gate-verdicts$/) && method === 'GET') {
-      return handleGetGateVerdictsForCandidate(request, specDoStub);
+      return handleGetGateVerdictsForCandidate(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -255,16 +255,16 @@ export default {
     // ============================================================================
 
     if (path === '/api/trials' && method === 'POST') {
-      return handleCreateTrial(request, specDoStub);
+      return handleCreateTrial(actorRequest, specDoStub);
     }
     if (path === '/api/trials' && method === 'GET') {
-      return handleListTrials(request, specDoStub);
+      return handleListTrials(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/trials\/[^\/]+$/) && method === 'GET') {
-      return handleGetTrial(request, specDoStub);
+      return handleGetTrial(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/trials\/[^\/]+\/decide$/) && method === 'POST') {
-      return handleDecideTrial(request, specDoStub);
+      return handleDecideTrial(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -272,10 +272,10 @@ export default {
     // ============================================================================
 
     if (path === '/api/promotions' && method === 'POST') {
-      return handleCreatePromotion(request, specDoStub);
+      return handleCreatePromotion(actorRequest, specDoStub);
     }
     if (path === '/api/promotions' && method === 'GET') {
-      return handleListPromotions(request, specDoStub);
+      return handleListPromotions(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -283,13 +283,13 @@ export default {
     // ============================================================================
 
     if (path === '/api/issues' && method === 'POST') {
-      return handleCreateIssue(request, specDoStub);
+      return handleCreateIssue(actorRequest, specDoStub);
     }
     if (path === '/api/issues' && method === 'GET') {
-      return handleListIssues(request, specDoStub);
+      return handleListIssues(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+$/) && method === 'GET') {
-      return handleGetIssue(request, specDoStub);
+      return handleGetIssue(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/stage$/) && method === 'PATCH') {
       return handleUpdateIssueStage(request, specDoStub);
@@ -1526,7 +1526,7 @@ async function handleUpdateActorTrust(
 }
 
 async function handleGrantPromotionAuthority(
-  request: Request,
+  request: MaintainerRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1574,7 +1574,7 @@ async function handleGetRepository(
 // ============================================================================
 
 async function handleCreateSpec(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateSpecRequest = await request.json();
@@ -1584,7 +1584,7 @@ async function handleCreateSpec(
 }
 
 async function handleListSpecs(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1598,7 +1598,7 @@ async function handleListSpecs(
 }
 
 async function handleGetSpec(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1607,7 +1607,7 @@ async function handleGetSpec(
 }
 
 async function handleUpdateSpecStage(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1622,7 +1622,7 @@ async function handleUpdateSpecStage(
 // ============================================================================
 
 async function handleClaimSpec(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const specId = extractParentId(request.url);
@@ -1644,7 +1644,7 @@ async function handleClaimSpec(
 }
 
 async function handleCreateCandidate(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateCandidateRequest = await request.json();
@@ -1654,7 +1654,7 @@ async function handleCreateCandidate(
 }
 
 async function handleListCandidates(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1669,7 +1669,7 @@ async function handleListCandidates(
 }
 
 async function handleGetCandidate(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1678,7 +1678,7 @@ async function handleGetCandidate(
 }
 
 async function handleUpdateCandidateStage(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1693,7 +1693,7 @@ async function handleUpdateCandidateStage(
 // ============================================================================
 
 async function handleCreateGateVerdict(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateGateVerdictRequest = await request.json();
@@ -1703,7 +1703,7 @@ async function handleCreateGateVerdict(
 }
 
 async function handleListGateVerdicts(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1718,7 +1718,7 @@ async function handleListGateVerdicts(
 }
 
 async function handleGetGateVerdictsForCandidate(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1731,7 +1731,7 @@ async function handleGetGateVerdictsForCandidate(
 // ============================================================================
 
 async function handleCreateTrial(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateTrialRequest = await request.json();
@@ -1741,7 +1741,7 @@ async function handleCreateTrial(
 }
 
 async function handleListTrials(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1755,7 +1755,7 @@ async function handleListTrials(
 }
 
 async function handleGetTrial(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1764,7 +1764,7 @@ async function handleGetTrial(
 }
 
 async function handleDecideTrial(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1779,7 +1779,7 @@ async function handleDecideTrial(
 // ============================================================================
 
 async function handleCreatePromotion(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreatePromotionRequest = await request.json();
@@ -1789,7 +1789,7 @@ async function handleCreatePromotion(
 }
 
 async function handleListPromotions(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1806,7 +1806,7 @@ async function handleListPromotions(
 // ============================================================================
 
 async function handleCreateIssue(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueRequest = await request.json();
@@ -1816,7 +1816,7 @@ async function handleCreateIssue(
 }
 
 async function handleListIssues(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1831,7 +1831,7 @@ async function handleListIssues(
 }
 
 async function handleGetIssue(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
