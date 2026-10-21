@@ -67,6 +67,7 @@ import type {
   ListFilter,
   HealthResponse,
 } from './types';
+import type { ActorRequest, WriteRequest, ReadRequest, MaintainerRequest } from '../shared/principal';
 import { getSpecDoStub, maintainerCappedStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 // Helper to generate ID for Spec DO lookup
@@ -141,13 +142,13 @@ export default {
     // ============================================================================
 
     if (path === '/api/organizations' && method === 'POST') {
-      return handleCreateOrganization(request, specDoStub);
+      return handleCreateOrganization(actorRequest, specDoStub);
     }
     if (path === '/api/organizations' && method === 'GET') {
-      return handleListOrganizations(request, specDoStub);
+      return handleListOrganizations(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/organizations\/[^\/]+$/) && method === 'GET') {
-      return handleGetOrganization(request, specDoStub);
+      return handleGetOrganization(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -155,16 +156,16 @@ export default {
     // ============================================================================
 
     if (path === '/api/actors' && method === 'POST') {
-      return handleCreateActor(request, specDoStub);
+      return handleCreateActor(actorRequest, specDoStub);
     }
     if (path === '/api/actors' && method === 'GET') {
-      return handleListActors(request, specDoStub);
+      return handleListActors(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/actors\/[^\/]+$/) && method === 'GET') {
-      return handleGetActor(request, specDoStub);
+      return handleGetActor(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/actors\/[^\/]+\/trust$/) && method === 'PATCH') {
-      return handleUpdateActorTrust(request, specDoStub);
+      return handleUpdateActorTrust(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/actors\/[^\/]+\/promotion-authority$/) && method === 'PATCH') {
       return handleGrantPromotionAuthority(request, specDoStub);
@@ -175,13 +176,13 @@ export default {
     // ============================================================================
 
     if (path === '/api/repositories' && method === 'POST') {
-      return handleCreateRepository(request, specDoStub);
+      return handleCreateRepository(actorRequest, specDoStub);
     }
     if (path === '/api/repositories' && method === 'GET') {
       return handleListRepositories(request, specDoStub);
     }
     if (path.match(/^\/api\/repositories\/[^\/]+$/) && method === 'GET') {
-      return handleGetRepository(request, specDoStub);
+      return handleGetRepository(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -1450,7 +1451,7 @@ async function handleHealth(_request: Request, specDoStub: SpecDoStub): Promise<
 // ============================================================================
 
 async function handleCreateOrganization(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateOrganizationRequest = await request.json();
@@ -1460,7 +1461,7 @@ async function handleCreateOrganization(
 }
 
 async function handleListOrganizations(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1471,7 +1472,7 @@ async function handleListOrganizations(
 }
 
 async function handleGetOrganization(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1484,7 +1485,7 @@ async function handleGetOrganization(
 // ============================================================================
 
 async function handleCreateActor(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateActorRequest = await request.json();
@@ -1494,7 +1495,7 @@ async function handleCreateActor(
 }
 
 async function handleListActors(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1505,7 +1506,7 @@ async function handleListActors(
 }
 
 async function handleGetActor(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1514,7 +1515,7 @@ async function handleGetActor(
 }
 
 async function handleUpdateActorTrust(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1539,7 +1540,7 @@ async function handleGrantPromotionAuthority(
 // ============================================================================
 
 async function handleCreateRepository(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateRepositoryRequest = await request.json();
@@ -1549,7 +1550,7 @@ async function handleCreateRepository(
 }
 
 async function handleListRepositories(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1560,7 +1561,7 @@ async function handleListRepositories(
 }
 
 async function handleGetRepository(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
