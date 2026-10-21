@@ -102,20 +102,18 @@ export default {
     if (principal instanceof Response) return principal;
     const forbidden = authorize(principal, method, path);
     if (forbidden) return forbidden;
+    // Never trust a client-supplied actor (service and user tokens): rewrite before any handler reads it.
+    const headers = new Headers(request.headers);
+    headers.set('X-Actor-ID', principal.actorId);
+    request = new Request(request, { headers });
     if (principal.kind === 'master') {
       logMasterActorAssertion(request, url, env);
-    } else {
-      // Never trust a client-supplied actor (service and user tokens): rewrite before any handler reads it.
-      const headers = new Headers(request.headers);
-      headers.set('X-Actor-ID', principal.actorId);
-      request = new Request(request, { headers });
+    }
 
     // Wrap request with auth context for compile-time safety
     const authedRequest = withAuth(request, principal);
     const actorRequest = withActor(authedRequest, principal);
     if (actorRequest instanceof Response) return actorRequest;
-
-    }
     // Maintainer cap (M12): a user token without the maintainer scope never exercises its actor's
     // maintainer role. Wrapped once, here; only this stub is used below (handlers build fresh
     // headers, so the stub is the one place that reaches every DO request).
