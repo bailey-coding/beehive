@@ -242,12 +242,12 @@ export default {
 
     // POST /api/candidates/:id/gate/pre-merge - Run pre-merge gate
     if (path.match(/^\/api\/candidates\/[^\/]+\/gate\/pre-merge$/) && method === 'POST') {
-      return handleRunPreMergeGate(request, specDoStub);
+      return handleRunPreMergeGate(actorRequest, specDoStub);
     }
 
     // GET /api/gate-verdicts/:id - Get gate verdict
     if (path.match(/^\/api\/gate-verdicts\/[^\/]+$/) && method === 'GET') {
-      return handleGetGateVerdict(request, specDoStub);
+      return handleGetGateVerdict(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -350,7 +350,7 @@ export default {
 
     // POST /api/candidates/:id/execute - Execute candidate in sandbox
     if (path.match(/^\/api\/candidates\/[^\/]+\/execute$/) && method === 'POST') {
-      return handleExecuteCandidate(request, specDoStub);
+      return handleExecuteCandidate(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -1940,7 +1940,7 @@ async function handleGetEntityHistory(
 // ============================================================================
 
 async function handleExecuteCandidate(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1962,7 +1962,7 @@ async function handleExecuteCandidate(
 // ============================================================================
 
 async function handleRunPreMergeGate(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1973,7 +1973,7 @@ async function handleRunPreMergeGate(
 }
 
 async function handleGetGateVerdict(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
