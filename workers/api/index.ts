@@ -21,7 +21,9 @@ interface Env {
   ANALYTICS?: AnalyticsEngineDataset;
 }
 
-import { authenticate, authorize, withAuth, withActor, type ActorRequest } from '../shared/principal';
+import { authenticate, authorize } from './principal';
+import { withAuth, withActor } from '../shared/principal';
+import type { ActorRequest } from '../shared/principal';
 import { handleServiceAccountRoutes } from './service-accounts';
 import { handleUserTokenRoutes } from './user-tokens';
 import { handleLifecycleRoutes } from './lifecycle';
@@ -67,7 +69,6 @@ import type {
   ListFilter,
   HealthResponse,
 } from './types';
-import type { ActorRequest, WriteRequest, ReadRequest, MaintainerRequest } from '../shared/principal';
 import { getSpecDoStub, maintainerCappedStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 // Helper to generate ID for Spec DO lookup
@@ -132,7 +133,7 @@ export default {
 
     // Health check
     if (path === '/health' || path === '/api/health') {
-      return handleHealth(request, specDoStub);
+      return handleHealth(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -177,7 +178,7 @@ export default {
       return handleCreateRepository(actorRequest, specDoStub);
     }
     if (path === '/api/repositories' && method === 'GET') {
-      return handleListRepositories(request, specDoStub);
+      return handleListRepositories(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/repositories\/[^\/]+$/) && method === 'GET') {
       return handleGetRepository(actorRequest, specDoStub);
@@ -307,7 +308,7 @@ export default {
       return handleCreateIssueComment(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'GET') {
-      return handleListIssueComments(request, specDoStub);
+      return handleListIssueComments(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -1449,7 +1450,7 @@ async function handleHealth(request: Request, specDoStub: SpecDoStub): Promise<R
 // ============================================================================
 
 async function handleCreateOrganization(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateOrganizationRequest = await request.json();
@@ -1459,7 +1460,7 @@ async function handleCreateOrganization(
 }
 
 async function handleListOrganizations(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1470,7 +1471,7 @@ async function handleListOrganizations(
 }
 
 async function handleGetOrganization(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1483,7 +1484,7 @@ async function handleGetOrganization(
 // ============================================================================
 
 async function handleCreateActor(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateActorRequest = await request.json();
@@ -1493,7 +1494,7 @@ async function handleCreateActor(
 }
 
 async function handleListActors(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1504,7 +1505,7 @@ async function handleListActors(
 }
 
 async function handleGetActor(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1513,7 +1514,7 @@ async function handleGetActor(
 }
 
 async function handleUpdateActorTrust(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1524,7 +1525,7 @@ async function handleUpdateActorTrust(
 }
 
 async function handleGrantPromotionAuthority(
-  request: MaintainerRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1538,7 +1539,7 @@ async function handleGrantPromotionAuthority(
 // ============================================================================
 
 async function handleCreateRepository(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateRepositoryRequest = await request.json();
@@ -1548,7 +1549,7 @@ async function handleCreateRepository(
 }
 
 async function handleListRepositories(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1559,7 +1560,7 @@ async function handleListRepositories(
 }
 
 async function handleGetRepository(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1572,7 +1573,7 @@ async function handleGetRepository(
 // ============================================================================
 
 async function handleCreateSpec(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateSpecRequest = await request.json();
@@ -1582,7 +1583,7 @@ async function handleCreateSpec(
 }
 
 async function handleListSpecs(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1596,7 +1597,7 @@ async function handleListSpecs(
 }
 
 async function handleGetSpec(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1605,7 +1606,7 @@ async function handleGetSpec(
 }
 
 async function handleUpdateSpecStage(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1620,7 +1621,7 @@ async function handleUpdateSpecStage(
 // ============================================================================
 
 async function handleClaimSpec(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const specId = extractParentId(request.url);
@@ -1642,7 +1643,7 @@ async function handleClaimSpec(
 }
 
 async function handleCreateCandidate(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateCandidateRequest = await request.json();
@@ -1652,7 +1653,7 @@ async function handleCreateCandidate(
 }
 
 async function handleListCandidates(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1667,7 +1668,7 @@ async function handleListCandidates(
 }
 
 async function handleGetCandidate(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1676,7 +1677,7 @@ async function handleGetCandidate(
 }
 
 async function handleUpdateCandidateStage(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1691,7 +1692,7 @@ async function handleUpdateCandidateStage(
 // ============================================================================
 
 async function handleCreateGateVerdict(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateGateVerdictRequest = await request.json();
@@ -1701,7 +1702,7 @@ async function handleCreateGateVerdict(
 }
 
 async function handleListGateVerdicts(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1716,7 +1717,7 @@ async function handleListGateVerdicts(
 }
 
 async function handleGetGateVerdictsForCandidate(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1729,7 +1730,7 @@ async function handleGetGateVerdictsForCandidate(
 // ============================================================================
 
 async function handleCreateTrial(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateTrialRequest = await request.json();
@@ -1739,7 +1740,7 @@ async function handleCreateTrial(
 }
 
 async function handleListTrials(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1753,7 +1754,7 @@ async function handleListTrials(
 }
 
 async function handleGetTrial(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1762,7 +1763,7 @@ async function handleGetTrial(
 }
 
 async function handleDecideTrial(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1777,7 +1778,7 @@ async function handleDecideTrial(
 // ============================================================================
 
 async function handleCreatePromotion(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreatePromotionRequest = await request.json();
@@ -1787,7 +1788,7 @@ async function handleCreatePromotion(
 }
 
 async function handleListPromotions(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1804,7 +1805,7 @@ async function handleListPromotions(
 // ============================================================================
 
 async function handleCreateIssue(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueRequest = await request.json();
@@ -1814,7 +1815,7 @@ async function handleCreateIssue(
 }
 
 async function handleListIssues(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1829,7 +1830,7 @@ async function handleListIssues(
 }
 
 async function handleGetIssue(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1838,7 +1839,7 @@ async function handleGetIssue(
 }
 
 async function handleUpdateIssueStage(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1849,7 +1850,7 @@ async function handleUpdateIssueStage(
 }
 
 async function handleUpdateIssueStatus(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1860,7 +1861,7 @@ async function handleUpdateIssueStatus(
 }
 
 async function handleUpdateIssueCommentPolicy(
-  request: MaintainerRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1875,7 +1876,7 @@ async function handleUpdateIssueCommentPolicy(
 // ============================================================================
 
 async function handleCreateIssueComment(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1886,7 +1887,7 @@ async function handleCreateIssueComment(
 }
 
 async function handleListIssueComments(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1899,7 +1900,7 @@ async function handleListIssueComments(
 // ============================================================================
 
 async function handleCreateIssueSpecLink(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueSpecLinkRequest = await request.json();
@@ -1909,7 +1910,7 @@ async function handleCreateIssueSpecLink(
 }
 
 async function handleCreateIssueCandidateLink(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueCandidateLinkRequest = await request.json();
@@ -1923,7 +1924,7 @@ async function handleCreateIssueCandidateLink(
 // ============================================================================
 
 async function handleGetEntityHistory(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const pathParts = pathnameOf(request.url).split('/');
@@ -1938,7 +1939,7 @@ async function handleGetEntityHistory(
 // ============================================================================
 
 async function handleExecuteCandidate(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1960,7 +1961,7 @@ async function handleExecuteCandidate(
 // ============================================================================
 
 async function handleRunPreMergeGate(
-  request: WriteRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1971,7 +1972,7 @@ async function handleRunPreMergeGate(
 }
 
 async function handleGetGateVerdict(
-  request: ReadRequest,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);

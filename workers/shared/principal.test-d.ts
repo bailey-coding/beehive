@@ -7,7 +7,7 @@
  * if type safety is violated.
  */
 
-import type { Request } from 'workers/api/types';
+// Request is the global Fetch API type - no import needed
 import type {
   AuthedRequest,
   ActorRequest,
@@ -15,6 +15,7 @@ import type {
   WriteRequest,
   MaintainerRequest,
   Principal,
+  Scope,
 } from './principal';
 
 // =============================================================================
