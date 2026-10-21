@@ -292,13 +292,13 @@ export default {
       return handleGetIssue(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateIssueStage(request, specDoStub);
+      return handleUpdateIssueStage(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
-      return handleUpdateIssueStatus(request, specDoStub);
+      return handleUpdateIssueStatus(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
-      return handleUpdateIssueCommentPolicy(request, specDoStub);
+      return handleUpdateIssueCommentPolicy(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -306,7 +306,7 @@ export default {
     // ============================================================================
 
     if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'POST') {
-      return handleCreateIssueComment(request, specDoStub);
+      return handleCreateIssueComment(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'GET') {
       return handleListIssueComments(request, specDoStub);
@@ -317,10 +317,10 @@ export default {
     // ============================================================================
 
     if (path === '/api/issue-spec-links' && method === 'POST') {
-      return handleCreateIssueSpecLink(request, specDoStub);
+      return handleCreateIssueSpecLink(actorRequest, specDoStub);
     }
     if (path === '/api/issue-candidate-links' && method === 'POST') {
-      return handleCreateIssueCandidateLink(request, specDoStub);
+      return handleCreateIssueCandidateLink(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -341,7 +341,7 @@ export default {
     // ============================================================================
 
     if (path.match(/^\/api\/entities\/[^\/]+\/[^\/]+\/history$/) && method === 'GET') {
-      return handleGetEntityHistory(request, specDoStub);
+      return handleGetEntityHistory(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -1840,7 +1840,7 @@ async function handleGetIssue(
 }
 
 async function handleUpdateIssueStage(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1851,7 +1851,7 @@ async function handleUpdateIssueStage(
 }
 
 async function handleUpdateIssueStatus(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1862,7 +1862,7 @@ async function handleUpdateIssueStatus(
 }
 
 async function handleUpdateIssueCommentPolicy(
-  request: Request,
+  request: MaintainerRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1877,7 +1877,7 @@ async function handleUpdateIssueCommentPolicy(
 // ============================================================================
 
 async function handleCreateIssueComment(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1888,7 +1888,7 @@ async function handleCreateIssueComment(
 }
 
 async function handleListIssueComments(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1901,7 +1901,7 @@ async function handleListIssueComments(
 // ============================================================================
 
 async function handleCreateIssueSpecLink(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueSpecLinkRequest = await request.json();
@@ -1911,7 +1911,7 @@ async function handleCreateIssueSpecLink(
 }
 
 async function handleCreateIssueCandidateLink(
-  request: Request,
+  request: WriteRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueCandidateLinkRequest = await request.json();
@@ -1925,7 +1925,7 @@ async function handleCreateIssueCandidateLink(
 // ============================================================================
 
 async function handleGetEntityHistory(
-  request: Request,
+  request: ReadRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const pathParts = pathnameOf(request.url).split('/');
