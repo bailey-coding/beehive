@@ -1455,7 +1455,7 @@ async function handleCreateOrganization(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateOrganizationRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/organizations', 'POST', body, actorId);
   return response;
 }
@@ -1489,7 +1489,7 @@ async function handleCreateActor(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateActorRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/actors', 'POST', body, actorId);
   return response;
 }
@@ -1520,7 +1520,7 @@ async function handleUpdateActorTrust(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateActorTrustRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/actors/${id}/trust`, 'PATCH', body, actorId);
   return response;
 }
@@ -1530,7 +1530,7 @@ async function handleGrantPromotionAuthority(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/actors/${id}/promotion-authority`, 'PATCH', undefined, actorId);
   return response;
 }
@@ -1544,7 +1544,7 @@ async function handleCreateRepository(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateRepositoryRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/repositories', 'POST', body, actorId);
   return response;
 }
@@ -1578,7 +1578,7 @@ async function handleCreateSpec(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateSpecRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/specs', 'POST', body, actorId);
   return response;
 }
@@ -1612,7 +1612,7 @@ async function handleUpdateSpecStage(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateSpecStageRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/specs/${id}/stage`, 'PATCH', body, actorId);
   return response;
 }
@@ -1627,7 +1627,7 @@ async function handleClaimSpec(
 ): Promise<Response> {
   const specId = extractParentId(request.url);
   const body: import('./types').ClaimSpecRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   
   // Call Spec DO to claim the spec - it now returns real data from Artifacts API
   const doResponse = await sendToSpecDo(stub, `/api/specs/${specId}/claim`, 'POST', body, actorId);
@@ -1648,7 +1648,7 @@ async function handleCreateCandidate(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateCandidateRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/candidates', 'POST', { ...body, agentId: actorId }, actorId);
   return response;
 }
@@ -1683,7 +1683,7 @@ async function handleUpdateCandidateStage(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateCandidateStageRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/stage`, 'PATCH', body, actorId);
   return response;
 }
@@ -1697,7 +1697,7 @@ async function handleCreateGateVerdict(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateGateVerdictRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/gate-verdicts', 'POST', { ...body, decidedBy: actorId }, actorId);
   return response;
 }
@@ -1735,7 +1735,7 @@ async function handleCreateTrial(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateTrialRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/trials', 'POST', { ...body, decidedBy: actorId }, actorId);
   return response;
 }
@@ -1769,7 +1769,7 @@ async function handleDecideTrial(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').DecideTrialRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/trials/${id}/decide`, 'POST', { ...body, decidedBy: actorId }, actorId);
   return response;
 }
@@ -1783,7 +1783,7 @@ async function handleCreatePromotion(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreatePromotionRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/promotions', 'POST', { ...body, promotedBy: actorId }, actorId);
   return response;
 }
@@ -1810,7 +1810,7 @@ async function handleCreateIssue(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issues', 'POST', { ...body, createdBy: actorId }, actorId);
   return response;
 }
@@ -1845,7 +1845,7 @@ async function handleUpdateIssueStage(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueStageRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/stage`, 'PATCH', body, actorId);
   return response;
 }
@@ -1856,7 +1856,7 @@ async function handleUpdateIssueStatus(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueStatusRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/status`, 'PATCH', body, actorId);
   return response;
 }
@@ -1867,7 +1867,7 @@ async function handleUpdateIssueCommentPolicy(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueCommentPolicyRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/comment-policy`, 'PATCH', body, actorId);
   return response;
 }
@@ -1882,7 +1882,7 @@ async function handleCreateIssueComment(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').CreateIssueCommentRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/comments`, 'POST', { ...body, createdBy: actorId, issueId: id }, actorId);
   return response;
 }
@@ -1905,7 +1905,7 @@ async function handleCreateIssueSpecLink(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueSpecLinkRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issue-spec-links', 'POST', body, actorId);
   return response;
 }
@@ -1915,7 +1915,7 @@ async function handleCreateIssueCandidateLink(
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueCandidateLinkRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issue-candidate-links', 'POST', body, actorId);
   return response;
 }
@@ -1945,7 +1945,7 @@ async function handleExecuteCandidate(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body = await request.json() as { sandboxRunnerUrl?: string };
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
 
   // Extract sandbox runner URL from body or use default
   const sandboxRunnerUrl = body.sandboxRunnerUrl || 'https://beehive.example.com';
@@ -1967,7 +1967,7 @@ async function handleRunPreMergeGate(
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body = await request.json() as unknown;
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/gate/pre-merge`, 'POST', body, actorId);
   return response;
 }
