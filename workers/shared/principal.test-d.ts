@@ -1,6 +1,10 @@
 /**
  * Type-level tests for custom request types
- * These should fail to type-check if the type safety is broken
+ * These should fail to type-check if the type safety is broken.
+ * 
+ * Convention: .test-d.ts files contain only type-level assertions (no runtime code).
+ * They are checked by `tsc --noEmit` and should produce compile-time errors
+ * if type safety is violated.
  */
 
 import type { Request } from 'workers/api/types';

@@ -1419,7 +1419,7 @@ $ ./scripts/demo-end-to-end.sh --local
 // HEALTH
 // ============================================================================
 
-async function handleHealth(_request: Request, specDoStub: SpecDoStub): Promise<Response> {
+async function handleHealth(request: Request, specDoStub: SpecDoStub): Promise<Response> {
   // The Spec DO's /health answers only after its init() (schema + migrations) succeeded, so a ledger
   // stuck on a failed migration shows here. The ledger is the only database: both checks share the result.
   let ledgerOk = false;
