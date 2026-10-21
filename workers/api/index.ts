@@ -21,7 +21,7 @@ interface Env {
   ANALYTICS?: AnalyticsEngineDataset;
 }
 
-import { authenticate, authorize } from './principal';
+import { authenticate, authorize, withAuth, withActor, type ActorRequest } from '../shared/principal';
 import { handleServiceAccountRoutes } from './service-accounts';
 import { handleUserTokenRoutes } from './user-tokens';
 import { handleLifecycleRoutes } from './lifecycle';
@@ -108,6 +108,12 @@ export default {
       const headers = new Headers(request.headers);
       headers.set('X-Actor-ID', principal.actorId);
       request = new Request(request, { headers });
+
+    // Wrap request with auth context for compile-time safety
+    const authedRequest = withAuth(request, principal);
+    const actorRequest = withActor(authedRequest, principal);
+    if (actorRequest instanceof Response) return actorRequest;
+
     }
     // Maintainer cap (M12): a user token without the maintainer scope never exercises its actor's
     // maintainer role. Wrapped once, here; only this stub is used below (handlers build fresh
