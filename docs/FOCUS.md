@@ -165,7 +165,9 @@ agent-autonomy items (agent-created issues/specs, change-type classification).
 ## Queued milestones
 
 **Recommended order (per Opus agent):**
-1. M5a (idempotency + bootstrap schema + change-type classification + two-person rule)
+1. **M5a (idempotency partially complete on `agent/m5a-idempotency-fix`)** — Idempotency keys schema m10
+   and queue-consumer fix are done (closes at-least-once double-write for all nine POST routes); remaining:
+   bootstrap schema fields, change-type classification, two-person merge rule.
 2. M7 (session provenance)
 3. Capability minting (M3 core + M6.2 merged)
 4. M5b (trust registry calibration)
