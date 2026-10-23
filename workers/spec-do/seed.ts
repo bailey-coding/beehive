@@ -121,6 +121,13 @@ const seedData: {
       trustScore: 50,
       promotionAuthority: false,
     },
+    {
+      id: 'queue-consumer',
+      type: 'agent',
+      name: 'Queue Consumer Worker',
+      trustScore: 100,
+      promotionAuthority: false,
+    },
   ],
 
   repositories: [
