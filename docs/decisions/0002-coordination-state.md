@@ -6,6 +6,8 @@ ADR-0002
 
 **Status:** Accepted · **Date:** 2026-10-09
 
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** Spec DO and Analytics Engine are implemented. D1 (cross-spec indexes) is not: no `d1_databases` binding or `D1Database` use exists in `workers/`. Git notes for provenance are not read or written by any worker code found (`grep` for `git notes`); treat that row as intent.
+
 ### Context
 
 The platform needs a storage strategy for coordination state that supports multi-writer,

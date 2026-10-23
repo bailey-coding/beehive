@@ -17,9 +17,6 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Import the command factory
-import { registerAllEntityCommands, registerEntityCommands } from './utils/command-factory';
-import { ENTITIES, CUSTOM_COMMAND_GROUPS } from './types/definitions';
-import type { EntityName, CustomCommandConfig } from './types/definitions';
 
 // Import manual command registrations for Phase 1 entities
 import { registerAuthCommands } from './commands/auth';
@@ -156,10 +153,13 @@ async function createCliState(opts: GlobalOptions): Promise<CliState> {
  */
 function createActionHandler<T extends unknown[]>(
   action: (state: CliState, ...args: T) => Promise<void> | void
-): (opts: GlobalOptions, ...args: T) => Promise<void> {
-  return async (opts: GlobalOptions, ...args: T) => {
+): (...commanderArgs: unknown[]) => Promise<void> {
+  // Commander calls actions as (...positionals, localOptions, command).
+  return async (...commanderArgs: unknown[]) => {
     try {
-      const state = await createCliState(opts);
+      const command = commanderArgs[commanderArgs.length - 1] as Command;
+      const args = commanderArgs.slice(0, -1) as T;
+      const state = await createCliState(command.optsWithGlobals<GlobalOptions>());
 
       // Print verbose info if enabled
       if (state.verbose) {
@@ -199,7 +199,7 @@ function registerPhase1Commands(
   program: Command,
   createHandler: <T extends unknown[]>(
     action: (state: CliState, ...args: T) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: T) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   // Phase 1: Core entities with custom command implementations
   registerAuthCommands(program, createHandler);
@@ -220,28 +220,6 @@ function registerPhase1Commands(
 }
 
 /**
- * Register Phase 2/3 entity commands using the factory
- * This automatically creates CRUD commands for new entities only
- */
-function registerGeneratedCommands(
-  program: Command,
-  createHandler: <T extends unknown[]>(
-    action: (state: CliState, ...args: T) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: T) => Promise<void>
-): void {
-  // Phase 2 and Phase 3 entities - only these are auto-registered
-  // Phase 1 entities are manually registered above
-  const phase2And3Entities = ['workflow', 'deployment', 'environment'] as const;
-  
-  for (const entityName of phase2And3Entities) {
-    const entityConfig = ENTITIES[entityName];
-    if (entityConfig) {
-      registerEntityCommands(program, entityName, entityConfig, createHandler);
-    }
-  }
-}
-
-/**
  * Main entry point
  */
 async function main(): Promise<void> {
@@ -249,9 +227,6 @@ async function main(): Promise<void> {
 
   // Register Phase 1 commands manually
   registerPhase1Commands(program, createActionHandler);
-
-  // Register Phase 2/3 commands automatically via factory
-  registerGeneratedCommands(program, createActionHandler);
 
   // Parse arguments
   await program.parseAsync(process.argv);
@@ -287,5 +262,4 @@ export {
   VERSION,
   DESCRIPTION,
   registerPhase1Commands,
-  registerGeneratedCommands,
 };

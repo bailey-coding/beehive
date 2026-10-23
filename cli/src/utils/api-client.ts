@@ -35,9 +35,6 @@ import {
   CreateIssueRequest,
   EntityHistoryResponse,
   EntityType,
-  StateDumpResponse,
-  QueueStatus,
-  ArtifactsStatus,
 } from '../types/api';
 
 // Custom error class for API errors
@@ -139,10 +136,18 @@ export class BeehiveClient {
       config.data = data;
     }
 
-    if (options?.actorId) {
+    // Per-call actor (--actor) wins; BEEHIVE_ACTOR is folded into defaultActor by loadConfig.
+    const actorId = options?.actorId || this.config.defaultActor;
+    if (actorId) {
+      // Mirror of ActorIdSchema (workers/shared/principal.ts): the edge answers 400 otherwise.
+      if (!/^[\x21-\x7e]{1,128}$/.test(actorId)) {
+        throw new Error(
+          `Invalid actor id "${actorId.slice(0, 40)}": use 1-128 printable ASCII characters with no spaces (--actor, BEEHIVE_ACTOR or defaultActor).`
+        );
+      }
       config.headers = {
         ...config.headers,
-        'X-Actor-ID': options.actorId,
+        'X-Actor-ID': actorId,
       };
     }
 
@@ -178,7 +183,7 @@ export class BeehiveClient {
   }
 
   async getHealthExtended(): Promise<HealthResponse> {
-    return this.request<HealthResponse>('GET', '/api/health');
+    return this.request<HealthResponse>('GET', '/health');
   }
 
   // ============================================================================
@@ -514,9 +519,7 @@ export class BeehiveClient {
     );
   }
 
-  async getPromotion(id: string): Promise<PromotionResponse> {
-    return this.request<PromotionResponse>('GET', `/promotions/${id}`);
-  }
+
 
   // ============================================================================
   // ISSUES
@@ -567,62 +570,7 @@ export class BeehiveClient {
     );
   }
 
-  // ============================================================================
-  // DEBUG ENDPOINTS (Custom for CLI)
-  // Note: These may need to be added to the API worker
-  // ============================================================================
 
-  /**
-   * Get full state dump from Spec DO
-   * This is a debug endpoint that aggregates all entities
-   */
-  async getStateDump(options?: RequestOptions): Promise<StateDumpResponse> {
-    return this.request<StateDumpResponse>('GET', '/debug/state-dump', undefined, options);
-  }
-
-  /**
-   * Get queue status
-   */
-  async getQueueStatus(queueName: string, options?: RequestOptions): Promise<QueueStatus> {
-    return this.request<QueueStatus>('GET', `/debug/queues/${queueName}/status`, undefined, options);
-  }
-
-  /**
-   * List all queues
-   */
-  async listQueues(options?: RequestOptions): Promise<QueueStatus[]> {
-    return this.request<QueueStatus[]>('GET', '/debug/queues', undefined, options);
-  }
-
-  /**
-   * Get Artifacts status
-   */
-  async getArtifactsStatus(options?: RequestOptions): Promise<ArtifactsStatus> {
-    return this.request<ArtifactsStatus>('GET', '/debug/artifacts/status', undefined, options);
-  }
-
-  /**
-   * List Artifacts repositories
-   */
-  async listArtifactsRepos(options?: RequestOptions): Promise<{ repositories: unknown[] }> {
-    return this.request<{ repositories: unknown[] }>('GET', '/debug/artifacts/repos', undefined, options);
-  }
-
-  /**
-   * Test claim workflow
-   */
-  async testClaimWorkflow(
-    specId: string,
-    dryRun?: boolean,
-    options?: RequestOptions
-  ): Promise<ClaimSpecResponse> {
-    return this.request<ClaimSpecResponse>(
-      'POST',
-      `/debug/claim-test/${specId}`,
-      { dryRun },
-      options
-    );
-  }
 
   // ============================================================================
   // RAW REQUEST (for extensibility)

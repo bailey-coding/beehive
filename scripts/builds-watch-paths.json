@@ -1,0 +1,16 @@
+{
+  "path_includes": ["*"],
+  "path_excludes": ["docs/*", "*.md"],
+  "workers": [
+    "beehive",
+    "beehive-gate-workflow",
+    "beehive-queue-consumer",
+    "beehive-shadow-router",
+    "beehive-scientist-comparator",
+    "beehive-preview-manager",
+    "beehive-candidate-service",
+    "beehive-canary-worker",
+    "beehive-promotion-worker",
+    "beehive-sandbox-runner"
+  ]
+}

@@ -653,15 +653,20 @@ max_batch_timeout = 30
 
 ## 🧩 Design Decisions
 
-For detailed rationales, see `docs/decisions/`:
+For detailed rationales and the ADR (Architecture Decision Record) process, see [docs/decisions/README.md](docs/decisions/README.md):
 
 | ADR | Decision | Status |
 |-----|----------|--------|
-| 0001 | VCS Client Model (Sapling-first) | Accepted |
-| 0002 | Coordination State (DO SQLite) | Accepted |
-| 0003 | Language (TypeScript) | Accepted |
-| 0004 | CI (Workers-only) | Accepted |
-| 0005 | Org Memory (Maintainer-only) | Accepted |
+| [0001](./docs/decisions/0001-vcs-client-model.md) | VCS Client Model (Sapling-first) | Accepted |
+| [0002](./docs/decisions/0002-coordination-state.md) | Coordination State (DO SQLite) | Accepted |
+| [0003](./docs/decisions/0003-language.md) | Language (TypeScript) | Accepted |
+| [0004](./docs/decisions/0004-ci.md) | CI and Builds | Accepted |
+| [0005](./docs/decisions/0005-org-memory.md) | Organizational Memory | Proposed |
+| [0006](./docs/decisions/0006-deploy-path.md) | Deploy path: GitHub CI-only, one Artifacts push | Accepted |
+| [0007](./docs/decisions/0007-fail-closed-edge-auth.md) | Fail-closed edge authentication | Accepted |
+| [0008](./docs/decisions/0008-tombstone-then-purge.md) | Tombstone, then guarded purge | Accepted |
+
+**Note:** For proposing new features or major changes, use the [RFC process](docs/rfcs/README.md). For documenting learnings from incidents, use the [RFO process](docs/rfos/README.md).
 
 ---
 
@@ -675,7 +680,10 @@ For detailed rationales, see `docs/decisions/`:
 | `docs/OPEN-QUESTIONS.md` | Findings, issues, undocumented behavior |
 | `docs/ARTIFACTS-SETUP.md` | Cloudflare Artifacts configuration |
 | `docs/UI-DASHBOARD-PLAN.md` | Dashboard implementation roadmap |
-| `docs/decisions/` | Architecture Decision Records (ADRs) |
+| `docs/decisions/README.md` | ADR process and all Architecture Decision Records |
+| `docs/rfcs/README.md` | RFC process for proposing new features |
+| `docs/rfos/README.md` | RFO process for incident post-mortems |
+| `docs/templates/README.md` | Reusable templates for documentation |
 
 ---
 

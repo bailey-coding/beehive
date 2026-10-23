@@ -504,7 +504,7 @@ list `sqlite_master` before deploying.
 
 ## Promotion worker calls Spec DO routes that do not exist (2026-10-16)
 
-**Status**: Open, found by the local e2e rerun after the ledger CAS change. Pre-existing; spine work.
+**Status**: Resolved 2026-10-16 (promotion-routes-fix) with the existing DO routes; the plan is at the end of this entry. Found by the local e2e rerun after the ledger CAS change.
 
 **Finding**: `workers/promotion-worker` calls `GET /candidates/:id` (tournament metrics,
 `tournament.ts`), `PATCH /candidates/:id` (promote the winner: `current_rung`, `status: promoted`,
@@ -514,24 +514,212 @@ them: its candidate routes are `/api/candidates`, `/api/candidates/:id`, `.../st
 fall back to defaults, a tournament winner and a rolled-back merge-train car are never recorded on the
 candidate, and none of it failed visibly because the responses were not checked.
 
-**Not fixed here**: making the winner PATCH fatal (tried, reverted) fails every tournament at the last
+**Original note (now resolved)**: making the winner PATCH fatal (tried, reverted) fails every tournament at the last
 step. The fix is a decision for the maintainer: which DO route and fields carry a rung change
 (`/api/candidates/:id/stage` exists), what a rollback writes, and whether the DO should own the
 `current_rung` bookkeeping the ledger already has in `promotion_states`. Until then the winner PATCH
 only logs a warning.
 
+**Plan (promotion-routes-fix, existing routes only, no DO change)**:
+- `GET /candidates/:id` -> `GET /api/candidates/:id`. The body is `{success, data}` with `shadowScore` and
+  `shadowMetrics` (a JSON string); there are no `metrics`/`score` fields, so those two feed the existing defaults.
+  A !ok answer still falls back to defaults (the comparison tolerates missing metrics), but is now a real read.
+- Winner `PATCH /candidates/:id` -> `PATCH /api/candidates/:id/stage {stage, notes}` with `X-Actor-ID:
+  promotion-worker`. The DO writes `candidates.stage` and an `entity_history` row. Rung -> stage:
+  pre-merge `passed_premerge`, shadow `passed_shadow`, train `passed_train`, canary `passed_canary`, full
+  `promoted`. `promoted_at` has no column; the history row's `changed_at` is that timestamp. The call is
+  fatal again (throws on !ok), so the tournament is recorded `failed` and can be retried.
+- Rollback `POST /candidates/:id/rollback` -> the same stage route with `stage: 'rolled_back'`, `notes:
+  <reason>`. It writes the candidate stage and a history row, nothing else. Fatal for the call (returns
+  `success: false`); the ledger car is already `rolled_back` by then and the stage write is idempotent.
+- Rejected: a new `PATCH /api/candidates/:id` or `/rollback` route (spine work, and the stage route already
+  carries a stage plus history); having the DO own `current_rung` (the ledger's `promotion_states` already
+  does); calling the deploy-ref `rollbackHead` (that is the canary/ref rollback for deployed rungs, not a
+  merge-train car); adding a `promoted_at`/`current_rung` column (schema change).
+- Mixed versions: every route used exists in the DO today, so a new worker works against an old DO, and
+  an old worker against a new DO behaves as before (its 404s). No ordering dependency.
+- Result: the winner write is fatal again; tournament e2e now seeds real candidates, since a fabricated id is correctly rejected.
+- Known gap: the stage route does not validate the transition (any stage is accepted, an unknown one hits
+  the table CHECK and answers 500). Not changed here.
+
 ---
 
 ## Edge `/health` on `beehive` reports the Spec DO as ok without calling it (2026-10-16)
 
-**Status**: Open, not fixed.
+**Status**: Resolved 2026-10-17 in code (takes effect when deployed). `8480fde` made `handleHealth` call the DO's
+`/health`; it still answered HTTP 200 `degraded` when the DO was down, so a status-code check passed with a stuck
+ledger. It now answers 503 `unhealthy` (`success: false`, both checks `error`), with unit tests for the healthy,
+non-OK and throwing cases (`workers/api/tests/api.test.ts`).
 
-**Finding**: `handleHealth` (`workers/api/index.ts`) returns a fixed body with `database: 'ok'` and
+**Finding** (as first logged): `handleHealth` (`workers/api/index.ts`) returned a fixed body with `database: 'ok'` and
 `durableObject: 'ok'` and never touches the Spec DO. During the m3 -> m8 deploy the ledger was stuck at
 m5 and every DO request failed, yet `GET /health` on `beehive` still answered 200 `healthy`. It also does
 not trigger the DO's lazy init, so it does not run the migrations either (an earlier version of the
 deploy checklist said it did). `docs/OPS.md` step 4 now points at `scripts/prod-health.sh`, whose last
 check is `GET /api/organizations?limit=1`.
 
-**Want**: have `handleHealth` make a cheap DO call (the DO's own `/health` answers `OK` after `init()`)
-and report `durableObject: 'error'` with a 503 when it fails, so monitors see a stuck ledger.
+**Wanted, now done**: `handleHealth` makes a cheap DO call (the DO's own `/health` answers `OK` after `init()`)
+and reports `error` with a 503 when it fails, so monitors see a stuck ledger. It also triggers the DO's lazy init.
+
+---
+
+## CLI Parity Fixes - Implementation Findings (2026-10-16)
+
+**Status**: Resolved in `agent/parity-cli-fixes` branch
+
+- Promotion get: No GET /api/promotions/:id route exists (confirmed in workers/api/index.ts and workers/spec-do/index.ts) - removed command
+- Health extended: Base URL appends /api, so /api/health became /api/api/health (404) - fixed to /health in api-client.ts:181
+- Trial decide: API expects winnerId/comparisonMetrics, not winner/notes (workers/api/types.ts:446-448) - updated CLI
+- Promotion create: API requires fromRung/toRung (workers/api/types.ts:522-523) - added required options
+- Dead groups: No routes for workflow/deployment/environment (confirmed absent) - removed from ENTITIES
+- Debug methods: No /api/debug/* routes (confirmed absent) - removed from api-client.ts
+- Type mismatches: Aligned cli/src/types/api.ts with workers/api/types.ts
+
+---
+
+## Three workers did not redeploy on the Artifacts push (2026-10-16)
+
+**Status**: Cause found (builds failed with `Could not resolve "zod"`), fix committed 2026-10-16 and verified in
+clean copies; takes effect when pushed and deployed. Seen with `wrangler deployments list --name <worker>`.
+
+**Finding**: seven workers (`beehive`, `-gate-workflow`, `-queue-consumer`, `-scientist-comparator`,
+`-preview-manager`, `-candidate-service`, `-sandbox-runner`) each have two new deployments at 21:32 and 21:37 UTC.
+`beehive-shadow-router`, `beehive-canary-worker` and `beehive-promotion-worker` have none: their newest
+deployment is the 20:29 UTC secret change, and the code deployment before it is from 2026-10-15. `wrangler deploy
+--dry-run` builds all three, so the config is not the cause. Workers Builds status is not visible through wrangler.
+
+**Impact**: the old promotion worker sends no `X-Beehive-Internal`, so every call to the new Spec DO answers 401
+(ledger, promotion mode); the old canary worker lacks deploy-ref canary logic; the old shadow-router does not follow
+live canary refs. `scripts/prod-health.sh` passes anyway, because `/health` on each worker answers 200.
+
+**Cause**: Workers Builds installs per worker (`npm install` in `workers/<name>/`). `promotion-worker` and
+`canary-worker` import `workers/shared/promotion-ledger.ts` and `deploy-refs.ts`, and `shadow-router` imports
+`deploy-refs.ts`; those shared files `import 'zod'`. Node resolves a bare import from the importing file's own
+directory upward (`workers/shared/`, `workers/`, repo root), never from the importing worker's `node_modules`, so a
+per-worker `zod` cannot satisfy it. The seven workers that built import only zod-free shared files (`auth`,
+`spec-do-auth`) and import zod from their own folder. `beehive` builds from the repo root, where `zod` is installed.
+Every local check missed it: the repo-root `node_modules` supplies zod to everything.
+
+**Fix**: `workers/shared/package.json` declares `zod`; `promotion-worker`, `canary-worker` and `shadow-router` (which
+had no `package.json`) run `npm install --prefix ../shared` in a `postinstall`, so a per-worker install also installs
+zod where the shared files resolve it. Verified: `git archive` into a clean directory, `npm install` in the worker
+folder only, `wrangler deploy --dry-run` builds all three. Rejected: a wrangler `[alias]` to `./node_modules/zod` (builds
+in a checkout without per-worker installs, i.e. local `wrangler dev` and the e2e start script, fail with `Cannot find
+module`), and `file:../shared` (npm puts zod in the worker, not in `workers/shared`). Assumes Workers Builds runs
+lifecycle scripts (the default). Alternative if it does not: set those three builds' root directory to the repo root.
+
+**Next**: after the push, check `wrangler deployments list` shows a code deployment newer than the push for all ten.
+**Want**: a CI step that builds each worker from a clean per-worker install, since nothing else catches this.
+
+---
+
+## Review of 39a2669 (repo-level issue pages + promotion-mode persistence) (2026-10-17)
+
+**Status**: Reviewed after it shipped unreviewed with the agent stack. Persistence half is fine; the UI half is
+unreachable code with six defects. Evidence is from reading the code and evaluating the route regexes; the handler
+was not run end to end (a scratch harness kept redirecting to `/login`, cause not found).
+
+**Correction and resolution (2026-10-17, M8 PR 2, `agent/m8-issues-ui`)**: this review undercounted and is now superseded.
+`docs/M8-UI-ISSUES-PLAN.md` section 1 lists 14 defects, not six. Corrections to the list below:
+- Defect 2 (comments route) had already been fixed in `3790070`; what remained was the success redirect to `/app`, a form
+  action without the repo, and a missing `success` read as OK.
+- Defect 3: the filtered `/api/issues?repositoryId=` call was never reached in the UI tests (the stub throws `BLOCKED` on it);
+  whether production returned empty for it was not checked. The number is now assigned by the Spec DO (M8 PR 1), so the UI
+  sends none.
+- Defect 6 counted four copies of the repo lookup; there were five (plus a sixth URL builder in the dashboard).
+- Missed: link text was `getName(issue)` (issues have `title`), so the repo-tab and spec-page links rendered empty; private
+  issues showed on the detail page; `issues.status` was never written, so nothing could close or reopen an issue.
+- "Dead code with no production exposure" held only until the next deploy of the pre-fix code; it is now reachable code, on `main`
+  once PR 2 merges and live only after the maintainer's push to the Artifacts repo.
+- "Not run end to end": it is now. `workers/api/tests/ui-issues.test.ts` runs `handleUi` against the real Spec DO, and
+  `tests/e2e/ui-issues.test.ts` runs it against the local workers (`docs/SETUP.md` "Local e2e status").
+Routes are now matched before the repo routes by `workers/api/ui-repo-ref.ts`; the lookup is one helper; `GET /app/issues/:id`
+302s to the canonical repo URL. Known gap left on purpose: `doReader.get` maps a DO catch-all 404 to "not found" (404 page, not 502),
+pinned by a test so the follow-up (a distinct entity-404 error) has a target.
+
+**Promotion-mode persistence (fine)**: `/promotion-mode` GET/POST on the Spec DO, `setPromotionMode` validates the
+value server-side, tier-1 auth guards it, 122 lines of tests (`workers/promotion-worker/tests/mode-persistence.test.ts`).
+
+**UI repo-issue pages (`workers/api/ui.ts`)**:
+1. **Unreachable.** The three issue routes (`/issues`, `/issues/new`, `/issues/:id`) sit inside the existing
+   `if (repoHierarchicalMatch)` block, whose regex `^/app/repos/([^/]+)/([^/]+)(?:/([^/]+))?$` allows at most three
+   segments. `/app/repos/acme/acme/widgets/issues` (and `/issues/new`, `/issues/:id`) do not match it, so the inner
+   code never runs; the 2-part form `/app/repos/acme/widgets/issues` matches as repo `issues` and answers
+   "Repository not found". They need their own top-level matches before the repo route.
+2. **Comments cannot work.** `createIssueComment` posts to `/api/issue_comments`; the DO serves only
+   `/api/issues/:id/comments` (also in `docs/FEATURE-PARITY.md`).
+3. **Issue numbers.** `createIssue` takes `max(number) + 1` from a 500-row list and sends it as `number`: not atomic
+   (two creates get the same number) and wrong past 500. It also makes a filtered call (`/api/issues?repositoryId=`),
+   which the UI's own rule R1/R3 forbids because filtered routes returned empty in production (bind-order bug); if that
+   holds for issues, every issue is numbered 1. Unverified for issues.
+4. **Broken redirect.** `redirect(`${repoUrl}/issues?ok=Created issue #${n}`)` is unencoded: `#` starts a fragment and
+   the message is cut off. `back()` encodes; this one does not.
+5. **Not scoped.** `issuePage(issueId, ...)` resolves the repo from the URL and then ignores it, so any issue id renders
+   under any repo's URL.
+6. **Duplication.** The org/namespace/repo resolution is copied four times (three routes plus `createIssue`).
+No tests cover any of it.
+
+**Not fixed here**: `agent/parity-ui` is editing `ui.ts` (M8: comments route, `doReader` swallowing errors), so these go
+to that work to avoid a conflict. Until then the pages are dead code with no production exposure.
+
+
+## Issue writes trust a client-asserted actor until a user-bound token exists (2026-10-17)
+
+**Status**: Open - proposal only, needs a human (spine; overlaps M3/M6.2 capability minting).
+
+**Done (M8 PR 1, `agent/m8-issues-do`)**: the Spec DO resolves the `X-Actor-ID` header against the `actors` table for issue create, comment, status and comment-policy. An unknown id, `unknown` (no header) and any service-account actor get 403 (`requireIssueActor`, `workers/spec-do/index.ts`). Maintainer status stays ledger-global `actors.role` (`isMaintainer`), service actors excluded. UI requests derive the actor from the signed session, never from a form field (`workers/api/tests/ui-actor.test.ts`); a session whose actor row is gone is sent to `/login`, and a first login creates the row (`ensureActor`).
+
+**Remaining limit**: `authenticate()` (`workers/api/principal.ts:36-109`) knows only the master token, whose actor is the client-sent `X-Actor-ID` (line 44), and read-only service tokens. A master-token holder can therefore still act as any existing actor id (including a maintainer) on these routes. The CLI sends no actor on `issue create`, so it now gets an explicit 403 (it used to fail on the `created_by` foreign key with a 500).
+
+**Proposal (not built)**: a user-bound API token (`kind: 'user'`). Minted by an authenticated UI session (settings page) or by a maintainer for a named actor; stored hashed like `service_tokens` (`workers/shared/service-tokens.ts`), with a `user_tokens` table keyed to `actors.id`, scopes `read`/`write`, expiry and revoke. `authenticate()` would look the hash up in the Spec DO and return `{ kind: 'user', actorId, scopes }`, with the edge rewriting `X-Actor-ID` from it exactly as it does for service tokens (`workers/api/index.ts:100-105`), so the header is no longer client-asserted for these callers; the CLI would send the token and drop `--actor`. Open points: which routes `write` scope covers; whether a user token may ever carry `maintainer` (`isMaintainer` reads the actor, so it would); overlap with capability tokens in M3/M6.2; a new table is a schema migration, so it needs the two-push method in `docs/M8-UI-ISSUES-PLAN.md` (plan branch `agent/ui-issues-plan-v2`) section 13.
+
+**Addendum (2026-10-17, PR 1 review)**: first login is tested end to end (`workers/api/tests/ui-actor.test.ts`): the callback creates a plain `human` actor (no role, so not a maintainer), the session is accepted, and a second login reuses the row. Pre-existing limit: `ensureActor` (`workers/api/ui.ts:498`) and the per-request existence check (`ui.ts:119`) both read `/api/actors?limit=500&offset=0`. Beyond 500 actors a real user's row is not found, so every request bounces to `/login` and login creates a duplicate actor. Issue writes now depend on that lookup. Fix later with a by-id / by-github-id lookup route. Also noted: `PATCH /api/issues/:id/stage` still has no actor check (outside the plan).
+
+
+## A schema version bump turns a rollback into an outage (2026-10-17)
+
+**Status**: Open - hazard recorded; the safe method is in `docs/M8-UI-ISSUES-PLAN.md` section 13 (plan branch `agent/ui-issues-plan-v2`).
+
+`runMigrations` throws `Unknown schema_version '<v>'` when the stored version is not in the code's own step list
+(`workers/spec-do/index.ts:842`), and `init()` rethrows (`:499-506`), so every request fails. Therefore any change that bumps
+`LATEST_SCHEMA_VERSION` (`:27`, `'m8'` today) makes rolling the Spec DO back to the previous code (AGENTS.md rule 7) an outage, not
+a degraded mode. `docs/OPS.md` said only that this combination "is untested"; it is known to fail. m4-m8 shipped in one push, each step
+additive and idempotent, with a read-only `schema_version` check before and after (`docs/OPS.md`); nothing in m3-m8 made them
+rollback-safe. Safe method for the next bump (M11): push A first, with no bump, so `runMigrations` accepts an `m<N>` above the latest
+it knows (log and continue, with a test); push B, only after A is live, adds the step. Not built.
+
+**Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
+(404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
+
+## Queue-consumer double-write prevention is unfinished (2026-10-19)
+
+**Status**: Resolved - implemented in agent/m5a-idempotency-fix
+
+The three blocking issues identified by agent 621993c have been addressed:
+
+1. **scientist-comparator route fix**: Changed POST from `/api/gate-verdicts/shadow` to `/api/gate-verdicts` with `gate: 'shadow'` in the body (matches existing Spec DO route).
+
+2. **Entity history POST route**: Added POST support for `/api/entities/:entity_type/:entity_id/history` in Spec DO, with the route pattern added to `IDEMPOTENT_ROUTES`.
+
+3. **queue-consumer actor**: Added 'queue-consumer' actor of type 'agent' to the seed data in `workers/spec-do/seed.ts`, allowing FK references to `changed_by` in entity_history.
+
+The queue-consumer now sends `Idempotency-Key: ${queueName}:${event.id}` header for history writes and properly handles response status (treats 409 as already-processed, not an error).
+
+M5a now closes the at-least-once double-write for all nine POST routes in `IDEMPOTENT_ROUTES`.
+
+---
+
+## Cloudflare Flagship for Beehive platform features (2026-10-18)
+
+**Status**: Open - deferred, no immediate need
+
+**Question**: Should Beehive adopt Cloudflare Flagship for gating platform-level features (new gate types, UI changes, promotion algorithms)?
+
+**Context**: Flagship is Cloudflare's native feature flag service (built on KV + Durable Objects, OpenFeature-compatible) that enables sub-millisecond flag evaluation at the edge. It provides the workflow we want: default off, enable, ramp up, remove once full on.
+
+**Assessment**: 
+- **Not for the Oracle Ladder** - the ladder is Beehive's coordination spine; Flagship is a feature toggle utility, not a promotion system. Our existing Spec DO + dedicated workers handle candidate progression better.
+- **Good fit for platform features** - useful when we have users and want to ship risky changes behind kill switches, A/B test new algorithms, or gradually roll out UI changes.
+- **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
+
+**Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.

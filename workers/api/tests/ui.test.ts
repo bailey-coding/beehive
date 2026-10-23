@@ -157,11 +157,23 @@ const fixtureIssues = [
   { id: 'issue-003', title: 'Private security issue', repository_id: 'repo-001', change_type: 'security-sensitive', stage: 'triage', visibility: 'private', created_at: Date.now() - 57600000 },
 ];
 
+const fixtureIssueComments = [
+  { id: 'comment-001', issue_id: 'issue-001', body: 'This looks good', created_by: 'actor-001', created_at: Date.now() - 86400000 },
+  { id: 'comment-002', issue_id: 'issue-001', body: 'Needs more tests', created_by: 'actor-002', created_at: Date.now() - 72000000 },
+];
+
 const fixtureActors = [
   { id: 'actor-001', type: 'human', name: 'testuser', github_user_id: '12345', trust_score: 0.5, promotion_authority: false, created_at: Date.now() },
   { id: 'actor-002', type: 'agent', name: 'agent-001', github_user_id: undefined, trust_score: 0.7, promotion_authority: true, created_at: Date.now() },
   { id: 'actor-123', type: 'human', name: 'testuser', github_user_id: '12345', trust_score: 0.5, promotion_authority: false, created_at: Date.now() },
 ];
+
+// The session check reads GET /api/actors/:id; an unknown id falls through to the stub's 404.
+function onActors(stub: MockDurableObjectStub): void {
+  for (const actor of fixtureActors) {
+    stub.on(`/api/actors/${actor.id}`, async () => Response.json({ success: true, data: actor }));
+  }
+}
 
 // ============================================================================
 // Helper to create a mock DO stub with fixtures
@@ -214,12 +226,35 @@ function createMockStub(): MockDurableObjectStub {
     });
   });
   
-  // Actor lookup (required for auth - R3)
-  stub.on('/api/actors?limit=500&offset=0', async () => {
-    return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
+  // Issue comments - correct route is /api/issues/:id/comments
+  stub.on('/api/issues/issue-001/comments', async (req) => {
+    if (req.method === 'GET') {
+      return new Response(JSON.stringify({ success: true, data: fixtureIssueComments.filter(c => c.issue_id === 'issue-001') }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (req.method === 'POST') {
+      const body = await req.json();
+      return new Response(JSON.stringify({ success: true, data: { id: 'new-comment', ...body } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ success: false, error: 'Method not allowed' }), {
+      status: 405,
       headers: { 'Content-Type': 'application/json' },
     });
   });
+  
+  // Also handle with query params (doReader.list adds these)
+  stub.on('/api/issues/issue-001/comments?limit=500&offset=0', async () => {
+    return new Response(JSON.stringify({ success: true, data: fixtureIssueComments.filter(c => c.issue_id === 'issue-001') }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
+  
+  // Actor lookup (required for auth - R3)
+  onActors(stub);
   
   // Single-record GETs
   for (const org of fixtureOrgs) {
@@ -241,6 +276,14 @@ function createMockStub(): MockDurableObjectStub {
   for (const spec of fixtureSpecs) {
     stub.on(`/api/specs/${spec.id}`, async () => {
       return new Response(JSON.stringify({ success: true, data: spec }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+  }
+  
+  for (const issue of fixtureIssues) {
+    stub.on(`/api/issues/${issue.id}`, async () => {
+      return new Response(JSON.stringify({ success: true, data: issue }), {
         headers: { 'Content-Type': 'application/json' },
       });
     });
@@ -1238,5 +1281,246 @@ describe('Regression Tests', () => {
     const response = await handleUi(request, mockEnv, mockStub as any);
     expect(response?.status).toBe(302);
     expect(response?.headers.get('Location')).toContain('github.com/login/oauth/authorize');
+  });
+
+  describe('Issue Comments Route Bug (Task 1)', () => {
+    it('FAILS: POST /app/issue_comments calls /api/issue_comments instead of /api/issues/:id/comments', async () => {
+      // This test verifies the bug exists: UI calls /api/issue_comments which doesn't exist
+      // After fix, it should call /api/issues/issue-001/comments
+      const formData = new FormData();
+      formData.append('issueId', 'issue-001');
+      formData.append('body', 'Test comment');
+
+      const request = new Request('http://localhost/app/issue_comments', {
+        method: 'POST',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+          'Origin': 'http://localhost',
+        },
+        body: formData,
+      });
+
+      const response = await handleUi(request, mockEnv, mockStub as any);
+      // Currently this fails because /api/issue_comments doesn't exist
+      // After fix, it should succeed
+      expect(response?.status).toBe(302);
+      // The shim derives the repo and sends the user to the canonical issue URL
+      expect(response?.headers.get('Location')).toBe('/app/repos/repo-001/issues/issue-001?ok=Comment%20added#comments');
+    });
+
+    it('GET /app/issues/:id redirects to the canonical repo URL, where the comments render', async () => {
+      // This test verifies the bug exists: UI calls /api/issue_comments for list which doesn't exist
+      // After fix, it should call /api/issues/issue-001/comments
+      const request = new Request('http://localhost/app/issues/issue-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const legacy = await handleUi(request, mockEnv, mockStub as any);
+      expect(legacy?.status).toBe(302);
+      const canonical = legacy?.headers.get('Location') as string;
+      expect(canonical).toBe('/app/repos/repo-001/issues/issue-001');
+      const response = await handleUi(
+        new Request(`http://localhost${canonical}`, { headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` } }),
+        mockEnv,
+        mockStub as any
+      );
+      expect(response?.status).toBe(200);
+      const body = await response?.text();
+      // Should show the comments, not "No comments yet"
+      expect(body).toContain('This looks good');
+    });
+  });
+
+  describe('DoReader Error Surfacing Bug (Task 2)', () => {
+    it('Spec DO 500 returns 502 page with could not load message', async () => {
+      // Create a stub that returns 500 for repos list to trigger error
+      const errorStub = createMockStub();
+      // Override repos list to return 500
+      errorStub.on('/api/repositories?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      // Should surface error with 502 status
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      // Should show generic error message, not empty list
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('Genuine Not found on get yields existing not-found page', async () => {
+      // Use createMockStub which has all list endpoints mocked
+      const errorStub = createMockStub();
+      // Override specific spec get to return 'Not found'
+      errorStub.on('/api/specs/nonexistent', async () => {
+        // DO returns 'Not found' error for missing entity
+        return new Response(JSON.stringify({ success: false, error: 'Not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/specs/nonexistent', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      // Should return 404 with "Not found" page for genuine entity not found
+      expect(response?.status).toBe(404);
+      const body = await response?.text();
+      expect(body).toContain('not found');
+      expect(body).not.toContain('could not load');
+    });
+
+    it('Spec DO 500 on get returns 502 page with could not load message', async () => {
+      // Create a stub that returns 500 for a specific spec
+      const errorStub = new MockDurableObjectStub();
+      onActors(errorStub);
+      errorStub.on('/api/specs?limit=500&offset=0', async () => {
+        return new Response(JSON.stringify({ success: true, data: fixtureSpecs }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+      errorStub.on('/api/specs/nonexistent', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/specs/nonexistent', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      // Should return 502 with error page for DO errors
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('orgPage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific org get to return 500
+      errorStub.on('/api/organizations/org-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/orgs/org-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('repoPage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific repo get to return 500
+      errorStub.on('/api/repositories/repo-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/repos/repo-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('candidatePage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific candidate get to return 500
+      errorStub.on('/api/candidates/cand-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/candidates/cand-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
+
+    it('trialPage: Spec DO 500 returns 502, Not found yields 404', async () => {
+      const errorStub = createMockStub();
+      // Override specific trial get to return 500
+      errorStub.on('/api/trials/trial-001', async () => {
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+      const sessionCookie = await createTestSession();
+      const request = new Request('http://localhost/app/trials/trial-001', {
+        method: 'GET',
+        headers: { 
+          'Cookie': `${SESSION_COOKIE}=${sessionCookie}`,
+        },
+      });
+
+      const response = await handleUi(request, mockEnv, errorStub as any);
+      expect(response?.status).toBe(502);
+      const body = await response?.text();
+      expect(body).toContain('could not load this page');
+      expect(body).not.toContain('Internal server error');
+    });
   });
 });

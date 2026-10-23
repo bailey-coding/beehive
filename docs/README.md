@@ -8,11 +8,13 @@ This directory contains all Beehive project documentation, organized for **human
 
 | Category | Purpose | Key Files |
 |----------|---------|-----------|
+| **📚 Governance** | ADRs, RFCs, RFOs - decision records and proposals | [decisions/](./decisions/README.md), [rfcs/](./rfcs/README.md), [rfos/](./rfos/README.md) |
 | **🏗️ Architecture** | Core system design, non-negotiable rules, orchestration spine | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | **🎯 Milestones & Planning** | Roadmaps, phased implementation, timeline tracking | [MILESTONES.md](./MILESTONES.md), [FOCUS.md](./FOCUS.md) |
 | **📜 Feature Specs** | Detailed designs for specific capabilities | [SEMANTIC-NAVIGATION-PLAN.md](./SEMANTIC-NAVIGATION-PLAN.md), [UI-DASHBOARD-PLAN.md](./UI-DASHBOARD-PLAN.md) |
 | **📋 Issue UX Flow** | End-to-end issue creation with agent assistance | [ISSUE-CREATION-INDEX.md](./ISSUE-CREATION-INDEX.md), [ISSUE-FLOW-SUMMARY.md](./ISSUE-FLOW-SUMMARY.md) |
 | **🔍 Findings & Lessons** | Spike results, open questions, empirical validation | [OPEN-QUESTIONS.md](./OPEN-QUESTIONS.md) |
+| **🤖 Agent Guidelines** | Review standards, efficiency tips | [AGENTS-REVIEWER.md](./AGENTS-REVIEWER.md) |
 | **🛠️ Setup & Deployment** | Environment, configuration, Cloudflare integration | [SETUP.md](./SETUP.md), [ARTIFACTS-SETUP.md](./ARTIFACTS-SETUP.md) |
 | **🔐 Auth & Integration** | OAuth, Statsig, external service wiring | [OAUTH-INTEGRATION.md](./OAUTH-INTEGRATION.md), [STATSIG-INTEGRATION.md](./STATSIG-INTEGRATION.md) |
 | **✅ Verification & Testing** | Test plans, audit reports, execution results | [VERIFICATION.md](./VERIFICATION.md), [TEST-AUDIT-REPORT.md](./TEST-AUDIT-REPORT.md) |
@@ -21,6 +23,22 @@ This directory contains all Beehive project documentation, organized for **human
 ---
 
 ## 📚 Category Deep Dive
+
+### 📚 Governance & Version Control
+**Decision records, proposals, and retrospectives** - The Beehive Version Control System for documentation.
+
+All artifacts follow the workflow: **RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO**
+
+- [GOVERNANCE-SUMMARY.md](./GOVERNANCE-SUMMARY.md) - *Overview of the complete version control system*
+- [decisions/README.md](./decisions/README.md) - *ADR (Architecture Decision Records) process and index*
+  - [ADR-0001: VCS Client Model](./decisions/0001-vcs-client-model.md)
+  - [ADR-0002: Coordination State Storage](./decisions/0002-coordination-state.md)
+  - [ADR-0003: Language Strategy](./decisions/0003-language.md)
+  - [ADR-0004: CI and Builds](./decisions/0004-ci.md)
+  - [ADR-0005: Organizational Memory](./decisions/0005-org-memory.md)
+- [rfcs/README.md](./rfcs/README.md) - *RFC (Request for Comments) process for proposing features*
+- [rfos/README.md](./rfos/README.md) - *RFO (Request for Observation) process for post-mortems and learnings*
+- [templates/README.md](./templates/README.md) - *Reusable templates for ADRs, RFCs, and RFOs*
 
 ### 🏗️ Architecture
 Core system design and inviolable rules. Start here to understand **how Beehive works**.
@@ -80,6 +98,11 @@ Quality assurance and validation documentation.
 - [CLOUDFLARE-DEPLOY-FAILURES-REPORT.md](./CLOUDFLARE-DEPLOY-FAILURES-REPORT.md) - *Deploy failure analysis*
 - [FINAL-SUBMISSION-REVIEW.md](./FINAL-SUBMISSION-REVIEW.md) - *Submission review checklist*
 
+### 🤖 Agent Guidelines
+Standardized review processes and token-efficient patterns for code review agents.
+
+- [AGENTS-REVIEWER.md](./AGENTS-REVIEWER.md) - *Reviewer checklist, structure template, and Beehive-specific invariants*
+
 ### 📊 Phase Reports (M1-M7)
 Complete historical record of each milestone phase.
 
@@ -108,6 +131,7 @@ Documents that may be outdated or need consolidation.
 
 ### By Category (Exact Match)
 ```
+category: governance
 category: architecture
 category: findings
 category: setup
@@ -123,7 +147,7 @@ M1, M2, M3, M4, M5, M6, M6.5, M7
 
 ### By Document Type
 ```
-PLAN, REVIEW, REPORT, SPEC, SUMMARY, GUIDE, SETUP, INTEGRATION
+ADR, RFC, RFO, PLAN, REVIEW, REPORT, SPEC, SUMMARY, GUIDE, SETUP, INTEGRATION, TEMPLATE
 ```
 
 ### Common Patterns
@@ -139,6 +163,7 @@ When searching for implementation details:
 2. Look in **PLAN.md** files for the relevant milestone
 3. Review **[OPEN-QUESTIONS.md](./OPEN-QUESTIONS.md)** for known issues and findings
 4. Consult **IMPLEMENTATION-RESULTS.md** for prior work
+5. For governance questions, see **[decisions/](./decisions/README.md)**, **[rfcs/](./rfcs/README.md)**, **[rfos/](./rfos/README.md)**
 
 ---
 

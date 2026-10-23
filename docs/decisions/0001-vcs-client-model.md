@@ -6,6 +6,8 @@ ADR-0001
 
 **Status:** Accepted · **Date:** 2026-10-09
 
+> **Audit 2026-10-17 (`docs/RECORDS-AUDIT.md`):** No Sapling-specific code, docs or tooling exists outside this ADR and the `docs/ARCHITECTURE.md` index (grep of docs/, cli/, workers/). The stack-to-branch translation in the Decision is not built. The Mercurial rejection reasons are not verifiable from the repo.
+
 ### Context
 
 Artifacts speaks Git only (smart HTTP v1+v2 fetch, v1 receive-pack). The platform needs a

@@ -1,0 +1,9 @@
+{
+  "name": "@beehive/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Declares what workers/shared imports. Workers that import zod-using shared modules install it here via their postinstall, because Node resolves a shared file's imports from workers/shared upward, never from the importing worker's node_modules.",
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}

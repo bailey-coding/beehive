@@ -12,6 +12,8 @@ audience: human,agent
 **Recommended execution order (Opus agent review 2026-10-15):**
 0. Stabilize (fix tests, CI gates, commit docs) → M5a (idempotency + bootstrap schema) → M7 (session provenance) → Capability minting (M3 + M6.2 merged) → M5b (trust registry calibration) → M6.5 (semantic navigation) → M6.2 items deferred
 
+**M5a now COMPLETE (2026-10-19):** Idempotency implementation merged to `main` with queue-consumer double-write prevention, idempotency keys moved to schema m10, and legacy-shape migration tests added.
+
 Mocked semantic UI (M6) is in the API worker; real semantic layer (M6.5) is not built. M3 train/canary/promotion workers exist in `workers/`; the Varda-inspired spine items (DO facets, capability minting, ArtifactFS) have no implementation in the repo and remain open. M2 completed 2026-10-12 with all 4 workers deployed and operational: shadow-router (traffic mirroring), scientist-comparator (declared delta surface validation), preview-manager (Workers Builds integration), candidate-service (preview operations). Analytics Engine capturing per-candidate metrics (10+ rows). All components health-checked and verified. SPIKE completed 2026-10-11 with exit criteria met: 3 forks, 3 pushes (first-writer-wins verified against real Artifacts), 3 events, zero manual steps — validated locally (Miniflare, 13/13) and remotely. Findings in `docs/OPEN-QUESTIONS.md`.
 
 **Spike — prove the riskiest assumption.** Baseline repo → fork 3× via binding → sandbox
@@ -74,17 +76,19 @@ repo; treat as open unless a commit says otherwise. Demo video (one spec, three 
 - **Demo script:** Show concurrent agent work, issue creation, candidate spawning, and lazy file access
 **Exit criteria:** Competition submission complete with video demonstrating multi-agent coordination, autonomous issue/spec generation, and ArtifactFS lazy-loading benefits (startup time <1s, minimal bandwidth usage).
 
-**M5a — Trust & Governance Layer: Core Schema (post-submission, do next).** 
+**M5a — Trust & Governance Layer: Core Schema (COMPLETE 2026-10-19).** 
 Bootstrap governance with minimal viable ledger changes and change-type classification:
 
 **Architecture of distrust principle:** "The agent cannot be trusted, so build so that its mistakes cannot matter." Every agent starts with zero capabilities; authority flows only through explicit capability grants.
 
-- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees. **CORRECTNESS BUG: Queue delivery is at-least-once and double-writes are possible today.**
-- **Bootstrap schema fields.** Ledger fields that ship from day one: change-type classification, approval records, self-approval markers, cost attribution. This stops later governance work from needing a migration.
+- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees. **FIXED:** Queue-consumer idempotency implementation merged (`c421d63`, `dfaa8ee`, 2026-10-19), preventing double-writes.
+- **Bootstrap schema fields.** Ledger fields that ship from day one: change-type classification, approval records, self-approval markers, cost attribution. This stops later governance work from needing a migration. Idempotency keys table moved to schema m10 (`469389b`, 2026-10-19).
 - **Change-type classification** with confidence (typo-fix / refactor / behavior-change / security-sensitive / dependency-change / infra). Change type drives the gate policy: which oracles are mandatory, which can be skipped. **Note: Also an open M4 agent-autonomy item; do once and count for both.**
 - **Two-person merge rule enforced at Spec DO promotion step.** Starting in bootstrap mode (self-approvals marked as such) so governance is retrofittable by policy change, not schema migration.
+- **Legacy-shape migration tests:** Added production dump simulation tests for `service_accounts`, `actors`, `entity`, and `promotion` tables, asserting schema m10 (`e55ce32`, 2026-10-19).
 **Exit criteria:** Idempotency keys prevent double-writes; bootstrap fields added to ledger; change-type classification operational; two-person rule logic in place (even if only self-approvals for now).
 
+- **Compile-time auth safety:** Custom request types (`AuthedRequest`, `ActorRequest`, `ReadRequest`, `WriteRequest`, `MaintainerRequest`) added with branded types. All 43 API handlers in `workers/api/index.ts` migrated to use typed requests. Wrapper functions (`withAuth`, `withActor`, scope checkers) added to `workers/shared/principal.ts`. Redundant runtime `actorId` lookups removed from handlers. Type-level tests in `principal.test-d.ts`. Implementation on `vibe/custom-request-types-1a468a`.
 ---
 
 **M5b — Trust & Governance Layer: Calibration (deferred).** Trust registry and advanced features that need measured outcomes:
@@ -114,7 +118,7 @@ closer to the platform vision with semantic intelligence at its core, even if mo
 **Exit criteria:** Semantic UI concepts visible and navigable; all existing `/app` functions
 (creating orgs/repos/specs) still work; mocked semantic sections clearly labeled as such.
 
-**M6.2 — OCAP CI Security (merged with M3 capability minting, do after M5a).** Service-scoped object-capability model for CI workflows. **NOTE: Capability validation and OCAP model merged with M3 capability minting and M5's OCAP items into a single capability system.** See full plan in `docs/OCAP-CI-PLAN.md`.
+**M6.2 — OCAP CI Security (merged with M3 capability minting, do after M5a and M12 verified identity).** Service-scoped object-capability model for CI workflows. **NOTE: Capability validation and OCAP model merged with M3 capability minting and M5's OCAP items into a single capability system.** See full plan in `docs/OCAP-CI-PLAN.md`.
 - **Service registry** — Services as first-class entities in Spec DO, with path prefixes for monorepos
 - **Capability validation in gate workflow** — PRs can only modify services the actor has capabilities for. **Unified with M5 capability model.**
 - **Scoped token generation** — CI workflows receive tokens limited to specific services and resources
@@ -148,6 +152,99 @@ addition is joining rationale to oracle-ladder outcomes.
 **Exit criteria:** Every new commit resolves to a trial and session record; no secret
 fixtures survive redaction in tests; intent search returns prior failures for a clause;
 one successor candidate demonstrably starts from a prior session.
+
+**M8 — Surface parity and route correctness (proposed 2026-10-16, not started).** Make the
+API, CLI and UI agree, and remove calls to routes that do not exist. Source of truth:
+`docs/FEATURE-PARITY.md` (read from code only; confirm each "broken" claim at runtime first).
+- **Route correctness: done 2026-10-16** (`agent/promotion-routes-fix`): the promotion worker's calls to
+  nonexistent Spec DO routes now use `GET /api/candidates/:id` and `PATCH /api/candidates/:id/stage`
+  (`docs/OPEN-QUESTIONS.md` 2026-10-16). Deployed once the merge is pushed and `git push cf main` runs.
+- **UI:** `doReader` surfaces errors instead of turning 404/500 into empty lists.
+- **UI issue pages: done 2026-10-17** (PR 1, the Spec DO half, and PR 2, the UI, are on `main`). Issue
+  comments use `/api/issues/:id/comments`; the repo issue pages (list, new, detail, comment, close/reopen) are reachable in the 2-part,
+  3-part and UUID URL forms and scoped to their repo. 13 of the 14 defects in `docs/M8-UI-ISSUES-PLAN.md` section 1 are fixed; defect 11
+  (`doReader.get` maps a DO catch-all 404 to "not found") is deliberately left open and pinned by a test for the follow-up. Live once the
+  maintainer pushes to the Artifacts repo.
+- **CLI fixes:** `promotion create`/`trial decide` bodies, `health extended` path, `promotion get`;
+  register missing options and implement the create stubs; delete dead `workflow`,
+  `deployment`, `environment` groups.
+- **CLI additions:** commands for existing API routes (comments, stage, links, execute);
+  `service-account` group.
+- **Out of scope:** UI extras (parity task 8); read-only ledger/canary view and `rollback`
+  wrapper (parity task 9, needs sign-off); edge `/health` fix; tournament creation race.
+- **Exit criteria:** every CLI command parses with its flags (smoke test); no UI page maps an
+  error to an empty list; no client calls a missing route; local e2e green.
+- **Sequencing:** CLI tasks share `cli/src/utils/api-client.ts` and `cli/src/index.ts`; run
+  them serially, each branch cut from `main`.
+- **UI issue pages (plan):** `docs/M8-UI-ISSUES-PLAN.md`, reviewed in
+  `docs/M8-UI-ISSUES-PLAN-REVIEW.md`, `docs/M8-PR1-REVIEW.md`, `docs/M8-PR1-RECHECK.md`, `docs/M8-PR2-REVIEW.md` and, for the CLI actor stopgap, `docs/CLI-DEFAULT-ACTOR-REVIEW.md`. Two PRs: Spec DO changes first, then the UI (both done, see above).
+
+**M9 — Site navigation (implemented 2026-10-17 on `agent/m9-nav`; not yet merged or deployed, independent review L9 pending).** Give the
+logged-in `/app` UI one shared layout with real navigation. Plan: `docs/M9-NAV-PLAN.md` (v2), reviewed in `docs/M9-NAV-PLAN-REVIEW.md`.
+Code: `workers/api/ui-layout.ts` (`appPage`, `statusPage`, trail builders, lazy chrome source).
+- **Navbar: done.** Brand link, org switcher (20 orgs, then "All organizations (N)"), Dashboard / Repositories / Specs
+  (dashboard anchors), signed-in user and sign-out. "Issues" is contextual: it appears only inside a repo (no cross-repo
+  issue index exists).
+- **Breadcrumbs: done.** `Dashboard › org › repo › Issues › #12` and the spec, candidate, trial and status-page trails.
+- **Search box: done.** One mocked search box per page (navbar), labelled "Search (mocked)"; the in-page search forms are
+  gone, the results sections stay. Disabled where a page has no results.
+- **Shared layout pieces: done.** One flash area with live-region roles, current-page marks, skip link, landmarks,
+  contrast fixes (flash text, status badges), focus ring.
+- **Out of scope (see M10):** user menu, notifications, command palette.
+- **Exit criteria:** every `/app` session page uses the layout (pre-login pages use a minimal shell); existing `/app`
+  functions (create org, repo, spec, issue) still work; no new fetch maps an error to an empty list (a failed nav read says
+  "unavailable"); local e2e green. Manual visual checklist: `docs/M9-NAV-PLAN.md` section 5.
+
+**M10 — Account menu and notifications (proposed 2026-10-17, future).** Needs the M9 layout.
+- **User menu:** profile, API tokens and service accounts, sign-out.
+- **Notifications:** promotion, canary rollback and gate results. Open decision for a human: where the state
+  lives. By the architecture rules it is a Spec DO table (not the repo), which is spine-adjacent.
+- **Command palette:** keyboard-driven navigation and search.
+- **Exit criteria:** to be set when the notification storage decision is made.
+
+**M11 — Issue links and closed-issue comment setting (proposed 2026-10-17, future; after M9).** Both need a
+Spec DO schema change, so they ship together in one additive migration, in their own two pushes (the first
+makes an old DO tolerate an unknown `schema_version`; see `docs/M8-UI-ISSUES-PLAN.md` "Deferred"). Plan first;
+spine work, a human reviews.
+- **Issue-to-issue links:** a new `issue_issue_links` table, routes and UI ("follow-up of", "see also"),
+  limited to issues in the same organisation.
+- **Closed-issue comment setting:** a per-repository setting for whether closed issues accept comments
+  (default: they do). A new column, not a new `comment_policy` value.
+- **Also here if wanted:** unique `(repository_id, number)` index (re-run the duplicate check first), a
+  distinct entity-404 error, number-based issue URLs.
+- **Exit criteria:** migration applied with an old and a new DO both serving; `migrations.test.ts` and
+  `schema-sync.test.ts` green; org purge still works; local e2e green.
+
+**M12 — Verified identity and user tokens (proposed 2026-10-17, future; capability minting (M3 + M6.2) depends on it).**
+Today `authenticate()` (`workers/api/principal.ts`) knows only the master token, whose actor is the client-sent
+`X-Actor-ID`, and read-only service tokens; UI users arrive through a GitHub session. A capability granted to an
+actor that anyone holding the master token can claim proves nothing, so minting needs a verified principal first.
+Spine work: a human designs it; start from the 2026-10-17 proposal in `docs/OPEN-QUESTIONS.md`.
+- **User tokens:** `authenticate()` returns a `kind: 'user'` principal; where tokens are minted, stored (hashed),
+  scoped, expired and revoked; how a token maps to an `actors` row.
+- **Master token:** what happens to actor assertion once user tokens exist (keep for break-glass admin only?).
+- **CLI:** login/token storage replaces the default-actor stopgap below.
+- **Stopgap until then (small, CLI only):** apply `defaultActor` (config) or `BEEHIVE_ACTOR` (env) to every request
+  as `X-Actor-ID`, `--actor` still overriding; the actor must be a real `actors` row. This is attribution, not
+  authentication; document it as an admin stopgap in `docs/OPS.md`.
+- **Exit criteria:** to be set in the design; at minimum, a write by a user token cannot name a different actor.
+- **Status (2026-10-19):** designed in RFC-0008 (Accepted), planned in `docs/M12-IMPL-PLAN.md`. PR-0 (actor lookup) and
+  push A (rollback floor `8de5485`) are live. PR-B (T2-T6d: `bh_usr_` tokens in the Spec DO, schema `m9`, the edge
+  branch and write allow-list, the maintainer cap, admin routes, `/app/settings/tokens`, master stage-1 logging) is on
+  `agent/m12-pr-b`, **T2 merged** (`e786f60`, `50728bc`, 2026-10-19: user token helpers generalized to `bh_usr_` prefix
+  in `service-tokens.ts`, `user` kind and `userTokenId` added to `Principal`). Remaining PR-B tasks (T3-T6d) still
+  on branch. Left: PR-C (CLI, T7), PR-D1/PR-D2 (`SESSION_SIGNING_KEY`, T8/T9). Master stage 2 is a separate
+  later decision. **Schema note:** M12 PR-B uses schema m9 for `user_tokens` table; M5a idempotency moved
+  idempotency keys from m9 to m10, so M12 references updated accordingly (`3365259`, 2026-10-19).
+- **Exit criteria (from the plan):** (1) a write with a user token is attributed to the token's actor whatever
+  `X-Actor-ID` says (local e2e `tests/e2e/user-tokens.test.ts`); (2) user tokens are hashed at rest, at most 90 days,
+  revocable from the next request, minted only for human actors with a GitHub id; (3) every failure is fail-closed (401
+  for a bad token, 503 when the DO cannot answer, including an older DO); (4) no user-token scope writes oracle outcomes
+  (verdicts, trials, promotions, candidate stage, execute) or reaches lifecycle and admin routes; (5) the CLI acts as its
+  user without the master token (PR-C); (6) the master token can no longer forge a UI session (PR-D2).
+- **Documentation:** `docs/OPS.md` updated with "User tokens" section (mint, rotate, revoke, freshness scope, push B
+  checks, stage-1 Workers Logs + AE query) and `docs/FOCUS.md` M12 follow-ups (`c623045`, 2026-10-19). Review docs
+  added: `docs/M12-PRB-REVIEW.md` with nits N1-N5 and fixes S1-S2 (`f1595c`, `a7308a2`, 2026-10-19).
 
 ---
 

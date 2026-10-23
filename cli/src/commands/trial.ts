@@ -7,17 +7,19 @@ import { printOutput, formatSuccess, formatError } from '../utils/output';
 
 export function registerTrialCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const trial = program.command('trial').description('Trial operations');
 
-  trial.command('create').description('Create a trial').action(createHandler(async (state, ..._args) => {
-    const args = _args as [{ candidateA?: string; candidateB?: string; spec?: string }];
-    if (!args[0]?.candidateA || !args[0]?.candidateB || !args[0]?.spec) {
-      console.error(formatError('candidateA, candidateB, and spec are required'));
-      process.exit(1);
-    }
-    console.log(formatError('Trial creation not fully implemented'));
+  trial.command('create').description('Create a trial').requiredOption('--candidate-a <id>', 'Candidate A ID').requiredOption('--candidate-b <id>', 'Candidate B ID').requiredOption('--spec <id>', 'Spec ID').option('--decided-by <id>', 'Decided by actor ID').option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)').action(createHandler(async (state, ..._args) => {
+    const opts = _args[0] as { candidateA: string; candidateB: string; spec: string; decidedBy?: string; actor?: string };
+    const result = await state.client.createTrial({
+      candidateAId: opts.candidateA,
+      candidateBId: opts.candidateB,
+      specId: opts.spec,
+      decidedBy: opts.decidedBy,
+    }, { actorId: opts.actor });
+    printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 
   trial.command('list').description('List trials').action(createHandler(async (state) => {
@@ -34,13 +36,26 @@ export function registerTrialCommands(
     printOutput(t, { format: state.outputFormat, pretty: true });
   }));
 
-  trial.command('decide <trial-id> <winner-id>').description('Decide trial').action(createHandler(async (state, ..._args) => {
+  trial.command('decide <trial-id> <winner-id>').description('Decide trial').option('--comparison-metrics <json>', 'Comparison metrics as JSON string (default: {})').option('--decided-by <id>', 'Actor ID who decided').option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)').action(createHandler(async (state, ..._args) => {
     const trialId = _args[0] as string;
-    const winner = _args[1] as string;
-    const opts = _args[2] as { notes?: string } || {};
-    const notes = opts.notes;
+    const winnerId = _args[1] as string;
+    const opts = _args[2] as { comparisonMetrics?: string; decidedBy?: string; actor?: string } || {};
     
-    const result = await state.client.decideTrial(trialId, { winner, notes }, {});
+    let comparisonMetrics: Record<string, unknown> = {};
+    if (opts.comparisonMetrics) {
+      try {
+        comparisonMetrics = JSON.parse(opts.comparisonMetrics);
+      } catch (e) {
+        console.error(formatError('Invalid JSON for comparisonMetrics'));
+        process.exit(1);
+      }
+    }
+    
+    const result = await state.client.decideTrial(trialId, {
+      winnerId,
+      comparisonMetrics,
+      decidedBy: opts.decidedBy
+    }, { actorId: opts.actor });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 }

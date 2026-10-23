@@ -134,7 +134,7 @@ export class SpecDOClient {
   ): Promise<boolean> {
     try {
       const stub = await this.getStub();
-      const response = await stub.fetch(`/api/gate-verdicts/shadow`, {
+      const response = await stub.fetch(`/api/gate-verdicts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

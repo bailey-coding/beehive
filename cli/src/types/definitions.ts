@@ -420,80 +420,14 @@ export const ENTITIES: Record<string, EntityConfig> = {
   // ==========================================================================
   // PHASE 2: Add new entities here when starting phase 2
   // ==========================================================================
+  // NOTE: workflow, deployment, and environment entities have been removed
+  // as they reference API routes that do not exist
   
-  workflow: {
-    singular: 'workflow',
-    plural: 'workflows',
-    cliName: 'workflow',
-    description: 'Workflow management',
-    operations: ['list', 'get', 'trigger', 'cancel'],
-    createFields: [
-      { name: 'specId', type: 'id', required: true, description: 'Spec ID' },
-      { name: 'workflowType', type: 'enum', required: true, description: 'Workflow type', enumValues: ['gate', 'build', 'test', 'deploy'] },
-    ],
-    updateFields: [
-      { name: 'status', type: 'enum', required: false, description: 'Workflow status', enumValues: ['pending', 'running', 'completed', 'failed', 'cancelled'] },
-    ],
-    listDisplayFields: ['id', 'specId', 'workflowType', 'status', 'createdAt'],
-    operationConfig: {
-      trigger: {
-        requiresId: true,
-        options: [
-          { name: 'input', type: 'string', description: 'Workflow input' },
-        ],
-      },
-      cancel: {
-        requiresId: true,
-      },
-    },
-  },
-
   // ==========================================================================
   // PHASE 3: Add new entities here when starting phase 3
   // ==========================================================================
-  
-  deployment: {
-    singular: 'deployment',
-    plural: 'deployments',
-    cliName: 'deploy',
-    description: 'Deployment management',
-    operations: ['list', 'get', 'create', 'rollback'],
-    createFields: [
-      { name: 'candidateId', type: 'id', required: true, description: 'Candidate ID' },
-      { name: 'environment', type: 'string', required: true, description: 'Deployment environment' },
-      { name: 'version', type: 'string', required: false, description: 'Version tag' },
-    ],
-    updateFields: [
-      { name: 'status', type: 'enum', required: false, description: 'Deployment status', enumValues: ['pending', 'deploying', 'active', 'failed', 'rolled-back'] },
-    ],
-    listDisplayFields: ['id', 'candidateId', 'environment', 'status', 'createdAt'],
-    operationConfig: {
-      rollback: {
-        requiresId: true,
-        options: [
-          { name: 'to-version', type: 'string', description: 'Rollback to version' },
-        ],
-      },
-    },
-  },
-
-  environment: {
-    singular: 'environment',
-    plural: 'environments',
-    cliName: 'env',
-    description: 'Environment management',
-    operations: ['list', 'get', 'create', 'update', 'delete'],
-    createFields: [
-      { name: 'name', type: 'string', required: true, description: 'Environment name' },
-      { name: 'type', type: 'enum', required: true, description: 'Environment type', enumValues: ['dev', 'staging', 'production', 'shadow'] },
-      { name: 'config', type: 'string', required: false, description: 'Environment configuration' },
-    ],
-    updateFields: [
-      { name: 'name', type: 'string', required: false, description: 'Environment name' },
-      { name: 'config', type: 'string', required: false, description: 'Environment configuration' },
-    ],
-    listDisplayFields: ['id', 'name', 'type', 'status', 'createdAt'],
-  },
+  // NOTE: deployment and environment entities have been removed
+  // as they reference API routes that do not exist
 } as const;
 
 // ============================================================================

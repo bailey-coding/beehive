@@ -7,23 +7,19 @@ import { printOutput, formatSuccess, formatError } from '../utils/output';
 
 export function registerCandidateCommands(
   program: Command,
-  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const candidate = program.command('candidate').description('Candidate management');
 
-  candidate.command('create').description('Create candidate').action(createHandler(async (state, ..._args) => {
-    const args = _args[0] as { spec?: string; repository?: string; commit?: string; baseCommit?: string; agent?: string };
-    if (!args.spec || !args.repository || !args.commit || !args.baseCommit) {
-      console.error(formatError('Spec, repository, commit, and base-commit are required'));
-      process.exit(1);
-    }
+  candidate.command('create').description('Create candidate').requiredOption('--spec <id>', 'Spec ID').requiredOption('--repository <id>', 'Repository ID').requiredOption('--commit <sha>', 'Commit SHA').requiredOption('--base-commit <sha>', 'Base commit SHA').option('--agent <id>', 'Agent ID').option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)').action(createHandler(async (state, ..._args) => {
+    const opts = _args[0] as { spec: string; repository: string; commit: string; baseCommit: string; agent?: string; actor?: string };
     const result = await state.client.createCandidate({
-      specId: args.spec,
-      repositoryId: args.repository,
-      commitSha: args.commit,
-      baseCommitSha: args.baseCommit,
-      agentId: args.agent,
-    });
+      specId: opts.spec,
+      repositoryId: opts.repository,
+      commitSha: opts.commit,
+      baseCommitSha: opts.baseCommit,
+      agentId: opts.agent,
+    }, { actorId: opts.actor });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 

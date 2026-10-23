@@ -252,7 +252,7 @@ beehive trial list [--spec <spec-id>] [--stage <stage>] [--limit <n>]
 beehive trial get <trial-id>
 
 # Decide trial (select winner)
-beehive trial decide <trial-id> --winner <candidate-id> [--notes <notes>]
+beehive trial decide <trial-id> <winner-id> [--comparison-metrics <json>] [--decided-by <actor-id>]
 ```
 
 ---
@@ -267,9 +267,6 @@ beehive promotion create <candidate-id> \
 
 # List promotions
 beehive promotion list [--candidate <candidate-id>] [--limit <n>]
-
-# Get promotion details
-beehive promotion get <promotion-id>
 ```
 
 **Note:** Promotion authority is required (see `beehive actor grant-promotion`)

@@ -2,10 +2,18 @@ name: CI
 
 # CI only. Nothing here deploys: production deploys happen from the Cloudflare
 # Artifacts repo, pushed by the maintainer (docs/OPS.md).
+# paths-ignore must match the paths in ci-skip.yml, which reports the same check
+# as passed on docs-only PRs.
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   push:
     branches: ['**']
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
 
 env:
   NODE_VERSION: '22'
@@ -53,6 +61,10 @@ jobs:
 
       - name: Install worker dependencies (queue-consumer)
         working-directory: workers/queue-consumer
+        run: npm install
+
+      - name: Install CLI dependencies (tests/cli-behavior.test.ts runs the CLI via tsx)
+        working-directory: cli
         run: npm install
 
       - name: Run typecheck

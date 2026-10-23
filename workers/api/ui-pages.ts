@@ -11,7 +11,7 @@
  * Any allowlisted user can see all orgs - this is existing behavior (R9).
  */
 
-import { esc, str, table, tableHtml, page, appLink, badge, stageBadge, visibilityBadge, mockedLabel, isValidId, pick, tabs } from './ui-html';
+import { esc, str, table, tableHtml, appLink, badge, stageBadge, visibilityBadge, mockedLabel, isValidId, pick, tabs } from './ui-html';
 import { 
   semanticSearch, renderSearch, 
   semanticChangelog, renderChangelog,
@@ -19,11 +19,18 @@ import {
   mockFileTree, renderFileTree, renderFileTreeSection,
   type ArtifactsUiEnv
 } from './ui-semantic';
+import { buildRepoUrl, type RepoRef } from './ui-repo-ref';
+import {
+  appPage, statusPage, dashboardCrumb, issuesCrumbs, orgCrumbs, repoCrumbs, specCrumbs, candidateCrumbs, trialCrumbs,
+  type ChromeSource,
+} from './ui-layout';
 
 // Session type (re-exported from ui.ts for tests)
 export interface Session {
   login: string;
   actorId: string;
+  /** Sign-in time (epoch seconds). Absent on cookies issued before M12: those are never "fresh" for a token mint. */
+  iat?: number;
   exp: number;
 }
 
@@ -69,18 +76,6 @@ function formatDate(ts: number | string | undefined): string {
   const num = typeof ts === 'string' ? parseInt(ts, 10) : ts;
   if (isNaN(num)) return '';
   return new Date(num).toLocaleString();
-}
-
-/**
- * Create a subheader with back link and title.
- */
-function subHeader(title: string, backHref: string = '/app', backText: string = 'Back to dashboard'): string {
-  return `
-    <div class="subbar">
-      <a href="${esc(backHref)}" class="link">&larr; ${esc(backText)}</a>
-      <h2>${esc(title)}</h2>
-    </div>
-  `;
 }
 
 // ============================================================================
@@ -144,38 +139,7 @@ function getNamespace(row: DoRow): string {
   return pick(row, 'namespace');
 }
 
-/**
- * Build a hierarchical repo URL or fall back to UUID URL.
- * Falls back when: org not found, namespace empty, or any component has invalid characters.
- */
-function buildRepoUrl(repo: DoRow, orgs: DoRow[], repoIdFallback?: string): string {
-  const id = repoIdFallback || pick(repo, 'id');
-  const repoOrg = orgs.find((o) => pick(o, 'id') === pick(repo, 'organization_id', 'organizationId'));
-  
-  if (!repoOrg) {
-    // Fallback to UUID URL if org not found (Bug #3 fix)
-    return `/app/repos/${esc(encodeURIComponent(id))}`;
-  }
-  
-  const orgName = pick(repoOrg, 'name');
-  const namespace = pick(repo, 'namespace') || 'default';
-  const repoName = pick(repo, 'name') || id;
-  
-  // Validate all components have allowed characters (Bug #2 fix)
-  const validComponent = /^[A-Za-z0-9_.-]{1,64}$/;
-  if (!validComponent.test(orgName) || 
-      !validComponent.test(namespace) || 
-      !validComponent.test(repoName)) {
-    // Fallback to UUID URL if any component has invalid characters
-    return `/app/repos/${esc(encodeURIComponent(id))}`;
-  }
-  
-  // If namespace equals orgName, use 2-part URL; otherwise use 3-part
-  const namespacePart = namespace === orgName ? '' : `/${esc(encodeURIComponent(namespace))}`;
-  return `/app/repos/${esc(encodeURIComponent(orgName))}${namespacePart}/${esc(encodeURIComponent(repoName))}`;
-}
-
-// Export buildRepoUrl for use in ui.ts
+// buildRepoUrl lives in ui-repo-ref.ts (shared validator); re-exported for ui.ts and tests
 export { buildRepoUrl };
 
 // ============================================================================
@@ -189,10 +153,11 @@ export async function orgPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid organization ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid organization ID.');
   }
   
   const [org, repos, specs, candidates, trials, promotions, issues] = await Promise.all([
@@ -206,7 +171,7 @@ export async function orgPage(
   ]);
   
   if (!org) {
-    return page('Not found', '<p>Organization not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Organization not found. <a href="/app">Back to dashboard</a>');
   }
   
   // Filter in UI (R1)
@@ -250,10 +215,8 @@ export async function orgPage(
   ]);
   
   const body = `
-    ${subHeader(getName(org), '/app', 'All organizations')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(org))}</dd>
         <dt>Type</dt><dd>${esc(getType(org))}</dd>
@@ -271,12 +234,8 @@ export async function orgPage(
       ${tableHtml(['Name', 'Stage', 'Created'], specsRows)}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/orgs/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this organization...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
     
@@ -290,7 +249,14 @@ export async function orgPage(
     </p>
   `;
   
-  return page(getName(org), body);
+  return appPage(chrome, {
+    title: getName(org),
+    crumbs: orgCrumbs(org),
+    section: null,
+    orgId: id,
+    searchAction: `/app/orgs/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -335,10 +301,11 @@ export async function repoPage(
   url: URL,
   session: Session,
   doReader: DoReader,
-  env?: ArtifactsUiEnv
+  env: ArtifactsUiEnv | undefined,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid repository ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid repository ID.');
   }
   
   const [repo, orgs, specs, candidates, issues, trials, promotions] = await Promise.all([
@@ -352,9 +319,9 @@ export async function repoPage(
   ]);
   
   if (!repo) {
-    return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Repository not found. <a href="/app">Back to dashboard</a>');
   }
-  
+
   const repoOrg = orgs.find((o) => getId(o) === getOrganizationId(repo));
   const linkedSpec = specs.find((s) => getId(s) === getSpecId(repo));
   const repoIssues = issues.filter((i) => getRepositoryId(i) === id);
@@ -391,10 +358,8 @@ export async function repoPage(
   const tabContent = await renderRepoTab(activeTab, repo, repoOrg, linkedSpec, repoIssues, repoCandidates, repoSpecs, commits, trials, promotions, env);
   
   const body = `
-    ${subHeader(getName(repo), '/app', 'All repositories')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(repo))}</dd>
         <dt>Organization</dt><dd>${repoOrg ? `<a href="/app/orgs/${esc(encodeURIComponent(getId(repoOrg)))}">${esc(getName(repoOrg))}</a>` : 'N/A'}</dd>
@@ -411,22 +376,26 @@ export async function repoPage(
     
     ${tabContent}
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="${hierarchicalRepoPath}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this repository...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(getName(repo), body);
+
+  return appPage(chrome, {
+    title: getName(repo),
+    crumbs: repoCrumbs({ repo, org: repoOrg ?? null, repoUrl: hierarchicalRepoPath }),
+    section: 'repos',
+    orgId: repoOrg ? getId(repoOrg) : undefined,
+    repoUrl: hierarchicalRepoPath,
+    searchAction: `${hierarchicalRepoPath}#search`,
+    query,
+  }, body);
 }
 
 /**
@@ -449,7 +418,7 @@ async function renderRepoTab(
     case 'overview':
       return renderRepoOverview(repo, org, spec, candidates, trials, promotions);
     case 'issues':
-      return renderRepoIssues(issues);
+      return renderRepoIssues(issues, buildRepoUrl(repo, org ? [org] : []));
     case 'specs':
       return renderRepoSpecs(specs);
     case 'trials':
@@ -542,14 +511,14 @@ function renderRepoOverview(
 /**
  * Render repository issues tab.
  */
-function renderRepoIssues(issues: DoRow[]): string {
+function renderRepoIssues(issues: DoRow[], repoUrl: string): string {
   const publicIssues = issues.filter((i) => {
     const visibility = getVisibility(i);
     return !visibility || visibility === 'public' || visibility === 'internal';
   });
   
   const rows = publicIssues.map((i) => [
-    `<a href="/app/issues/${esc(encodeURIComponent(getId(i)))}">${esc(getName(i))}</a>`,
+    issueLink(i, repoUrl),
     visibilityBadge(getVisibility(i) || 'public'),
     esc(pick(i, 'change_type', 'changeType') || ''),
     esc(getStage(i) || ''),
@@ -631,25 +600,26 @@ export async function specPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid spec ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid spec ID.');
   }
   
   const [spec, orgs, repos, candidates, trials, promotions, issues] = await Promise.all([
-    doReader.get(`/api/specs/${encodeURIComponent(id)}`),
-    doReader.list('/api/organizations', 500),
-    doReader.list('/api/repositories', 500),
-    doReader.list('/api/candidates', 500),
-    doReader.list('/api/trials', 500),
-    doReader.list('/api/promotions', 500),
-    doReader.list('/api/issues', 500),
-  ]);
-  
-  if (!spec) {
-    return page('Not found', '<p>Spec not found. <a href="/app">Back to dashboard</a></p>', 404);
-  }
+      doReader.get(`/api/specs/${encodeURIComponent(id)}`),
+      doReader.list('/api/organizations', 500),
+      doReader.list('/api/repositories', 500),
+      doReader.list('/api/candidates', 500),
+      doReader.list('/api/trials', 500),
+      doReader.list('/api/promotions', 500),
+      doReader.list('/api/issues', 500),
+    ]);
+    
+    if (!spec) {
+      return statusPage(chrome, 404, 'Not found', 'Spec not found. <a href="/app">Back to dashboard</a>');
+    }
   
   const specOrg = orgs.find((o) => getId(o) === getOrganizationId(spec));
   const linkedRepos = repos.filter((r) => getSpecId(r) === id);
@@ -741,17 +711,15 @@ export async function specPage(
       return !visibility || visibility === 'public' || visibility === 'internal';
     })
     .map((i) => [
-      `<a href="/app/issues/${esc(encodeURIComponent(getId(i)))}">${esc(getName(i))}</a>`,
+      issueLink(i, buildRepoUrl(linkedRepos.find((r) => getId(r) === getRepositoryId(i)) ?? {}, orgs, getRepositoryId(i))),
       visibilityBadge(getVisibility(i) || 'public'),
       esc(pick(i, 'change_type', 'changeType') || ''),
       esc(getStage(i) || ''),
     ]);
   
   const body = `
-    ${subHeader(getName(spec), '/app', 'All specs')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(spec))}</dd>
         <dt>Organization</dt><dd>${specOrg ? `<a href="/app/orgs/${esc(encodeURIComponent(getId(specOrg)))}">${esc(getName(specOrg))}</a>` : 'N/A'}</dd>
@@ -798,22 +766,25 @@ export async function specPage(
       ${tableHtml(['Title', 'Visibility', 'Type', 'Stage'], issueRows)}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/specs/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this spec...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(getName(spec), body);
+
+  return appPage(chrome, {
+    title: getName(spec),
+    crumbs: specCrumbs(spec, specOrg),
+    section: 'specs',
+    orgId: specOrg ? getId(specOrg) : undefined,
+    searchAction: `/app/specs/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -827,10 +798,11 @@ export async function candidatePage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid candidate ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid candidate ID.');
   }
   
   const [candidate, specs, orgs, repos, trialsList, promotionsList, verdicts] = await Promise.all([
@@ -844,10 +816,11 @@ export async function candidatePage(
   ]);
   
   if (!candidate) {
-    return page('Not found', '<p>Candidate not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Candidate not found. <a href="/app">Back to dashboard</a>');
   }
-  
+
   const spec = specs.find((s) => getId(s) === getSpecId(candidate));
+  const specOrg = spec ? orgs.find((o) => getId(o) === getOrganizationId(spec)) : undefined;
   const repo = repos.find((r) => getId(r) === getRepositoryId(candidate));
   const repoHierarchicalUrl = repo ? buildRepoUrl(repo, orgs) : null;
   
@@ -933,10 +906,8 @@ export async function candidatePage(
   }).join('');
   
   const body = `
-    ${subHeader(`Candidate ${getId(candidate).slice(0, 8)}`, '/app', 'All candidates')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(candidate))}</dd>
         <dt>Spec</dt><dd>${spec ? `<a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a>` : 'N/A'}</dd>
@@ -971,22 +942,25 @@ export async function candidatePage(
       ${promoDetails}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/candidates/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search for this candidate...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(`Candidate ${getId(candidate).slice(0, 8)}`, body);
+
+  return appPage(chrome, {
+    title: `Candidate ${getId(candidate).slice(0, 8)}`,
+    crumbs: candidateCrumbs(candidate, spec, specOrg),
+    section: 'specs',
+    orgId: specOrg ? getId(specOrg) : undefined,
+    searchAction: `/app/candidates/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -1000,21 +974,23 @@ export async function trialPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid trial ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid trial ID.');
   }
-  
-  const [trial, specs, candidates, promotionsList] = await Promise.all([
+
+  const [trial, specs, orgs, candidates, promotionsList] = await Promise.all([
     doReader.get(`/api/trials/${encodeURIComponent(id)}`),
     doReader.list('/api/specs', 500),
+    doReader.list('/api/organizations', 500), // for the breadcrumb; shared with the navigation read
     doReader.list('/api/candidates', 500),
     doReader.list('/api/promotions', 500),
   ]);
-  
+
   if (!trial) {
-    return page('Not found', '<p>Trial not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Trial not found. <a href="/app">Back to dashboard</a>');
   }
   
   const candidateA = candidates.find((c) => getId(c) === pick(trial, 'candidate_a_id', 'candidateAId'));
@@ -1023,7 +999,9 @@ export async function trialPage(
   
   const specA = candidateA ? specs.find((s) => getId(s) === getSpecId(candidateA)) : undefined;
   const specB = candidateB ? specs.find((s) => getId(s) === getSpecId(candidateB)) : undefined;
-  
+  const trailSpec = specA ?? specB;
+  const trailOrg = trailSpec ? orgs.find((o) => getId(o) === getOrganizationId(trailSpec)) : undefined;
+
   const winnerPromotions = winner
     ? promotionsList.filter((p) => pick(p, 'candidate_id', 'candidateId') === getId(winner))
     : [];
@@ -1056,10 +1034,8 @@ export async function trialPage(
   const idSlice = (c: DoRow | undefined) => c ? getId(c).slice(0, 8) : 'N/A';
   
   const body = `
-    ${subHeader(`Trial ${getId(trial).slice(0, 8)}`, '/app', 'All trials')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(trial))}</dd>
         <dt>Candidate A</dt><dd>${candidateA ? `<a href="/app/candidates/${esc(encodeURIComponent(getId(candidateA)))}">${esc(idSlice(candidateA))}</a>` : 'N/A'}</dd>
@@ -1085,22 +1061,25 @@ export async function trialPage(
     </section>
     ` : ''}
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/trials/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search for this trial...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(`Trial ${getId(trial).slice(0, 8)}`, body);
+
+  return appPage(chrome, {
+    title: `Trial ${getId(trial).slice(0, 8)}`,
+    crumbs: trialCrumbs(trial, trailSpec, trailOrg),
+    section: 'specs',
+    orgId: trailOrg ? getId(trailOrg) : undefined,
+    searchAction: `/app/trials/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -1156,15 +1135,30 @@ function getClosedBy(row: DoRow): string {
 }
 
 /**
+ * Link text for an issue: `#<number>: <title>`, never empty (issues have `title`, not `name`).
+ */
+function issueLabel(issue: DoRow): string {
+  const number = getIssueNumber(issue);
+  const title = getIssueTitle(issue).trim();
+  if (number && title) return `#${number}: ${title}`;
+  if (title) return title;
+  if (number) return `#${number}`;
+  return `Issue ${getId(issue).slice(0, 8)}`;
+}
+
+/**
+ * Link to the canonical issue URL under its repository.
+ */
+function issueLink(issue: DoRow, repoUrl: string): string {
+  return `<a href="${repoUrl}/issues/${esc(encodeURIComponent(getId(issue)))}">${esc(issueLabel(issue))}</a>`;
+}
+
+/**
  * Render a single issue row for a table.
  */
-function renderIssueRow(issue: DoRow, repoId?: string): string[] {
-  const issueId = getId(issue);
-  const repoIdFromIssue = getRepositoryId(issue);
-  const displayRepoId = repoId || repoIdFromIssue;
-  
+function renderIssueRow(issue: DoRow, repoUrl: string): string[] {
   return [
-    `<a href="/app/repos/${esc(encodeURIComponent(displayRepoId))}/issues/${esc(encodeURIComponent(issueId))}">#${esc(getIssueNumber(issue))}: ${esc(getIssueTitle(issue))}</a>`,
+    issueLink(issue, repoUrl),
     visibilityBadge(getIssueVisibility(issue) || 'public'),
     stageBadge(getIssueStage(issue)),
     getIssueLabels(issue).map((l) => `<span class="label">${esc(l)}</span>`).join(''),
@@ -1172,58 +1166,43 @@ function renderIssueRow(issue: DoRow, repoId?: string): string[] {
   ];
 }
 
+/** Private issues are hidden from lists and from the detail page. */
+function isPrivateIssue(issue: DoRow): boolean {
+  return getIssueVisibility(issue) === 'private';
+}
+
 /**
  * List issues for a repository.
  */
 export async function repoIssuesPage(
-  repoId: string,
+  ref: RepoRef,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
-  if (!isValidId(repoId)) {
-    return page('Not found', '<p>Invalid repository ID.</p>', 404);
-  }
-  
-  const [repo, issues, orgs, specs] = await Promise.all([
-    doReader.get(`/api/repositories/${encodeURIComponent(repoId)}`),
+  const { repo, repoUrl } = ref;
+  const repoId = getId(repo);
+
+  const [issues, specs] = await Promise.all([
     doReader.list('/api/issues', 500),
-    doReader.list('/api/organizations', 500),
     doReader.list('/api/specs', 500),
   ]);
-  
-  if (!repo) {
-    return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
-  }
-  
+
   // Filter issues for this repo
   const repoIssues = issues.filter((i) => getRepositoryId(i) === repoId);
-  const publicIssues = repoIssues.filter((i) => {
-    const visibility = getIssueVisibility(i);
-    return !visibility || visibility === 'public' || visibility === 'internal';
-  });
-  
-  // Build repo URL for navigation
-  const orgId = getOrganizationId(repo);
-  const org = orgs.find((o) => getId(o) === orgId);
-  const repoUrl = org ? buildRepoUrl(repo, orgs) : `/app/repos/${esc(encodeURIComponent(repoId))}`;
-  
+  const publicIssues = repoIssues.filter((i) => !isPrivateIssue(i));
+
   // Get spec for this repo if any
   const spec = specs.find((s) => getRepositoryId(s) === repoId);
-  
-  const issueRows = publicIssues.map((i) => renderIssueRow(i, repoId));
-  
-  const notice = url.searchParams.get('ok');
-  
+
+  const issueRows = publicIssues.map((i) => renderIssueRow(i, repoUrl));
+
   const body = `
-    ${subHeader(`Issues for ${esc(getName(repo))}`, repoUrl)}
-    
-    ${notice ? `<p class="flash ok">${esc(notice)}</p>` : ''}
-    
     <section class="action-bar">
       <a href="${repoUrl}/issues/new" class="button">New Issue</a>
     </section>
-    
+
     <section>
       <h2>Issues (${publicIssues.length} of ${repoIssues.length} total)</h2>
       ${publicIssues.length > 0 ? tableHtml(
@@ -1231,153 +1210,167 @@ export async function repoIssuesPage(
         issueRows
       ) : '<p class="empty">No issues found. <a href="' + repoUrl + '/issues/new">Create one</a></p>'}
     </section>
-    
+
     ${spec ? `
     <section>
       <h2>Linked Spec</h2>
       <p><a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a> (${esc(getStage(spec))})</p>
     </section>
     ` : ''}
-    
-    <p><a href="${repoUrl}">Back to repository</a></p>
   `;
-  
-  return page(`Issues - ${getName(repo)}`, body);
+
+  return appPage(chrome, {
+    title: `Issues - ${getName(repo)}`,
+    heading: `Issues for ${getName(repo)}`,
+    crumbs: issuesCrumbs(ref),
+    section: 'issues',
+    orgId: ref.org ? getId(ref.org) : undefined,
+    repoUrl,
+    searchAction: `${repoUrl}#search`,
+  }, body);
 }
 
 /**
- * Form to create a new issue for a repository.
+ * Form to create a new issue for a repository. The number is assigned by the Spec DO.
  */
-export async function newIssuePage(
-  repoId: string,
-  url: URL,
-  session: Session,
-  doReader: DoReader
-): Promise<Response> {
-  if (!isValidId(repoId)) {
-    return page('Not found', '<p>Invalid repository ID.</p>', 404);
-  }
-  
-  const [repo, orgs] = await Promise.all([
-    doReader.get(`/api/repositories/${encodeURIComponent(repoId)}`),
-    doReader.list('/api/organizations', 500),
-  ]);
-  
-  if (!repo) {
-    return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
-  }
-  
-  // Build repo URL
-  const orgId = getOrganizationId(repo);
-  const org = orgs.find((o) => getId(o) === orgId);
-  const repoUrl = org ? buildRepoUrl(repo, orgs) : `/app/repos/${esc(encodeURIComponent(repoId))}`;
-  
-  const error = url.searchParams.get('error');
-  
+export function newIssuePage(ref: RepoRef, _url: URL, _session: Session, chrome: ChromeSource): Promise<Response> {
+  const { repo, repoUrl } = ref;
+
   const body = `
-    ${subHeader(`New Issue for ${esc(getName(repo))}`, repoUrl)}
-    
-    ${error ? `<p class="flash err">${esc(error)}</p>` : ''}
-    
     <form method="POST" action="${repoUrl}/issues" class="stack">
       <div class="form-group">
         <label for="title">Title *</label>
         <input type="text" id="title" name="title" placeholder="Brief description of the issue" required>
       </div>
-      
+
       <div class="form-group">
         <label for="body">Description</label>
         <textarea id="body" name="body" rows="10" placeholder="Detailed description..."></textarea>
       </div>
-      
+
       <div class="form-group">
         <label for="labels">Labels (comma-separated)</label>
         <input type="text" id="labels" name="labels" placeholder="bug, enhancement, documentation">
       </div>
-      
+
       <div class="form-actions">
         <button type="submit" class="button primary">Create Issue</button>
         <a href="${repoUrl}/issues" class="button">Cancel</a>
       </div>
     </form>
-    
-    <p><a href="${repoUrl}">Back to repository</a></p>
   `;
-  
-  return page(`New Issue - ${getName(repo)}`, body);
+
+  return appPage(chrome, {
+    title: `New Issue - ${getName(repo)}`,
+    heading: `New Issue for ${getName(repo)}`,
+    crumbs: issuesCrumbs(ref, undefined, 'New'),
+    section: 'issues',
+    orgId: ref.org ? getId(ref.org) : undefined,
+    repoUrl,
+    searchAction: `${repoUrl}#search`,
+  }, body);
+}
+
+/** Who is looking at the page: decides which buttons and forms are offered (the DO still decides). */
+export interface IssueViewer {
+  actorId: string;
+  isMaintainer: boolean;
 }
 
 /**
- * View a single issue.
+ * View a single issue. With a `ref` the issue must belong to that repository (404 otherwise);
+ * without one (legacy URL whose repository cannot be resolved) it renders in place, read-only.
+ * Private issues are 404 either way.
  */
 export async function issuePage(
   issueId: string,
+  ref: RepoRef | null,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  viewer: IssueViewer,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(issueId)) {
-    return page('Not found', '<p>Invalid issue ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid issue ID.');
   }
-  
-  const [issue, repos, orgs, comments] = await Promise.all([
+
+  const [issue, comments] = await Promise.all([
     doReader.get(`/api/issues/${encodeURIComponent(issueId)}`),
-    doReader.list('/api/repositories', 500),
-    doReader.list('/api/organizations', 500),
-    doReader.list('/api/issue_comments', 500),
+    doReader.list(`/api/issues/${encodeURIComponent(issueId)}/comments`, 500),
   ]);
-  
-  if (!issue) {
-    return page('Not found', '<p>Issue not found. <a href="/app">Back to dashboard</a></p>', 404);
+
+  if (!issue || isPrivateIssue(issue)) {
+    return statusPage(chrome, 404, 'Not found', 'Issue not found. <a href="/app">Back to dashboard</a>');
   }
-  
-  // Find the repo this issue belongs to
   const repoId = getRepositoryId(issue);
-  const repo = repos.find((r) => getId(r) === repoId);
-  const orgId = repo ? getOrganizationId(repo) : undefined;
-  const org = orgId ? orgs.find((o) => getId(o) === orgId) : undefined;
-  
-  // Get comments for this issue
-  const issueComments = comments.filter((c) => pick(c, 'issue_id', 'issueId') === issueId);
-  
+  if (ref && getId(ref.repo) !== repoId) {
+    return statusPage(chrome, 404, 'Not found', 'Issue not found in this repository. <a href="/app">Back to dashboard</a>');
+  }
+
+  const repo = ref?.repo;
+  const repoUrl = ref?.repoUrl ?? null;
+  const issueUrl = repoUrl ? `${repoUrl}/issues/${esc(encodeURIComponent(issueId))}` : null;
+
   // Get spec for this repo if any
   const specs = await doReader.list('/api/specs', 500);
   const spec = specs.find((s) => getRepositoryId(s) === repoId);
-  
-  // Build repo URL
-  const repoUrl = repo ? (org ? buildRepoUrl(repo, orgs) : `/app/repos/${esc(encodeURIComponent(repoId))}`) : null;
-  
+
   const labels = getIssueLabels(issue);
   const isOpen = getIssueStatus(issue) === 'open';
-  
+  const createdBy = str(pick(issue, 'created_by', 'createdBy'));
+  const canToggle = !!issueUrl && (viewer.isMaintainer || (!!createdBy && createdBy === viewer.actorId));
+  const policy = getIssueCommentPolicy(issue) || 'open';
+
+  const title = `Issue #${getIssueNumber(issue)}: ${getIssueTitle(issue)}`;
+  const toggleForm = canToggle
+    ? `<form method="POST" action="${issueUrl}/status" class="inline">
+          <input type="hidden" name="status" value="${isOpen ? 'closed' : 'open'}">
+          <button type="submit">${isOpen ? 'Close issue' : 'Reopen issue'}</button>
+        </form>`
+    : '';
+
+  let commentForm = '';
+  if (issueUrl) {
+    if (policy === 'open' || viewer.isMaintainer) {
+      commentForm = `
+        <form method="POST" action="${issueUrl}/comments" class="comment-form">
+          <textarea name="body" placeholder="Add a comment..." rows="4" maxlength="10000" required></textarea>
+          <button type="submit">Comment</button>
+        </form>`;
+    } else if (policy === 'locked') {
+      commentForm = '<p class="empty">Locked</p>';
+    } else {
+      commentForm = '<p class="empty">Only maintainers can comment on this issue.</p>';
+    }
+  }
+
   const body = `
-    ${repoUrl ? subHeader(`Issue #${getIssueNumber(issue)}: ${esc(getIssueTitle(issue))}`, repoUrl + '/issues') : `<h1>Issue #${getIssueNumber(issue)}: ${esc(getIssueTitle(issue))}</h1>`}
-    
     <section class="details-section">
       <dl>
-        <dt>Status</dt><dd>${isOpen ? '<span class="badge open">Open</span>' : '<span class="badge closed">Closed</span>'}</dd>
+        <dt>Status</dt><dd>${isOpen ? '<span class="badge open">Open</span>' : '<span class="badge closed">Closed</span>'} ${toggleForm}</dd>
         <dt>Stage</dt><dd>${stageBadge(getIssueStage(issue))}</dd>
         <dt>Visibility</dt><dd>${visibilityBadge(getIssueVisibility(issue) || 'public')}</dd>
         <dt>Labels</dt><dd>${labels.length > 0 ? labels.map((l) => `<span class="label">${esc(l)}</span>`).join('') : '<span class="empty">none</span>'}</dd>
-        <dt>Repository</dt><dd>${repo ? `<a href="${esc(repoUrl || '')}">${esc(getName(repo))}</a>` : esc(repoId || 'Unknown')}</dd>
+        <dt>Repository</dt><dd>${repo && repoUrl ? `<a href="${repoUrl}">${esc(getName(repo))}</a>` : esc(repoId || 'Unknown')}</dd>
         ${spec ? `<dt>Spec</dt><dd><a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a></dd>` : ''}
-        <dt>Created</dt><dd>${esc(formatDate(getCreatedAt(issue)))} by ${esc(getName(issue) || getId(issue))}</dt>
+        <dt>Created</dt><dd>${esc(formatDate(getCreatedAt(issue)))} by ${esc(createdBy || getId(issue))}</dd>
         ${getClosedAt(issue) ? `<dt>Closed</dt><dd>${esc(formatDate(getClosedAt(issue)))} by ${esc(getClosedBy(issue))}</dd>` : ''}
       </dl>
     </section>
-    
+
     ${getIssueBody(issue) ? `
     <section>
       <h2>Description</h2>
       <div class="markdown">${esc(getIssueBody(issue))}</div>
     </section>
     ` : ''}
-    
-    <section>
-      <h2>Comments (${issueComments.length})</h2>
-      ${issueComments.length > 0 ? `
+
+    <section id="comments">
+      <h2>Comments (${comments.length})</h2>
+      ${comments.length > 0 ? `
         <div class="comments">
-          ${issueComments.map((c) => {
+          ${comments.map((c) => {
             const commentBody = esc(str(pick(c, 'body')));
             const commentCreatedAt = formatDate(getCreatedAt(c));
             const commentCreatedBy = esc(str(pick(c, 'created_by', 'createdBy')) || getId(c));
@@ -1393,19 +1386,22 @@ export async function issuePage(
           }).join('')}
         </div>
       ` : '<p class="empty">No comments yet</p>'}
-      
-      ${isOpen ? `
-        <form method="POST" action="/app/issue_comments" class="comment-form">
-          <input type="hidden" name="issueId" value="${esc(issueId)}">
-          <textarea name="body" placeholder="Add a comment..." rows="4" required></textarea>
-          <button type="submit">Comment</button>
-        </form>
-      ` : ''}
-    </section>
-    
-    <p><a href="${repoUrl ? repoUrl + '/issues' : '/app'}">Back to issues</a></p>
-  `;
-  
-  return page(`Issue #${getIssueNumber(issue)} - ${getIssueTitle(issue)}`, body);
-}
 
+      ${commentForm}
+    </section>
+  `;
+
+  const number = getIssueNumber(issue);
+  const fallbackName = `Issue ${getId(issue).slice(0, 8)}`;
+  const tail = number ? `#${number}` : fallbackName;
+  return appPage(chrome, {
+    title: `Issue #${number} - ${getIssueTitle(issue)}`,
+    heading: title,
+    // Legacy render without a resolvable repository: no repo, no Issues item, a short trail.
+    crumbs: ref ? issuesCrumbs(ref, undefined, tail) : [dashboardCrumb(), { label: number ? `Issue #${number}` : fallbackName }],
+    section: ref ? 'issues' : null,
+    orgId: ref?.org ? getId(ref.org) : undefined,
+    repoUrl: repoUrl ?? undefined,
+    searchAction: repoUrl ? `${repoUrl}#search` : undefined,
+  }, body);
+}

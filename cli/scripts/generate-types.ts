@@ -300,17 +300,6 @@ function printEntitySummary(): void {
       console.log(`  - ${cmd.name.padEnd(20)} | ${cmd.description}`);
     }
   }
-  
-  console.log('\n=== Phases ===\n');
-  console.log('Phase 1 entities:', Object.keys(ENTITIES).filter(e => 
-    !['workflow', 'deployment', 'environment'].includes(e)
-  ).join(', '));
-  console.log('Phase 2 entities:', Object.keys(ENTITIES).filter(e => 
-    ['workflow'].includes(e)
-  ).join(', '));
-  console.log('Phase 3 entities:', Object.keys(ENTITIES).filter(e => 
-    ['deployment', 'environment'].includes(e)
-  ).join(', '));
 }
 
 // ============================================================================

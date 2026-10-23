@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { getConfig } from './config';
+import { createRequest } from './helpers';
 
 // ============================================================================
 // Test Setup and Types
@@ -435,8 +436,23 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     it.skipIf(shouldSkip)('should start tournament with participants', async () => {
       const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
       const originalMode = (await readJson(await fetch(`${WORKER_URLS.promotion}/mode`, { headers: auth }))).mode;
-      const specId = `e2e-tournament-spec-${Date.now()}`;
-      const candidateIds = [`e2e-participant-1-${Date.now()}`, `e2e-participant-2-${Date.now()}`];
+      // The winner is recorded on the candidate (PATCH /api/candidates/:id/stage), so the
+      // participants must be real rows. test-org-e2e-* is what the purge-by-prefix cleanup targets.
+      const seed = async (path: string, body: unknown, actor?: string) => {
+        const res = await fetch(createRequest(path, 'POST', body, actor ? { 'X-Actor-ID': actor } : {}));
+        expect(res.status, path).toBe(201);
+        return ((await readJson(res)).data as { id: string }).id;
+      };
+      const actor = await seed('/api/actors', { type: 'agent', name: `e2e-tournament-${Date.now()}` });
+      const orgId = await seed('/api/organizations', { name: `test-org-e2e-tournament-${Date.now()}`, type: 'artifacts' }, actor);
+      const repoId = await seed('/api/repositories', {
+        name: 'repo', organizationId: orgId, repoType: 'baseline', remoteUrl: 'https://example.invalid/r.git', namespace: 'e2e',
+      }, actor);
+      const specId = await seed('/api/specs', { name: 'spec', contract: '{}', declaredDeltaSurface: [], organizationId: orgId }, actor);
+      const candidateIds = [
+        await seed('/api/candidates', { specId, repositoryId: repoId, commitSha: 'abc', baseCommitSha: 'base' }, actor),
+        await seed('/api/candidates', { specId, repositoryId: repoId, commitSha: 'def', baseCommitSha: 'base' }, actor),
+      ];
 
       try {
         const modeRes = await fetch(`${WORKER_URLS.promotion}/mode`, {

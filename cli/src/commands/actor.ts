@@ -18,7 +18,7 @@ import { ActorResponse, CreateActorRequest, UpdateActorTrustRequest } from '../t
 async function actionCreate(state: CliState, ...args: unknown[]): Promise<void> {
   try {
     const name = args[0] as string;
-    const opts = args[1] as { type?: string; githubUserId?: string };
+    const opts = args[1] as { type?: string; githubUserId?: string; actor?: string };
     
     const request: CreateActorRequest = {
       name,
@@ -26,7 +26,7 @@ async function actionCreate(state: CliState, ...args: unknown[]): Promise<void> 
       githubUserId: opts.githubUserId,
     };
 
-    const actor = await state.client.createActor(request, { actorId: state.config.defaultActor });
+    const actor = await state.client.createActor(request, { actorId: opts.actor });
 
     if (state.outputFormat === 'json') {
       printOutput(actor, { format: state.outputFormat, pretty: true });
@@ -99,8 +99,9 @@ async function actionTrust(state: CliState, ...args: unknown[]): Promise<void> {
   try {
     const id = args[0] as string;
     const score = args[1] as number;
+    const opts = (args[2] as { actor?: string }) || {};
     const request: UpdateActorTrustRequest = { trustScore: score };
-    const actor = await state.client.updateActorTrust(id, request, { actorId: state.config.defaultActor });
+    const actor = await state.client.updateActorTrust(id, request, { actorId: opts.actor });
 
     if (state.outputFormat === 'json') {
       printOutput(actor, { format: state.outputFormat, pretty: true });
@@ -123,7 +124,8 @@ async function actionTrust(state: CliState, ...args: unknown[]): Promise<void> {
 async function actionGrantPromotion(state: CliState, ...args: unknown[]): Promise<void> {
   try {
     const id = args[0] as string;
-    const actor = await state.client.grantPromotionAuthority(id, { actorId: state.config.defaultActor });
+    const opts = (args[1] as { actor?: string }) || {};
+    const actor = await state.client.grantPromotionAuthority(id, { actorId: opts.actor });
 
     if (state.outputFormat === 'json') {
       printOutput(actor, { format: state.outputFormat, pretty: true });
@@ -151,7 +153,7 @@ export function registerActorCommands(
   program: Command,
   createHandler: (
     action: (state: CliState, ...args: unknown[]) => Promise<void> | void
-  ) => (opts: GlobalOptions, ...args: unknown[]) => Promise<void>
+  ) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const actor = program.command('actor').description('Actor management');
 
@@ -161,6 +163,7 @@ export function registerActorCommands(
     .description('Create a new actor')
     .option('--type <type>', 'Actor type: human or agent')
     .option('--github-user-id <id>', 'GitHub user ID')
+    .option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)')
     .action(createHandler(actionCreate));
 
   // List
@@ -182,11 +185,13 @@ export function registerActorCommands(
   actor
     .command('trust <id> <score>')
     .description('Update actor trust score')
+    .option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)')
     .action(createHandler(actionTrust));
 
   // Grant promotion authority
   actor
     .command('grant-promotion <id>')
     .description('Grant promotion authority to an actor')
+    .option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)')
     .action(createHandler(actionGrantPromotion));
 }

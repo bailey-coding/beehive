@@ -13,7 +13,7 @@ import {
   Rung,
   Env,
 } from './types';
-import { getSpecDo, getPromotionLedger } from './spec-do';
+import { getCandidate, setCandidateStage, getPromotionLedger, CANDIDATE_STAGE_FOR_RUNG } from './spec-do';
 
 /**
  * Extended tournament type with ID
@@ -316,19 +316,17 @@ export class TournamentManager {
     };
 
     try {
-      const specDoResponse = await getSpecDo(this.env).fetch(
-        `/candidates/${encodeURIComponent(candidateId)}`
-      );
-
-      if (!specDoResponse.ok) {
-        throw new Error(`Failed to get candidate: ${await specDoResponse.text()}`);
-      }
-
-      const candidateData = await specDoResponse.json() as { metrics?: Partial<CandidateMetrics>; score?: number };
+      const candidate = await getCandidate(this.env, candidateId) as {
+        shadowScore?: number;
+        shadowMetrics?: string;
+      };
+      const metrics = candidate.shadowMetrics
+        ? JSON.parse(candidate.shadowMetrics) as Partial<CandidateMetrics>
+        : {};
       return {
         ...defaultMetrics,
-        ...(candidateData.metrics || {}),
-        score: candidateData.score || defaultMetrics.score,
+        ...metrics,
+        score: candidate.shadowScore || defaultMetrics.score,
       };
     } catch (error) {
       console.error(`[Tournament] Failed to get metrics for ${candidateId}:`, error);
@@ -497,25 +495,13 @@ export class TournamentManager {
   ): Promise<void> {
     console.log(`[Tournament] Promoting winner ${winner.candidateId} to ${toRung}`);
 
-    const promoted = await getSpecDo(this.env).fetch(
-      `/candidates/${encodeURIComponent(winner.candidateId)}`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          current_rung: toRung,
-          status: 'promoted',
-          promoted_at: new Date().toISOString(),
-        }),
-      }
+    // Throws on !ok: the tournament is then recorded failed (recordTournamentFailure) and can be retried
+    await setCandidateStage(
+      this.env,
+      winner.candidateId,
+      CANDIDATE_STAGE_FOR_RUNG[toRung],
+      `Tournament winner ${tournament.id} promoted to ${toRung}`
     );
-    if (!promoted.ok) {
-      // Known defect, not made fatal here: the Spec DO serves no PATCH /candidates/:id (its routes are
-      // /api/candidates/...), so this has always answered 404 and the winner is never recorded on the
-      // candidate. Failing the tournament would break tournament mode end to end, and the fix (route and
-      // semantics) is spine work. docs/OPEN-QUESTIONS.md 2026-10-16 "Promotion worker calls Spec DO routes".
-      console.warn(`[Tournament] Winner ${winner.candidateId} not recorded on the candidate: ${promoted.status}`);
-    }
 
     const updatedCandidates = tournament.candidates.map(c =>
       c.candidateId === winner.candidateId

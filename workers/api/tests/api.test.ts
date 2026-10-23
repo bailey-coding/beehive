@@ -68,21 +68,45 @@ describe('API Handlers', () => {
   // ========================================================================
 
   describe('GET /health', () => {
+    const authed = () => createRequest('/health', 'GET', undefined, { Authorization: 'Bearer test-auth-token' });
+
     it('should return healthy status with correct structure', async () => {
-      const request = createRequest('/health', 'GET', undefined, {
-        Authorization: 'Bearer test-auth-token',
-      });
-      
-      const response = await worker.fetch(request, mockEnv, mockCtx);
-      
+      mockSpecDoStub.fetch.mockResolvedValue(new Response('OK', { status: 200 }));
+
+      const response = await worker.fetch(authed(), mockEnv, mockCtx);
+
       expect(response.status).toBe(200);
       const data = await response.json();
-      
+
       expect(data.success).toBe(true);
       expect(data.data.status).toBe('healthy');
       expect(data.data.version).toBeDefined();
       expect(data.data.timestamp).toBeDefined();
-      expect(data.data.checks).toBeDefined();
+      expect(data.data.checks).toEqual({ database: 'ok', durableObject: 'ok' });
+      expect(mockSpecDoStub.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers 503 unhealthy when the Spec DO answers non-OK (e.g. a stuck migration)', async () => {
+      mockSpecDoStub.fetch.mockResolvedValue(new Response('init failed', { status: 500 }));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const response = await worker.fetch(authed(), mockEnv, mockCtx);
+
+      expect(response.status).toBe(503);
+      const data = await response.json();
+      expect(data.success).toBe(false);
+      expect(data.data.status).toBe('unhealthy');
+      expect(data.data.checks).toEqual({ database: 'error', durableObject: 'error' });
+    });
+
+    it('answers 503 unhealthy when the Spec DO call throws', async () => {
+      mockSpecDoStub.fetch.mockRejectedValue(new Error('no such column: is_active'));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const response = await worker.fetch(authed(), mockEnv, mockCtx);
+
+      expect(response.status).toBe(503);
+      expect((await response.json()).data.checks.durableObject).toBe('error');
     });
 
     it('should return 401 for missing auth token', async () => {
@@ -645,5 +669,27 @@ describe('Shared Utilities', () => {
       
       expect(response.status).toBe(400);
     });
+  });
+});
+
+describe('PATCH /api/issues/:id/status (edge passthrough)', () => {
+  beforeEach(() => {
+    mockSpecDoStub.fetch.mockReset();
+    mockSpecDoNamespace.get.mockReturnValue(mockSpecDoStub);
+  });
+
+  it('forwards the body and the actor header to the Spec DO and returns its answer', async () => {
+    mockSpecDoStub.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ success: false, error: 'nope' }), { status: 403 }));
+    const request = createRequest('/api/issues/issue-1/status', 'PATCH', { status: 'closed' }, {
+      Authorization: 'Bearer test-auth-token',
+      'X-Actor-ID': 'actor-1',
+    });
+    const response = await worker.fetch(request, mockEnv, mockCtx);
+    expect(response.status).toBe(403);
+    const forwarded = mockSpecDoStub.fetch.mock.calls[0][0] as Request;
+    expect(forwarded.method).toBe('PATCH');
+    expect(new URL(forwarded.url).pathname).toBe('/api/issues/issue-1/status');
+    expect(forwarded.headers.get('X-Actor-ID')).toBe('actor-1');
+    expect(await forwarded.json()).toEqual({ status: 'closed' });
   });
 });
