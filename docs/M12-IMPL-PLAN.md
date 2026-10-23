@@ -4,6 +4,9 @@
 re-opened here) | **Date:** 2026-10-18 | Spine work (AGENTS.md rule 2): every PR is reviewed by the maintainer plus an
 independent review agent. Line numbers are on `main` at e06cf48. No code here; master stage 2 is out of scope.
 
+> **Note (2026-10-19):** `m10` is now `idempotency_keys` (M5a). Where this plan says M11's unique index on
+> `actors.github_user_id` goes in `m10`, read `m11`. The text below is left as written.
+
 ## 1. File-by-file plan
 
 **T0, actor lookup (PR-0)**

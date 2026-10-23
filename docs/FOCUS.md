@@ -95,9 +95,10 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   constant time. Follow-up, out of M12 scope.
 - **Verify 404 differs by token type, on purpose:** a service-token verify 404 is "unknown token" (401); the user-token
   verify route always answers 200 for a well-formed hash, so its 404 means an older DO (503).
-- **M11 handoff:** M11 rebases onto PR-B and takes `m10`. A UNIQUE index on `actors.github_user_id` goes in `m10` only
+- **M11 handoff:** M11 rebases onto PR-B and takes `m11`. A UNIQUE index on `actors.github_user_id` goes in `m11` only
   after the duplicate check is re-run and comes back clean: on a ledger with duplicates it throws, `init()` rethrows,
   and that is a full outage.
+  Update (2026-10-19): m10 is now `idempotency_keys` (M5a), so the index migration is m11; older docs that say m10 are historical.
 - **Prerequisite of master stage 2:** open the lifecycle routes (tombstone, purge, roles, `include_deleted`) to
   `maintainer` user tokens first; in M12 they stay master-only (plan A1). Stage 2 itself waits for the stage-1 evidence
   (`docs/OPS.md`, the AE query).
