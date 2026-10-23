@@ -20,6 +20,7 @@ import { page, esc, str, table, tableHtml, isValidId } from './ui-html';
 import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, type DoReader, type DoRow, type Session, type IssueViewer } from './ui-pages';
 import { parseRepoIssuesPath, resolveRepoRef, buildRepoUrl, validComponent, type RepoIssuesRoute, type RepoRef } from './ui-repo-ref';
 import { appPage, makeChromeSource, memoizeReader, statusPage, type ChromeSource } from './ui-layout';
+import { handleTokenSettings, parseTokenRoute, tokenPrecheck } from './ui-tokens';
 import type { SpecDoStub } from '../shared/spec-do-auth';
 
 // Re-export Session for use by tests
@@ -118,13 +119,23 @@ export async function handleUi(
 
   if (!session) return redirect('/login');
 
+  // API tokens (M12): the origin check and the mint freshness check precede every DO call,
+  // the actor lookup below included.
+  const tokenRoute = parseTokenRoute(path, method);
+  if (tokenRoute) {
+    const early = tokenPrecheck(tokenRoute, method, session, sameOrigin(request));
+    if (early) return early;
+  }
+
   // A valid signature does not prove the actor still exists (the ledger can be wiped).
   // Force a fresh login so ensureActor re-creates it instead of failing on a foreign key.
-  const actorList = await callDo(stub, '/api/actors?limit=500&offset=0', 'GET');
-  const actorRow = actorList.success && Array.isArray(actorList.data)
-    ? (actorList.data as Row[]).find((a) => pick(a, 'id') === session.actorId)
-    : undefined;
-  if (!actorRow) return redirect('/login', [clearCookie(SESSION_COOKIE)]);
+  // Looked up by id, not in a capped list. Only a 404 means "gone"; any other failure is a 503, not a login loop.
+  const lookup = await findSessionActor(stub, session.actorId);
+  if (lookup.state === 'error') {
+    return page('Service unavailable', '<p>Could not check your account. Try again shortly.</p>', 503);
+  }
+  if (lookup.state === 'missing') return redirect('/login', [clearCookie(SESSION_COOKIE)]);
+  const actorRow = lookup.row;
   // Only decides what the pages offer; the Spec DO re-checks every write. Sessions are never service accounts.
   const viewer: IssueViewer = { actorId: session.actorId, isMaintainer: pick(actorRow, 'role') === 'maintainer' };
 
@@ -139,6 +150,8 @@ export async function handleUi(
 
   // Dashboard route
   if (path === '/app' && method === 'GET') return dashboard(doReader, chrome);
+
+  if (tokenRoute) return handleTokenSettings(tokenRoute, request, session, viewer, stub, chrome);
 
   // Issue routes come first, GET and POST together (docs/M8-UI-ISSUES-PLAN.md section 2). When the
   // ref does not resolve they fall through, so repos named "issues" or "new" keep working.
@@ -322,16 +335,42 @@ async function finishLogin(
     return page('Login failed', '<p>Could not create your actor record.</p>', 500, [clearCookie(STATE_COOKIE)]);
   }
 
+  const iat = Math.floor(Date.now() / 1000);
   const token = await signSession(
-    { login: user.login, actorId, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS },
+    { login: user.login, actorId, iat, exp: iat + SESSION_TTL_SECONDS },
     env.API_AUTH_TOKEN as string
   );
   return redirect('/app', [cookie(SESSION_COOKIE, token, SESSION_TTL_SECONDS), clearCookie(STATE_COOKIE)]);
 }
 
+type SessionActor = { state: 'found'; row: Row } | { state: 'missing' } | { state: 'error' };
+
+/** `GET /api/actors/:id`: 200 with that row is found, 404 is missing, anything else is an error. */
+async function findSessionActor(stub: SpecDoStub, actorId: string): Promise<SessionActor> {
+  try {
+    const res = await stub.fetch(
+      new Request(`https://spec-do.internal/api/actors/${encodeURIComponent(actorId)}`, {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    if (res.status === 404) return { state: 'missing' };
+    const json = (await res.json().catch(() => null)) as { success?: boolean; data?: unknown } | null;
+    const row = json?.data as Row | undefined;
+    if (res.ok && json?.success === true && row && typeof row === 'object' && pick(row, 'id') === actorId) {
+      return { state: 'found', row };
+    }
+    return { state: 'error' };
+  } catch {
+    return { state: 'error' };
+  }
+}
+
 async function ensureActor(stub: SpecDoStub, login: string, githubId: string): Promise<string | null> {
-  const list = await callDo(stub, '/api/actors?limit=500&offset=0', 'GET');
-  const rows = Array.isArray(list.data) ? (list.data as Row[]) : [];
+  // The filter finds the row past the 500-row page; the .find stays for a Spec DO that ignores it.
+  // A failed lookup must never fall through to creating an actor (it would add a duplicate row).
+  const list = await callDo(stub, `/api/actors?github_user_id=${encodeURIComponent(githubId)}&limit=500&offset=0`, 'GET');
+  if (!list.success || !Array.isArray(list.data)) return null;
+  const rows = list.data as Row[];
   const existing = rows.find((a) => a.github_user_id === githubId || a.githubUserId === githubId);
   if (existing && typeof existing.id === 'string') return existing.id;
 

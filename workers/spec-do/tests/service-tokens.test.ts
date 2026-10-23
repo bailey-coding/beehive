@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
-import { SCHEMA_SQL, SERVICE_TOKENS_SQL, DEPLOY_REFS_SQL, LEDGER_CAS_SQL } from '../schema-inline';
+import { SCHEMA_SQL, SERVICE_TOKENS_SQL, DEPLOY_REFS_SQL, LEDGER_CAS_SQL, USER_TOKENS_SQL, IDEMPOTENCY_KEYS_SQL } from '../schema-inline';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
 import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 
@@ -334,9 +334,9 @@ describe('service actors and the ledger lifecycle (defence in depth)', () => {
 
   it('a service actor with a role set out of band is still not a maintainer', async () => {
     store.raw.prepare(`UPDATE actors SET role = 'maintainer' WHERE id = ?`).run(svc);
-    expect(spec.isMaintainer(svc)).toBe(false);
+    expect(spec.isMaintainer(svc, false)).toBe(false);
     expect((await call('/api/organizations?include_deleted=1', 'GET', undefined, svc)).status).toBe(403);
-    expect(spec.isMaintainer(maintainer)).toBe(true);
+    expect(spec.isMaintainer(maintainer, false)).toBe(true);
   });
 });
 
@@ -380,7 +380,7 @@ describe('m5 -> m6 migration', () => {
     spec = makeSpecDo(restarted);
     store = restarted;
     await spec.init();
-    expect(version(restarted)).toBe('m8');
+    expect(version(restarted)).toBe('m10');
     expect(columns(restarted, 'service_accounts')).toContain('actor_id');
     expect(columns(restarted, 'service_tokens').length).toBeGreaterThan(0);
     expect(raw.prepare("SELECT actor_id, token_hash FROM service_accounts WHERE id = 'legacy'").get()).toEqual({
@@ -392,14 +392,14 @@ describe('m5 -> m6 migration', () => {
     expect((await verify(hash)).status).toBe(200);
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m8');
+    expect(version(restarted)).toBe('m10');
     expect(count("SELECT COUNT(*) AS n FROM service_accounts WHERE name = 'after-migration'")).toBe(1);
   });
 
   it('schema.sql and schema-inline.ts agree byte for byte', () => {
     const file = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
     expect(file.startsWith(SCHEMA_SQL)).toBe(true);
-    // m8 (ledger versions) is the last section, after m7 (deploy refs) and m6
-    expect(file.endsWith(SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL)).toBe(true);
+    // m10 (idempotency keys) is the last section, after m9 (user tokens), m8 (ledger versions), m7 (deploy refs) and m6
+    expect(file.endsWith(SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL + USER_TOKENS_SQL + IDEMPOTENCY_KEYS_SQL)).toBe(true);
   });
 });
