@@ -17,10 +17,15 @@ interface Env {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   ALLOWED_GITHUB_USERS?: string;
+  // wrangler.toml [[analytics_engine_datasets]]; optional so a missing binding never fails a request
+  ANALYTICS?: AnalyticsEngineDataset;
 }
 
 import { authenticate, authorize } from './principal';
+import { ACTOR_ID_MAX_CHARS, withAuth, withActor } from '../shared/principal';
+import type { ActorRequest } from '../shared/principal';
 import { handleServiceAccountRoutes } from './service-accounts';
+import { handleUserTokenRoutes } from './user-tokens';
 import { handleLifecycleRoutes } from './lifecycle';
 import { handleUi } from './ui';
 
@@ -64,7 +69,7 @@ import type {
   ListFilter,
   HealthResponse,
 } from './types';
-import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
+import { getSpecDoStub, maintainerCappedStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 // Helper to generate ID for Spec DO lookup
 const DEFAULT_SPEC_DO_NAME = 'main';
@@ -91,21 +96,37 @@ export default {
     if (uiResponse) return uiResponse;
 
     // Auth - fail closed, applies to every other route including /health.
-    // Master token keeps full access; service tokens are read-only (deny by default).
-    const specDoStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
-    const principal = await authenticate(request, env, specDoStub);
+    // Master token keeps full access; service tokens are read-only; user tokens write through
+    // an allow-list (deny by default, workers/api/principal.ts).
+    const authStub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
+    const principal = await authenticate(request, env, authStub);
     if (principal instanceof Response) return principal;
     const forbidden = authorize(principal, method, path);
     if (forbidden) return forbidden;
-    if (principal.kind === 'service') {
-      // Never trust a client-supplied actor: rewrite before any handler reads it.
+    if (principal.kind === 'master') {
+      logMasterActorAssertion(request, url, env);
+    } else {
+      // Never trust a client-supplied actor (service and user tokens): rewrite before any handler reads it.
       const headers = new Headers(request.headers);
       headers.set('X-Actor-ID', principal.actorId);
       request = new Request(request, { headers });
     }
 
+    // Wrap request with auth context for compile-time safety
+    const authedRequest = withAuth(request, principal);
+    const actorRequest = withActor(authedRequest, principal);
+    if (actorRequest instanceof Response) return actorRequest;
+    // Maintainer cap (M12): a user token without the maintainer scope never exercises its actor's
+    // maintainer role. Wrapped once, here; only this stub is used below (handlers build fresh
+    // headers, so the stub is the one place that reaches every DO request).
+    const specDoStub =
+      principal.kind === 'user' && !principal.scopes.includes('maintainer') ? maintainerCappedStub(authStub) : authStub;
+
     const adminResponse = await handleServiceAccountRoutes(request, path, principal, specDoStub);
     if (adminResponse) return adminResponse;
+
+    const userTokenResponse = await handleUserTokenRoutes(request, path, principal, specDoStub);
+    if (userTokenResponse) return userTokenResponse;
 
     // Ledger lifecycle: tombstones, purge, maintainer role, ?include_deleted=1 reads
     const lifecycleResponse = await handleLifecycleRoutes(request, url, principal, specDoStub);
@@ -113,7 +134,7 @@ export default {
 
     // Health check
     if (path === '/health' || path === '/api/health') {
-      return handleHealth(request, specDoStub);
+      return handleHealth(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -121,13 +142,13 @@ export default {
     // ============================================================================
 
     if (path === '/api/organizations' && method === 'POST') {
-      return handleCreateOrganization(request, specDoStub);
+      return handleCreateOrganization(actorRequest, specDoStub);
     }
     if (path === '/api/organizations' && method === 'GET') {
-      return handleListOrganizations(request, specDoStub);
+      return handleListOrganizations(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/organizations\/[^\/]+$/) && method === 'GET') {
-      return handleGetOrganization(request, specDoStub);
+      return handleGetOrganization(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -135,19 +156,19 @@ export default {
     // ============================================================================
 
     if (path === '/api/actors' && method === 'POST') {
-      return handleCreateActor(request, specDoStub);
+      return handleCreateActor(actorRequest, specDoStub);
     }
     if (path === '/api/actors' && method === 'GET') {
-      return handleListActors(request, specDoStub);
+      return handleListActors(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/actors\/[^\/]+$/) && method === 'GET') {
-      return handleGetActor(request, specDoStub);
+      return handleGetActor(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/actors\/[^\/]+\/trust$/) && method === 'PATCH') {
-      return handleUpdateActorTrust(request, specDoStub);
+      return handleUpdateActorTrust(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/actors\/[^\/]+\/promotion-authority$/) && method === 'PATCH') {
-      return handleGrantPromotionAuthority(request, specDoStub);
+      return handleGrantPromotionAuthority(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -155,13 +176,13 @@ export default {
     // ============================================================================
 
     if (path === '/api/repositories' && method === 'POST') {
-      return handleCreateRepository(request, specDoStub);
+      return handleCreateRepository(actorRequest, specDoStub);
     }
     if (path === '/api/repositories' && method === 'GET') {
-      return handleListRepositories(request, specDoStub);
+      return handleListRepositories(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/repositories\/[^\/]+$/) && method === 'GET') {
-      return handleGetRepository(request, specDoStub);
+      return handleGetRepository(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -169,19 +190,19 @@ export default {
     // ============================================================================
 
     if (path === '/api/specs' && method === 'POST') {
-      return handleCreateSpec(request, specDoStub);
+      return handleCreateSpec(actorRequest, specDoStub);
     }
     if (path === '/api/specs' && method === 'GET') {
-      return handleListSpecs(request, specDoStub);
+      return handleListSpecs(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/specs\/[^\/]+$/) && method === 'GET') {
-      return handleGetSpec(request, specDoStub);
+      return handleGetSpec(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/specs\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateSpecStage(request, specDoStub);
+      return handleUpdateSpecStage(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/specs\/[^\/]+\/claim$/) && method === 'POST') {
-      return handleClaimSpec(request, specDoStub);
+      return handleClaimSpec(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -189,16 +210,16 @@ export default {
     // ============================================================================
 
     if (path === '/api/candidates' && method === 'POST') {
-      return handleCreateCandidate(request, specDoStub);
+      return handleCreateCandidate(actorRequest, specDoStub);
     }
     if (path === '/api/candidates' && method === 'GET') {
-      return handleListCandidates(request, specDoStub);
+      return handleListCandidates(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/candidates\/[^\/]+$/) && method === 'GET') {
-      return handleGetCandidate(request, specDoStub);
+      return handleGetCandidate(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/candidates\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateCandidateStage(request, specDoStub);
+      return handleUpdateCandidateStage(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -206,13 +227,13 @@ export default {
     // ============================================================================
 
     if (path === '/api/gate-verdicts' && method === 'POST') {
-      return handleCreateGateVerdict(request, specDoStub);
+      return handleCreateGateVerdict(actorRequest, specDoStub);
     }
     if (path === '/api/gate-verdicts' && method === 'GET') {
-      return handleListGateVerdicts(request, specDoStub);
+      return handleListGateVerdicts(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/candidates\/[^\/]+\/gate-verdicts$/) && method === 'GET') {
-      return handleGetGateVerdictsForCandidate(request, specDoStub);
+      return handleGetGateVerdictsForCandidate(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -221,12 +242,12 @@ export default {
 
     // POST /api/candidates/:id/gate/pre-merge - Run pre-merge gate
     if (path.match(/^\/api\/candidates\/[^\/]+\/gate\/pre-merge$/) && method === 'POST') {
-      return handleRunPreMergeGate(request, specDoStub);
+      return handleRunPreMergeGate(actorRequest, specDoStub);
     }
 
     // GET /api/gate-verdicts/:id - Get gate verdict
     if (path.match(/^\/api\/gate-verdicts\/[^\/]+$/) && method === 'GET') {
-      return handleGetGateVerdict(request, specDoStub);
+      return handleGetGateVerdict(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -234,16 +255,16 @@ export default {
     // ============================================================================
 
     if (path === '/api/trials' && method === 'POST') {
-      return handleCreateTrial(request, specDoStub);
+      return handleCreateTrial(actorRequest, specDoStub);
     }
     if (path === '/api/trials' && method === 'GET') {
-      return handleListTrials(request, specDoStub);
+      return handleListTrials(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/trials\/[^\/]+$/) && method === 'GET') {
-      return handleGetTrial(request, specDoStub);
+      return handleGetTrial(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/trials\/[^\/]+\/decide$/) && method === 'POST') {
-      return handleDecideTrial(request, specDoStub);
+      return handleDecideTrial(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -251,10 +272,10 @@ export default {
     // ============================================================================
 
     if (path === '/api/promotions' && method === 'POST') {
-      return handleCreatePromotion(request, specDoStub);
+      return handleCreatePromotion(actorRequest, specDoStub);
     }
     if (path === '/api/promotions' && method === 'GET') {
-      return handleListPromotions(request, specDoStub);
+      return handleListPromotions(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -262,22 +283,22 @@ export default {
     // ============================================================================
 
     if (path === '/api/issues' && method === 'POST') {
-      return handleCreateIssue(request, specDoStub);
+      return handleCreateIssue(actorRequest, specDoStub);
     }
     if (path === '/api/issues' && method === 'GET') {
-      return handleListIssues(request, specDoStub);
+      return handleListIssues(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+$/) && method === 'GET') {
-      return handleGetIssue(request, specDoStub);
+      return handleGetIssue(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateIssueStage(request, specDoStub);
+      return handleUpdateIssueStage(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
-      return handleUpdateIssueStatus(request, specDoStub);
+      return handleUpdateIssueStatus(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
-      return handleUpdateIssueCommentPolicy(request, specDoStub);
+      return handleUpdateIssueCommentPolicy(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -285,10 +306,10 @@ export default {
     // ============================================================================
 
     if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'POST') {
-      return handleCreateIssueComment(request, specDoStub);
+      return handleCreateIssueComment(actorRequest, specDoStub);
     }
     if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'GET') {
-      return handleListIssueComments(request, specDoStub);
+      return handleListIssueComments(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -296,10 +317,10 @@ export default {
     // ============================================================================
 
     if (path === '/api/issue-spec-links' && method === 'POST') {
-      return handleCreateIssueSpecLink(request, specDoStub);
+      return handleCreateIssueSpecLink(actorRequest, specDoStub);
     }
     if (path === '/api/issue-candidate-links' && method === 'POST') {
-      return handleCreateIssueCandidateLink(request, specDoStub);
+      return handleCreateIssueCandidateLink(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -320,7 +341,7 @@ export default {
     // ============================================================================
 
     if (path.match(/^\/api\/entities\/[^\/]+\/[^\/]+\/history$/) && method === 'GET') {
-      return handleGetEntityHistory(request, specDoStub);
+      return handleGetEntityHistory(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -329,7 +350,7 @@ export default {
 
     // POST /api/candidates/:id/execute - Execute candidate in sandbox
     if (path.match(/^\/api\/candidates\/[^\/]+\/execute$/) && method === 'POST') {
-      return handleExecuteCandidate(request, specDoStub);
+      return handleExecuteCandidate(actorRequest, specDoStub);
     }
 
     // ============================================================================
@@ -371,6 +392,47 @@ function extractParentId(urlOrPath: string): string {
   const path = pathnameOf(urlOrPath);
   const parts = path.split('/');
   return parts[parts.length - 2];
+}
+
+// ============================================================================
+// MASTER TOKEN STAGE 1 (RFC-0008 section 5): log, change nothing
+// ============================================================================
+
+const MAX_LOGGED_ACTOR_CHARS = ACTOR_ID_MAX_CHARS;
+
+/** url.pathname with every segment that is not a lowercase word replaced by ':id' (ids stay out of the AE blob) */
+function pathClass(pathname: string): string {
+  return pathname
+    .split('/')
+    .map((s) => (s === '' || /^[a-z][a-z-]*$/.test(s) ? s : ':id'))
+    .join('/')
+    .slice(0, 256);
+}
+
+/**
+ * One Workers Logs line and one Analytics Engine point per master request that names an actor
+ * (the evidence for the stage-2 decision; Workers Logs keep 7 days, AE longer). Fields: method,
+ * pathname, the client's X-Actor-ID (truncated: it is client-controlled) and cf-ray. Never the
+ * query string, other headers, the body or any token. Never fails the request.
+ */
+function logMasterActorAssertion(request: Request, url: URL, env: Env): void {
+  const asserted = request.headers.get('X-Actor-ID');
+  if (!asserted || asserted === 'unknown') return;
+  const actorId = asserted.slice(0, MAX_LOGGED_ACTOR_CHARS);
+  console.log(
+    JSON.stringify({
+      event: 'master_actor_assertion',
+      method: request.method,
+      path: url.pathname,
+      actorId,
+      ray: request.headers.get('cf-ray'),
+    })
+  );
+  try {
+    env.ANALYTICS?.writeDataPoint({ indexes: ['master_actor_assertion'], blobs: [actorId, request.method, pathClass(url.pathname)] });
+  } catch (error) {
+    console.error('[master_actor_assertion] Analytics Engine write failed:', error instanceof Error ? error.message : String(error));
+  }
 }
 
 function makeApiResponse<T>(data: T, status = 200): Response {
@@ -1357,7 +1419,7 @@ $ ./scripts/demo-end-to-end.sh --local
 // HEALTH
 // ============================================================================
 
-async function handleHealth(_request: Request, specDoStub: SpecDoStub): Promise<Response> {
+async function handleHealth(request: Request, specDoStub: SpecDoStub): Promise<Response> {
   // The Spec DO's /health answers only after its init() (schema + migrations) succeeded, so a ledger
   // stuck on a failed migration shows here. The ledger is the only database: both checks share the result.
   let ledgerOk = false;
@@ -1389,17 +1451,17 @@ async function handleHealth(_request: Request, specDoStub: SpecDoStub): Promise<
 // ============================================================================
 
 async function handleCreateOrganization(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateOrganizationRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/organizations', 'POST', body, actorId);
   return response;
 }
 
 async function handleListOrganizations(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1410,7 +1472,7 @@ async function handleListOrganizations(
 }
 
 async function handleGetOrganization(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1423,17 +1485,17 @@ async function handleGetOrganization(
 // ============================================================================
 
 async function handleCreateActor(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateActorRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/actors', 'POST', body, actorId);
   return response;
 }
 
 async function handleListActors(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1444,7 +1506,7 @@ async function handleListActors(
 }
 
 async function handleGetActor(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1453,22 +1515,22 @@ async function handleGetActor(
 }
 
 async function handleUpdateActorTrust(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateActorTrustRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/actors/${id}/trust`, 'PATCH', body, actorId);
   return response;
 }
 
 async function handleGrantPromotionAuthority(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/actors/${id}/promotion-authority`, 'PATCH', undefined, actorId);
   return response;
 }
@@ -1478,17 +1540,17 @@ async function handleGrantPromotionAuthority(
 // ============================================================================
 
 async function handleCreateRepository(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateRepositoryRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/repositories', 'POST', body, actorId);
   return response;
 }
 
 async function handleListRepositories(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1499,7 +1561,7 @@ async function handleListRepositories(
 }
 
 async function handleGetRepository(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1512,17 +1574,17 @@ async function handleGetRepository(
 // ============================================================================
 
 async function handleCreateSpec(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateSpecRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/specs', 'POST', body, actorId);
   return response;
 }
 
 async function handleListSpecs(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1536,7 +1598,7 @@ async function handleListSpecs(
 }
 
 async function handleGetSpec(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1545,12 +1607,12 @@ async function handleGetSpec(
 }
 
 async function handleUpdateSpecStage(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateSpecStageRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/specs/${id}/stage`, 'PATCH', body, actorId);
   return response;
 }
@@ -1560,12 +1622,12 @@ async function handleUpdateSpecStage(
 // ============================================================================
 
 async function handleClaimSpec(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const specId = extractParentId(request.url);
   const body: import('./types').ClaimSpecRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   
   // Call Spec DO to claim the spec - it now returns real data from Artifacts API
   const doResponse = await sendToSpecDo(stub, `/api/specs/${specId}/claim`, 'POST', body, actorId);
@@ -1582,17 +1644,17 @@ async function handleClaimSpec(
 }
 
 async function handleCreateCandidate(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateCandidateRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/candidates', 'POST', { ...body, agentId: actorId }, actorId);
   return response;
 }
 
 async function handleListCandidates(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1607,7 +1669,7 @@ async function handleListCandidates(
 }
 
 async function handleGetCandidate(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1616,12 +1678,12 @@ async function handleGetCandidate(
 }
 
 async function handleUpdateCandidateStage(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateCandidateStageRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/stage`, 'PATCH', body, actorId);
   return response;
 }
@@ -1631,17 +1693,17 @@ async function handleUpdateCandidateStage(
 // ============================================================================
 
 async function handleCreateGateVerdict(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateGateVerdictRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/gate-verdicts', 'POST', { ...body, decidedBy: actorId }, actorId);
   return response;
 }
 
 async function handleListGateVerdicts(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1656,7 +1718,7 @@ async function handleListGateVerdicts(
 }
 
 async function handleGetGateVerdictsForCandidate(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1669,17 +1731,17 @@ async function handleGetGateVerdictsForCandidate(
 // ============================================================================
 
 async function handleCreateTrial(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateTrialRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/trials', 'POST', { ...body, decidedBy: actorId }, actorId);
   return response;
 }
 
 async function handleListTrials(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1693,7 +1755,7 @@ async function handleListTrials(
 }
 
 async function handleGetTrial(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1702,12 +1764,12 @@ async function handleGetTrial(
 }
 
 async function handleDecideTrial(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').DecideTrialRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/trials/${id}/decide`, 'POST', { ...body, decidedBy: actorId }, actorId);
   return response;
 }
@@ -1717,17 +1779,17 @@ async function handleDecideTrial(
 // ============================================================================
 
 async function handleCreatePromotion(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreatePromotionRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/promotions', 'POST', { ...body, promotedBy: actorId }, actorId);
   return response;
 }
 
 async function handleListPromotions(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1744,17 +1806,17 @@ async function handleListPromotions(
 // ============================================================================
 
 async function handleCreateIssue(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issues', 'POST', { ...body, createdBy: actorId }, actorId);
   return response;
 }
 
 async function handleListIssues(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const url = new URL(request.url);
@@ -1769,7 +1831,7 @@ async function handleListIssues(
 }
 
 async function handleGetIssue(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);
@@ -1778,34 +1840,34 @@ async function handleGetIssue(
 }
 
 async function handleUpdateIssueStage(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueStageRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/stage`, 'PATCH', body, actorId);
   return response;
 }
 
 async function handleUpdateIssueStatus(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueStatusRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/status`, 'PATCH', body, actorId);
   return response;
 }
 
 async function handleUpdateIssueCommentPolicy(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').UpdateIssueCommentPolicyRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/comment-policy`, 'PATCH', body, actorId);
   return response;
 }
@@ -1815,18 +1877,18 @@ async function handleUpdateIssueCommentPolicy(
 // ============================================================================
 
 async function handleCreateIssueComment(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body: import('./types').CreateIssueCommentRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/comments`, 'POST', { ...body, createdBy: actorId, issueId: id }, actorId);
   return response;
 }
 
 async function handleListIssueComments(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
@@ -1839,21 +1901,21 @@ async function handleListIssueComments(
 // ============================================================================
 
 async function handleCreateIssueSpecLink(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueSpecLinkRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issue-spec-links', 'POST', body, actorId);
   return response;
 }
 
 async function handleCreateIssueCandidateLink(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateIssueCandidateLinkRequest = await request.json();
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issue-candidate-links', 'POST', body, actorId);
   return response;
 }
@@ -1863,7 +1925,7 @@ async function handleCreateIssueCandidateLink(
 // ============================================================================
 
 async function handleGetEntityHistory(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const pathParts = pathnameOf(request.url).split('/');
@@ -1878,12 +1940,12 @@ async function handleGetEntityHistory(
 // ============================================================================
 
 async function handleExecuteCandidate(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body = await request.json() as { sandboxRunnerUrl?: string };
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
 
   // Extract sandbox runner URL from body or use default
   const sandboxRunnerUrl = body.sandboxRunnerUrl || 'https://beehive.example.com';
@@ -1900,18 +1962,18 @@ async function handleExecuteCandidate(
 // ============================================================================
 
 async function handleRunPreMergeGate(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
   const body = await request.json() as unknown;
-  const actorId = request.headers.get('X-Actor-ID') || 'unknown';
+  const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/gate/pre-merge`, 'POST', body, actorId);
   return response;
 }
 
 async function handleGetGateVerdict(
-  request: Request,
+  request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractId(request.url);

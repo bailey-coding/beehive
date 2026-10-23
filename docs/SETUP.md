@@ -16,6 +16,7 @@ checked without a fresh Cloudflare account.
 
 ```bash
 npm install        # package-lock.json is gitignored, so `npm ci` has nothing to use
+(cd cli && npm install)  # tests/cli-behavior.test.ts runs the CLI via cli/node_modules/.bin/tsx; without this, `npm test` fails its 28 tests
 npm run typecheck        # clean as of 2026-10-15; CI runs it
 npm test                 # unit tests (excludes tests/e2e, which need running workers); this is what CI runs
 npm run test:e2e:local   # e2e against local workers (start them first, below)

@@ -100,8 +100,8 @@ describe('m3 -> m4 migration', () => {
     await makeSpecDo(restarted).init();
 
     expect(tableNames(restarted)).toEqual(expect.arrayContaining(['promotion_states', 'tournaments', 'merge_trains']));
-    // m4 -> m5, m5 -> m6 (service tokens) and m6 -> m7 (deploy refs) run in the same pass
-    expect(schemaVersion(restarted)).toBe('m9');
+    // m4 -> m5 up to m9 -> m10 (idempotency keys) run in the same pass
+    expect(schemaVersion(restarted)).toBe('m10');
     expect(store.raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'").get()).toEqual({ n: 1 });
   });
 
@@ -109,7 +109,7 @@ describe('m3 -> m4 migration', () => {
     store.raw.exec("UPDATE metadata SET value = 'm3' WHERE key = 'schema_version'");
     await makeSpecDo(makeSqliteState(store.raw, store.kv)).init();
     await makeSpecDo(makeSqliteState(store.raw, store.kv)).init();
-    expect(schemaVersion(store)).toBe('m9');
+    expect(schemaVersion(store)).toBe('m10');
   });
 });
 

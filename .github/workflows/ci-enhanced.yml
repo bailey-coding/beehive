@@ -44,15 +44,25 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install root dependencies
-        run: npm install
-
       # ============================================================================
       # PER-WORKER CLEAN INSTALL AND DRY-RUN BUILD
       # ============================================================================
       # This simulates what Workers Builds does: installs each worker in isolation.
-      # A clean git archive means no shared node_modules, so each worker must
-      # be able to resolve all its dependencies including those from workers/shared.
+      # Build from git archive copy with NO root node_modules.
+      # Each worker must be able to resolve all its dependencies including those
+      # from workers/shared. This catches version mismatch issues (e.g., zod in shared).
+      #
+      # Strategy:
+      # 1. Do NOT install root dependencies - this is the key fix
+      # 2. Install workers/shared dependencies first
+      # 3. Install each worker's dependencies in isolation
+      # 4. Workers with postinstall scripts will also install shared, but we do it
+      #    explicitly first to ensure all workers can resolve from shared
+
+      - name: Install shared dependencies
+        run: |
+          echo "=== Installing shared dependencies ==="
+          (cd "workers/shared" && npm install --no-audit --no-fund) || exit 1
 
       - name: Install and build all workers
         run: |
@@ -75,13 +85,10 @@ jobs:
           for worker in "${WORKERS[@]}"; do
             echo "=== Installing $worker ==="
             if [ -f "workers/$worker/package.json" ]; then
-              (cd "workers/$worker" && npm install) || FAILED=1
+              # Install with --no-audit --no-fund for speed and to match Workers Builds behavior
+              (cd "workers/$worker" && npm install --no-audit --no-fund) || FAILED=1
             fi
           done
-          
-          # Also install shared dependencies
-          echo "=== Installing shared ==="
-          (cd "workers/shared" && npm install) || FAILED=1
           
           # Now try a dry-run build for workers that have wrangler.toml
           for worker in "${WORKERS[@]}"; do
