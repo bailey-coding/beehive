@@ -28,8 +28,8 @@ Completed items are removed, not struck through; history lives in git.*
   keys moved from schema m9 to m10, legacy-shape migration tests added (production dump simulation for
   `service_accounts`, `actors`, `entity`, `promotion` tables), and the `agent/m5a-idempotency-fix` branch
   merged. See `docs/rfos/2026-10-14-migration-failures.md` for context.
-- M9 (site navigation) is implemented on `agent/m9-nav` (2026-10-17), **not merged or deployed**; the independent
-  code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
+- M9 (site navigation) is **merged to `main`** (`agent/m9-nav` is 0 commits ahead, checked 2026-10-23); production deploy state unverified
+  (check `wrangler deployments list`). The independent code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
   `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`. **Note:** schema m9 is now used by M5a idempotency
   (the idempotency keys table), so M12 references have been updated from m9 to m10.
 - Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
@@ -68,7 +68,7 @@ Completed items are removed, not struck through; history lives in git.*
 3. Defect 11 (a Spec DO catch-all 404 reads as "not found") stays open on purpose, pinned by a test.
    Details: `docs/OPEN-QUESTIONS.md` 2026-10-17 (review of `39a2669`, with corrections).
 
-## Deploy M9 (needs the maintainer, after the L9 review and merge)
+## Deploy M9 (needs the maintainer; the L9 review and merge are done)
 
 One `beehive` worker change, UI only: `git pull origin main && git push cf main` (together with M8 if that is still undeployed).
 Then check `scripts/prod-health.sh` and click through `/app` (navbar on each page type, org switcher, one flash after
@@ -77,9 +77,9 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
 
 ## M12 verified identity (plan: `docs/M12-IMPL-PLAN.md`)
 
-- PR-0 and push A are live (rollback floor `8de5485`, `docs/OPS.md`). PR-B (T2-T6d: user tokens, schema `m9`, the
-  settings page, the master stage-1 log) is on `agent/m12-pr-b`, **not merged or deployed**; it needs the maintainer's
-  and an independent review. Deploy steps: `docs/OPS.md` "User tokens" (push B deploy checks) and the plan, section 3.
+- PR-0 and push A are live (rollback floor `8de5485`, `docs/OPS.md`). PR-B (T2-T6d: user tokens, the
+  settings page, the master stage-1 log) is **merged to `main`** (`99fc4e2`; `agent/m12-pr-b` is 0 commits ahead, checked 2026-10-23), deploy state
+  unverified. Its user-token table landed as schema `m9` (the idempotency keys moved to `m10`, see above). Deploy steps: `docs/OPS.md` "User tokens" (push B deploy checks) and the plan, section 3.
 - Next: PR-C (T7, CLI token support and the "CLI actor attribution" rewrite), then PR-D1/PR-D2 (T8/T9,
   `SESSION_SIGNING_KEY`).
 - **Verify assumption A4** (task): open one `beehive` invocation log for an authenticated `/api/*` request and one
@@ -88,7 +88,7 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   seen. If any is not: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
   secrets, and record the result in `docs/OPEN-QUESTIONS.md` (2026-10-18 entry).
 - **M12 PR-B T2 is merged** (2026-10-19): `bh_usr_` user token helpers added to `service-tokens.ts` (commit
-  `50728bc`, PR `e786f60`); independent review approved by `cc90f6a`. The full PR-B remains on `agent/m12-pr-b`.
+  `50728bc`, PR `e786f60`); independent review approved by `cc90f6a`. The full PR-B has since merged (above).
 - **Rate limiting on failed user-token verifications is deferred** (RFC-0008 decision 8): every well-formed fake
   `bh_usr_` token costs one DO request. A per-IP limit via the Workers rate-limiting binding is the proposal.
 - **`authGate` on the nine other workers compares the master token with `===`** (`workers/shared/auth.ts`), not in
@@ -110,9 +110,10 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
 
 ## Cleanup
 
-- Merged `agent/*` branches: **15 merged agent/* remote branches deleted** (2026-10-19, `2dc02e`, `a78017c`),
-  plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). The unmerged M8 plan/review branches (their
-  docs are now on `main`) can be deleted once nothing needs them.
+- Merged `agent/*` branches: **15 merged agent/* remote branches deleted earlier** (2026-10-19, `2dc02e`, `a78017c`),
+  plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). As of 2026-10-23 another 15 `agent/*`/`merge/*` branches are 0 commits ahead of `main` (e.g. `m8-issues-do`, `m8-issues-ui`,
+  `m9-nav`, `m12-pr-a`, `m12-pr-b`, `merge/m12-prb`) and can be deleted; the review/plan branches that are still ahead
+  (their docs are on `main`) go once nothing needs them.
 - `scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers (ArtifactFS is not built).
 - The 5 skipped local e2e tests are m3 health checks for workers with no local port.
 
