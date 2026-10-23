@@ -25,30 +25,35 @@ import type {
 declare const plainRequest: Request;
 
 // This should fail: AuthedRequest requires a principal property
+// @ts-expect-error intentional: compile-time negative check
 const test1a: AuthedRequest = plainRequest; // Error: Type 'Request' is missing 'principal'
 
 // =============================================================================
 // Test 2: ActorRequest cannot be assigned from plain Request
 // =============================================================================
 
+// @ts-expect-error intentional: compile-time negative check
 const test2a: ActorRequest = plainRequest; // Error: Type 'Request' is missing 'principal', 'actorId'
 
 // =============================================================================
 // Test 3: ReadRequest cannot be assigned from plain Request
 // =============================================================================
 
+// @ts-expect-error intentional: compile-time negative check
 const test3a: ReadRequest = plainRequest; // Error: Type 'Request' is missing 'principal', 'actorId', 'scopes'
 
 // =============================================================================
 // Test 4: WriteRequest cannot be assigned from plain Request
 // =============================================================================
 
+// @ts-expect-error intentional: compile-time negative check
 const test4a: WriteRequest = plainRequest; // Error: Type 'Request' is missing 'principal', 'actorId', 'scopes'
 
 // =============================================================================
 // Test 5: MaintainerRequest cannot be assigned from plain Request
 // =============================================================================
 
+// @ts-expect-error intentional: compile-time negative check
 const test5a: MaintainerRequest = plainRequest; // Error: Type 'Request' is missing 'principal', 'actorId', 'scopes'
 
 // =============================================================================
@@ -59,6 +64,7 @@ const test5a: MaintainerRequest = plainRequest; // Error: Type 'Request' is miss
 type FakeAuthedRequest = Request & { principal: Principal };
 declare const fakeAuthed: FakeAuthedRequest;
 
+// @ts-expect-error intentional: compile-time negative check
 const test6a: AuthedRequest = fakeAuthed; // Error: Type 'FakeAuthedRequest' is not assignable to 'AuthedRequest'
 
 // =============================================================================
@@ -70,6 +76,7 @@ function writeHandler(request: WriteRequest): Response {
   return new Response('ok');
 }
 
+// @ts-expect-error intentional: compile-time negative check
 writeHandler(plainRequest); // Error: Argument of type 'Request' is not assignable to 'WriteRequest'
 
 // A handler that requires ReadRequest should not accept plain Request
@@ -77,6 +84,7 @@ function readHandler(request: ReadRequest): Response {
   return new Response('ok');
 }
 
+// @ts-expect-error intentional: compile-time negative check
 readHandler(plainRequest); // Error: Argument of type 'Request' is not assignable to 'ReadRequest'
 
 // A handler that requires MaintainerRequest should not accept WriteRequest
@@ -86,6 +94,7 @@ function maintainerHandler(request: MaintainerRequest): Response {
 
 // Even WriteRequest is not MaintainerRequest
 declare const writeReq: WriteRequest;
+// @ts-expect-error intentional: compile-time negative check
 maintainerHandler(writeReq); // Error: Argument of type 'WriteRequest' is not assignable to 'MaintainerRequest'
 
 // =============================================================================
@@ -95,6 +104,7 @@ maintainerHandler(writeReq); // Error: Argument of type 'WriteRequest' is not as
 type PartialAuthedRequest = Request & { principal: Omit<Principal, 'actorId'> };
 declare const partialAuthed: PartialAuthedRequest;
 
+// @ts-expect-error intentional: compile-time negative check
 const test8a: ActorRequest = partialAuthed; // Error: Type is missing 'actorId'
 
 // =============================================================================

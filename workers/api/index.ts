@@ -103,12 +103,13 @@ export default {
     if (principal instanceof Response) return principal;
     const forbidden = authorize(principal, method, path);
     if (forbidden) return forbidden;
-    // Never trust a client-supplied actor (service and user tokens): rewrite before any handler reads it.
-    const headers = new Headers(request.headers);
-    headers.set('X-Actor-ID', principal.actorId);
-    request = new Request(request, { headers });
     if (principal.kind === 'master') {
       logMasterActorAssertion(request, url, env);
+    } else {
+      // Never trust a client-supplied actor (service and user tokens): rewrite before any handler reads it.
+      const headers = new Headers(request.headers);
+      headers.set('X-Actor-ID', principal.actorId);
+      request = new Request(request, { headers });
     }
 
     // Wrap request with auth context for compile-time safety

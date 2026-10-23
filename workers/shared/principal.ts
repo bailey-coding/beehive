@@ -54,7 +54,8 @@ export type AuthedRequest = Request & {
 
 /**
  * Request with a guaranteed actorId.
- * Guarantees: actorId is a valid string (never 'unknown' for non-master).
+ * Guarantees: actorId is a non-empty string. Master without X-Actor-ID carries 'unknown'; routes
+ * that need a real actor reject it themselves (as before), so health/bootstrap keep working.
  */
 export type ActorRequest = AuthedRequest & {
   [ActorRequestBrand]: never;
@@ -104,10 +105,11 @@ export function withAuth(request: Request, principal: Principal): AuthedRequest 
 
 /**
  * Wrap an AuthedRequest with actorId guarantee to create an ActorRequest.
- * Returns 503 if principal has no actorId (should never happen in practice).
+ * Returns 503 if principal has no actorId (should never happen in practice). 'unknown' (master
+ * without X-Actor-ID) is allowed through: rejecting it here would break /health and bootstrap.
  */
 export function withActor(request: Request, principal: Principal): ActorRequest | Response {
-  if (!principal.actorId || principal.actorId === 'unknown') {
+  if (!principal.actorId) {
     return jsonError('Actor required', 503);
   }
   return Object.assign(request, {
