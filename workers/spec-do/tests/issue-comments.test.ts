@@ -234,3 +234,66 @@ describe('malformed bodies on comment, status and policy routes are 400', () => 
     expect(policy()).toBe('open');
   });
 });
+
+// ============================================================================
+// M12 maintainer cap: the edge sends X-Beehive-Maintainer-Cap for a user token without
+// the maintainer scope; every isMaintainer decision of that request is then false.
+// ============================================================================
+
+describe('maintainer cap (X-Beehive-Maintainer-Cap)', () => {
+  const capped = (path: string, method: string, body: unknown, actorId: string, value = '1') =>
+    spec.fetch(
+      new Request(`https://spec-do.internal${path}`, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'X-Actor-ID': actorId, 'X-Beehive-Maintainer-Cap': value },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+    );
+  const status = () => (store.raw.prepare('SELECT status FROM issues WHERE id = ?').get(issueId) as { status: string }).status;
+
+  it('a capped maintainer cannot set the comment policy; uncapped can', async () => {
+    expect((await capped(`/api/issues/${issueId}/comment-policy`, 'PATCH', { commentPolicy: 'locked' }, maintainer)).status).toBe(403);
+    expect(policy()).toBe('open');
+    expect((await setPolicy('locked', maintainer)).status).toBe(200);
+  });
+
+  it("a capped maintainer cannot close another actor's issue; the creator still can while capped", async () => {
+    expect((await capped(`/api/issues/${issueId}/status`, 'PATCH', { status: 'closed' }, maintainer)).status).toBe(403);
+    expect(status()).toBe('open');
+    // The creator check is not a maintainer decision: the cap does not touch it
+    expect((await capped(`/api/issues/${issueId}/status`, 'PATCH', { status: 'closed' }, user)).status).toBe(200);
+    expect(status()).toBe('closed');
+  });
+
+  it('a capped maintainer cannot comment on a locked or maintainers_only issue; open still works', async () => {
+    for (const p of ['locked', 'maintainers_only']) {
+      expect((await setPolicy(p, maintainer)).status).toBe(200);
+      expect((await capped(`/api/issues/${issueId}/comments`, 'POST', { body: 'x' }, maintainer)).status, p).toBe(403);
+    }
+    expect(commentCount()).toBe(0);
+    expect((await setPolicy('open', maintainer)).status).toBe(200);
+    expect((await capped(`/api/issues/${issueId}/comments`, 'POST', { body: 'x' }, maintainer)).status).toBe(201);
+  });
+
+  it('a capped maintainer cannot read tombstones (include_deleted=1)', async () => {
+    expect((await capped('/api/organizations?include_deleted=1', 'GET', undefined, maintainer)).status).toBe(403);
+    expect((await call('/api/organizations?include_deleted=1', 'GET', undefined, maintainer)).status).toBe(200);
+  });
+
+  it('a capped maintainer cannot purge, change a role, or bootstrap the role', async () => {
+    expect((await capped('/internal/purge', 'POST', { orgNamePrefix: 'e2e-', dryRun: true }, maintainer)).status).toBe(403);
+    expect((await call('/internal/purge', 'POST', { orgNamePrefix: 'e2e-', dryRun: true }, maintainer)).status).toBe(200);
+    expect((await capped(`/internal/actors/${user}/role`, 'POST', { role: 'maintainer' }, maintainer)).status).toBe(403);
+    // With no maintainer at all, a capped self-grant is still refused
+    store.raw.prepare(`UPDATE actors SET role = NULL`).run();
+    expect((await capped(`/internal/actors/${user}/role`, 'POST', { role: 'maintainer' }, user)).status).toBe(403);
+    expect(store.raw.prepare('SELECT COUNT(*) AS n FROM actors WHERE role IS NOT NULL').get()).toEqual({ n: 0 });
+  });
+
+  it('any header value caps (a spoofed or odd value can only remove power)', async () => {
+    for (const v of ['0', 'false', '', 'yes']) {
+      expect((await capped(`/api/issues/${issueId}/comment-policy`, 'PATCH', { commentPolicy: 'locked' }, maintainer, v)).status, v).toBe(403);
+    }
+    expect(policy()).toBe('open');
+  });
+});
