@@ -619,6 +619,24 @@ lifecycle scripts (the default). Alternative if it does not: set those three bui
 unreachable code with six defects. Evidence is from reading the code and evaluating the route regexes; the handler
 was not run end to end (a scratch harness kept redirecting to `/login`, cause not found).
 
+**Correction and resolution (2026-10-17, M8 PR 2, `agent/m8-issues-ui`)**: this review undercounted and is now superseded.
+`docs/M8-UI-ISSUES-PLAN.md` section 1 lists 14 defects, not six. Corrections to the list below:
+- Defect 2 (comments route) had already been fixed in `3790070`; what remained was the success redirect to `/app`, a form
+  action without the repo, and a missing `success` read as OK.
+- Defect 3: the filtered `/api/issues?repositoryId=` call was never reached in the UI tests (the stub throws `BLOCKED` on it);
+  whether production returned empty for it was not checked. The number is now assigned by the Spec DO (M8 PR 1), so the UI
+  sends none.
+- Defect 6 counted four copies of the repo lookup; there were five (plus a sixth URL builder in the dashboard).
+- Missed: link text was `getName(issue)` (issues have `title`), so the repo-tab and spec-page links rendered empty; private
+  issues showed on the detail page; `issues.status` was never written, so nothing could close or reopen an issue.
+- "Dead code with no production exposure" held only until the next deploy of the pre-fix code; it is now reachable code, on `main`
+  once PR 2 merges and live only after the maintainer's push to the Artifacts repo.
+- "Not run end to end": it is now. `workers/api/tests/ui-issues.test.ts` runs `handleUi` against the real Spec DO, and
+  `tests/e2e/ui-issues.test.ts` runs it against the local workers (`docs/SETUP.md` "Local e2e status").
+Routes are now matched before the repo routes by `workers/api/ui-repo-ref.ts`; the lookup is one helper; `GET /app/issues/:id`
+302s to the canonical repo URL. Known gap left on purpose: `doReader.get` maps a DO catch-all 404 to "not found" (404 page, not 502),
+pinned by a test so the follow-up (a distinct entity-404 error) has a target.
+
 **Promotion-mode persistence (fine)**: `/promotion-mode` GET/POST on the Spec DO, `setPromotionMode` validates the
 value server-side, tier-1 auth guards it, 122 lines of tests (`workers/promotion-worker/tests/mode-persistence.test.ts`).
 
@@ -644,3 +662,64 @@ No tests cover any of it.
 **Not fixed here**: `agent/parity-ui` is editing `ui.ts` (M8: comments route, `doReader` swallowing errors), so these go
 to that work to avoid a conflict. Until then the pages are dead code with no production exposure.
 
+
+## Issue writes trust a client-asserted actor until a user-bound token exists (2026-10-17)
+
+**Status**: Open - proposal only, needs a human (spine; overlaps M3/M6.2 capability minting).
+
+**Done (M8 PR 1, `agent/m8-issues-do`)**: the Spec DO resolves the `X-Actor-ID` header against the `actors` table for issue create, comment, status and comment-policy. An unknown id, `unknown` (no header) and any service-account actor get 403 (`requireIssueActor`, `workers/spec-do/index.ts`). Maintainer status stays ledger-global `actors.role` (`isMaintainer`), service actors excluded. UI requests derive the actor from the signed session, never from a form field (`workers/api/tests/ui-actor.test.ts`); a session whose actor row is gone is sent to `/login`, and a first login creates the row (`ensureActor`).
+
+**Remaining limit**: `authenticate()` (`workers/api/principal.ts:36-109`) knows only the master token, whose actor is the client-sent `X-Actor-ID` (line 44), and read-only service tokens. A master-token holder can therefore still act as any existing actor id (including a maintainer) on these routes. The CLI sends no actor on `issue create`, so it now gets an explicit 403 (it used to fail on the `created_by` foreign key with a 500).
+
+**Proposal (not built)**: a user-bound API token (`kind: 'user'`). Minted by an authenticated UI session (settings page) or by a maintainer for a named actor; stored hashed like `service_tokens` (`workers/shared/service-tokens.ts`), with a `user_tokens` table keyed to `actors.id`, scopes `read`/`write`, expiry and revoke. `authenticate()` would look the hash up in the Spec DO and return `{ kind: 'user', actorId, scopes }`, with the edge rewriting `X-Actor-ID` from it exactly as it does for service tokens (`workers/api/index.ts:100-105`), so the header is no longer client-asserted for these callers; the CLI would send the token and drop `--actor`. Open points: which routes `write` scope covers; whether a user token may ever carry `maintainer` (`isMaintainer` reads the actor, so it would); overlap with capability tokens in M3/M6.2; a new table is a schema migration, so it needs the two-push method in `docs/M8-UI-ISSUES-PLAN.md` (plan branch `agent/ui-issues-plan-v2`) section 13.
+
+**Addendum (2026-10-17, PR 1 review)**: first login is tested end to end (`workers/api/tests/ui-actor.test.ts`): the callback creates a plain `human` actor (no role, so not a maintainer), the session is accepted, and a second login reuses the row. Pre-existing limit: `ensureActor` (`workers/api/ui.ts:498`) and the per-request existence check (`ui.ts:119`) both read `/api/actors?limit=500&offset=0`. Beyond 500 actors a real user's row is not found, so every request bounces to `/login` and login creates a duplicate actor. Issue writes now depend on that lookup. Fix later with a by-id / by-github-id lookup route. Also noted: `PATCH /api/issues/:id/stage` still has no actor check (outside the plan).
+
+
+## A schema version bump turns a rollback into an outage (2026-10-17)
+
+**Status**: Open - hazard recorded; the safe method is in `docs/M8-UI-ISSUES-PLAN.md` section 13 (plan branch `agent/ui-issues-plan-v2`).
+
+`runMigrations` throws `Unknown schema_version '<v>'` when the stored version is not in the code's own step list
+(`workers/spec-do/index.ts:842`), and `init()` rethrows (`:499-506`), so every request fails. Therefore any change that bumps
+`LATEST_SCHEMA_VERSION` (`:27`, `'m8'` today) makes rolling the Spec DO back to the previous code (AGENTS.md rule 7) an outage, not
+a degraded mode. `docs/OPS.md` said only that this combination "is untested"; it is known to fail. m4-m8 shipped in one push, each step
+additive and idempotent, with a read-only `schema_version` check before and after (`docs/OPS.md`); nothing in m3-m8 made them
+rollback-safe. Safe method for the next bump (M11): push A first, with no bump, so `runMigrations` accepts an `m<N>` above the latest
+it knows (log and continue, with a test); push B, only after A is live, adds the step. Not built.
+
+**Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
+(404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
+
+## Queue-consumer double-write prevention is unfinished (2026-10-19)
+
+**Status**: Resolved - implemented in agent/m5a-idempotency-fix
+
+The three blocking issues identified by agent 621993c have been addressed:
+
+1. **scientist-comparator route fix**: Changed POST from `/api/gate-verdicts/shadow` to `/api/gate-verdicts` with `gate: 'shadow'` in the body (matches existing Spec DO route).
+
+2. **Entity history POST route**: Added POST support for `/api/entities/:entity_type/:entity_id/history` in Spec DO, with the route pattern added to `IDEMPOTENT_ROUTES`.
+
+3. **queue-consumer actor**: Added 'queue-consumer' actor of type 'agent' to the seed data in `workers/spec-do/seed.ts`, allowing FK references to `changed_by` in entity_history.
+
+The queue-consumer now sends `Idempotency-Key: ${queueName}:${event.id}` header for history writes and properly handles response status (treats 409 as already-processed, not an error).
+
+M5a now closes the at-least-once double-write for all nine POST routes in `IDEMPOTENT_ROUTES`.
+
+---
+
+## Cloudflare Flagship for Beehive platform features (2026-10-18)
+
+**Status**: Open - deferred, no immediate need
+
+**Question**: Should Beehive adopt Cloudflare Flagship for gating platform-level features (new gate types, UI changes, promotion algorithms)?
+
+**Context**: Flagship is Cloudflare's native feature flag service (built on KV + Durable Objects, OpenFeature-compatible) that enables sub-millisecond flag evaluation at the edge. It provides the workflow we want: default off, enable, ramp up, remove once full on.
+
+**Assessment**: 
+- **Not for the Oracle Ladder** - the ladder is Beehive's coordination spine; Flagship is a feature toggle utility, not a promotion system. Our existing Spec DO + dedicated workers handle candidate progression better.
+- **Good fit for platform features** - useful when we have users and want to ship risky changes behind kill switches, A/B test new algorithms, or gradually roll out UI changes.
+- **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
+
+**Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.

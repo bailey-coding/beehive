@@ -10,9 +10,9 @@ export function registerRepoCommands(
   createHandler: (action: (state: CliState, ...args: unknown[]) => Promise<void> | void) => (...commanderArgs: unknown[]) => Promise<void>
 ): void {
   const repo = program.command('repo').description('Repository management');
-  repo.command('create <name>').description('Create a new repository').requiredOption('--organization <id>', 'Organization ID').requiredOption('--remote-url <url>', 'Remote URL').requiredOption('--namespace <ns>', 'Namespace').requiredOption('--type <type>', 'Repository type (baseline|candidate)').option('--spec <id>', 'Spec ID').option('--agent <id>', 'Agent ID').option('--default-branch <branch>', 'Default branch').action(createHandler(async (state, ..._args) => {
+  repo.command('create <name>').description('Create a new repository').requiredOption('--organization <id>', 'Organization ID').requiredOption('--remote-url <url>', 'Remote URL').requiredOption('--namespace <ns>', 'Namespace').requiredOption('--type <type>', 'Repository type (baseline|candidate)').option('--spec <id>', 'Spec ID').option('--agent <id>', 'Agent ID').option('--default-branch <branch>', 'Default branch').option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)').action(createHandler(async (state, ..._args) => {
     const name = _args[0] as string;
-    const opts = _args[1] as { organization: string; remoteUrl: string; namespace: string; type: 'baseline' | 'candidate'; spec?: string; agent?: string; defaultBranch?: string };
+    const opts = _args[1] as { organization: string; remoteUrl: string; namespace: string; type: 'baseline' | 'candidate'; spec?: string; agent?: string; defaultBranch?: string; actor?: string };
     const result = await state.client.createRepository({
       name,
       organizationId: opts.organization,
@@ -22,7 +22,7 @@ export function registerRepoCommands(
       remoteUrl: opts.remoteUrl,
       namespace: opts.namespace,
       defaultBranch: opts.defaultBranch,
-    });
+    }, { actorId: opts.actor });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 

@@ -145,6 +145,27 @@ export function visibilityBadge(visibility: string): SafeHtml {
 }
 
 /**
+ * Flash messages from the `ok` and `error` query parameters (escaped). Redirects carry the
+ * message there, so every page that can be redirected to renders it with this one helper.
+ */
+export function flash(url: URL): SafeHtml {
+  const ok = url.searchParams.get('ok');
+  const error = url.searchParams.get('error');
+  // The live-region role sits on a wrapper so the <p> markup stays as it was.
+  return safeHtml(
+    `${ok ? `<div role="status"><p class="flash ok">${esc(capFlash(ok))}</p></div>` : ''}` +
+      `${error ? `<div role="alert"><p class="flash err">${esc(capFlash(error))}</p></div>` : ''}`
+  );
+}
+
+const FLASH_MAX_CHARS = 300;
+
+function capFlash(s: string): string {
+  const chars = Array.from(s);
+  return chars.length > FLASH_MAX_CHARS ? `${chars.slice(0, FLASH_MAX_CHARS).join('')}…` : s;
+}
+
+/**
  * Create a "Mocked" label badge.
  */
 export function mockedLabel(text: string = 'Mocked'): SafeHtml {
@@ -224,18 +245,154 @@ export function tabs(base: string, active: string, tabList: string[]): SafeHtml 
     .map((tab) => {
       const isActive = tab === active;
       const href = `${base}?tab=${encodeURIComponent(tab)}`;
-      return `<a href="${esc(href)}" class="tab ${isActive ? 'active' : ''}">${esc(tab)}</a>`;
+      return `<a href="${esc(href)}"${isActive ? ' aria-current="page"' : ''} class="tab ${isActive ? 'active' : ''}">${esc(tab)}</a>`;
     })
     .join('');
-  return safeHtml(`<nav class="tabs">${tabLinks}</nav>`);
+  return safeHtml(`<nav class="tabs" aria-label="Repository sections">${tabLinks}</nav>`);
 }
 
 // ============================================================================
 // Full page wrapper
 // ============================================================================
 
+/** The one stylesheet, shared by `page()` and the app layout (`ui-layout.ts`). */
+export const PAGE_CSS = `  body { font-family: system-ui, sans-serif; background: #0d1117; color: #e6edf3; margin: 0; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px; }
+  h1 { margin: 0 0 16px; } h2 { margin-top: 32px; border-bottom: 1px solid #30363d; padding-bottom: 6px; }
+  h3 { margin-top: 24px; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+
+  /* Site header, breadcrumb and skip link (ui-layout.ts) */
+  .site-skip { position: absolute; left: -9999px; top: 0; background: #161b22; padding: 8px 12px; z-index: 10; }
+  .site-skip:focus { left: 8px; top: 8px; }
+  .site-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .site-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 10px 24px; background: #161b22; border-bottom: 1px solid #30363d; }
+  .site-brand { font-weight: 700; font-size: 18px; color: #e6edf3; }
+  .site-header ul, .site-crumbs ol { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  .site-header [aria-current] { color: #fff; font-weight: 700; border-bottom: 2px solid #58a6ff; }
+  .site-orgs { position: relative; }
+  .site-orgs summary { cursor: pointer; color: #58a6ff; }
+  .site-orgs ul { position: absolute; z-index: 5; display: block; min-width: 200px; max-height: 320px; overflow-y: auto; margin-top: 4px; padding: 8px 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+  .site-orgs li { margin: 4px 0; }
+  .site-search { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .site-search input { width: 200px; padding: 4px 8px; }
+  .site-account { display: flex; align-items: center; gap: 8px; color: #8b949e; }
+  .site-crumbs { max-width: 960px; margin: 0 auto; padding: 12px 24px 0; font-size: 14px; color: #8b949e; }
+  .site-crumbs li + li::before { content: '\\203A'; margin-right: 16px; color: #8b949e; }
+  .site-crumbs [aria-current] { color: #e6edf3; }
+  .site-flash { margin-bottom: 8px; }
+  #repositories, #specs, #organizations { scroll-margin-top: 16px; }
+  @media (max-width: 640px) { .site-search { flex: 1 0 100%; margin-left: 0; } .site-search input { flex: 1; width: auto; } }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #21262d; word-break: break-all; }
+  th { background: #161b22; font-weight: 600; }
+  tr:hover { background: #13171c; }
+
+  /* Forms */
+  input, select, textarea { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 8px; font: inherit; }
+  input:focus, select:focus, textarea:focus { border-color: #58a6ff; }
+  button { background: #238636; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; font: inherit; }
+  button:hover { background: #2ea043; }
+  button:disabled { background: #30363d; cursor: not-allowed; }
+  button.link { background: none; color: #58a6ff; padding: 0; border: none; cursor: pointer; }
+  button.link:hover { text-decoration: underline; }
+  form.inline { display: flex; gap: 8px; flex-wrap: wrap; }
+  form.stack { display: grid; gap: 8px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 8px; border-bottom: 1px solid #30363d; margin-bottom: 16px; }
+  .tabs .tab { padding: 8px 12px; color: #8b949e; }
+  .tabs .tab:hover { color: #e6edf3; }
+  .tabs .tab.active { color: #fff; border-bottom: 2px solid #58a6ff; }
+
+  /* Badges */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+  .badge.passed { background: #12261a; color: #3fb950; border: 1px solid #238636; }
+  .badge.failed { background: #2d1417; color: #f85149; border: 1px solid #da3633; }
+  .badge.running { background: #21262d; color: #39c5cf; border: 1px solid #39c5cf; }
+  .badge.skipped { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .badge.draft { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .badge.proposed { background: #211c13; color: #d1b06f; border: 1px solid #b3883e; }
+  .badge.active { background: #12261a; color: #3fb950; border: 1px solid #238636; }
+  .badge.deprecated { background: #2d1417; color: #f85149; border: 1px solid #8b0000; }
+  .badge.archived { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .badge.premerge { background: #211c13; color: #d1b06f; border: 1px solid #b3883e; }
+  .badge.shadow { background: #1a2e35; color: #39c5cf; border: 1px solid #39c5cf; }
+  .badge.train { background: #2d1417; color: #f85149; border: 1px solid #da3633; }
+  .badge.canary { background: #4a3818; color: #ffa630; border: 1px solid #ffa630; }
+  .badge.full { background: #12261a; color: #3fb950; border: 1px solid #238636; }
+  .badge.promoted { background: #12261a; color: #3fb950; border: 1px solid #238636; }
+  .badge.pending { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .badge.rolled-back { background: #2d1417; color: #f85149; border: 1px solid #8b0000; }
+  .badge.visibility { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .badge.private { background: #2d1417; color: #f85149; border: 1px solid #8b0000; }
+  .badge.public { background: #12261a; color: #3fb950; border: 1px solid #238636; }
+  .badge.internal { background: #4a3818; color: #d1b06f; border: 1px solid #b3883e; }
+  .badge.mock { background: #211c13; color: #8b949e; border: 1px solid #30363d; font-style: italic; }
+
+  /* Flash messages */
+  .flash { padding: 10px 12px; border-radius: 6px; margin-bottom: 16px; color: #e6edf3; }
+  .ok { background: #12261a; border: 1px solid #238636; }
+  .err { background: #2d1417; border: 1px solid #da3633; }
+  /* Bold lead-in so ok and error differ by more than colour (WCAG 1.4.1); in CSS because the <p> markup is pinned by tests. */
+  .flash.ok::before { content: 'Done: '; font-weight: 700; }
+  .flash.err::before { content: 'Error: '; font-weight: 700; }
+  .empty { color: #8b949e; font-style: italic; }
+
+  /* Code and pre */
+  pre { background: #161b22; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; border: 1px solid #30363d; }
+  code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; background: #161b22; padding: 2px 4px; border-radius: 3px; }
+
+  /* File tree (the org switcher is a details element too and keeps its default marker) */
+  details:not(.site-orgs) { margin-left: 16px; }
+  details:not(.site-orgs) > summary { cursor: pointer; color: #58a6ff; list-style: none; }
+  details:not(.site-orgs) > summary::-webkit-details-marker { display: none; }
+  details:not(.site-orgs) > summary::before { content: '📁 '; }
+  details[open]:not(.site-orgs) > summary::before { content: '📂 '; }
+  .file-item { color: #8b949e; margin-left: 8px; }
+  .file-item.file::before { content: '📄 '; }
+
+  /* Search */
+  .search-box { margin-bottom: 16px; }
+  .search-box input[type="search"] { width: 100%; max-width: 400px; }
+  .search-results { margin-top: 12px; }
+  .search-hit { margin-bottom: 8px; padding: 8px; background: #161b22; border-radius: 4px; }
+  .search-hit .kind { color: #8b949e; font-size: 12px; margin-right: 8px; }
+  .search-hit .score { color: #8b949e; font-size: 12px; float: right; }
+
+  /* Changelog */
+  .changelog-entry { padding: 8px 0; border-bottom: 1px solid #21262d; }
+  .changelog-entry .meta { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
+  .changelog-entry .summary { margin: 0; }
+  .changelog-entry .refs { margin-top: 4px; font-size: 13px; }
+  .changelog-entry .refs a { margin-right: 8px; }
+
+  /* Commit list */
+  .commit { padding: 8px 0; border-bottom: 1px solid #21262d; }
+  .commit .sha { font-family: monospace; color: #8b949e; font-size: 12px; }
+  .commit .message { font-weight: 500; }
+  .commit .author { color: #8b949e; font-size: 12px; }
+  .commit .build { margin-top: 4px; font-size: 13px; }
+
+  /* Details section */
+  .details-section { margin: 24px 0; }
+  .details-section h3 { margin-bottom: 8px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; }
+  dt { color: #8b949e; text-align: right; }
+  dd { margin: 0; }
+
+  /* Inline code display */
+  .contract-display { background: #161b22; padding: 16px; border-radius: 6px; border: 1px solid #30363d; overflow-x: auto; }`;
+
 /**
- * Wrap content in a full HTML page with styling.
+ * The pre-session shell (login failures, access denied, not configured, the logout 403): a skip
+ * link, a brand link to the public `/about` (`/app` would redirect a denied user to `/login` and a
+ * 503 back to itself), the title as the one h1. No navbar and no switcher: there is no session to
+ * read with. Session pages use `appPage` in `ui-layout.ts`.
  * @param title Page title (escaped)
  * @param body HTML body content (must be SafeHtml or already escaped)
  * @param status HTTP status code
@@ -246,116 +403,11 @@ export function page(title: string, body: string, status = 200, cookies: string[
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} - Beehive</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #0d1117; color: #e6edf3; margin: 0; }
-  main { max-width: 960px; margin: 0 auto; padding: 24px; }
-  h1 { margin: 0 0 16px; } h2 { margin-top: 32px; border-bottom: 1px solid #30363d; padding-bottom: 6px; }
-  h3 { margin-top: 24px; }
-  a { color: #58a6ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .bar { display: flex; justify-content: space-between; align-items: center; }
-  .subbar { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }
-  
-  /* Tables */
-  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #21262d; word-break: break-all; }
-  th { background: #161b22; font-weight: 600; }
-  tr:hover { background: #13171c; }
-  
-  /* Forms */
-  input, select, textarea { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 8px; font: inherit; }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: #58a6ff; }
-  button { background: #238636; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; font: inherit; }
-  button:hover { background: #2ea043; }
-  button:disabled { background: #30363d; cursor: not-allowed; }
-  button.link { background: none; color: #58a6ff; padding: 0; border: none; cursor: pointer; }
-  button.link:hover { text-decoration: underline; }
-  form.inline { display: flex; gap: 8px; flex-wrap: wrap; }
-  form.stack { display: grid; gap: 8px; }
-  
-  /* Tabs */
-  .tabs { display: flex; gap: 8px; border-bottom: 1px solid #30363d; margin-bottom: 16px; }
-  .tabs .tab { padding: 8px 12px; color: #8b949e; }
-  .tabs .tab:hover { color: #e6edf3; }
-  .tabs .tab.active { color: #fff; border-bottom: 2px solid #58a6ff; }
-  
-  /* Badges */
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
-  .badge.passed { background: #12261a; color: #238636; border: 1px solid #238636; }
-  .badge.failed { background: #2d1417; color: #da3633; border: 1px solid #da3633; }
-  .badge.running { background: #21262d; color: #39c5cf; border: 1px solid #39c5cf; }
-  .badge.skipped { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
-  .badge.draft { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
-  .badge.proposed { background: #211c13; color: #d1b06f; border: 1px solid #b3883e; }
-  .badge.active { background: #12261a; color: #238636; border: 1px solid #238636; }
-  .badge.deprecated { background: #2d1417; color: #da3633; border: 1px solid #8b0000; }
-  .badge.archived { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
-  .badge.premerge { background: #211c13; color: #d1b06f; border: 1px solid #b3883e; }
-  .badge.shadow { background: #1a2e35; color: #39c5cf; border: 1px solid #39c5cf; }
-  .badge.train { background: #2d1417; color: #da3633; border: 1px solid #da3633; }
-  .badge.canary { background: #4a3818; color: #ffa630; border: 1px solid #ffa630; }
-  .badge.full { background: #12261a; color: #238636; border: 1px solid #238636; }
-  .badge.promoted { background: #12261a; color: #238636; border: 1px solid #238636; }
-  .badge.pending { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
-  .badge.rolled\ back { background: #2d1417; color: #da3633; border: 1px solid #8b0000; }
-  .badge.rolled-back { background: #2d1417; color: #da3633; border: 1px solid #8b0000; }
-  .badge.visibility { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
-  .badge.private { background: #2d1417; color: #da3633; border: 1px solid #8b0000; }
-  .badge.public { background: #12261a; color: #238636; border: 1px solid #238636; }
-  .badge.internal { background: #4a3818; color: #d1b06f; border: 1px solid #b3883e; }
-  .badge.mock { background: #211c13; color: #8b949e; border: 1px solid #30363d; font-style: italic; }
-  
-  /* Flash messages */
-  .flash { padding: 10px 12px; border-radius: 6px; margin-bottom: 16px; }
-  .ok { background: #12261a; border: 1px solid #238636; color: #238636; }
-  .err { background: #2d1417; border: 1px solid #da3633; color: #da3633; }
-  .empty { color: #8b949e; font-style: italic; }
-  
-  /* Code and pre */
-  pre { background: #161b22; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; border: 1px solid #30363d; }
-  code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; background: #161b22; padding: 2px 4px; border-radius: 3px; }
-  
-  /* File tree */
-  details { margin-left: 16px; }
-  summary { cursor: pointer; color: #58a6ff; list-style: none; }
-  summary::-webkit-details-marker { display: none; }
-  summary::before { content: '📁 '; }
-  summary[open]::before { content: '📂 '; }
-  .file-item { color: #8b949e; margin-left: 8px; }
-  .file-item.file::before { content: '📄 '; }
-  
-  /* Search */
-  .search-box { margin-bottom: 16px; }
-  .search-box input[type="search"] { width: 100%; max-width: 400px; }
-  .search-results { margin-top: 12px; }
-  .search-hit { margin-bottom: 8px; padding: 8px; background: #161b22; border-radius: 4px; }
-  .search-hit .kind { color: #8b949e; font-size: 12px; margin-right: 8px; }
-  .search-hit .score { color: #8b949e; font-size: 12px; float: right; }
-  
-  /* Changelog */
-  .changelog-entry { padding: 8px 0; border-bottom: 1px solid #21262d; }
-  .changelog-entry .meta { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
-  .changelog-entry .summary { margin: 0; }
-  .changelog-entry .refs { margin-top: 4px; font-size: 13px; }
-  .changelog-entry .refs a { margin-right: 8px; }
-  
-  /* Commit list */
-  .commit { padding: 8px 0; border-bottom: 1px solid #21262d; }
-  .commit .sha { font-family: monospace; color: #8b949e; font-size: 12px; }
-  .commit .message { font-weight: 500; }
-  .commit .author { color: #8b949e; font-size: 12px; }
-  .commit .build { margin-top: 4px; font-size: 13px; }
-  
-  /* Details section */
-  .details-section { margin: 24px 0; }
-  .details-section h3 { margin-bottom: 8px; }
-  dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; }
-  dt { color: #8b949e; text-align: right; }
-  dd { margin: 0; }
-  
-  /* Inline code display */
-  .contract-display { background: #161b22; padding: 16px; border-radius: 6px; border: 1px solid #30363d; overflow-x: auto; }
+${PAGE_CSS}
 </style></head>
-<body><main><h1>Beehive</h1>${body}</main></body></html>`;
+<body><a class="site-skip" href="#main">Skip to content</a>
+<header class="site-header"><a class="site-brand" href="/about">Beehive</a></header>
+<main id="main" tabindex="-1"><h1>${esc(title)}</h1>${body}</main></body></html>`;
   const headers = new Headers({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   for (const c of cookies) headers.append('Set-Cookie', c);
   return new Response(html, { status, headers });

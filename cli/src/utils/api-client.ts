@@ -136,10 +136,18 @@ export class BeehiveClient {
       config.data = data;
     }
 
-    if (options?.actorId) {
+    // Per-call actor (--actor) wins; BEEHIVE_ACTOR is folded into defaultActor by loadConfig.
+    const actorId = options?.actorId || this.config.defaultActor;
+    if (actorId) {
+      // Mirror of ActorIdSchema (workers/shared/principal.ts): the edge answers 400 otherwise.
+      if (!/^[\x21-\x7e]{1,128}$/.test(actorId)) {
+        throw new Error(
+          `Invalid actor id "${actorId.slice(0, 40)}": use 1-128 printable ASCII characters with no spaces (--actor, BEEHIVE_ACTOR or defaultActor).`
+        );
+      }
       config.headers = {
         ...config.headers,
-        'X-Actor-ID': options.actorId,
+        'X-Actor-ID': actorId,
       };
     }
 

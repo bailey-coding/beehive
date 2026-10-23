@@ -168,6 +168,13 @@ const fixtureActors = [
   { id: 'actor-123', type: 'human', name: 'testuser', github_user_id: '12345', trust_score: 0.5, promotion_authority: false, created_at: Date.now() },
 ];
 
+// The session check reads GET /api/actors/:id; an unknown id falls through to the stub's 404.
+function onActors(stub: MockDurableObjectStub): void {
+  for (const actor of fixtureActors) {
+    stub.on(`/api/actors/${actor.id}`, async () => Response.json({ success: true, data: actor }));
+  }
+}
+
 // ============================================================================
 // Helper to create a mock DO stub with fixtures
 // ============================================================================
@@ -247,11 +254,7 @@ function createMockStub(): MockDurableObjectStub {
   });
   
   // Actor lookup (required for auth - R3)
-  stub.on('/api/actors?limit=500&offset=0', async () => {
-    return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  });
+  onActors(stub);
   
   // Single-record GETs
   for (const org of fixtureOrgs) {
@@ -1301,10 +1304,11 @@ describe('Regression Tests', () => {
       // Currently this fails because /api/issue_comments doesn't exist
       // After fix, it should succeed
       expect(response?.status).toBe(302);
-      expect(response?.headers.get('Location')).toContain('/app?ok=');
+      // The shim derives the repo and sends the user to the canonical issue URL
+      expect(response?.headers.get('Location')).toBe('/app/repos/repo-001/issues/issue-001?ok=Comment%20added#comments');
     });
 
-    it('FAILS: GET /app/issues/:id shows empty comments because list uses /api/issue_comments', async () => {
+    it('GET /app/issues/:id redirects to the canonical repo URL, where the comments render', async () => {
       // This test verifies the bug exists: UI calls /api/issue_comments for list which doesn't exist
       // After fix, it should call /api/issues/issue-001/comments
       const request = new Request('http://localhost/app/issues/issue-001', {
@@ -1314,9 +1318,15 @@ describe('Regression Tests', () => {
         },
       });
 
-      const response = await handleUi(request, mockEnv, mockStub as any);
-      // Currently this returns empty comments because /api/issue_comments doesn't exist
-      // After fix, it should show the actual comments
+      const legacy = await handleUi(request, mockEnv, mockStub as any);
+      expect(legacy?.status).toBe(302);
+      const canonical = legacy?.headers.get('Location') as string;
+      expect(canonical).toBe('/app/repos/repo-001/issues/issue-001');
+      const response = await handleUi(
+        new Request(`http://localhost${canonical}`, { headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` } }),
+        mockEnv,
+        mockStub as any
+      );
       expect(response?.status).toBe(200);
       const body = await response?.text();
       // Should show the comments, not "No comments yet"
@@ -1384,11 +1394,7 @@ describe('Regression Tests', () => {
     it('Spec DO 500 on get returns 502 page with could not load message', async () => {
       // Create a stub that returns 500 for a specific spec
       const errorStub = new MockDurableObjectStub();
-      errorStub.on('/api/actors?limit=500&offset=0', async () => {
-        return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      });
+      onActors(errorStub);
       errorStub.on('/api/specs?limit=500&offset=0', async () => {
         return new Response(JSON.stringify({ success: true, data: fixtureSpecs }), {
           headers: { 'Content-Type': 'application/json' },

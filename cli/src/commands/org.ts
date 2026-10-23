@@ -18,7 +18,7 @@ import { OrganizationResponse, CreateOrganizationRequest } from '../types/api';
 async function actionCreate(state: CliState, ...args: unknown[]): Promise<void> {
   try {
     const name = args[0] as string;
-    const opts = args[1] as { type?: string; externalId?: string };
+    const opts = args[1] as { type?: string; externalId?: string; actor?: string };
     
     const request: CreateOrganizationRequest = {
       name,
@@ -26,7 +26,7 @@ async function actionCreate(state: CliState, ...args: unknown[]): Promise<void> 
       externalId: opts.externalId,
     };
 
-    const organization = await state.client.createOrganization(request, { actorId: state.config.defaultActor });
+    const organization = await state.client.createOrganization(request, { actorId: opts.actor });
 
     if (state.outputFormat === 'json') {
       printOutput(organization, { format: state.outputFormat, pretty: true });
@@ -108,6 +108,7 @@ export function registerOrgCommands(
     .description('Create a new organization')
     .option('--type <type>', 'Organization type: github, gitlab, or artifacts')
     .option('--external-id <id>', 'External organization ID')
+    .option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)')
     .action(createHandler(actionCreate));
 
   // List
