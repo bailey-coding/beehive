@@ -129,6 +129,17 @@ describe('X-Actor-ID attribution', () => {
     expect(await actorHeader(issueArgs, { BEEHIVE_ACTOR: '   ' })).toBeUndefined();
   });
 
+  it.each([['BEEHIVE_ACTOR', 'Jane Doe'], ['--actor', 'a'.repeat(129)]])(
+    'rejects an actor the edge would 400 (%s) before sending anything',
+    async (via, bad) => {
+      const args = via === '--actor' ? [...issueArgs, '--actor', bad] : issueArgs;
+      const { code, stderr } = await runCli(args, via === '--actor' ? {} : { BEEHIVE_ACTOR: bad });
+      expect(code).not.toBe(0);
+      expect(stderr).toContain('Invalid actor id');
+      expect(recorded).toHaveLength(0);
+    }
+  );
+
   it('trims BEEHIVE_ACTOR', async () => {
     expect(await actorHeader(issueArgs, { BEEHIVE_ACTOR: '  a1 ' })).toBe('a1');
   });

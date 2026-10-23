@@ -8,7 +8,7 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-19
+**Last updated:** 2026-10-23
 
 ## Where we are
 
@@ -35,9 +35,17 @@ Completed items are removed, not struck through; history lives in git.*
 - Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
   `.../issues/:id`) reads organizations and repositories before answering 405, because the origin check covers only the
   write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
-- Local checks on `agent/m9-nav` (2026-10-17): 836 unit tests pass, typecheck clean; local e2e 70 passed / 5 skipped /
-  0 failed (run with `E2E_UI=1`, see `docs/SETUP.md`). On `main`: 743 unit tests, e2e 63 passed / 5 skipped / 0 failed.
-- **Custom request types implemented** (2026-10-19, `vibe/custom-request-types-1a468a`): Compile-time auth safety via branded types (`AuthedRequest`, `ActorRequest`, `ReadRequest`, `WriteRequest`, `MaintainerRequest`). All 43 API handlers migrated, redundant `actorId` lookups removed. Type-level tests in `principal.test-d.ts`. Defense in depth: `authenticate()` and `authorize()` remain at edge level.
+- Local checks on `main` (2026-10-23): typecheck clean, unit tests pass (excluding e2e); `tests/cli-behavior.test.ts` needs
+  `npm ci` in `cli/` first. Last e2e run: 70 passed / 5 skipped / 0 failed on `agent/m9-nav` (2026-10-17, `E2E_UI=1`, `docs/SETUP.md`).
+- **Custom request types are merged** (PR #1, 2026-10-23, **not deployed**): branded request types in `workers/shared/principal.ts`
+  (`AuthedRequest`, `ActorRequest`, `ReadRequest`, `WriteRequest`, `MaintainerRequest`), all 43 API handlers migrated,
+  type-level tests in `principal.test-d.ts` (negative checks use `@ts-expect-error`). The brands are compile-time only and the scope
+  wrappers re-check `principal.scopes`; `authorize()` stays the real enforcement. A master token without `X-Actor-ID` carries
+  `'unknown'` and must still reach `/health` and bootstrap routes (fixed in `c2d4906`).
+- **Runtime validation in `authenticate()`** (2026-10-23, on `main`, **not deployed**): a master token's asserted `X-Actor-ID` must match
+  `ActorIdSchema` (1-128 printable ASCII, no spaces) or the request is a 400, logged as `master_actor_rejected` (no AE point,
+  `docs/OPS.md`). The service and user verify-route bodies are parsed with zod (mismatch = 503, `found:false` = 401). The CLI rejects
+  such an actor before sending. Local checks: typecheck clean, 438 `workers/api` tests, 30 CLI behavior tests.
 
 ## Next session, first (needs the maintainer)
 
