@@ -6,7 +6,20 @@
  * can extend the interface without reshaping it.
  */
 
+import { z } from 'zod';
 import { jsonError } from './auth';
+
+/**
+ * A client-asserted X-Actor-ID (master token only; service and user tokens get it overwritten).
+ * Deliberately loose: actor ids are UUIDs but ids like 'queue-consumer' exist, so this rejects only
+ * what can never be an id (empty, over-long, whitespace or non-printable characters).
+ */
+export const ACTOR_ID_MAX_CHARS = 128;
+export const ActorIdSchema = z
+  .string()
+  .min(1)
+  .max(ACTOR_ID_MAX_CHARS)
+  .regex(/^[\x21-\x7e]+$/);
 
 export type Scope = 'read' | 'write' | 'maintainer';
 

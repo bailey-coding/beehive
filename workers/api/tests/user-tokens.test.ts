@@ -675,10 +675,14 @@ describe('master stage-1 log (S12)', () => {
     for (const s of [MASTER, 'secret=q', 'c=1', 'Bearer']) expect(everything).not.toContain(s);
   });
 
-  it('truncates a 300-char actor to 128', async () => {
+  it('a 128-char actor is logged whole; a 300-char one is rejected 400 before any line (zod cap)', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { ctx, points } = withAnalytics();
-    await send(ctx.env, '/api/organizations', 'GET', { token: MASTER, headers: { 'X-Actor-ID': 'a'.repeat(300) } });
+    const res = await send(ctx.env, '/api/organizations', 'GET', { token: MASTER, headers: { 'X-Actor-ID': 'a'.repeat(300) } });
+    expect(res.status).toBe(400);
+    expect(log.mock.calls.filter((c) => String(c[0]).includes('master_actor_assertion'))).toHaveLength(0);
+    expect(points).toHaveLength(0);
+    await send(ctx.env, '/api/organizations', 'GET', { token: MASTER, headers: { 'X-Actor-ID': 'a'.repeat(128) } });
     const line = JSON.parse(log.mock.calls.map((c) => String(c[0])).find((l) => l.includes('master_actor_assertion'))!);
     expect(line.actorId).toBe('a'.repeat(128));
     expect((points[0] as { blobs: string[] }).blobs[0]).toBe('a'.repeat(128));

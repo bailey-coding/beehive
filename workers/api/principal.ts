@@ -10,8 +10,9 @@
  *   - DO error while verifying            -> 503
  */
 
+import { z } from 'zod';
 import { jsonError } from '../shared/auth';
-import type { Principal, Scope } from '../shared/principal';
+import { ActorIdSchema, type Principal, type Scope } from '../shared/principal';
 import {
   SERVICE_TOKEN_PREFIX,
   USER_TOKEN_PREFIX,
@@ -28,6 +29,31 @@ const USER_TOKEN_SCOPES: Record<string, Scope[]> = {
   read_write: ['read', 'write'],
   maintainer: ['read', 'write', 'maintainer'],
 };
+
+// Verify-route bodies from the Spec DO. Parsed, not cast: anything that does not match is a 503
+// (or 401 for found:false), never a half-trusted principal. Lenient on purpose (an old or new DO
+// may send extra fields); actorId here is only non-empty, since the DO owns what an id is.
+const NonEmpty = z.string().min(1);
+const ServiceVerifySchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    kind: z.literal('service'),
+    actorId: NonEmpty,
+    serviceAccountId: z.string().optional(),
+  }),
+});
+const UserVerifySchema = z.union([
+  z.object({ success: z.literal(true), data: z.object({ found: z.literal(false) }) }),
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      found: z.literal(true),
+      actorId: NonEmpty,
+      userTokenId: NonEmpty,
+      scope: z.enum(['read', 'read_write', 'maintainer']),
+    }),
+  }),
+]);
 
 export interface AuthEnv {
   API_AUTH_TOKEN?: string;
@@ -55,9 +81,16 @@ export async function authenticate(
     (bearer !== null && (await constantTimeEqual(bearer, master))) ||
     (apiToken !== null && (await constantTimeEqual(apiToken, master)))
   ) {
+    // Only master may assert an actor, so only master's header is validated. Absent or empty is
+    // 'unknown' (as before); present but malformed is a 400, never passed on to the DO.
+    const asserted = request.headers.get('X-Actor-ID');
+    if (asserted) {
+      const parsed = ActorIdSchema.safeParse(asserted);
+      if (!parsed.success) return jsonError('Invalid X-Actor-ID', 400);
+    }
     return {
       kind: 'master',
-      actorId: request.headers.get('X-Actor-ID') || 'unknown',
+      actorId: asserted || 'unknown',
       scopes: ['read', 'write'],
       promotionAuthority: true,
       organizationId: null,
@@ -83,21 +116,17 @@ export async function authenticate(
     if (res.status === 404) return jsonError('Unauthorized', 401);
     if (res.status !== 200) return jsonError('Auth backend unavailable', 503);
     try {
-      const body = (await res.json()) as {
-        success?: boolean;
-        data?: { kind?: string; actorId: string; serviceAccountId: string; promotionAuthority?: boolean };
-      };
-      if (!body.success || body.data?.kind !== 'service' || typeof body.data.actorId !== 'string' || !body.data.actorId) {
-        return jsonError('Auth backend unavailable', 503);
-      }
+      const body = ServiceVerifySchema.safeParse(await res.json());
+      if (!body.success) return jsonError('Auth backend unavailable', 503);
+      const d = body.data.data;
       return {
         kind: 'service',
-        actorId: body.data.actorId,
+        actorId: d.actorId,
         // Read-only slice: whatever is stored, a service principal never exceeds read.
         scopes: ['read'],
         promotionAuthority: false,
         organizationId: null,
-        serviceAccountId: body.data.serviceAccountId,
+        serviceAccountId: d.serviceAccountId,
       };
     } catch {
       return jsonError('Auth backend unavailable', 503);
@@ -125,23 +154,11 @@ export async function authenticate(
     // is not "no such token": it is a DO that lacks the route (mid-deploy or a rollback), so 503.
     if (res.status !== 200) return jsonError('Auth backend unavailable', 503);
     try {
-      const body = (await res.json()) as {
-        success?: boolean;
-        data?: { found?: unknown; actorId?: unknown; userTokenId?: unknown; scope?: unknown };
-      };
-      const d = body.success === true ? body.data : undefined;
-      if (d?.found === false) return jsonError('Unauthorized', 401);
-      const scopes = typeof d?.scope === 'string' && Object.hasOwn(USER_TOKEN_SCOPES, d.scope) ? USER_TOKEN_SCOPES[d.scope] : null;
-      if (
-        d?.found !== true ||
-        typeof d.actorId !== 'string' ||
-        !d.actorId ||
-        typeof d.userTokenId !== 'string' ||
-        !d.userTokenId ||
-        !scopes
-      ) {
-        return jsonError('Auth backend unavailable', 503);
-      }
+      const body = UserVerifySchema.safeParse(await res.json());
+      if (!body.success) return jsonError('Auth backend unavailable', 503);
+      const d = body.data.data;
+      if (!d.found) return jsonError('Unauthorized', 401);
+      const scopes = USER_TOKEN_SCOPES[d.scope];
       return {
         kind: 'user',
         actorId: d.actorId,
