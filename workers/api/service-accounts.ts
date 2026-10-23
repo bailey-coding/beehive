@@ -69,6 +69,8 @@ export async function handleServiceAccountRoutes(
       actorId: principal.actorId,
       scopes: principal.scopes,
       serviceAccountId: principal.serviceAccountId ?? null,
+      // user tokens: the token's id (never the token); its scope is in `scopes`
+      userTokenId: principal.userTokenId ?? null,
     });
   }
 

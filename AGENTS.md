@@ -157,4 +157,5 @@ For implementation, see the canonical schema definitions:
 
 **Pointers:** `docs/SETUP.md` (local dev, e2e, self-hosting) · `docs/OPS.md` (topology, secrets,
 ledger wipe) · `docs/TROUBLESHOOTING.md` (symptoms) · `docs/AGENT-ROUTING.md` (model tiers,
-spawning) · `docs/FOCUS.md` (current open items) · `docs/MILESTONES.md` (plan).
+spawning) · `docs/FOCUS.md` (current open items) · `docs/MILESTONES.md` (plan) ·
+`docs/AGENTS-REVIEWER.md` (review standards, checklists).

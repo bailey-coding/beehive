@@ -21,8 +21,8 @@ named way; **no** = absent. "Read-only" for UI means list/detail pages only.
 | Organizations | **yes**: POST/GET `/api/organizations`, GET `:id` (`api/index.ts:123-131`) | **yes**: `org create/list/get` (`org.ts:107-124`) | **yes**: create form `ui.ts:346`, detail `orgPage` (`ui-pages.ts:188`) |
 | Actors | **yes**: POST/GET, GET `:id`, PATCH `trust`, PATCH `promotion-authority` (`index.ts:137-150`) | **yes**: `actor create/list/get/trust/grant-promotion` (`actor.ts:160-190`) | **no**: only an existence check on the session actor (`ui.ts:108`); no actor page, no create |
 | Repositories | **yes**: POST/GET, GET `:id` (`index.ts:157-165`) | **partial**: `repo list/get` work; `repo create` prints "not fully implemented" (`repo.ts:19`) | **yes**: create form `ui.ts:347`, page `repoPage` (`ui-pages.ts:333`), hierarchical URLs (`ui.ts:120`) |
-| Issues | **yes**: POST/GET, GET `:id`, PATCH `stage`, PATCH `comment-policy` (`index.ts:264-279`) | **partial**: `issue list/get`; `issue create` stub (`issue.ts:21`); no stage or policy | **partial**: create (`ui.ts:351`) and detail (`issuePage`, `ui-pages.ts:1313`); no stage or policy change |
-| Issue comments | **yes**: POST/GET `/api/issues/:id/comments` (`index.ts:284-292`) | **no**: no client method, no command | **partial, likely broken**: calls `/api/issue_comments` (`ui.ts:759`, `ui-pages.ts:1327`); the DO has no such route (see §3.1) |
+| Issues | **yes**: POST/GET, GET `:id`, PATCH `stage`, PATCH `comment-policy`, PATCH `status` (close/reopen) (`index.ts:264-279`; `number` optional, the DO assigns it) | **partial**: `issue list/get`; `issue create` stub (`issue.ts:21`) whose `--number` is required: a number already used in the repo is now a 409 (it used to be accepted silently); no stage, policy or status | **yes (2026-10-17, M8 PR 2)**: list, new, create, detail under `/app/repos/<ref>/issues` (2-part, 3-part, UUID), Close/Reopen for the creator or a maintainer (`ui.ts` `handleRepoIssues`, `ui-pages.ts` `issuePage`); no stage or policy change |
+| Issue comments | **yes**: POST/GET `/api/issues/:id/comments` (`index.ts:284-292`); `locked`/`maintainers_only` issues take maintainer comments only (403 otherwise) | **no**: no client method, no command | **yes (2026-10-17, M8 PR 2)**: posts to `/api/issues/:id/comments`; the form is replaced by "Locked" / a notice for non-maintainers |
 | Issue links (spec/candidate) | **yes**: POST `/api/issue-spec-links`, `/api/issue-candidate-links` (`index.ts:295-300`); no GET | **no** | **no** |
 | Specs | **yes**: POST/GET, GET `:id`, PATCH `stage`, POST `claim` (`index.ts:171-185`) | **partial**: `spec list/get/claim`; `spec create` stub (`spec.ts:20`); client has `updateSpecStage` but no command | **partial**: create (`ui.ts:348`) and detail (`specPage`, `ui-pages.ts:630`); no claim, no stage change |
 | Candidates | **yes**: POST/GET, GET `:id`, PATCH `stage`, POST `execute` (`index.ts:191-203`, `328`) | **partial**: `candidate create/list/get/gate-verdicts`; `create` cannot receive its flags (see §3.2); `executeCandidate` in client has no command | **partial**: read-only `candidatePage` (`ui-pages.ts:826`) |
@@ -67,7 +67,7 @@ Per-worker health routes exist on all ten workers; none is reachable through the
 
 ### 2.2 Missing and worth building (by impact)
 
-1. **UI issue comments are probably broken, and the failure is silent.** The UI uses
+1. **(Fixed 2026-10-17, M8 PR 2; text kept for history.) UI issue comments were probably broken, and the failure was silent.** The UI uses
    `/api/issue_comments`; the DO routes only `/api/issues/:id/comments` (`spec-do/index.ts:3514,3528`),
    and the edge route table has no `issue_comments`. List returns `[]` on any failure
    (`ui.ts:60-65`), so the page shows "no comments". Posting returns "Not found" via
@@ -97,7 +97,7 @@ Per-worker health routes exist on all ten workers; none is reachable through the
 
 ## 3. Inconsistencies
 
-### 3.1 UI calls a route that does not exist
+### 3.1 UI calls a route that does not exist (fixed: `3790070`, then M8 PR 2)
 - `ui.ts:759` and `ui-pages.ts:1327` use `/api/issue_comments`. Real route:
   `/api/issues/:id/comments` (`index.ts:284-292`, `spec-do/index.ts:3514`). Likely cause: the
   table name `issue_comments` (`spec-do/index.ts:88,4049`) was used as a path.
@@ -144,7 +144,7 @@ Per-worker health routes exist on all ten workers; none is reachable through the
 - UI: separate GitHub session; calls the DO directly with `session.actorId`, so UI writes bypass
   `authorize()` and the service-token rewrite. Intended, but note UI users get create rights that a
   service token never has.
-- CLI: sends `X-Actor-ID` from `config.defaultActor` or `--actor`; with the master token the edge
+- CLI: sends `X-Actor-ID` on every request from `--actor`, `BEEHIVE_ACTOR` or `config.defaultActor` (stopgap until M12); with the master token the edge
   trusts it (`service-accounts.ts:15`). The UI cannot choose an actor.
 - Edge `/health` is public-looking but 401s without the bearer (`index.ts:115` sits after the auth
   block at `:88`); the workers' own `/health` behaviour differs (`shared/auth.ts`, not read in full).
@@ -161,7 +161,7 @@ Per-worker health routes exist on all ten workers; none is reachable through the
 
 Each bullet is one builder task. None touches the spine (spec schema, DO ledger, promotion train).
 
-1. **Fix UI issue comments route.** Change `/api/issue_comments` to `/api/issues/:id/comments`
+1. **(Done: `3790070` and M8 PR 2.) Fix UI issue comments route.** Change `/api/issue_comments` to `/api/issues/:id/comments`
    (POST and list). Files: `workers/api/ui.ts:759`, `workers/api/ui-pages.ts:1327`; add a test in
    `workers/api/tests/`. Verify against the DO test harness, not prod.
 2. **Make `doReader` surface errors.** Return an error flag so pages show "could not load" instead of
@@ -208,3 +208,9 @@ Each bullet is one builder task. None touches the spine (spec schema, DO ledger,
   `/api/service-accounts`.
 - `docs/MILESTONES.md` states the semantic UI is mocked (M6); I did not audit `ui-semantic.ts` content
   against any real data source.
+
+## Note: actor limit on issue writes (2026-10-17)
+
+Issue writes (create, comment, status, comment policy) take their author from the `X-Actor-ID` header, which the Spec DO resolves against
+`actors`. UI requests derive it from the signed session. A master-token holder (API, CLI) can still assert any existing actor id until a
+user-bound token exists (`docs/OPEN-QUESTIONS.md` 2026-10-17, "Issue writes trust a client-asserted actor").

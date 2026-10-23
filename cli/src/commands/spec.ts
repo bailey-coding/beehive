@@ -11,9 +11,9 @@ export function registerSpecCommands(
 ): void {
   const spec = program.command('spec').description('Spec management');
 
-  spec.command('create <name>').description('Create a new spec').requiredOption('--organization <id>', 'Organization ID').requiredOption('--contract <path>', 'Contract as JSON string, or @path to a JSON file').requiredOption('--declared-delta-surface <surface>', 'Declared delta surface (comma-separated)').option('--description <desc>', 'Spec description').action(createHandler(async (state, ..._args) => {
+  spec.command('create <name>').description('Create a new spec').requiredOption('--organization <id>', 'Organization ID').requiredOption('--contract <path>', 'Contract as JSON string, or @path to a JSON file').requiredOption('--declared-delta-surface <surface>', 'Declared delta surface (comma-separated)').option('--description <desc>', 'Spec description').option('--actor <id>', 'Actor ID to act as (default: BEEHIVE_ACTOR, then config defaultActor)').action(createHandler(async (state, ..._args) => {
     const name = _args[0] as string;
-    const opts = _args[1] as { organization: string; contract: string; declaredDeltaSurface: string; description?: string };
+    const opts = _args[1] as { organization: string; contract: string; declaredDeltaSurface: string; description?: string; actor?: string };
     
     let contract: string;
     if (opts.contract.startsWith('@')) {
@@ -39,7 +39,7 @@ export function registerSpecCommands(
       contract,
       declaredDeltaSurface,
       description: opts.description,
-    });
+    }, { actorId: opts.actor });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));
 

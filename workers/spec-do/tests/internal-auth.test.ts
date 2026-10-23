@@ -42,6 +42,12 @@ const ADMIN_ROUTES: Array<[string, string, unknown]> = [
   ['POST', '/internal/service-accounts/s1/tokens', {}],
   ['POST', '/internal/service-accounts/s1/tokens/t1/revoke', undefined],
   ['PATCH', '/api/actors/a1/promotion-authority', undefined],
+  // User tokens (M12): every route but verify
+  ['POST', '/internal/user-tokens', { actorId: 'a1' }],
+  ['GET', '/internal/user-tokens', undefined],
+  ['GET', '/internal/user-tokens?actorId=a1', undefined],
+  ['POST', '/internal/user-tokens/t1/revoke', undefined],
+  ['POST', '/internal/user-tokens/revoke-all', { actorId: 'a1' }],
 ];
 
 // Routes the non-API workers call
@@ -54,6 +60,8 @@ const TIER1_ROUTES: Array<[string, string]> = [
   ['GET', '/merge-train-status'],
   ['GET', '/deploy-refs/live?rung=canary'],
   ['GET', '/canary-deployments'],
+  // The edge's per-request user-token check (M12) is tier 1, like the service-token verify
+  ['POST', '/internal/user-tokens/verify'],
 ];
 
 describe('Spec DO internal auth gate', () => {
@@ -156,7 +164,15 @@ describe('timingSafeEqual', () => {
 
 describe('isAdminRoute / specDoAuthGate', () => {
   it('classifies privileged routes only', () => {
-    for (const [method, path] of ADMIN_ROUTES) expect(isAdminRoute(method, path), `${method} ${path}`).toBe(true);
+    for (const [method, path] of ADMIN_ROUTES) expect(isAdminRoute(method, path.split('?')[0]), `${method} ${path}`).toBe(true);
+    // Only the exact verify path is tier 1; anything else under /internal/user-tokens is tier 2
+    for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']) {
+      expect(isAdminRoute(method, '/internal/user-tokens/verify'), method).toBe(false);
+      expect(isAdminRoute(method, '/internal/user-tokens'), method).toBe(true);
+    }
+    for (const path of ['/internal/user-tokens/verify/', '/internal/user-tokens/verifyx', '/internal/user-tokens/verify/revoke', '/internal/user-tokens/x/verify']) {
+      expect(isAdminRoute('POST', path), path).toBe(true);
+    }
     for (const [method, path] of TIER1_ROUTES) expect(isAdminRoute(method, path.split('?')[0]), `${method} ${path}`).toBe(false);
     expect(isAdminRoute('POST', '/internal/service-tokens/verify')).toBe(false);
     expect(isAdminRoute('GET', '/api/actors/a1/promotion-authority')).toBe(false);
