@@ -29,6 +29,8 @@ import {
 export interface Session {
   login: string;
   actorId: string;
+  /** Sign-in time (epoch seconds). Absent on cookies issued before M12: those are never "fresh" for a token mint. */
+  iat?: number;
   exp: number;
 }
 

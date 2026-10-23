@@ -1,0 +1,106 @@
+/**
+ * authenticate() input validation: the master X-Actor-ID header and the Spec DO verify bodies
+ * are parsed with zod. Malformed input fails closed (400 / 503), never a half-trusted principal.
+ */
+import { describe, it, expect, vi } from 'vitest';
+import { authenticate } from '../principal';
+import { generateServiceToken, generateUserToken } from '../../shared/service-tokens';
+import type { SpecDoStub } from '../../shared/spec-do-auth';
+
+const MASTER = 'master-token-for-tests';
+const env = { API_AUTH_TOKEN: MASTER };
+
+function stubReturning(status: number, body: unknown): SpecDoStub {
+  return { fetch: async () => new Response(JSON.stringify(body), { status }) } as unknown as SpecDoStub;
+}
+const unused = stubReturning(500, {});
+
+function masterReq(actor?: string): Request {
+  const headers: Record<string, string> = { Authorization: `Bearer ${MASTER}` };
+  if (actor !== undefined) headers['X-Actor-ID'] = actor;
+  return new Request('https://x/api/actors', { headers });
+}
+
+async function status(r: Response | { kind: string }): Promise<number | string> {
+  return r instanceof Response ? r.status : r.kind;
+}
+
+describe('master X-Actor-ID', () => {
+  it('absent -> unknown actor, not an error', async () => {
+    expect(await authenticate(masterReq(), env, unused)).toMatchObject({ kind: 'master', actorId: 'unknown' });
+  });
+  it.each(['a'.repeat(36), 'queue-consumer', crypto.randomUUID()])('accepts %s', async (id) => {
+    expect(await authenticate(masterReq(id), env, unused)).toMatchObject({ kind: 'master', actorId: id });
+  });
+  it.each([['over-long', 'a'.repeat(129)], ['inner space', 'two words'], ['non-ascii', 'acteur-é']])(
+    'rejects %s with 400',
+    async (_n, id) => {
+      expect(await status(await authenticate(masterReq(id), env, unused))).toBe(400);
+    }
+  );
+  it('logs a bounded printable copy of a rejected id and says what is allowed', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const res = (await authenticate(masterReq('two words' + 'x'.repeat(300)), env, unused)) as Response;
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('printable ASCII');
+    const line = JSON.parse(String(log.mock.calls[0][0]));
+    expect(line.event).toBe('master_actor_rejected');
+    expect(line.actorId).toHaveLength(128);
+    expect(line.actorId).not.toContain(' ');
+    log.mockRestore();
+  });
+  it('a wrong master token is still 401, not 400', async () => {
+    const req = new Request('https://x/', { headers: { Authorization: 'Bearer nope', 'X-Actor-ID': 'two words' } });
+    expect(await status(await authenticate(req, env, unused))).toBe(401);
+  });
+});
+
+describe('service verify body', () => {
+  const tok = generateServiceToken();
+  const req = () => new Request('https://x/', { headers: { Authorization: `Bearer ${tok}` } });
+  const ok = { success: true, data: { kind: 'service', actorId: 'a1', serviceAccountId: 's1', extra: 1 } };
+  it('valid -> read-only service principal', async () => {
+    expect(await authenticate(req(), env, stubReturning(200, ok))).toMatchObject({
+      kind: 'service', actorId: 'a1', scopes: ['read'], serviceAccountId: 's1',
+    });
+  });
+  it.each([
+    ['success false', { success: false, data: ok.data }],
+    ['wrong kind', { success: true, data: { ...ok.data, kind: 'user' } }],
+    ['empty actorId', { success: true, data: { ...ok.data, actorId: '' } }],
+    ['numeric actorId', { success: true, data: { ...ok.data, actorId: 7 } }],
+    ['no data', { success: true }],
+    ['not an object', 'nope'],
+  ])('%s -> 503', async (_n, body) => {
+    expect(await status(await authenticate(req(), env, stubReturning(200, body)))).toBe(503);
+  });
+});
+
+describe('user verify body', () => {
+  const tok = generateUserToken();
+  const req = () => new Request('https://x/', { headers: { Authorization: `Bearer ${tok}` } });
+  const found = { found: true, actorId: 'a1', userTokenId: 't1', scope: 'read_write' };
+  it('maps each stored scope', async () => {
+    for (const [scope, scopes] of [['read', ['read']], ['read_write', ['read', 'write']], ['maintainer', ['read', 'write', 'maintainer']]] as const) {
+      expect(await authenticate(req(), env, stubReturning(200, { success: true, data: { ...found, scope } }))).toMatchObject({
+        kind: 'user', userTokenId: 't1', scopes,
+      });
+    }
+  });
+  it('found:false -> 401', async () => {
+    expect(await status(await authenticate(req(), env, stubReturning(200, { success: true, data: { found: false } })))).toBe(401);
+  });
+  it.each([
+    ['success false', { success: false, data: found }],
+    ['unknown scope', { success: true, data: { ...found, scope: 'root' } }],
+    ['prototype-key scope', { success: true, data: { ...found, scope: 'constructor' } }],
+    ['empty userTokenId', { success: true, data: { ...found, userTokenId: '' } }],
+    ['missing actorId', { success: true, data: { found: true, userTokenId: 't1', scope: 'read' } }],
+    ['found not boolean', { success: true, data: { ...found, found: 'true' } }],
+  ])('%s -> 503', async (_n, body) => {
+    expect(await status(await authenticate(req(), env, stubReturning(200, body)))).toBe(503);
+  });
+  it('404 from an old DO -> 503, not 401', async () => {
+    expect(await status(await authenticate(req(), env, stubReturning(404, {})))).toBe(503);
+  });
+});

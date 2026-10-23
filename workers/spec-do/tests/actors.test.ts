@@ -57,4 +57,12 @@ describe('GET /api/actors github_user_id filter', () => {
     const b = actorAt('b', undefined, 200);
     expect((await list('?limit=50&offset=0')).map((x) => x.id)).toEqual([b, a]);
   });
+
+  it('rows created in the same millisecond come back in reverse insertion order, filtered or not', async () => {
+    const first = actorAt('a', '42', 500);
+    const second = actorAt('a-again', '42', 500);
+    const third = actorAt('a-third', '42', 500);
+    expect((await list('?github_user_id=42')).map((a) => a.id)).toEqual([third, second, first]);
+    expect((await list('?limit=50&offset=0')).map((a) => a.id)).toEqual([third, second, first]);
+  });
 });

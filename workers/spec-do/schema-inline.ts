@@ -609,3 +609,67 @@ export const LEDGER_CAS_SQL = `
 --       holds the status transition rules the DO enforces
 -- ============================================================================
 `;
+
+// User tokens (m8 -> m9). Byte-identical to its section of schema.sql.
+export const USER_TOKENS_SQL = `
+-- ============================================================================
+-- USER TOKENS (m8 -> m9, additive; RFC-0008)
+-- One row per bh_usr_ token of one human actor. The actor must be type 'human'
+-- with a github_user_id and not a service account's actor (checked in code at
+-- mint and again at verify). token_hash is the SHA-256 hex of the plaintext and
+-- token_prefix its first 12 chars; the plaintext is never stored. scope is
+-- hierarchical: maintainer > read_write > read. The 90-day lifetime ceiling and
+-- the cap of 10 live tokens per actor are enforced in code
+-- (SpecDO.mintUserToken), so either can change without a table rebuild. The
+-- table references actors only, and m9 adds no index on actors (a unique
+-- actors.github_user_id index is M11's m11). Timestamps are epoch milliseconds.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS user_tokens (
+  id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 64),
+  token_hash TEXT NOT NULL,
+  token_prefix TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK(scope IN ('read', 'read_write', 'maintainer')),
+  created_by TEXT NOT NULL,
+  created_via TEXT NOT NULL CHECK(created_via IN ('session', 'admin')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL CHECK(expires_at > created_at),
+  revoked_at INTEGER,
+  revoked_by TEXT,
+  last_used_at INTEGER,
+  FOREIGN KEY (actor_id) REFERENCES actors(id),
+  FOREIGN KEY (created_by) REFERENCES actors(id),
+  FOREIGN KEY (revoked_by) REFERENCES actors(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_tokens_hash ON user_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_user_tokens_actor ON user_tokens(actor_id);
+`;
+
+// Idempotency keys table (m9 -> m10, additive). Prevents double-writes from at-least-once queue delivery.
+export const IDEMPOTENCY_KEYS_SQL = `
+-- ============================================================================
+-- IDEMPOTENCY KEYS (m9 -> m10, additive)
+-- Prevents double-writes from at-least-once Queue delivery.
+-- key_hash is SHA-256 of [actor, method, path, key], so a key cannot be replayed across actors or routes.
+-- The row is written in the same transaction as the mutation it guards.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  id TEXT PRIMARY KEY,
+  key_hash TEXT NOT NULL UNIQUE,
+  endpoint TEXT NOT NULL,
+  method TEXT NOT NULL CHECK(method IN ('POST', 'PATCH', 'PUT', 'DELETE')),
+  request_hash TEXT NOT NULL,
+  response_status INTEGER NOT NULL,
+  response_body TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires ON idempotency_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_endpoint ON idempotency_keys(endpoint, created_at);
+`;

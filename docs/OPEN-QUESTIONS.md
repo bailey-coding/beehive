@@ -690,3 +690,36 @@ it knows (log and continue, with a test); push B, only after A is live, adds the
 
 **Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
 (404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
+
+## Queue-consumer double-write prevention is unfinished (2026-10-19)
+
+**Status**: Resolved - implemented in agent/m5a-idempotency-fix
+
+The three blocking issues identified by agent 621993c have been addressed:
+
+1. **scientist-comparator route fix**: Changed POST from `/api/gate-verdicts/shadow` to `/api/gate-verdicts` with `gate: 'shadow'` in the body (matches existing Spec DO route).
+
+2. **Entity history POST route**: Added POST support for `/api/entities/:entity_type/:entity_id/history` in Spec DO, with the route pattern added to `IDEMPOTENT_ROUTES`.
+
+3. **queue-consumer actor**: Added 'queue-consumer' actor of type 'agent' to the seed data in `workers/spec-do/seed.ts`, allowing FK references to `changed_by` in entity_history.
+
+The queue-consumer now sends `Idempotency-Key: ${queueName}:${event.id}` header for history writes and properly handles response status (treats 409 as already-processed, not an error).
+
+M5a now closes the at-least-once double-write for all nine POST routes in `IDEMPOTENT_ROUTES`.
+
+---
+
+## Cloudflare Flagship for Beehive platform features (2026-10-18)
+
+**Status**: Open - deferred, no immediate need
+
+**Question**: Should Beehive adopt Cloudflare Flagship for gating platform-level features (new gate types, UI changes, promotion algorithms)?
+
+**Context**: Flagship is Cloudflare's native feature flag service (built on KV + Durable Objects, OpenFeature-compatible) that enables sub-millisecond flag evaluation at the edge. It provides the workflow we want: default off, enable, ramp up, remove once full on.
+
+**Assessment**: 
+- **Not for the Oracle Ladder** - the ladder is Beehive's coordination spine; Flagship is a feature toggle utility, not a promotion system. Our existing Spec DO + dedicated workers handle candidate progression better.
+- **Good fit for platform features** - useful when we have users and want to ship risky changes behind kill switches, A/B test new algorithms, or gradually roll out UI changes.
+- **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
+
+**Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.
