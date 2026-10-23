@@ -19,6 +19,8 @@ export interface UiEnv {
 import { page, esc, str, table, tableHtml, isValidId } from './ui-html';
 import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, type DoReader, type DoRow, type Session, type IssueViewer } from './ui-pages';
 import { parseRepoIssuesPath, resolveRepoRef, buildRepoUrl, validComponent, type RepoIssuesRoute, type RepoRef } from './ui-repo-ref';
+import { appPage, makeChromeSource, memoizeReader, statusPage, type ChromeSource } from './ui-layout';
+import { handleTokenSettings, parseTokenRoute, tokenPrecheck } from './ui-tokens';
 import type { SpecDoStub } from '../shared/spec-do-auth';
 
 // Re-export Session for use by tests
@@ -117,27 +119,45 @@ export async function handleUi(
 
   if (!session) return redirect('/login');
 
+  // API tokens (M12): the origin check and the mint freshness check precede every DO call,
+  // the actor lookup below included.
+  const tokenRoute = parseTokenRoute(path, method);
+  if (tokenRoute) {
+    const early = tokenPrecheck(tokenRoute, method, session, sameOrigin(request));
+    if (early) return early;
+  }
+
   // A valid signature does not prove the actor still exists (the ledger can be wiped).
   // Force a fresh login so ensureActor re-creates it instead of failing on a foreign key.
-  const actorList = await callDo(stub, '/api/actors?limit=500&offset=0', 'GET');
-  const actorRow = actorList.success && Array.isArray(actorList.data)
-    ? (actorList.data as Row[]).find((a) => pick(a, 'id') === session.actorId)
-    : undefined;
-  if (!actorRow) return redirect('/login', [clearCookie(SESSION_COOKIE)]);
+  // Looked up by id, not in a capped list. Only a 404 means "gone"; any other failure is a 503, not a login loop.
+  const lookup = await findSessionActor(stub, session.actorId);
+  if (lookup.state === 'error') {
+    return page('Service unavailable', '<p>Could not check your account. Try again shortly.</p>', 503);
+  }
+  if (lookup.state === 'missing') return redirect('/login', [clearCookie(SESSION_COOKIE)]);
+  const actorRow = lookup.row;
   // Only decides what the pages offer; the Spec DO re-checks every write. Sessions are never service accounts.
   const viewer: IssueViewer = { actorId: session.actorId, isMaintainer: pick(actorRow, 'role') === 'maintainer' };
 
-  // CREATE DOREADER - available to all authenticated routes below
-  const doReader = createDoReader(stub, session.actorId);
+  // CREATE DOREADER - available to all authenticated routes below. GET/HEAD requests share
+  // identical reads (the navigation's organization list and a page's own list) within the request.
+  const readOnly = method === 'GET' || method === 'HEAD';
+  const rawReader = createDoReader(stub, session.actorId);
+  const doReader = readOnly ? memoizeReader(rawReader) : rawReader;
+  // Lazy navigation data: nothing is read until a page awaits it while rendering, so the origin
+  // checks below still precede every DO read, and non-GET requests never read the org list.
+  const chrome = makeChromeSource(method, doReader, session, url);
 
   // Dashboard route
-  if (path === '/app' && method === 'GET') return dashboard(url, session, stub, doReader);
+  if (path === '/app' && method === 'GET') return dashboard(doReader, chrome);
+
+  if (tokenRoute) return handleTokenSettings(tokenRoute, request, session, viewer, stub, chrome);
 
   // Issue routes come first, GET and POST together (docs/M8-UI-ISSUES-PLAN.md section 2). When the
   // ref does not resolve they fall through, so repos named "issues" or "new" keep working.
   const issueRoute = parseRepoIssuesPath(path, method);
   if (issueRoute) {
-    const handled = await handleRepoIssues(issueRoute, request, url, session, viewer, stub, doReader);
+    const handled = await handleRepoIssues(issueRoute, request, url, session, viewer, stub, doReader, chrome);
     if (handled) return handled;
   }
 
@@ -146,7 +166,7 @@ export async function handleUi(
   const repoHierarchicalMatch = path.match(/^\/app\/repos\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/);
   if (repoHierarchicalMatch) {
     if (method !== 'GET') {
-      return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Method not allowed. <a href="/app">Back to dashboard</a>');
     }
     const segments: string[] = [];
     for (const part of repoHierarchicalMatch.slice(1)) {
@@ -154,23 +174,23 @@ export async function handleUi(
       try {
         segments.push(decodeURIComponent(part));
       } catch {
-        return page('Not found', '<p>Invalid path format. <a href="/app">Back to dashboard</a></p>', 404);
+        return statusPage(chrome, 404, 'Not found', 'Invalid path format. <a href="/app">Back to dashboard</a>');
       }
     }
     if (!segments.every(validComponent)) {
-      return page('Not found', '<p>Invalid path format. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Invalid path format. <a href="/app">Back to dashboard</a>');
     }
 
     try {
       const ref = await resolveRepoRef(doReader, segments);
       if (!ref) {
-        return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+        return statusPage(chrome, 404, 'Not found', 'Repository not found. <a href="/app">Back to dashboard</a>');
       }
       // Render using UUID (all existing page code works unchanged)
-      return await repoPage(pick(ref.repo, 'id'), url, session, doReader, env);
+      return await repoPage(pick(ref.repo, 'id'), url, session, doReader, env, chrome);
     } catch (error) {
       console.error('Repo page error:', error);
-      return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+      return statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
     }
   }
 
@@ -182,41 +202,41 @@ export async function handleUi(
     
     // Detail pages are GET-only (R9)
     if (method !== 'GET') {
-      return page('Not found', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Method not allowed. <a href="/app">Back to dashboard</a>');
     }
-    
+
     // Validate ID format (R5)
     // Reject anything that doesn't match alphanumeric/hyphen/underscore pattern
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
-      return page('Not found', '<p>Invalid ID format. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Invalid ID format. <a href="/app">Back to dashboard</a>');
     }
     
     try {
       switch (kind) {
         case 'orgs':
-          return await orgPage(id, url, session, doReader);
+          return await orgPage(id, url, session, doReader, chrome);
         case 'repos':
-          return await repoPage(id, url, session, doReader, env);
+          return await repoPage(id, url, session, doReader, env, chrome);
         case 'issues':
-          return await legacyIssue(id, url, session, viewer, doReader);
+          return await legacyIssue(id, url, session, viewer, doReader, chrome);
         case 'specs':
-          return await specPage(id, url, session, doReader);
+          return await specPage(id, url, session, doReader, chrome);
         case 'candidates':
-          return await candidatePage(id, url, session, doReader);
+          return await candidatePage(id, url, session, doReader, chrome);
         case 'trials':
-          return await trialPage(id, url, session, doReader);
+          return await trialPage(id, url, session, doReader, chrome);
         default:
-          return page('Not found', '<p>Unknown entity type. <a href="/app">Back to dashboard</a></p>', 404);
+          return statusPage(chrome, 404, 'Not found', 'Unknown entity type. <a href="/app">Back to dashboard</a>');
       }
     } catch (error) {
       console.error('Detail page error:', error);
-      return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+      return statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
     }
   }
 
   // POST routes for create forms (unchanged)
   if (method === 'POST') {
-    if (!sameOrigin(request)) return page('Forbidden', '<p>Cross-origin request blocked.</p>', 403);
+    if (!sameOrigin(request)) return statusPage(chrome, 403, 'Forbidden', 'Cross-origin request blocked.');
     const form = await request.formData();
     if (path === '/app/organizations') return createOrganization(form, session, stub);
     if (path === '/app/repositories') return createRepository(form, session, stub);
@@ -226,8 +246,10 @@ export async function handleUi(
     if (path === '/app/issue_comments') return legacyIssueComment(form, session, doReader, stub);
   }
 
-  return page('Not found', '<p>This page does not exist. <a href="/app">Back to dashboard</a></p>', 404);
+  return statusPage(chrome, 404, 'Not found', 'This page does not exist. <a href="/app">Back to dashboard</a>');
 }
+
+const LOAD_ERROR_MESSAGE = 'could not load this page. <a href="/app">Back to dashboard</a>';
 
 // ============================================================================
 // OAuth
@@ -313,16 +335,42 @@ async function finishLogin(
     return page('Login failed', '<p>Could not create your actor record.</p>', 500, [clearCookie(STATE_COOKIE)]);
   }
 
+  const iat = Math.floor(Date.now() / 1000);
   const token = await signSession(
-    { login: user.login, actorId, exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS },
+    { login: user.login, actorId, iat, exp: iat + SESSION_TTL_SECONDS },
     env.API_AUTH_TOKEN as string
   );
   return redirect('/app', [cookie(SESSION_COOKIE, token, SESSION_TTL_SECONDS), clearCookie(STATE_COOKIE)]);
 }
 
+type SessionActor = { state: 'found'; row: Row } | { state: 'missing' } | { state: 'error' };
+
+/** `GET /api/actors/:id`: 200 with that row is found, 404 is missing, anything else is an error. */
+async function findSessionActor(stub: SpecDoStub, actorId: string): Promise<SessionActor> {
+  try {
+    const res = await stub.fetch(
+      new Request(`https://spec-do.internal/api/actors/${encodeURIComponent(actorId)}`, {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    if (res.status === 404) return { state: 'missing' };
+    const json = (await res.json().catch(() => null)) as { success?: boolean; data?: unknown } | null;
+    const row = json?.data as Row | undefined;
+    if (res.ok && json?.success === true && row && typeof row === 'object' && pick(row, 'id') === actorId) {
+      return { state: 'found', row };
+    }
+    return { state: 'error' };
+  } catch {
+    return { state: 'error' };
+  }
+}
+
 async function ensureActor(stub: SpecDoStub, login: string, githubId: string): Promise<string | null> {
-  const list = await callDo(stub, '/api/actors?limit=500&offset=0', 'GET');
-  const rows = Array.isArray(list.data) ? (list.data as Row[]) : [];
+  // The filter finds the row past the 500-row page; the .find stays for a Spec DO that ignores it.
+  // A failed lookup must never fall through to creating an actor (it would add a duplicate row).
+  const list = await callDo(stub, `/api/actors?github_user_id=${encodeURIComponent(githubId)}&limit=500&offset=0`, 'GET');
+  if (!list.success || !Array.isArray(list.data)) return null;
+  const rows = list.data as Row[];
   const existing = rows.find((a) => a.github_user_id === githubId || a.githubUserId === githubId);
   if (existing && typeof existing.id === 'string') return existing.id;
 
@@ -355,7 +403,7 @@ function formatDate(ts: number | string | undefined): string {
   return new Date(num).toLocaleString();
 }
 
-async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader: DoReader): Promise<Response> {
+async function dashboard(doReader: DoReader, chrome: ChromeSource): Promise<Response> {
   try {
     const [orgs, repos, specs] = await Promise.all([
       doReader.list('/api/organizations'),
@@ -363,9 +411,6 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       doReader.list('/api/specs'),
     ]);
 
-  const notice = url.searchParams.get('ok');
-  const error = url.searchParams.get('error');
-  
   // Build name lookup maps
   const orgName = new Map(orgs.map((o) => [pick(o, 'id'), pick(o, 'name')]));
   const repoName = new Map(repos.map((r) => [pick(r, 'id'), pick(r, 'name')]));
@@ -412,15 +457,9 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
     ];
   });
 
+  // The layout renders the sign-out form and the flash; the section ids are the nav's anchors.
   const body = `
-    <header class="bar">
-      <span>Signed in as <strong>${esc(session.login)}</strong></span>
-      <form method="POST" action="/logout"><button class="link">Sign out</button></form>
-    </header>
-    ${notice ? `<p class="flash ok">${esc(notice)}</p>` : ''}
-    ${error ? `<p class="flash err">${esc(error)}</p>` : ''}
-
-    <section>
+    <section id="organizations">
       <h2>Organizations (${orgs.length})</h2>
       ${tableHtml(['Name', 'Type', 'ID'], orgRows)}
       <form method="POST" action="/app/organizations" class="inline">
@@ -431,7 +470,7 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       </form>
     </section>
 
-    <section>
+    <section id="repositories">
       <h2>Repositories (${repos.length})</h2>
       ${tableHtml(
         ['Name', 'Org', 'Type', 'Spec'],
@@ -448,7 +487,7 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       </form>
     </section>
 
-    <section>
+    <section id="specs">
       <h2>Specs (${specs.length})</h2>
       ${tableHtml(
         ['Name', 'Org', 'Stage', 'ID'],
@@ -464,10 +503,10 @@ async function dashboard(url: URL, session: Session, stub: SpecDoStub, doReader:
       </form>
     </section>`;
 
-    return page('Dashboard', body);
+    return await appPage(chrome, { title: 'Dashboard', crumbs: [], section: null }, body);
   } catch (error) {
     console.error('Dashboard error:', error);
-    return page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
+    return statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
   }
 }
 
@@ -521,12 +560,13 @@ async function createSpec(form: FormData, session: Session, stub: SpecDoStub): P
 // ============================================================================
 
 const MAX_COMMENT_CHARS = 10_000;
-const NO_REPO_PAGE = () => page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
-const NOT_FOUND_ISSUE = () => page('Not found', '<p>Issue not found. <a href="/app">Back to dashboard</a></p>', 404);
-const LOAD_ERROR = () =>
-  page('Error', '<p>could not load this page</p><p><a href="/app">Back to dashboard</a></p>', 502);
-const FORBIDDEN_ORIGIN = () => page('Forbidden', '<p>Cross-origin request blocked.</p>', 403);
-const METHOD_NOT_ALLOWED = () => page('Method not allowed', '<p>Method not allowed. <a href="/app">Back to dashboard</a></p>', 405);
+const NOT_FOUND_ISSUE = (chrome: ChromeSource) =>
+  statusPage(chrome, 404, 'Not found', 'Issue not found. <a href="/app">Back to dashboard</a>');
+const LOAD_ERROR = (chrome: ChromeSource) => statusPage(chrome, 502, 'Error', LOAD_ERROR_MESSAGE);
+const FORBIDDEN_ORIGIN = (chrome: ChromeSource) => statusPage(chrome, 403, 'Forbidden', 'Cross-origin request blocked.');
+const METHOD_NOT_ALLOWED = (chrome: ChromeSource) =>
+  statusPage(chrome, 405, 'Method not allowed', 'Method not allowed. <a href="/app">Back to dashboard</a>');
+const INVALID_ISSUE_ID = (chrome: ChromeSource) => statusPage(chrome, 404, 'Not found', 'Invalid issue ID.');
 
 const POST_KINDS = new Set(['create', 'comment', 'status']);
 
@@ -541,47 +581,48 @@ async function handleRepoIssues(
   session: Session,
   viewer: IssueViewer,
   stub: SpecDoStub,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response | null> {
   const isPostKind = POST_KINDS.has(route.kind);
   const method = request.method;
 
   // One origin check, before any DO read, for every state-changing issue route.
-  if (method === 'POST' && isPostKind && !sameOrigin(request)) return FORBIDDEN_ORIGIN();
+  if (method === 'POST' && isPostKind && !sameOrigin(request)) return FORBIDDEN_ORIGIN(chrome);
 
   let ref: RepoRef | null;
   try {
     ref = await resolveRepoRef(doReader, route.refSegments);
   } catch (error) {
     console.error('Issue route repo lookup error:', error);
-    return LOAD_ERROR();
+    return LOAD_ERROR(chrome);
   }
   if (!ref) return null;
 
   const allowed = isPostKind ? method === 'POST' : method === 'GET' || method === 'HEAD';
-  if (!allowed) return METHOD_NOT_ALLOWED();
+  if (!allowed) return METHOD_NOT_ALLOWED(chrome);
 
   try {
     switch (route.kind) {
       case 'list':
-        return await repoIssuesPage(ref, url, session, doReader);
+        return await repoIssuesPage(ref, url, session, doReader, chrome);
       case 'new':
-        return newIssuePage(ref, url, session);
+        return await newIssuePage(ref, url, session, chrome);
       case 'detail': {
         const issueId = route.issueId as string;
-        if (!isValidId(issueId)) return page('Not found', '<p>Invalid issue ID.</p>', 404);
-        return await issuePage(issueId, ref, url, session, doReader, viewer);
+        if (!isValidId(issueId)) return INVALID_ISSUE_ID(chrome);
+        return await issuePage(issueId, ref, url, session, doReader, viewer, chrome);
       }
       case 'create':
         return await createIssue(await readForm(request), ref, session, stub);
       case 'comment':
       case 'status': {
         const issueId = route.issueId as string;
-        if (!isValidId(issueId)) return page('Not found', '<p>Invalid issue ID.</p>', 404);
+        if (!isValidId(issueId)) return INVALID_ISSUE_ID(chrome);
         const issue = await doReader.get(`/api/issues/${encodeURIComponent(issueId)}`);
         // Private or out-of-repo issues are 404 before anything is written or disclosed.
         if (!issue || pick(issue, 'repository_id', 'repositoryId') !== pick(ref.repo, 'id') || pick(issue, 'visibility') === 'private') {
-          return NOT_FOUND_ISSUE();
+          return NOT_FOUND_ISSUE(chrome);
         }
         const form = await readForm(request);
         return route.kind === 'comment'
@@ -591,8 +632,8 @@ async function handleRepoIssues(
     }
   } catch (error) {
     console.error('Issue route error:', route.kind, error);
-    if (route.kind === 'list' || route.kind === 'new' || route.kind === 'detail') return LOAD_ERROR();
-    return page('Error', '<p>could not complete this request</p><p><a href="/app">Back to dashboard</a></p>', 502);
+    if (route.kind === 'list' || route.kind === 'new' || route.kind === 'detail') return LOAD_ERROR(chrome);
+    return statusPage(chrome, 502, 'Error', 'could not complete this request. <a href="/app">Back to dashboard</a>');
   }
 }
 
@@ -691,12 +732,12 @@ function writeFailure(result: { status: number; error: string }, fallback: strin
  * 404 before any redirect, so a private issue's canonical URL is never disclosed. If the
  * repository cannot be resolved the issue renders in place.
  */
-async function legacyIssue(id: string, url: URL, session: Session, viewer: IssueViewer, doReader: DoReader): Promise<Response> {
+async function legacyIssue(id: string, url: URL, session: Session, viewer: IssueViewer, doReader: DoReader, chrome: ChromeSource): Promise<Response> {
   const issue = await doReader.get(`/api/issues/${encodeURIComponent(id)}`);
-  if (!issue || pick(issue, 'visibility') === 'private') return NOT_FOUND_ISSUE();
+  if (!issue || pick(issue, 'visibility') === 'private') return NOT_FOUND_ISSUE(chrome);
   const repoId = pick(issue, 'repository_id', 'repositoryId');
   const ref = repoId ? await resolveRepoRef(doReader, [repoId]) : null;
-  if (!ref) return issuePage(id, null, url, session, doReader, viewer);
+  if (!ref) return issuePage(id, null, url, session, doReader, viewer, chrome);
   return redirect(`${ref.repoUrl}/issues/${encodeURIComponent(id)}`);
 }
 

@@ -168,6 +168,13 @@ const fixtureActors = [
   { id: 'actor-123', type: 'human', name: 'testuser', github_user_id: '12345', trust_score: 0.5, promotion_authority: false, created_at: Date.now() },
 ];
 
+// The session check reads GET /api/actors/:id; an unknown id falls through to the stub's 404.
+function onActors(stub: MockDurableObjectStub): void {
+  for (const actor of fixtureActors) {
+    stub.on(`/api/actors/${actor.id}`, async () => Response.json({ success: true, data: actor }));
+  }
+}
+
 // ============================================================================
 // Helper to create a mock DO stub with fixtures
 // ============================================================================
@@ -247,11 +254,7 @@ function createMockStub(): MockDurableObjectStub {
   });
   
   // Actor lookup (required for auth - R3)
-  stub.on('/api/actors?limit=500&offset=0', async () => {
-    return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  });
+  onActors(stub);
   
   // Single-record GETs
   for (const org of fixtureOrgs) {
@@ -1391,11 +1394,7 @@ describe('Regression Tests', () => {
     it('Spec DO 500 on get returns 502 page with could not load message', async () => {
       // Create a stub that returns 500 for a specific spec
       const errorStub = new MockDurableObjectStub();
-      errorStub.on('/api/actors?limit=500&offset=0', async () => {
-        return new Response(JSON.stringify({ success: true, data: fixtureActors }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      });
+      onActors(errorStub);
       errorStub.on('/api/specs?limit=500&offset=0', async () => {
         return new Response(JSON.stringify({ success: true, data: fixtureSpecs }), {
           headers: { 'Content-Type': 'application/json' },

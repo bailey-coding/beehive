@@ -11,7 +11,7 @@
  * Any allowlisted user can see all orgs - this is existing behavior (R9).
  */
 
-import { esc, str, table, tableHtml, page, appLink, badge, stageBadge, visibilityBadge, mockedLabel, isValidId, pick, tabs, flash } from './ui-html';
+import { esc, str, table, tableHtml, appLink, badge, stageBadge, visibilityBadge, mockedLabel, isValidId, pick, tabs } from './ui-html';
 import { 
   semanticSearch, renderSearch, 
   semanticChangelog, renderChangelog,
@@ -20,11 +20,17 @@ import {
   type ArtifactsUiEnv
 } from './ui-semantic';
 import { buildRepoUrl, type RepoRef } from './ui-repo-ref';
+import {
+  appPage, statusPage, dashboardCrumb, issuesCrumbs, orgCrumbs, repoCrumbs, specCrumbs, candidateCrumbs, trialCrumbs,
+  type ChromeSource,
+} from './ui-layout';
 
 // Session type (re-exported from ui.ts for tests)
 export interface Session {
   login: string;
   actorId: string;
+  /** Sign-in time (epoch seconds). Absent on cookies issued before M12: those are never "fresh" for a token mint. */
+  iat?: number;
   exp: number;
 }
 
@@ -70,18 +76,6 @@ function formatDate(ts: number | string | undefined): string {
   const num = typeof ts === 'string' ? parseInt(ts, 10) : ts;
   if (isNaN(num)) return '';
   return new Date(num).toLocaleString();
-}
-
-/**
- * Create a subheader with back link and title.
- */
-function subHeader(title: string, backHref: string = '/app', backText: string = 'Back to dashboard'): string {
-  return `
-    <div class="subbar">
-      <a href="${esc(backHref)}" class="link">&larr; ${esc(backText)}</a>
-      <h2>${esc(title)}</h2>
-    </div>
-  `;
 }
 
 // ============================================================================
@@ -159,10 +153,11 @@ export async function orgPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid organization ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid organization ID.');
   }
   
   const [org, repos, specs, candidates, trials, promotions, issues] = await Promise.all([
@@ -176,7 +171,7 @@ export async function orgPage(
   ]);
   
   if (!org) {
-    return page('Not found', '<p>Organization not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Organization not found. <a href="/app">Back to dashboard</a>');
   }
   
   // Filter in UI (R1)
@@ -220,10 +215,8 @@ export async function orgPage(
   ]);
   
   const body = `
-    ${subHeader(getName(org), '/app', 'All organizations')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(org))}</dd>
         <dt>Type</dt><dd>${esc(getType(org))}</dd>
@@ -241,12 +234,8 @@ export async function orgPage(
       ${tableHtml(['Name', 'Stage', 'Created'], specsRows)}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/orgs/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this organization...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
     
@@ -260,7 +249,14 @@ export async function orgPage(
     </p>
   `;
   
-  return page(getName(org), body);
+  return appPage(chrome, {
+    title: getName(org),
+    crumbs: orgCrumbs(org),
+    section: null,
+    orgId: id,
+    searchAction: `/app/orgs/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -305,10 +301,11 @@ export async function repoPage(
   url: URL,
   session: Session,
   doReader: DoReader,
-  env?: ArtifactsUiEnv
+  env: ArtifactsUiEnv | undefined,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid repository ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid repository ID.');
   }
   
   const [repo, orgs, specs, candidates, issues, trials, promotions] = await Promise.all([
@@ -322,9 +319,9 @@ export async function repoPage(
   ]);
   
   if (!repo) {
-    return page('Not found', '<p>Repository not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Repository not found. <a href="/app">Back to dashboard</a>');
   }
-  
+
   const repoOrg = orgs.find((o) => getId(o) === getOrganizationId(repo));
   const linkedSpec = specs.find((s) => getId(s) === getSpecId(repo));
   const repoIssues = issues.filter((i) => getRepositoryId(i) === id);
@@ -361,10 +358,8 @@ export async function repoPage(
   const tabContent = await renderRepoTab(activeTab, repo, repoOrg, linkedSpec, repoIssues, repoCandidates, repoSpecs, commits, trials, promotions, env);
   
   const body = `
-    ${subHeader(getName(repo), '/app', 'All repositories')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(repo))}</dd>
         <dt>Organization</dt><dd>${repoOrg ? `<a href="/app/orgs/${esc(encodeURIComponent(getId(repoOrg)))}">${esc(getName(repoOrg))}</a>` : 'N/A'}</dd>
@@ -381,22 +376,26 @@ export async function repoPage(
     
     ${tabContent}
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="${hierarchicalRepoPath}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this repository...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(getName(repo), body);
+
+  return appPage(chrome, {
+    title: getName(repo),
+    crumbs: repoCrumbs({ repo, org: repoOrg ?? null, repoUrl: hierarchicalRepoPath }),
+    section: 'repos',
+    orgId: repoOrg ? getId(repoOrg) : undefined,
+    repoUrl: hierarchicalRepoPath,
+    searchAction: `${hierarchicalRepoPath}#search`,
+    query,
+  }, body);
 }
 
 /**
@@ -601,10 +600,11 @@ export async function specPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid spec ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid spec ID.');
   }
   
   const [spec, orgs, repos, candidates, trials, promotions, issues] = await Promise.all([
@@ -618,7 +618,7 @@ export async function specPage(
     ]);
     
     if (!spec) {
-      return page('Not found', '<p>Spec not found. <a href="/app">Back to dashboard</a></p>', 404);
+      return statusPage(chrome, 404, 'Not found', 'Spec not found. <a href="/app">Back to dashboard</a>');
     }
   
   const specOrg = orgs.find((o) => getId(o) === getOrganizationId(spec));
@@ -718,10 +718,8 @@ export async function specPage(
     ]);
   
   const body = `
-    ${subHeader(getName(spec), '/app', 'All specs')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(spec))}</dd>
         <dt>Organization</dt><dd>${specOrg ? `<a href="/app/orgs/${esc(encodeURIComponent(getId(specOrg)))}">${esc(getName(specOrg))}</a>` : 'N/A'}</dd>
@@ -768,22 +766,25 @@ export async function specPage(
       ${tableHtml(['Title', 'Visibility', 'Type', 'Stage'], issueRows)}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/specs/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search in this spec...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-    return page(getName(spec), body);
+
+  return appPage(chrome, {
+    title: getName(spec),
+    crumbs: specCrumbs(spec, specOrg),
+    section: 'specs',
+    orgId: specOrg ? getId(specOrg) : undefined,
+    searchAction: `/app/specs/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -797,10 +798,11 @@ export async function candidatePage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid candidate ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid candidate ID.');
   }
   
   const [candidate, specs, orgs, repos, trialsList, promotionsList, verdicts] = await Promise.all([
@@ -814,10 +816,11 @@ export async function candidatePage(
   ]);
   
   if (!candidate) {
-    return page('Not found', '<p>Candidate not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Candidate not found. <a href="/app">Back to dashboard</a>');
   }
-  
+
   const spec = specs.find((s) => getId(s) === getSpecId(candidate));
+  const specOrg = spec ? orgs.find((o) => getId(o) === getOrganizationId(spec)) : undefined;
   const repo = repos.find((r) => getId(r) === getRepositoryId(candidate));
   const repoHierarchicalUrl = repo ? buildRepoUrl(repo, orgs) : null;
   
@@ -903,10 +906,8 @@ export async function candidatePage(
   }).join('');
   
   const body = `
-    ${subHeader(`Candidate ${getId(candidate).slice(0, 8)}`, '/app', 'All candidates')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(candidate))}</dd>
         <dt>Spec</dt><dd>${spec ? `<a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a>` : 'N/A'}</dd>
@@ -941,22 +942,25 @@ export async function candidatePage(
       ${promoDetails}
     </section>
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/candidates/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search for this candidate...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(`Candidate ${getId(candidate).slice(0, 8)}`, body);
+
+  return appPage(chrome, {
+    title: `Candidate ${getId(candidate).slice(0, 8)}`,
+    crumbs: candidateCrumbs(candidate, spec, specOrg),
+    section: 'specs',
+    orgId: specOrg ? getId(specOrg) : undefined,
+    searchAction: `/app/candidates/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -970,21 +974,23 @@ export async function trialPage(
   id: string,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(id)) {
-    return page('Not found', '<p>Invalid trial ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid trial ID.');
   }
-  
-  const [trial, specs, candidates, promotionsList] = await Promise.all([
+
+  const [trial, specs, orgs, candidates, promotionsList] = await Promise.all([
     doReader.get(`/api/trials/${encodeURIComponent(id)}`),
     doReader.list('/api/specs', 500),
+    doReader.list('/api/organizations', 500), // for the breadcrumb; shared with the navigation read
     doReader.list('/api/candidates', 500),
     doReader.list('/api/promotions', 500),
   ]);
-  
+
   if (!trial) {
-    return page('Not found', '<p>Trial not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Trial not found. <a href="/app">Back to dashboard</a>');
   }
   
   const candidateA = candidates.find((c) => getId(c) === pick(trial, 'candidate_a_id', 'candidateAId'));
@@ -993,7 +999,9 @@ export async function trialPage(
   
   const specA = candidateA ? specs.find((s) => getId(s) === getSpecId(candidateA)) : undefined;
   const specB = candidateB ? specs.find((s) => getId(s) === getSpecId(candidateB)) : undefined;
-  
+  const trailSpec = specA ?? specB;
+  const trailOrg = trailSpec ? orgs.find((o) => getId(o) === getOrganizationId(trailSpec)) : undefined;
+
   const winnerPromotions = winner
     ? promotionsList.filter((p) => pick(p, 'candidate_id', 'candidateId') === getId(winner))
     : [];
@@ -1026,10 +1034,8 @@ export async function trialPage(
   const idSlice = (c: DoRow | undefined) => c ? getId(c).slice(0, 8) : 'N/A';
   
   const body = `
-    ${subHeader(`Trial ${getId(trial).slice(0, 8)}`, '/app', 'All trials')}
-    
     <section class="details-section">
-      <h3>Details</h3>
+      <h2>Details</h2>
       <dl>
         <dt>ID</dt><dd>${esc(getId(trial))}</dd>
         <dt>Candidate A</dt><dd>${candidateA ? `<a href="/app/candidates/${esc(encodeURIComponent(getId(candidateA)))}">${esc(idSlice(candidateA))}</a>` : 'N/A'}</dd>
@@ -1055,22 +1061,25 @@ export async function trialPage(
     </section>
     ` : ''}
     
-    <section class="search-box">
+    <section class="search-box" id="search">
       <h2>Search</h2>
-      <form method="GET" action="/app/trials/${esc(encodeURIComponent(id))}">
-        <input type="search" name="q" value="${esc(query)}" placeholder="Search for this trial...">
-        <button type="submit">Search</button>
-      </form>
       ${renderSearch(searchResults)}
     </section>
-    
+
     <section>
       <h2>Recent Activity</h2>
       ${renderChangelog(changelog)}
     </section>
   `;
-  
-  return page(`Trial ${getId(trial).slice(0, 8)}`, body);
+
+  return appPage(chrome, {
+    title: `Trial ${getId(trial).slice(0, 8)}`,
+    crumbs: trialCrumbs(trial, trailSpec, trailOrg),
+    section: 'specs',
+    orgId: trailOrg ? getId(trailOrg) : undefined,
+    searchAction: `/app/trials/${esc(encodeURIComponent(id))}#search`,
+    query,
+  }, body);
 }
 
 // ============================================================================
@@ -1169,7 +1178,8 @@ export async function repoIssuesPage(
   ref: RepoRef,
   url: URL,
   session: Session,
-  doReader: DoReader
+  doReader: DoReader,
+  chrome: ChromeSource
 ): Promise<Response> {
   const { repo, repoUrl } = ref;
   const repoId = getId(repo);
@@ -1189,10 +1199,6 @@ export async function repoIssuesPage(
   const issueRows = publicIssues.map((i) => renderIssueRow(i, repoUrl));
 
   const body = `
-    ${subHeader(`Issues for ${getName(repo)}`, repoUrl)}
-
-    ${flash(url)}
-
     <section class="action-bar">
       <a href="${repoUrl}/issues/new" class="button">New Issue</a>
     </section>
@@ -1211,24 +1217,26 @@ export async function repoIssuesPage(
       <p><a href="/app/specs/${esc(encodeURIComponent(getId(spec)))}">${esc(getName(spec))}</a> (${esc(getStage(spec))})</p>
     </section>
     ` : ''}
-
-    <p><a href="${repoUrl}">Back to repository</a></p>
   `;
 
-  return page(`Issues - ${getName(repo)}`, body);
+  return appPage(chrome, {
+    title: `Issues - ${getName(repo)}`,
+    heading: `Issues for ${getName(repo)}`,
+    crumbs: issuesCrumbs(ref),
+    section: 'issues',
+    orgId: ref.org ? getId(ref.org) : undefined,
+    repoUrl,
+    searchAction: `${repoUrl}#search`,
+  }, body);
 }
 
 /**
  * Form to create a new issue for a repository. The number is assigned by the Spec DO.
  */
-export function newIssuePage(ref: RepoRef, url: URL, _session: Session): Response {
+export function newIssuePage(ref: RepoRef, _url: URL, _session: Session, chrome: ChromeSource): Promise<Response> {
   const { repo, repoUrl } = ref;
 
   const body = `
-    ${subHeader(`New Issue for ${getName(repo)}`, repoUrl)}
-
-    ${flash(url)}
-
     <form method="POST" action="${repoUrl}/issues" class="stack">
       <div class="form-group">
         <label for="title">Title *</label>
@@ -1250,11 +1258,17 @@ export function newIssuePage(ref: RepoRef, url: URL, _session: Session): Respons
         <a href="${repoUrl}/issues" class="button">Cancel</a>
       </div>
     </form>
-
-    <p><a href="${repoUrl}">Back to repository</a></p>
   `;
 
-  return page(`New Issue - ${getName(repo)}`, body);
+  return appPage(chrome, {
+    title: `New Issue - ${getName(repo)}`,
+    heading: `New Issue for ${getName(repo)}`,
+    crumbs: issuesCrumbs(ref, undefined, 'New'),
+    section: 'issues',
+    orgId: ref.org ? getId(ref.org) : undefined,
+    repoUrl,
+    searchAction: `${repoUrl}#search`,
+  }, body);
 }
 
 /** Who is looking at the page: decides which buttons and forms are offered (the DO still decides). */
@@ -1274,10 +1288,11 @@ export async function issuePage(
   url: URL,
   session: Session,
   doReader: DoReader,
-  viewer: IssueViewer
+  viewer: IssueViewer,
+  chrome: ChromeSource
 ): Promise<Response> {
   if (!isValidId(issueId)) {
-    return page('Not found', '<p>Invalid issue ID.</p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Invalid issue ID.');
   }
 
   const [issue, comments] = await Promise.all([
@@ -1286,11 +1301,11 @@ export async function issuePage(
   ]);
 
   if (!issue || isPrivateIssue(issue)) {
-    return page('Not found', '<p>Issue not found. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Issue not found. <a href="/app">Back to dashboard</a>');
   }
   const repoId = getRepositoryId(issue);
   if (ref && getId(ref.repo) !== repoId) {
-    return page('Not found', '<p>Issue not found in this repository. <a href="/app">Back to dashboard</a></p>', 404);
+    return statusPage(chrome, 404, 'Not found', 'Issue not found in this repository. <a href="/app">Back to dashboard</a>');
   }
 
   const repo = ref?.repo;
@@ -1331,10 +1346,6 @@ export async function issuePage(
   }
 
   const body = `
-    ${repoUrl ? subHeader(title, `${repoUrl}/issues`, 'Back to issues') : `<h1>${esc(title)}</h1>`}
-
-    ${flash(url)}
-
     <section class="details-section">
       <dl>
         <dt>Status</dt><dd>${isOpen ? '<span class="badge open">Open</span>' : '<span class="badge closed">Closed</span>'} ${toggleForm}</dd>
@@ -1378,9 +1389,19 @@ export async function issuePage(
 
       ${commentForm}
     </section>
-
-    <p><a href="${repoUrl ? repoUrl + '/issues' : '/app'}">Back to issues</a></p>
   `;
 
-  return page(`Issue #${getIssueNumber(issue)} - ${getIssueTitle(issue)}`, body);
+  const number = getIssueNumber(issue);
+  const fallbackName = `Issue ${getId(issue).slice(0, 8)}`;
+  const tail = number ? `#${number}` : fallbackName;
+  return appPage(chrome, {
+    title: `Issue #${number} - ${getIssueTitle(issue)}`,
+    heading: title,
+    // Legacy render without a resolvable repository: no repo, no Issues item, a short trail.
+    crumbs: ref ? issuesCrumbs(ref, undefined, tail) : [dashboardCrumb(), { label: number ? `Issue #${number}` : fallbackName }],
+    section: ref ? 'issues' : null,
+    orgId: ref?.org ? getId(ref.org) : undefined,
+    repoUrl: repoUrl ?? undefined,
+    searchAction: repoUrl ? `${repoUrl}#search` : undefined,
+  }, body);
 }

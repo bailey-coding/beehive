@@ -14,6 +14,7 @@ This directory contains all Beehive project documentation, organized for **human
 | **📜 Feature Specs** | Detailed designs for specific capabilities | [SEMANTIC-NAVIGATION-PLAN.md](./SEMANTIC-NAVIGATION-PLAN.md), [UI-DASHBOARD-PLAN.md](./UI-DASHBOARD-PLAN.md) |
 | **📋 Issue UX Flow** | End-to-end issue creation with agent assistance | [ISSUE-CREATION-INDEX.md](./ISSUE-CREATION-INDEX.md), [ISSUE-FLOW-SUMMARY.md](./ISSUE-FLOW-SUMMARY.md) |
 | **🔍 Findings & Lessons** | Spike results, open questions, empirical validation | [OPEN-QUESTIONS.md](./OPEN-QUESTIONS.md) |
+| **🤖 Agent Guidelines** | Review standards, efficiency tips | [AGENTS-REVIEWER.md](./AGENTS-REVIEWER.md) |
 | **🛠️ Setup & Deployment** | Environment, configuration, Cloudflare integration | [SETUP.md](./SETUP.md), [ARTIFACTS-SETUP.md](./ARTIFACTS-SETUP.md) |
 | **🔐 Auth & Integration** | OAuth, Statsig, external service wiring | [OAUTH-INTEGRATION.md](./OAUTH-INTEGRATION.md), [STATSIG-INTEGRATION.md](./STATSIG-INTEGRATION.md) |
 | **✅ Verification & Testing** | Test plans, audit reports, execution results | [VERIFICATION.md](./VERIFICATION.md), [TEST-AUDIT-REPORT.md](./TEST-AUDIT-REPORT.md) |
@@ -96,6 +97,11 @@ Quality assurance and validation documentation.
 - [TEST-AUDIT-REPORT.md](./TEST-AUDIT-REPORT.md) - *Comprehensive test audit*
 - [CLOUDFLARE-DEPLOY-FAILURES-REPORT.md](./CLOUDFLARE-DEPLOY-FAILURES-REPORT.md) - *Deploy failure analysis*
 - [FINAL-SUBMISSION-REVIEW.md](./FINAL-SUBMISSION-REVIEW.md) - *Submission review checklist*
+
+### 🤖 Agent Guidelines
+Standardized review processes and token-efficient patterns for code review agents.
+
+- [AGENTS-REVIEWER.md](./AGENTS-REVIEWER.md) - *Reviewer checklist, structure template, and Beehive-specific invariants*
 
 ### 📊 Phase Reports (M1-M7)
 Complete historical record of each milestone phase.
