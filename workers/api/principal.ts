@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import { jsonError } from '../shared/auth';
-import { ActorIdSchema, type Principal, type Scope } from '../shared/principal';
+import { ACTOR_ID_MAX_CHARS, ActorIdSchema, type Principal, type Scope } from '../shared/principal';
 import {
   SERVICE_TOKEN_PREFIX,
   USER_TOKEN_PREFIX,
@@ -86,7 +86,19 @@ export async function authenticate(
     const asserted = request.headers.get('X-Actor-ID');
     if (asserted) {
       const parsed = ActorIdSchema.safeParse(asserted);
-      if (!parsed.success) return jsonError('Invalid X-Actor-ID', 400);
+      if (!parsed.success) {
+        // Keep the stage-1 evidence (who asserts odd ids): log a bounded, printable-only copy.
+        console.log(
+          JSON.stringify({
+            event: 'master_actor_rejected',
+            method: request.method,
+            path: new URL(request.url).pathname,
+            actorId: asserted.slice(0, ACTOR_ID_MAX_CHARS).replace(/[^\x21-\x7e]/g, '?'),
+            ray: request.headers.get('cf-ray'),
+          })
+        );
+        return jsonError(`Invalid X-Actor-ID: 1-${ACTOR_ID_MAX_CHARS} printable ASCII characters, no spaces`, 400);
+      }
     }
     return {
       kind: 'master',

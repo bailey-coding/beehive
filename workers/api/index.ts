@@ -22,7 +22,7 @@ interface Env {
 }
 
 import { authenticate, authorize } from './principal';
-import { withAuth, withActor } from '../shared/principal';
+import { ACTOR_ID_MAX_CHARS, withAuth, withActor } from '../shared/principal';
 import type { ActorRequest } from '../shared/principal';
 import { handleServiceAccountRoutes } from './service-accounts';
 import { handleUserTokenRoutes } from './user-tokens';
@@ -398,7 +398,7 @@ function extractParentId(urlOrPath: string): string {
 // MASTER TOKEN STAGE 1 (RFC-0008 section 5): log, change nothing
 // ============================================================================
 
-const MAX_LOGGED_ACTOR_CHARS = 128;
+const MAX_LOGGED_ACTOR_CHARS = ACTOR_ID_MAX_CHARS;
 
 /** url.pathname with every segment that is not a lowercase word replaced by ':id' (ids stay out of the AE blob) */
 function pathClass(pathname: string): string {

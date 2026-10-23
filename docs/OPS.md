@@ -314,8 +314,9 @@ as in step 2. No production e2e without the maintainer's approval.
 
 **Master token, stage 1 (log, change nothing).** Every master request that sends an `X-Actor-ID` other
 than `unknown` writes one Workers Logs line
-`{"event":"master_actor_assertion","method","path","actorId","ray"}` (pathname only; actor truncated to
-128 chars; never the query, headers, body or token) and one Analytics Engine point in the
+`{"event":"master_actor_assertion","method","path","actorId","ray"}` (pathname only; the id is at most 128
+printable ASCII characters with no spaces: a longer or malformed id is a 400 and writes a
+`master_actor_rejected` log line instead, with no AE point; never the query, headers, body or token) and one Analytics Engine point in the
 `beehive-metrics` dataset (index `master_actor_assertion`, blobs: actor, method, path class with ids
 replaced by `:id`). Workers Logs keep 7 days; use AE for the stage-2 evidence:
 

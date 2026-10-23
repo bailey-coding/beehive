@@ -2,7 +2,7 @@
  * authenticate() input validation: the master X-Actor-ID header and the Spec DO verify bodies
  * are parsed with zod. Malformed input fails closed (400 / 503), never a half-trusted principal.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { authenticate } from '../principal';
 import { generateServiceToken, generateUserToken } from '../../shared/service-tokens';
 import type { SpecDoStub } from '../../shared/spec-do-auth';
@@ -38,6 +38,17 @@ describe('master X-Actor-ID', () => {
       expect(await status(await authenticate(masterReq(id), env, unused))).toBe(400);
     }
   );
+  it('logs a bounded printable copy of a rejected id and says what is allowed', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const res = (await authenticate(masterReq('two words' + 'x'.repeat(300)), env, unused)) as Response;
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('printable ASCII');
+    const line = JSON.parse(String(log.mock.calls[0][0]));
+    expect(line.event).toBe('master_actor_rejected');
+    expect(line.actorId).toHaveLength(128);
+    expect(line.actorId).not.toContain(' ');
+    log.mockRestore();
+  });
   it('a wrong master token is still 401, not 400', async () => {
     const req = new Request('https://x/', { headers: { Authorization: 'Bearer nope', 'X-Actor-ID': 'two words' } });
     expect(await status(await authenticate(req, env, unused))).toBe(401);
