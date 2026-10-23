@@ -88,6 +88,7 @@ Bootstrap governance with minimal viable ledger changes and change-type classifi
 - **Legacy-shape migration tests:** Added production dump simulation tests for `service_accounts`, `actors`, `entity`, and `promotion` tables, asserting schema m10 (`e55ce32`, 2026-10-19).
 **Exit criteria:** Idempotency keys prevent double-writes; bootstrap fields added to ledger; change-type classification operational; two-person rule logic in place (even if only self-approvals for now).
 
+- **Compile-time auth safety:** Custom request types (`AuthedRequest`, `ActorRequest`, `ReadRequest`, `WriteRequest`, `MaintainerRequest`) added with branded types. All 43 API handlers in `workers/api/index.ts` migrated to use typed requests. Wrapper functions (`withAuth`, `withActor`, scope checkers) added to `workers/shared/principal.ts`. Redundant runtime `actorId` lookups removed from handlers. Type-level tests in `principal.test-d.ts`. Implementation on `vibe/custom-request-types-1a468a`.
 ---
 
 **M5b — Trust & Governance Layer: Calibration (deferred).** Trust registry and advanced features that need measured outcomes:

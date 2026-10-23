@@ -37,6 +37,7 @@ Completed items are removed, not struck through; history lives in git.*
   write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
 - Local checks on `agent/m9-nav` (2026-10-17): 836 unit tests pass, typecheck clean; local e2e 70 passed / 5 skipped /
   0 failed (run with `E2E_UI=1`, see `docs/SETUP.md`). On `main`: 743 unit tests, e2e 63 passed / 5 skipped / 0 failed.
+- **Custom request types implemented** (2026-10-19, `vibe/custom-request-types-1a468a`): Compile-time auth safety via branded types (`AuthedRequest`, `ActorRequest`, `ReadRequest`, `WriteRequest`, `MaintainerRequest`). All 43 API handlers migrated, redundant `actorId` lookups removed. Type-level tests in `principal.test-d.ts`. Defense in depth: `authenticate()` and `authorize()` remain at edge level.
 
 ## Next session, first (needs the maintainer)
 
