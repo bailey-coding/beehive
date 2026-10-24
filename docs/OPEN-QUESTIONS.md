@@ -369,13 +369,54 @@ live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 fail
   `deploy_ref_id`, status `deployed`/`superseded`/`rolled_back`). No foreign keys, like the
   promotion ledger: e2e (and the promotion worker) use candidate/spec ids with no ledger row.
   A tombstoned candidate or spec is refused (404).
-- **Workers Versions API: unverified, stubbed, not called.** Open: can a version be created from
-  a candidate commit, and can a deployment be switched to it instantly? Nothing here depends on
-  it. `workers/preview-manager/versions.ts` has only `StubWorkerVersionsClient` (`stub-<uuid>`,
-  URL `<prefix>-<worker>.<subdomain>.workers.dev`), selected by `WORKER_VERSIONS_MODE=stub`
-  plus `BEEHIVE_LOCAL_DEV=1` (both set by `scripts/start-e2e-workers.sh`). Unset (production) the route answers **501**, so
-  production canary deploys fail closed until a real client is written and verified. Rollback
-  calls no Cloudflare API at all: traffic follows the ref.
+- **Workers Versions API: verified 2026-10-24 (spike on a throwaway worker, since deleted).**
+  Docs (cloudflare MCP) plus real calls against `beehive-versions-spike` only.
+  - **(a) Version from built code: yes.** `POST /accounts/{acct}/workers/scripts/{name}/versions`
+    (multipart: `metadata` JSON part with `main_module`, `compatibility_date`, `bindings`,
+    `annotations`; one part per module, `application/javascript+module`) uploads WITHOUT deploying.
+    It needs the built modules, not a commit: nothing here builds a candidate, so a bundle source is
+    still unwired (below). `annotations`: `workers/tag` (<=100 B), `workers/commit_sha` (<=64 B),
+    `workers/message`. Response `result`: `{id (uuid), number, metadata{has_preview,...}, annotations, resources}`.
+    **The first upload of a Worker cannot be a version upload**: 404, code 10007 "This Worker does
+    not exist". Use `PUT .../scripts/{name}` (creates v1 AND a 100% deployment; `result.deployment_id`
+    is v1's id as undashed 32-hex). New Workers have no version URL until
+    `POST .../scripts/{name}/subdomain {"enabled":true,"previews_enabled":true}` (set explicitly).
+  - **(b) Switch / split: yes.** `POST .../scripts/{name}/deployments`
+    `{"strategy":"percentage","versions":[{"version_id","percentage"}]}` (percentage 0.01-100, must total
+    100 within 1e-6, else 400 code 10210; 0% is rejected, so a 0% "dark" entry is not expressible
+    this way). Returns `{id}`. Only the last 100 uploaded versions are deployable. Observed: 50/50 gave
+    9 v1 / 7 v2 in 16 requests; a switch to 100% v2 was visible on the next request, but **one request
+    after the switch still hit v1**: fast (seconds), not atomic. Rollback = another deployment (~1.1 s per call).
+  - **(c) Auth/limits.** Token: "Workers Scripts Write" (upload, deployments, subdomain); read needs
+    "Workers Scripts Read". Wrangler OAuth `workers (write)` sufficed. Rate limit: global 1200 requests
+    / 5 min per token, 429 beyond, then blocked 5 min (docs, fundamentals/api/reference/limits); no
+    Workers-specific limit documented. Calls took 0.9-1.2 s each. Not exercised: 429 behavior, quotas on
+    number of Workers per account.
+  - **(d) Version URLs.** `https://<first 8 hex of version id>-<worker>.<subdomain>.workers.dev`
+    (confirmed: `1496f34f-...` served v2 with 200 while the deployment was elsewhere). Label
+    `<8>-<worker>` must be <=63 chars. Public unless Cloudflare Access is added; not generated for
+    Workers with Durable Objects, Containers/Sandbox, or Workers for Platforms user Workers (candidate
+    services are stateless, so fine); no logs for version URLs. The header
+    `Cloudflare-Workers-Version-Overrides: <worker>="<version-id>"` (confirmed) also pins a version on
+    the normal URL. A version URL works for a non-deployed version, so canary needs no deployment
+    switch: the ref names the version and the router targets its URL.
+  - **Mapping.** `ApiWorkerVersionsClient` (`workers/preview-manager/versions.ts`, mode
+    `WORKER_VERSIONS_MODE=api`) implements `createVersion` as: POST versions; on 10007 PUT script then
+    enable subdomain; URL from the id prefix. `setDeployment` wraps the deployments call (not part of the
+    interface; unused by the ref-driven path). Mocked-fetch tests in `tests/versions.test.ts`; the
+    real-API shapes above came from the spike, but the client code itself was never run live.
+  - **Unverified.** 429 behavior; behavior of `bindings` other than none (a candidate needing KV/DO
+    bindings; `inherit` bindings only resolve against the latest uploaded version); propagation bound of
+    a switch (saw one stale request); whether `previews_enabled` is needed on top of workers.dev being
+    on (set explicitly, not tested without); wrangler-free multi-module / wasm uploads; where the built
+    bundle comes from.
+  - **Human wiring needed (not done; spine/promotion path).** (1) a `CandidateBundleSource`
+    passed as 2nd arg of `workerVersionsClientFor(env, bundle)` in `workers/preview-manager/index.ts`
+    (fetch built output of the candidate commit, e.g. from the Workers Builds artifact or Artifacts
+    repo); (2) set `WORKER_VERSIONS_MODE=api`, `CLOUDFLARE_API_TOKEN` (Workers Scripts Write) and
+    `WORKERS_SUBDOMAIN` on preview-manager (`CLOUDFLARE_ACCOUNT_ID` is already typed); (3) the route's
+    `versionsClient` field now may be `'api'`; (4) cleanup of `beehive-candidate-*` Workers on purge
+    (nothing deletes them). Default unchanged: unset mode answers 501.
 - **Where traffic follows the ref.** shadow-router now binds `SpecDO` and, per mirrored request,
   reads `GET /deploy-refs/live?rung=canary`: each live canary becomes a mirror target at its
   version URL with its split. If the read fails, no canary target is added. No cache (a cache
