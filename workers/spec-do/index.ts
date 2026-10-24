@@ -367,7 +367,12 @@ interface Env {
   CLOUDFLARE_API_TOKEN?: string;
   // Minimum tombstone age before purge may hard-delete (hours, default 24). Local e2e sets 0.
   PURGE_MIN_AGE_HOURS?: string;
+  // Producer for canary SLO ticks (docs/M3-CANARY-SLO-PLAN.md). Optional: an unbound DO still arms and re-arms.
+  CANARY_SLO_TICKS?: { send(message: unknown): Promise<void> };
 }
+
+/** Delay between canary SLO ticks while a canary is live. */
+export const CANARY_TICK_INTERVAL_MS = 60_000;
 
 // Tombstone columns, present on organizations/repositories/specs/candidates/issues rows
 // only when the row is tombstoned (live rows serialize exactly as before m5)
@@ -3069,7 +3074,9 @@ export class SpecDO {
         if (id === undefined && method === 'POST') {
           const p = parse(CanaryDeployRequestSchema, 'canary deployment');
           if ('error' in p) return p.error;
-          return json(this.deployCanary(p.data, actorId), 201);
+          const moved = this.deployCanary(p.data, actorId);
+          await this.armCanaryAlarm();
+          return json(moved, 201);
         }
         if (id !== undefined && sub === undefined && method === 'GET') {
           const deployment = this.getCanaryDeployment(id);
@@ -3205,6 +3212,38 @@ export class SpecDO {
       this.syncCanaryStatuses(request.specId);
       return { deployment: this.getCanaryDeployment(id)!, ref };
     });
+  }
+
+  /** Set the tick alarm for +60s when a canary is live and none is pending. Best effort: never throws. */
+  async armCanaryAlarm(): Promise<void> {
+    try {
+      if (!this.db || this.liveRefs('canary').length === 0) return;
+      if ((await this.state.storage.getAlarm()) != null) return;
+      await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS);
+    } catch (e) {
+      console.error('[SpecDO] canary alarm arm failed:', e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Canary SLO tick: while any canary head is live, send one message to the tick queue and re-arm. With none
+   * live nothing is re-armed, so the chain stops. Never throws (a throw would make the runtime retry with backoff).
+   */
+  async alarm(): Promise<void> {
+    try {
+      if (!this.db) await this.init();
+      if (this.liveRefs('canary').length === 0) return;
+      try {
+        await this.env.CANARY_SLO_TICKS?.send({ type: 'canary-slo-tick', at: now() });
+      } catch (e) {
+        console.error('[SpecDO] canary tick send failed:', e instanceof Error ? e.message : String(e));
+      }
+      await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS);
+    } catch (e) {
+      console.error('[SpecDO] canary alarm failed:', e instanceof Error ? e.message : String(e));
+      // Best effort to keep the chain alive; the next request also re-arms
+      try { await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS); } catch { /* ignore */ }
+    }
   }
 
   /** Roll back a live canary: its spec's canary ref moves to the previous target. */
@@ -3611,6 +3650,8 @@ export class SpecDO {
 
     if (!this.db) {
       await this.init();
+      // A canary may already be live from before this deploy or an eviction
+      await this.armCanaryAlarm();
     }
     
     const url = new URL(request.url);

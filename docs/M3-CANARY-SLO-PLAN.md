@@ -25,6 +25,16 @@ Spine-adjacent (promotion train, Spec DO schema): **a human approves this plan b
 4. **Trigger: a `scheduled` cron on the canary worker**, every minute, using `DeployRefsClient.liveRefs('canary')` to list
    live canaries (it already returns `{ref, deployment}` with `autoRollback`). No queue producer.
 
+5. **Event-driven tick (added 2026-10-24, accepted).** The Spec DO arms an alarm (+60 s) when a canary deploy lands (and on
+   the first request after a restart if a canary is already live). `alarm()` sends one message to queue `canary-slo-ticks`
+   and re-arms while `liveRefs('canary')` is non-empty; with none live it does nothing, so the chain stops and an idle
+   ledger costs nothing. The canary worker consumes the queue (`[[queues.consumers]]`) and runs the same cycle as the cron
+   (`runSloCycle`, `workers/canary-worker/index.ts`). The cron stays for now as a fallback and for mixed-version safety
+   (old DO + new worker: no ticks, cron covers; new DO + old worker: ticks pile up unconsumed, cron covers). The producer
+   binding (`CANARY_SLO_TICKS`) is optional in code: an unbound DO still arms and re-arms, it just sends nothing.
+   **Not live in production yet:** prod canary deploys answer 501 (no Versions client), so no canary ref is ever written
+   and the alarm never arms there until that lands. Removing the cron is a later step, once ticks are seen firing.
+
 ## Rules this must keep (AGENTS.md)
 
 - Coordination state lives in the Spec DO, transactional; AE keeps raw telemetry only.

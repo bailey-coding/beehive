@@ -41,6 +41,13 @@ queue = "canary-rollback-triggers"
 max_batch_size = 100
 max_batch_timeout = 30
 
+# SLO ticks from the Spec DO alarm (docs/M3-CANARY-SLO-PLAN.md); the cron above stays as a fallback
+[[queues.consumers]]
+queue = "canary-slo-ticks"
+max_batch_size = 10
+max_batch_timeout = 1
+max_retries = 0
+
 [observability]
 enabled = true
 head_sampling_rate = 1
