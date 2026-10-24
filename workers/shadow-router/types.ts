@@ -49,6 +49,10 @@ export interface ShadowConfig {
   
   // Candidate preview URLs to mirror traffic to
   candidatePreviews: Map<string, string>; // candidateId -> previewUrl
+
+  // candidateId -> live canary deployment id (from the deploy refs). Absent/empty for static
+  // candidates, which have no deployment and so no canary metrics.
+  canaryDeployments?: Map<string, string>;
   
   // Sample rate (0.0 - 1.0)
   sampleRate: number;
