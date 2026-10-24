@@ -131,10 +131,10 @@ cleanups. Confirm, in this order:
     binding cycle may need two passes).
 - **README drift — FIXED:** `tests/e2e/README.md` updated to match `docs/SETUP.md` (local e2e makes real HTTP
   calls, no mocks) (`54808ae`, `30eb73`, `bc155e0`, 2026-10-19).
-- **M3 canary SLO loop implemented, not deployed** (2026-10-24, schema `m11`; plan `docs/M3-CANARY-SLO-PLAN.md`, runbook
+- **M3 canary SLO loop deployed** (2026-10-24, schema `m11`; plan `docs/M3-CANARY-SLO-PLAN.md`, runbook
   `docs/OPS.md` "Canary SLO loop"): the shadow router posts per-deployment, per-minute samples to the Spec DO; a minute cron on the
   canary worker evaluates each live canary and rolls back violators. **The input is shadow data** (`source = 'shadow'`), not canary
-  traffic. Deploying it migrates the production ledger `m10 -> m11` (additive, one table).
+  traffic. Deployed with `fe495d3`: `prod-health.sh` passed (all ten workers and the Spec DO, so the `m10 -> m11` migration ran), canary and shadow-router deployments 07:21-07:22Z. Not yet confirmed: `canary_slo_cycle` log lines from the cron.
 - **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; the canary SLO loop now runs from a cron
   (shadow data only, see above); no producer for `canary-rollback-triggers` (the consumer stays) or
   `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
