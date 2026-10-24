@@ -1,6 +1,6 @@
 ---
 category: planning
-status: proposed
+status: implemented (not deployed)
 audience: human,agent
 ---
 
@@ -19,11 +19,9 @@ Spine-adjacent (promotion train, Spec DO schema): **a human approves this plan b
 2. **Input today is shadow data.** Production canary traffic does not exist yet (canary deploys answer 501 until a Workers
    Versions client exists; the shadow router returns `200` and discards every candidate response, `workers/shadow-router/index.ts:678`).
    Samples are recorded with `source = 'shadow'`; the loop must not call them canary SLOs until `source = 'canary'` rows exist.
-3. **Schema slot: strictly after M11, numbered at rebase time.** This work merges after M11 and takes `LATEST+1` when it
-   rebases (m12 if M11 is `m11`). It is **never combined with M11's step**: M11's UNIQUE index can throw on duplicates and
-   cause a full outage (FOCUS), so one table per version step. Note the repo's two M11 descriptions already differ
-   (`docs/MILESTONES.md` M11 = issue links plus a repo column; FOCUS = the `github_user_id` UNIQUE index); the maintainer
-   settles which M11 ships before this starts.
+3. **Schema slot: `m11`** (maintainer decision 2026-10-24, nothing of M11 had started: M3 goes first, M11 renumbers to `m12` or
+   later). One table per version step: this migration is never combined with M11's, whose UNIQUE index can throw on duplicates
+   and cause a full outage (FOCUS). The rollback floor (push A) is live, so an older Spec DO serves over an `m11` ledger.
 4. **Trigger: a `scheduled` cron on the canary worker**, every minute, using `DeployRefsClient.liveRefs('canary')` to list
    live canaries (it already returns `{ref, deployment}` with `autoRollback`). No queue producer.
 

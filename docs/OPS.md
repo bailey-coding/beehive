@@ -367,6 +367,34 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
   10s by default), then the router falls back to the static config. Errors are never cached and
   concurrent requests share one read. Details: `docs/OPEN-QUESTIONS.md` "Shadow-router live-ref cache".
 
+### Canary SLO loop (m11, M3)
+
+A cron on `beehive-canary-worker` (`[triggers] crons = ["* * * * *"]`) evaluates every live canary once a minute and
+rolls back the ones in violation. Plan and reasoning: `docs/M3-CANARY-SLO-PLAN.md`.
+
+- **Data:** the shadow router aggregates each mirrored candidate result per (deployment, minute) and posts batches to
+  the Spec DO (`POST /canary-metrics`, table `canary_metrics`, migration `m10 -> m11`, additive). Rows older than 24 h are
+  pruned on every write and read; the table has no org column and no foreign keys, so a purge does not touch it.
+- **It is shadow data, not canary data.** The router mirrors and discards, so every row is `source = 'shadow'`. The loop
+  reads `CANARY_SLO_SOURCE` (default `shadow`); set it to `canary` only when real canary traffic records rows with that
+  source. Until then a "violation" means the mirrored candidate was slow or erroring, not production users.
+- **Settings** (canary worker vars): `CANARY_SLO_LATENCY_P95` (ms, 1000), `CANARY_SLO_ERROR_RATE` (0.01),
+  `CANARY_SLO_MIN_REQUESTS` (50), `CANARY_SLO_WINDOW_MINUTES` (15), `CANARY_SLO_SOURCE` (`shadow`). Unset or blank takes
+  the default; a value that is set but unusable (`low`, `0`, `2`) makes the cycle log an error and do nothing.
+- **Verdicts** (`GET /slo-status` shows them without acting): `healthy`, `violation`, `insufficient_data` (fewer than the
+  minimum requests in the window: no verdict) and `unavailable` (metrics unreadable, e.g. an older Spec DO answers 404:
+  no verdict). Only `violation` rolls back, and only when that canary's auto-rollback switch is on. Shadow traffic is
+  thinned twice (the top-level split, then each deployment's percentage) and chosen by URL hash, so `insufficient_data`
+  is the normal state for a quiet canary.
+- **Logs:** one `canary_slo_cycle` JSON line per tick (`checked`, `rolledBack`, `alreadyHandled`, `skipped`, `errors`).
+  A rollback answering 404/409 means it already happened and is not an error.
+- **Mixed versions / rollback of the deploy:** a new router with an older Spec DO logs `canary metrics not recorded ... 404`
+  and carries on; an older router records nothing, so the loop sees `insufficient_data`; a new cron with an older DO sees
+  `unavailable` and never rolls back. Redeploying the previous commit leaves `canary_metrics` idle (the rollback floor
+  skips the newer schema version).
+- **Turn it off:** remove the `[triggers]` section and redeploy, or set a canary's switch with
+  `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
+
 ### Promotion ledger concurrency (m7 -> m8)
 
 Live once the m7 -> m8 migration reaches the deploy flow (additive: `version` on `tournaments`

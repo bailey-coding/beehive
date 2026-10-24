@@ -95,10 +95,10 @@ cleanups. Confirm, in this order:
   `50728bc`, PR `e786f60`); independent review approved by `cc90f6a`. The full PR-B has since merged (above).
 - **Verify 404 differs by token type, on purpose:** a service-token verify 404 is "unknown token" (401); the user-token
   verify route always answers 200 for a well-formed hash, so its 404 means an older DO (503).
-- **M11 handoff:** M11 rebases onto PR-B and takes `m11`. A UNIQUE index on `actors.github_user_id` goes in `m11` only
+- **M11 handoff:** the M3 canary metrics table took `m11` (2026-10-24), so M11 takes `m12` or later. A UNIQUE index on `actors.github_user_id` goes in its own migration only
   after the duplicate check is re-run and comes back clean: on a ledger with duplicates it throws, `init()` rethrows,
   and that is a full outage.
-  Update (2026-10-19): m10 is now `idempotency_keys` (M5a), so the index migration is m11; older docs that say m10 are historical.
+  Update (2026-10-24): m10 is `idempotency_keys` (M5a) and m11 is `canary_metrics` (M3), so the index migration is m12 or later; older docs that say m10 or m11 are historical.
 - **Prerequisite of master stage 2:** open the lifecycle routes (tombstone, purge, roles, `include_deleted`) to
   `maintainer` user tokens first; in M12 they stay master-only (plan A1). Stage 2 itself waits for the stage-1 evidence
   (`docs/OPS.md`, the AE query).
@@ -131,11 +131,12 @@ cleanups. Confirm, in this order:
     binding cycle may need two passes).
 - **README drift — FIXED:** `tests/e2e/README.md` updated to match `docs/SETUP.md` (local e2e makes real HTTP
   calls, no mocks) (`54808ae`, `30eb73`, `bc155e0`, 2026-10-19).
-- **M3 canary SLO loop: plan written, waiting for approval and M11's schema slot** (`docs/M3-CANARY-SLO-PLAN.md`, 2026-10-24):
-  metrics live in the Spec DO (shadow data for now), a cron on the canary worker drives rollback.
-- **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; canary
-  `SLOMonitor.monitorAndTriggerRollback` is never called and `getMetric` returns 0
-  (`canary-worker/slo.ts:67-78`); no producer for `canary-rollback-triggers` or
+- **M3 canary SLO loop implemented, not deployed** (2026-10-24, schema `m11`; plan `docs/M3-CANARY-SLO-PLAN.md`, runbook
+  `docs/OPS.md` "Canary SLO loop"): the shadow router posts per-deployment, per-minute samples to the Spec DO; a minute cron on the
+  canary worker evaluates each live canary and rolls back violators. **The input is shadow data** (`source = 'shadow'`), not canary
+  traffic. Deploying it migrates the production ledger `m10 -> m11` (additive, one table).
+- **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; the canary SLO loop now runs from a cron
+  (shadow data only, see above); no producer for `canary-rollback-triggers` (the consumer stays) or
   `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
   config, not an SDK integration. Production canary deploys answer 501 until a real Workers Versions
   client exists (OPEN-QUESTIONS 2026-10-16).

@@ -51,9 +51,9 @@ complexity delta; trial UI showing candidate comparison.
 **M3 — Promotion train + Architectural Foundation (2–3 days).** PARTIAL: `promotion-worker`
 (tournament and merge-train modes), `canary-worker` (rollback), and Statsig config in
 `shadow-router` (local traffic-split config, no Statsig SDK) exist. Facets, capability minting,
-and ArtifactFS below are not implemented; canary auto-rollback is not wired (monitor never
-called, `getMetric` returns 0), `canary-rollback-triggers` and `promotion-events` have no
-producers, and speculative projection forks have no code.
+and ArtifactFS below are not implemented; canary auto-rollback runs from a minute cron over Spec DO metrics
+(`docs/M3-CANARY-SLO-PLAN.md`, schema m11) but its input is mirrored shadow traffic, not real canary traffic;
+`canary-rollback-triggers` and `promotion-events` have no producers, and speculative projection forks have no code.
 Statsig slicing, speculative projection forks, tournament vs merge-train modes, canary with
 auto-rollback.
 **Varda-inspired spine work (OPEN):**
