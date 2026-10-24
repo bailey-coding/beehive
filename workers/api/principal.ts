@@ -93,6 +93,16 @@ function recordFailure(ip: string | null, now: number): void {
   userTokenFailures.set(ip, { count: 1, resetAt: now + USER_TOKEN_FAIL_WINDOW_MS });
 }
 
+// A success only forgives one failure (not the whole count), so one valid token cannot be used to
+// keep a failure flood under the limit. Known tradeoff: once an IP hits the limit, even valid
+// bh_usr_ requests from it get 429 until the window (<= 60s) ends, e.g. a shared NAT behind a
+// stale revoked token.
+function forgiveOneFailure(ip: string | null): void {
+  const e = ip ? userTokenFailures.get(ip) : undefined;
+  if (!e) return;
+  if (--e.count <= 0) userTokenFailures.delete(ip as string);
+}
+
 /** Test hook: forget all tracked failures. */
 export function resetUserTokenFailures(): void {
   userTokenFailures.clear();
@@ -222,7 +232,7 @@ export async function authenticate(
         recordFailure(ip, Date.now());
         return jsonError('Unauthorized', 401);
       }
-      userTokenFailures.delete(ip ?? '');
+      forgiveOneFailure(ip);
       const scopes = USER_TOKEN_SCOPES[d.scope];
       return {
         kind: 'user',

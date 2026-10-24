@@ -279,6 +279,9 @@ export async function ensureMaintainer(
   if (existing) return existing;
 
   const created = await call('/api/actors', 'POST', { type: 'human', name });
+  if (created.status !== 201 || !created.json?.data?.id) {
+    throw new Error(`ensureMaintainer: creating the actor answered ${created.status}: ${JSON.stringify(created.json)}`);
+  }
   const mine = (created.json.data as { id: string }).id;
   const granted = await call(`/api/admin/actors/${mine}/role`, 'POST', { role: 'maintainer' }, mine);
   if (granted.status === 200) return mine;

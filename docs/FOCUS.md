@@ -45,7 +45,11 @@ Completed items are removed, not struck through; history lives in git.*
 - **Runtime validation in `authenticate()`** (2026-10-23, on `main`, **not deployed**): a master token's asserted `X-Actor-ID` must match
   `ActorIdSchema` (1-128 printable ASCII, no spaces) or the request is a 400, logged as `master_actor_rejected` (no AE point,
   `docs/OPS.md`). The service and user verify-route bodies are parsed with zod (mismatch = 503, `found:false` = 401). The CLI rejects
-  such an actor before sending. Local checks: typecheck clean, 438 `workers/api` tests, 30 CLI behavior tests.
+  such an actor before sending. Cleanups landed the same day: `authGate` is now constant-time (async; a test requires every call to be
+  awaited), `authorize()` and the typed scope wrappers share `hasScope`/`requireScope`, issue responses carry camelCase beside the
+  legacy snake_case (drop snake_case once no reader needs it), the e2e `ensureMaintainer` helper removes the first-maintainer race, and
+  failed `bh_usr_` verifications are limited to 20 per 60s per IP, **best effort per isolate** (a global Workers rate-limiting
+  binding is the follow-up). Local checks: typecheck clean, 438 `workers/api` tests, 30 CLI behavior tests.
 
 ## Next session, first (needs the maintainer)
 
@@ -89,10 +93,6 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
   secrets, and record the result in `docs/OPEN-QUESTIONS.md` (2026-10-18 entry).
 - **M12 PR-B T2 is merged** (2026-10-19): `bh_usr_` user token helpers added to `service-tokens.ts` (commit
   `50728bc`, PR `e786f60`); independent review approved by `cc90f6a`. The full PR-B has since merged (above).
-- **Rate limiting on failed user-token verifications is deferred** (RFC-0008 decision 8): every well-formed fake
-  `bh_usr_` token costs one DO request. A per-IP limit via the Workers rate-limiting binding is the proposal.
-- **`authGate` on the nine other workers compares the master token with `===`** (`workers/shared/auth.ts`), not in
-  constant time. Follow-up, out of M12 scope.
 - **Verify 404 differs by token type, on purpose:** a service-token verify 404 is "unknown token" (401); the user-token
   verify route always answers 200 for a well-formed hash, so its 404 means an older DO (503).
 - **M11 handoff:** M11 rebases onto PR-B and takes `m11`. A UNIQUE index on `actors.github_user_id` goes in `m11` only
@@ -102,12 +102,7 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
 - **Prerequisite of master stage 2:** open the lifecycle routes (tombstone, purge, roles, `include_deleted`) to
   `maintainer` user tokens first; in M12 they stay master-only (plan A1). Stage 2 itself waits for the stage-1 evidence
   (`docs/OPS.md`, the AE query).
-- Small drift seen in T4: the Spec DO's `POST /api/issues` answers snake_case fields (`created_by`), while
-  `workers/api/types.ts` `IssueResponse` says `createdBy`. Clients should read both until one is fixed.
-- **e2e first-maintainer race** (review N4, `docs/M12-PRB-REVIEW.md`): on a fresh local ledger four e2e files race for the
-  one-time maintainer self-grant, so `tests/e2e/user-tokens.test.ts` can fail its `beforeAll` with 403; on a non-200 grant,
-  re-list and use the winner, or bootstrap once in a global setup. Fixed in `f1595c` (review nits N1 N5 and
-  N4 follow-up).
+
 
 ## Cleanup
 

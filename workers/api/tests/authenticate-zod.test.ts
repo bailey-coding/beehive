@@ -137,12 +137,14 @@ describe('failed user-token verification limit (per IP, best effort)', () => {
     vi.advanceTimersByTime(USER_TOKEN_FAIL_WINDOW_MS + 1);
     expect(await status(await authenticate(reqFrom('1.1.1.1'), env, stub))).toBe(401);
   });
-  it('a success clears the count; 503s do not count; no IP header means no limiting', async () => {
+  it('a success forgives one failure only; 503s do not count; no IP header means no limiting', async () => {
     const bad = countingStub(notFound);
     for (let i = 0; i < USER_TOKEN_FAIL_LIMIT - 1; i++) await authenticate(reqFrom('3.3.3.3'), env, bad.stub);
     await authenticate(reqFrom('3.3.3.3'), env, countingStub(good).stub);
-    for (let i = 0; i < USER_TOKEN_FAIL_LIMIT - 1; i++) await authenticate(reqFrom('3.3.3.3'), env, bad.stub);
+    // one success forgave one failure: 18 failures stand, so 2 more are allowed before the block
     expect(await status(await authenticate(reqFrom('3.3.3.3'), env, bad.stub))).toBe(401);
+    expect(await status(await authenticate(reqFrom('3.3.3.3'), env, bad.stub))).toBe(401);
+    expect(await status(await authenticate(reqFrom('3.3.3.3'), env, bad.stub))).toBe(429);
     const broken = countingStub({ nonsense: true });
     for (let i = 0; i < USER_TOKEN_FAIL_LIMIT + 5; i++) expect(await status(await authenticate(reqFrom('4.4.4.4'), env, broken.stub))).toBe(503);
     for (let i = 0; i < USER_TOKEN_FAIL_LIMIT + 5; i++) expect(await status(await authenticate(reqFrom(), env, bad.stub))).toBe(401);
