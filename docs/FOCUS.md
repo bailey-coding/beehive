@@ -131,6 +131,8 @@ creating an org, sign-out). Rollback is a normal revert push. The manual visual 
     binding cycle may need two passes).
 - **README drift — FIXED:** `tests/e2e/README.md` updated to match `docs/SETUP.md` (local e2e makes real HTTP
   calls, no mocks) (`54808ae`, `30eb73`, `bc155e0`, 2026-10-19).
+- **M3 canary SLO loop: plan written, waiting for approval and M11's schema slot** (`docs/M3-CANARY-SLO-PLAN.md`, 2026-10-24):
+  metrics live in the Spec DO (shadow data for now), a cron on the canary worker drives rollback.
 - **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; canary
   `SLOMonitor.monitorAndTriggerRollback` is never called and `getMetric` returns 0
   (`canary-worker/slo.ts:67-78`); no producer for `canary-rollback-triggers` or
