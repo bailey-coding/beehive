@@ -781,3 +781,22 @@ Phase 0 of `docs/SANDBOX-BUILD-PLAN.md`, run by the maintainer-approved `wrangle
   `exec` ~5 s over the default HTTP transport. Preinstall esbuild in the image and keep builds off request paths with a timeout.
 - Not tried: SDK 1.0 (needs a `Dockerfile` copying `sandbox-shim`, so Docker or Workers Builds), cloning from an Artifacts
   repo (U3), outbound-handler credential injection, snapshots, cost at volume.
+
+### Sandbox build spike, part 2: U1 and U3 (2026-10-24)
+
+- **U3 verified: a sandbox can clone an Artifacts repo at an exact commit.** Throwaway repo `beehive-sandbox-spike` in namespace
+  `default` (one commit pushed with a short-lived write token), a 30-minute **read** token passed to the sandbox as
+  an `exec` `env` value, and `git -c http.extraHeader="Authorization: Bearer $ART_TOKEN" clone https://<account>.artifacts.cloudflare.net/git/default/<repo>.git`
+  followed by `git checkout <40-hex sha>` returned the right commit and file in ~35 s cold. The token was not found in `.git/` afterwards.
+  Design consequence: pass the token only to the clone `exec`, and run the build in a separate `exec` without it. The repo, the
+  token (expired anyway), the worker and its container application were deleted; the ten production workers were not touched.
+  Not tried: the SDK 1.0 outbound handler that injects credentials per hostname.
+- **U1 not verified empirically; the docs say yes.** Production deploys are Workers Builds per worker (`docs/OPS.md`
+  "Workers Builds watch paths"). Cloudflare documents that `wrangler deploy` in Workers Builds builds and publishes container
+  images (only `wrangler versions upload`, the non-production default, does not). So a Dockerfile image should build on the
+  push. The only real test is to deploy a Dockerfile-based worker through that flow, which deploys all ten; do it with the first
+  real Phase 1 change and watch that worker's Builds log. A registry image (`docker.io/cloudflare/sandbox:0.12.14`) needs no
+  Docker at all and was verified.
+- **Constraint found in the docs:** Workers that implement Durable Objects (including Containers) get no version URLs
+  and non-production Workers Builds runs create a version but do not roll out a new image, so the sandbox-runner must be
+  deployed via the production branch's `wrangler deploy`, as today.
