@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, type Mock } from 'vitest';
 import { ApiWorkerVersionsClient, workerVersionsClientFor, type CandidateBundleSource } from '../versions';
 
 const bundle: CandidateBundleSource = async () => ({
@@ -11,7 +11,8 @@ const fail = (status: number, code: number, message: string, headers?: HeadersIn
   new Response(JSON.stringify({ success: false, errors: [{ code, message }] }), { status, headers });
 const V = '1496f34f-7587-4bfb-b75d-97dab053a92b';
 const input = { workerName: 'beehive-candidate-c1', candidateId: 'c1', commitSha: 'abc123' };
-const client = (fetchFn: any) => new ApiWorkerVersionsClient({ accountId: 'acct1', apiToken: 'tok', subdomain: 'sub', bundle }, fetchFn);
+const client = (fetchFn: Mock) =>
+  new ApiWorkerVersionsClient({ accountId: 'acct1', apiToken: 'tok', subdomain: 'sub', bundle }, fetchFn as unknown as typeof fetch);
 
 describe('ApiWorkerVersionsClient', () => {
   it('uploads a version to the candidate Worker and builds the version URL from the id prefix', async () => {
@@ -102,6 +103,24 @@ describe('workerVersionsClientFor', () => {
   it('rejects a malformed version id from either path', async () => {
     await expect(client(vi.fn().mockResolvedValue(ok({ number: 2 }))).createVersion(input)).rejects.toThrow(/Unexpected version id/);
     await expect(client(vi.fn().mockResolvedValue(ok({ id: 'not-a-uuid' }))).createVersion(input)).rejects.toThrow(/Unexpected version id/);
+  });
+
+  it('rejects a bundle with a malformed compatibility flag before any API call', async () => {
+    const fetchFn = vi.fn();
+    const c = new ApiWorkerVersionsClient(
+      { accountId: 'a', apiToken: 'tok', subdomain: 's', bundle: async () => ({ ...(await bundle(input)), compatibilityFlags: ['nodejs_compat', 'x y'] }) },
+      fetchFn as unknown as typeof fetch
+    );
+    await expect(c.createVersion(input)).rejects.toThrow(/compatibility flag/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('truncates the tag annotation to 100 UTF-8 bytes without splitting a character', async () => {
+    const fetchFn = vi.fn().mockResolvedValueOnce(ok({ id: V })).mockResolvedValueOnce(ok({ enabled: true }));
+    await client(fetchFn).createVersion({ ...input, candidateId: 'é'.repeat(80) }); // 160 bytes
+    const meta = JSON.parse(await (fetchFn.mock.calls[0][1].body as FormData).get('metadata')!.text());
+    expect(new TextEncoder().encode(meta.annotations['workers/tag']).length).toBe(100);
+    expect(meta.annotations['workers/tag']).toBe('é'.repeat(50));
   });
 
   it('setDeployment validates locally: name, per-version range, total of 100', async () => {

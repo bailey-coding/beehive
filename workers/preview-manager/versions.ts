@@ -89,7 +89,7 @@ export function workerNameError(name: string): string | null {
 }
 
 class CfApiError extends Error {
-  constructor(readonly status: number, readonly codes: number[], message: string) {
+  constructor(readonly codes: number[], message: string) {
     super(message);
   }
 }
@@ -114,7 +114,7 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
     if (nameError) throw new Error(nameError);
     const bundle = await this.cfg.bundle(input);
     const script = `/accounts/${this.cfg.accountId}/workers/scripts/${input.workerName}`;
-    const annotations: Record<string, string> = { 'workers/tag': input.candidateId.slice(0, 100) };
+    const annotations: Record<string, string> = { 'workers/tag': truncateUtf8(input.candidateId, 100) };
     if (input.commitSha) annotations['workers/commit_sha'] = input.commitSha.slice(0, 64);
 
     let versionId: string;
@@ -154,6 +154,9 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
   }
 
   private form(bundle: CandidateBundle, annotations: Record<string, string>): FormData {
+    if (bundle.compatibilityFlags?.some((f) => typeof f !== 'string' || !/^[a-z0-9_]+$/.test(f))) {
+      throw new Error('Invalid compatibility flag in candidate bundle');
+    }
     const metadata = {
       main_module: bundle.mainModule,
       compatibility_date: bundle.compatibilityDate,
@@ -178,10 +181,16 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
       const errors = env.errors ?? [];
       const detail = errors.map((e) => `${e.code}: ${e.message}`).join('; ') || 'no error body';
       const retry = res.status === 429 ? ` (rate limited, retry-after ${res.headers.get('Retry-After') ?? 'unknown'}s)` : '';
-      throw new CfApiError(res.status, errors.map((e) => e.code), `Cloudflare API ${method} ${path} -> HTTP ${res.status}${retry}: ${detail}`);
+      throw new CfApiError(errors.map((e) => e.code), `Cloudflare API ${method} ${path} -> HTTP ${res.status}${retry}: ${detail}`);
     }
     return env.result;
   }
+}
+
+/** Cut to at most `maxBytes` UTF-8 bytes (the annotation limit is in bytes) without splitting a character. */
+function truncateUtf8(s: string, maxBytes: number): string {
+  const bytes = new TextEncoder().encode(s);
+  return bytes.length <= maxBytes ? s : new TextDecoder().decode(bytes.slice(0, maxBytes)).replace(/�+$/, '');
 }
 
 function toUuid(id: unknown): string {
