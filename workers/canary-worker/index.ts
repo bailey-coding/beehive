@@ -19,7 +19,9 @@ async function readBody<T>(request: Request): Promise<T | Response> {
   }
 }
 
-export const SLO_TICK_QUEUE = 'canary-slo-ticks';
+// Not exported: workerd treats every named export of the entry module as an entrypoint, and a string is not one
+// (local `wrangler dev` fails with "Incorrect type for map entry").
+const SLO_TICK_QUEUE = 'canary-slo-ticks';
 
 /** One SLO pass over every live canary; shared by the cron and the tick queue. Never throws. */
 export async function runSloCycle(env: Env): Promise<void> {
