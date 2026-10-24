@@ -19,6 +19,18 @@ async function readBody<T>(request: Request): Promise<T | Response> {
   }
 }
 
+export const SLO_TICK_QUEUE = 'canary-slo-ticks';
+
+/** One SLO pass over every live canary; shared by the cron and the tick queue. Never throws. */
+export async function runSloCycle(env: Env): Promise<void> {
+  try {
+    await new SLOMonitor(env).runCycle(new RollbackManager(env));
+  } catch (error) {
+    // No verdict (bad config, live canaries unreadable): never a rollback. The next tick retries.
+    console.error('[Canary] SLO cycle skipped:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Auth gate - fail closed, applies to every route including /health
@@ -117,16 +129,17 @@ export default {
   // Cron (wrangler.toml [triggers]): one SLO pass over every live canary. Fetch auth does not apply
   // here; the handler is only reachable by the platform's scheduler.
   async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    try {
-      await new SLOMonitor(env).runCycle(new RollbackManager(env));
-    } catch (error) {
-      // No verdict (bad config, live canaries unreadable): never a rollback. The next tick retries.
-      console.error('[Canary] SLO cycle skipped:', error instanceof Error ? error.message : String(error));
-    }
+    await runSloCycle(env);
   },
 
-  // Queue consumer for rollback triggers
+  // Queue consumer for rollback triggers and SLO ticks
   async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (batch.queue === SLO_TICK_QUEUE) {
+      // One cycle per batch however many ticks piled up; ack all (the next alarm sends a fresh tick)
+      await runSloCycle(env);
+      batch.ackAll();
+      return;
+    }
     // Same rule as fetch: SPEC_DO stays the namespace
     await handleRollbackQueue(batch, env);
   }

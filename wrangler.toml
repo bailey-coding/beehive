@@ -33,6 +33,11 @@ class_name = "SpecDO"
 binding = "ANALYTICS"
 dataset = "beehive-metrics"
 
+# Canary SLO ticks: the Spec DO alarm produces, beehive-canary-worker consumes (create the queue first, docs/OPS.md)
+[[queues.producers]]
+binding = "CANARY_SLO_TICKS"
+queue = "canary-slo-ticks"
+
 # Service binding to Gate Workflow
 [[services]]
 binding = "GATE_WORKFLOW"
