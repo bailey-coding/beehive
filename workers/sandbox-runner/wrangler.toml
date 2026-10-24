@@ -4,6 +4,7 @@
 name = "beehive-sandbox-runner"
 main = "index.ts"
 compatibility_date = "2026-10-09"
+compatibility_flags = ["nodejs_compat"]
 
 # Cloudflare Artifacts configuration
 # Set CLOUDFLARE_API_TOKEN as a secret: wrangler secret put CLOUDFLARE_API_TOKEN
@@ -13,6 +14,23 @@ compatibility_date = "2026-10-09"
 name = "SPEC_DO"
 class_name = "SpecDO"
 script_name = "beehive"
+
+# Build sandbox (Sandbox SDK 0.x, docs/SANDBOX-BUILD-PLAN.md). The Dockerfile image is built by Workers Builds'
+# `wrangler deploy` (the U1 test of docs/OPEN-QUESTIONS.md "Sandbox build spike"); the base image tag must match
+# the @cloudflare/sandbox version in package.json. No instance runs until a request starts one.
+[[containers]]
+class_name = "Sandbox"
+image = "./Dockerfile"
+instance_type = "lite"
+max_instances = 2
+
+[[durable_objects.bindings]]
+name = "SANDBOX"
+class_name = "Sandbox"
+
+[[migrations]]
+new_sqlite_classes = ["Sandbox"]
+tag = "v1"
 
 # Analytics Engine for per-candidate metrics
 [[analytics_engine_datasets]]

@@ -7,6 +7,10 @@
 
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 
+// The SDK imports `cloudflare:workers`, which node cannot load; the container itself is never started here.
+const exec = vi.fn();
+vi.mock('@cloudflare/sandbox', () => ({ getSandbox: vi.fn(() => ({ exec })), Sandbox: class {} }));
+
 // Mock the fetch handler
 import handler from '../index';
 
@@ -350,3 +354,26 @@ describe('Sandbox Utilities', () => {
     });
   });
 });
+
+describe('GET /sandbox/probe', () => {
+  it('runs the tool versions in the build container and reports the result', async () => {
+    exec.mockResolvedValueOnce({ exitCode: 0, stdout: 'v22.23.4\n0.25.0\n', stderr: '' });
+    const res = await callHandler('/sandbox/probe');
+    expect(res.status).toBe(200);
+    expect(await readJson(res)).toMatchObject({ success: true, stdout: 'v22.23.4\n0.25.0\n' });
+    expect(exec).toHaveBeenCalledWith('node --version; esbuild --version');
+  });
+
+  it('answers 502 with the error when the container cannot start', async () => {
+    exec.mockRejectedValueOnce(new Error('no container'));
+    const res = await callHandler('/sandbox/probe');
+    expect(res.status).toBe(502);
+    expect(await readJson(res)).toMatchObject({ success: false, error: 'no container' });
+  });
+
+  it('requires the bearer token', async () => {
+    const res = await handler.fetch(createRequest('/sandbox/probe'), mockEnv as never, mockCtx as never);
+    expect(res.status).toBe(401);
+  });
+});
+

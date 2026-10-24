@@ -12,12 +12,16 @@
  */
 
 
+import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { authGate } from '../shared/auth';
+
+// The Sandbox Durable Object class must be exported from the entry module (wrangler.toml [[containers]]).
+export { Sandbox } from '@cloudflare/sandbox';
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
   ARTIFACTS: unknown; // Cloudflare Artifacts binding
-  SANDBOX: unknown; // Sandbox SDK binding (future)
+  SANDBOX: DurableObjectNamespace<Sandbox>; // Sandbox SDK 0.x container (Dockerfile in this directory)
   API_AUTH_TOKEN?: string;
 }
 
@@ -79,6 +83,18 @@ export default {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
+    }
+
+    // GET /sandbox/probe - Run tool versions in the build container (deploy check: proves the Dockerfile
+    // image built by Workers Builds is the one running, esbuild comes from the Dockerfile). Authenticated above.
+    if (path === '/sandbox/probe' && method === 'GET') {
+      try {
+        const sandbox = getSandbox(env.SANDBOX, 'probe');
+        const r = await sandbox.exec('node --version; esbuild --version');
+        return Response.json({ success: r.exitCode === 0, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode });
+      } catch (error) {
+        return Response.json({ success: false, error: error instanceof Error ? error.message : String(error) }, { status: 502 });
+      }
     }
 
     // ============================================================================
