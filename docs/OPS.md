@@ -92,7 +92,7 @@ retries), so a bad deploy is loud rather than half-migrated.
      while rolled back. The batch rolls back and nothing is corrupted, but purge is unusable until the newer build returns.
    - New columns on old tables are nullable or have a default, so the floor's inserts still succeed.
    - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. A future unique index on
-     `actors.github_user_id` (M12's `m10`) would turn a duplicate insert by the floor into a failed login (fail closed, acceptable).
+     `actors.github_user_id` (M12's `m10`, now `m12` or later: `m10` is idempotency keys and `m11` is canary metrics) would turn a duplicate insert by the floor into a failed login (fail closed, acceptable).
 6. After deploy: `./scripts/prod-health.sh` passes (`GET /health` answers 200 on each worker with the
    bearer token, and the Spec DO check answers 200);
    `GET /api/service-accounts` answers 410; mint a service token
@@ -381,6 +381,9 @@ rolls back the ones in violation. Plan and reasoning: `docs/M3-CANARY-SLO-PLAN.m
 - **Settings** (canary worker vars): `CANARY_SLO_LATENCY_P95` (ms, 1000), `CANARY_SLO_ERROR_RATE` (0.01),
   `CANARY_SLO_MIN_REQUESTS` (50), `CANARY_SLO_WINDOW_MINUTES` (15), `CANARY_SLO_SOURCE` (`shadow`). Unset or blank takes
   the default; a value that is set but unusable (`low`, `0`, `2`) makes the cycle log an error and do nothing.
+- **Latency is bucketed** (bounds 10, 25, 50, 100, 250, 500, 1000, 2500, 5000 ms; p95 reads the bucket's upper bound), so
+  set `CANARY_SLO_LATENCY_P95` to one of those bounds; a value between two bounds (800) acts like the next bound up
+  for the "over" test and rolls back whenever the true p95 is anywhere in that whole bucket.
 - **Verdicts** (`GET /slo-status` shows them without acting): `healthy`, `violation`, `insufficient_data` (fewer than the
   minimum requests in the window: no verdict) and `unavailable` (metrics unreadable, e.g. an older Spec DO answers 404:
   no verdict). Only `violation` rolls back, and only when that canary's auto-rollback switch is on. Shadow traffic is

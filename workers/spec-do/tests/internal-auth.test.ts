@@ -60,6 +60,9 @@ const TIER1_ROUTES: Array<[string, string]> = [
   ['GET', '/merge-train-status'],
   ['GET', '/deploy-refs/live?rung=canary'],
   ['GET', '/canary-deployments'],
+  // M3 SLO loop: the shadow router writes, the canary worker reads (tier 1, not admin)
+  ['GET', '/canary-metrics?deploymentId=d&source=shadow'],
+  ['POST', '/canary-metrics'],
   // The edge's per-request user-token check (M12) is tier 1, like the service-token verify
   ['POST', '/internal/user-tokens/verify'],
 ];

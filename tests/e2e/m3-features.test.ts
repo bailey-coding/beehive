@@ -220,7 +220,7 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     }, 10000);
 
     it.skipIf(shouldSkip)('should test canary worker SLO configuration', async () => {
-      // There is no SLO *config* route; /slo-status answers { healthy, violations, currentMetrics }
+      // There is no SLO *config* route; /slo-status answers { healthy, violations, source, windowMinutes, minRequests, deployments[] }
       const response = await fetch(`${WORKER_URLS.canary}/slo-status`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
@@ -229,7 +229,8 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       const data = await readJson(response);
       expect(typeof data.healthy).toBe('boolean');
       expect(Array.isArray(data.violations)).toBe(true);
-      expect(data.currentMetrics).toBeDefined();
+      expect(['shadow', 'canary']).toContain(data.source);
+      expect(Array.isArray(data.deployments)).toBe(true);
     }, 10000);
   });
 
@@ -321,18 +322,18 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     }, 15000);
 
     it.skipIf(shouldSkip)('should get canary SLO metrics', async () => {
-      // /slo-status answers { healthy, violations, currentMetrics }
+      // /slo-status answers per-deployment verdicts (an empty list when no canary is live)
       const response = await fetch(`${WORKER_URLS.canary}/slo-status`, {
         headers: { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}` },
       });
 
       expect(response.status).toBe(200);
       const data = await readJson(response);
-      expect((data as { currentMetrics?: unknown }).currentMetrics).toBeDefined();
-      const metrics = data.currentMetrics as { requestCount?: number; errorRate?: number; latencyP95?: number } | undefined;
-      expect(metrics?.requestCount).toBeGreaterThanOrEqual(0);
-      expect(metrics?.errorRate).toBeGreaterThanOrEqual(0);
-      expect(metrics?.latencyP95).toBeGreaterThanOrEqual(0);
+      const deployments = (data as { deployments?: { verdict: string }[] }).deployments;
+      expect(Array.isArray(deployments)).toBe(true);
+      for (const d of deployments ?? []) {
+        expect(['healthy', 'violation', 'insufficient_data', 'unavailable']).toContain(d.verdict);
+      }
     }, 10000);
 
     // The switch belongs to a live canary, so the test deploys one first (it used to
@@ -621,7 +622,7 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       });
       expect(sloResponse.status).toBe(200);
       const sloData = await readJson(sloResponse);
-      expect((sloData as { currentMetrics?: unknown }).currentMetrics).toBeDefined();
+      expect(Array.isArray((sloData as { deployments?: unknown }).deployments)).toBe(true);
 
       // Step 4: Promote candidate
       const promoResponse = await fetch(`${WORKER_URLS.promotion}/promote`, {
