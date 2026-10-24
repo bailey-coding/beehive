@@ -15,6 +15,11 @@ CANARY_SLO_MIN_REQUESTS = "50"
 CANARY_SLO_WINDOW_MINUTES = "15"
 CANARY_SLO_SOURCE = "shadow"
 
+# No cron: the SLO loop runs from the Spec DO alarm tick (queue below). Deleting this section is not enough, because
+# a deploy keeps an existing schedule; an explicit empty list removes it (the cron fired and threw after 35e8eec).
+[triggers]
+crons = []
+
 # Durable Object binding for Spec DO (cross-script)
 [[durable_objects.bindings]]
 name = "SPEC_DO"
