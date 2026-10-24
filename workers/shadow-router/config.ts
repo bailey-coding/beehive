@@ -231,15 +231,17 @@ export async function applyCanaryRefs(
   if (!live) return config;
 
   const candidatePreviews = new Map(config.candidatePreviews);
+  const canaryDeployments = new Map(config.canaryDeployments);
   const splits = { ...config.statsig.splits };
   for (const { ref, deployment } of live) {
     if (!ref.candidateId || !deployment) continue;
     candidatePreviews.set(ref.candidateId, deployment.url);
+    canaryDeployments.set(ref.candidateId, deployment.id);
     splits[ref.candidateId] = normalizeTrafficSplitConfig({
       canaryPercentage: deployment.trafficPercentage,
       holdoutPercentage: deployment.holdoutPercentage,
       baselinePercentage: 0,
     });
   }
-  return { ...config, candidatePreviews, statsig: { ...config.statsig, splits } };
+  return { ...config, candidatePreviews, canaryDeployments, statsig: { ...config.statsig, splits } };
 }

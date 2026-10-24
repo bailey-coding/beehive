@@ -22,17 +22,3 @@ export async function handleRollbackQueue(
     }
   }
 }
-
-/**
- * Helper to send a rollback trigger to the queue
- */
-export async function sendRollbackTrigger(
-  env: Env,
-  trigger: RollbackTrigger
-): Promise<void> {
-  // Note: Queue producer is configured in wrangler.toml with [[queues]]
-  // This would be set up as a Queue binding in the worker
-  // For now, we'll use a service binding to trigger rollback directly
-  // In production, this would send to the actual queue
-  console.log('Rollback trigger would be sent to queue:', trigger);
-}

@@ -9,6 +9,15 @@ compatibility_date = "2026-10-09"
 [vars]
 CANARY_SLO_LATENCY_P95 = "1000"  # 1 second
 CANARY_SLO_ERROR_RATE = "0.01"   # 1%
+# SLO loop (docs/M3-CANARY-SLO-PLAN.md): verdicts need this many samples in the window; source is "shadow"
+# (mirrored traffic) until real canary traffic exists
+CANARY_SLO_MIN_REQUESTS = "50"
+CANARY_SLO_WINDOW_MINUTES = "15"
+CANARY_SLO_SOURCE = "shadow"
+
+# One SLO pass per minute over every live canary (rolls back violators with auto-rollback on)
+[triggers]
+crons = ["* * * * *"]
 
 # Durable Object binding for Spec DO (cross-script)
 [[durable_objects.bindings]]

@@ -257,3 +257,39 @@ export function createTestContext(): TestContext {
     timestamp,
   };
 }
+
+/**
+ * A maintainer actor id for tests, safe when several e2e files run at once on a fresh ledger.
+ *
+ * The first maintainer can only be made by self-grant, and only one self-grant wins; the others
+ * answer non-200. So: reuse an existing maintainer, else create one and self-grant, and if the
+ * grant loses the race, re-list and use the winner. Fails (throws) only if no maintainer ever
+ * appears.
+ */
+export async function ensureMaintainer(
+  call: (path: string, method?: string, body?: unknown, actorId?: string) => Promise<{ status: number; json: any }>,
+  name: string
+): Promise<string> {
+  const findExisting = async (): Promise<string | undefined> => {
+    const actors = await call('/api/actors?limit=1000');
+    return (actors.json.data as { id: string; role?: string }[] | undefined)?.find((a) => a.role === 'maintainer')?.id;
+  };
+
+  const existing = await findExisting();
+  if (existing) return existing;
+
+  const created = await call('/api/actors', 'POST', { type: 'human', name });
+  if (created.status !== 201 || !created.json?.data?.id) {
+    throw new Error(`ensureMaintainer: creating the actor answered ${created.status}: ${JSON.stringify(created.json)}`);
+  }
+  const mine = (created.json.data as { id: string }).id;
+  const granted = await call(`/api/admin/actors/${mine}/role`, 'POST', { role: 'maintainer' }, mine);
+  if (granted.status === 200) return mine;
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const winner = await findExisting();
+    if (winner) return winner;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`ensureMaintainer: self-grant answered ${granted.status} and no maintainer appeared`);
+}

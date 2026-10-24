@@ -18,6 +18,22 @@
 export const INTERNAL_TOKEN_HEADER = 'X-Beehive-Internal';
 export const ADMIN_TOKEN_HEADER = 'X-Beehive-Admin';
 
+/**
+ * Sent by the edge on every DO request made for a user token without the `maintainer` scope.
+ * Its presence (any value) makes every isMaintainer decision of that request false. No header
+ * means full power, as for the UI session, an old edge and the nine other workers, so a
+ * spoofed header can only remove power.
+ */
+export const MAINTAINER_CAP_HEADER = 'X-Beehive-Maintainer-Cap';
+
+/**
+ * The `error` of the user-token routes' own 404s. A DO without those routes (an older
+ * deploy) answers 404 'Not found' instead, which the edge must treat as 503, never as
+ * "no such token" or "no tokens".
+ */
+export const USER_TOKEN_NOT_FOUND = 'user token not found';
+export const USER_TOKEN_ACTOR_NOT_FOUND = 'actor not found';
+
 const SPEC_DO_ORIGIN = 'https://spec-do.internal';
 const DEFAULT_SPEC_DO_NAME = 'main';
 
@@ -42,6 +58,9 @@ const ADMIN_PATTERNS: Array<{ method: string; path: RegExp }> = [
   // Service accounts and tokens: list, mint, revoke, token mint/rotate/revoke.
   // /internal/service-tokens/verify (the edge's per-request token check) is tier 1.
   { method: '*', path: /^\/internal\/service-accounts(?:\/.*)?$/ },
+  // User tokens: mint, list, revoke, revoke-all (RFC-0008). /internal/user-tokens/verify is
+  // tier 1, like the service-token verify; the lookahead excludes exactly that path.
+  { method: '*', path: /^\/internal\/user-tokens(?!\/verify$)(?:\/.*)?$/ },
   // Sets the flag that lets an actor promote; the edge allows it for the master principal only
   { method: 'PATCH', path: /^\/api\/actors\/[^/]+\/promotion-authority$/ },
 ];
@@ -104,17 +123,34 @@ export function specDoAuthGate(request: Request, env: SpecDoAuthEnv | undefined)
  * strings, URLs or Requests (DO stubs require absolute URLs, so relative ones resolve against
  * an internal origin).
  */
+function toDoRequest(input: RequestInfo | URL, init?: RequestInit): Request {
+  return typeof input === 'string' || input instanceof URL
+    ? new Request(new URL(input.toString(), SPEC_DO_ORIGIN), init)
+    : new Request(input, init);
+}
+
 export function authedSpecDoStub(stub: SpecDoStub, env: SpecDoAuthEnv): SpecDoStub {
   return {
     fetch: (input: RequestInfo | URL, init?: RequestInit) => {
-      const request =
-        typeof input === 'string' || input instanceof URL
-          ? new Request(new URL(input.toString(), SPEC_DO_ORIGIN), init)
-          : new Request(input, init);
+      const request = toDoRequest(input, init);
       if (env.SPEC_DO_INTERNAL_TOKEN) request.headers.set(INTERNAL_TOKEN_HEADER, env.SPEC_DO_INTERNAL_TOKEN);
       if (env.SPEC_DO_ADMIN_TOKEN && isAdminRoute(request.method, new URL(request.url).pathname)) {
         request.headers.set(ADMIN_TOKEN_HEADER, env.SPEC_DO_ADMIN_TOKEN);
       }
+      return stub.fetch(request);
+    },
+  };
+}
+
+/**
+ * The same stub with MAINTAINER_CAP_HEADER on every request, whatever its input form (the edge
+ * wraps its stub once for a user token without the maintainer scope, so no handler can forget).
+ */
+export function maintainerCappedStub(stub: SpecDoStub): SpecDoStub {
+  return {
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = toDoRequest(input, init);
+      request.headers.set(MAINTAINER_CAP_HEADER, '1');
       return stub.fetch(request);
     },
   };

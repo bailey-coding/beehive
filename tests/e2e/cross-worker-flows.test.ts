@@ -125,7 +125,10 @@ async function rollbackCanary(candidateId: string, specId: string): Promise<{ su
 type SloStatus = {
   healthy: boolean;
   violations: unknown[];
-  currentMetrics: { latencyP95: number; errorRate: number; requestCount: number };
+  source: 'shadow' | 'canary';
+  windowMinutes: number;
+  minRequests: number;
+  deployments: { deploymentId: string; verdict: string; metrics?: { latencyP95: number | null; errorRate: number | null; requestCount: number } }[];
 };
 
 async function getSloMetrics(): Promise<SloStatus> {
@@ -388,9 +391,9 @@ describe('Cross-Worker Flow Tests', () => {
       
       expect(result.healthy).toBeDefined();
       expect(result.violations).toBeDefined();
-      expect(result.currentMetrics.requestCount).toBeDefined();
-      expect(result.currentMetrics.latencyP95).toBeDefined();
-      expect(result.currentMetrics.errorRate).toBeDefined();
+      expect(['shadow', 'canary']).toContain(result.source);
+      expect(result.windowMinutes).toBeGreaterThan(0);
+      expect(Array.isArray(result.deployments)).toBe(true);
     });
 
     // The shadow router caches the live canary pointers for LIVE_REFS_CACHE_TTL_MS (default 5s,

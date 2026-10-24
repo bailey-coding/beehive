@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getConfig } from './config';
-import { createRequest, readJson } from './helpers';
+import { createRequest, ensureMaintainer, readJson } from './helpers';
 import { signSession } from '../../workers/api/ui';
 
 const config = getConfig();
@@ -70,14 +70,7 @@ describe.skipIf(!isLocal || !enabled)('Repo issue pages (local UI)', () => {
   const issueIdFrom = (res: Response) => (res.headers.get('location') ?? '').match(/\/issues\/([^/?#]+)/)![1];
 
   beforeAll(async () => {
-    const actors = await api('/api/actors?limit=1000');
-    const existing = (actors.json.data as { id: string; role?: string }[]).find((a) => a.role === 'maintainer');
-    if (existing) {
-      maintainer = existing.id;
-    } else {
-      maintainer = ((await api('/api/actors', 'POST', { type: 'human', name: 'e2e-ui-maintainer' })).json.data as { id: string }).id;
-      expect((await api(`/api/admin/actors/${maintainer}/role`, 'POST', { role: 'maintainer' }, maintainer)).status).toBe(200);
-    }
+    maintainer = await ensureMaintainer(api, 'e2e-ui-maintainer');
     creator = ((await api('/api/actors', 'POST', { type: 'human', name: 'e2e-ui-creator' })).json.data as { id: string }).id;
     stranger = ((await api('/api/actors', 'POST', { type: 'human', name: 'e2e-ui-stranger' })).json.data as { id: string }).id;
     for (const a of [maintainer, creator, stranger]) cookies[a] = await cookieFor(a);

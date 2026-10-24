@@ -22,7 +22,7 @@ interface ForwardRequest {
 export default {
   async fetch(request: Request, env: ProbeEnv): Promise<Response> {
     if (env.BEEHIVE_LOCAL_DEV !== '1') return new Response('Not found', { status: 404 });
-    const denied = authGate(request, env);
+    const denied = await authGate(request, env);
     if (denied) return denied;
 
     const url = new URL(request.url);

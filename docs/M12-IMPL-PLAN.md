@@ -4,6 +4,9 @@
 re-opened here) | **Date:** 2026-10-18 | Spine work (AGENTS.md rule 2): every PR is reviewed by the maintainer plus an
 independent review agent. Line numbers are on `main` at e06cf48. No code here; master stage 2 is out of scope.
 
+> **Note (2026-10-19):** `m10` is now `idempotency_keys` (M5a). Where this plan says M11's unique index on
+> `actors.github_user_id` goes in `m10`, read `m11`. The text below is left as written.
+
 ## 1. File-by-file plan
 
 **T0, actor lookup (PR-0)**
@@ -176,7 +179,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | S9 | Scope per route class | See the matrix below. `authorize()` is an allow-list for user writes; anything unlisted is 403 | the full matrix for read, read_write and maintainer; **default-deny test**: a table lists every non-GET route the edge dispatches (`index.ts:123-331`, `lifecycle.ts`, `service-accounts.ts`, `user-tokens.ts`), each with its class. The test fails if a dispatched write route is missing from the table, and checks that each one denied to users gives 403 for all three scopes [edge] |
 | S10 | Replay of a revoked token | No edge cache, and every request verifies in the DO, so the next request after revoke is 401 | revoke, then the same bearer gives 401 [DO, edge, e2e] |
 | S11 | Concurrent mint | Mint is synchronous inside one `transactionSync` (no `await`): a cap of 10 live tokens per actor (409 beyond it) and the hash insert cannot interleave. A hash collision gives a unique violation, then 409 | 12 parallel mints give exactly 10 created and 2 conflicts [DO] |
-| S12 | Master stage-1 log | When `kind==='master'` and the client sent `X-Actor-ID` other than `unknown`, log one JSON line `{event:"master_actor_assertion", method, path: url.pathname, actorId, ray: cf-ray}` and write one Analytics Engine point to the existing `ANALYTICS` binding (`wrangler.toml:32-34`; index `master_actor_assertion`, blobs `actorId`, `method`, path class). Workers Logs keep 7 days, too short for the stage-2 evidence (F5). `actorId` is client-controlled, so it is truncated to 128 chars (N5). No query string, headers, body or token. Logged for any actor (no extra DO read on the master path); human vs agent is resolved afterwards against `actors` | the line and the AE point have exactly those fields; a 300-char actor is truncated; no line or point without the header [edge] |
+| S12 | Master stage-1 log | When `kind==='master'` and the client sent `X-Actor-ID` other than `unknown`, log one JSON line `{event:"master_actor_assertion", method, path: url.pathname, actorId, ray: cf-ray}` and write one Analytics Engine point to the existing `ANALYTICS` binding (`wrangler.toml:32-34`; index `master_actor_assertion`, blobs `actorId`, `method`, path class). Workers Logs keep 7 days, too short for the stage-2 evidence (F5). `actorId` is client-controlled, so it is capped at 128 chars (N5); since 2026-10-23 `authenticate()` rejects a longer or malformed master `X-Actor-ID` with 400 and logs `master_actor_rejected` instead (no AE point). No query string, headers, body or token. Logged for any actor (no extra DO read on the master path); human vs agent is resolved afterwards against `actors` | the line and the AE point have exactly those fields; a 300-char actor is truncated; no line or point without the header [edge] |
 | S13 | Show once | The mint answer is a 200 page (not a redirect or flash) with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; the list shows the prefix only. A browser refresh of that page resubmits the POST and mints a second token. This is documented, not prevented: the browser asks before resubmitting, the token cap bounds it, and the extra token is listed for revocation (N2) | headers; the plaintext is absent from the next list page [UI] |
 | S14 | CSRF and freshness | POSTs check `sameOrigin` before any DO call (as `ui.ts:226`, `:552`); `SameSite=Lax` cookie. Mint requires `0 ≤ now - session.iat ≤ 600 s` (an `iat` in the future is not fresh, N3), otherwise a "sign in again" page and no DO call | cross-origin POST gives 403 with zero DO calls; a stale, missing or future `iat` gives no mint [UI] |
 | S15 | Fail closed | `API_AUTH_TOKEN` unset gives 503 before any branch; DO 404, 5xx, throw or a bad body gives 503; never anonymous, never master | stub each outcome [edge] |
@@ -260,6 +263,6 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | N2 refresh mints twice | **Accepted in part: documented, no nonce.** A nonce adds server state to the UI; the browser warns before resubmitting, the cap bounds it, and the extra token is visible and revocable | S13 |
 | N3 future `iat`, return path, freshness scope | **Accepted in part.** A future `iat` is not fresh, and the OPS note explains what freshness bounds. **Rejected: the return path to the settings page.** It changes the OAuth state flow (`startLogin`/`finishLogin`, `ui.ts:245-330`), which M12 does not need; the "sign in again" page links there afterwards | S14, T6d |
 | N4 temp file + rename | **Accepted** | §1 PR-C, T7 |
-| N5 truncate `actorId` | **Accepted** (128 chars) | S12 |
+| N5 truncate `actorId` | **Accepted** (128 chars; now enforced as a 400 by `ActorIdSchema`) | S12 |
 | N6 name the RFC deviations | **Accepted** | R7 |
 | N7 rollback race | **Accepted** as a known risk | R3 |

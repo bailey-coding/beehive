@@ -28,6 +28,7 @@ import {
 } from './config';
 import type { SpecDoFetcher } from '../shared/deploy-refs';
 import { getLiveRefsCache } from './live-refs-cache';
+import { getCanaryMetricsRecorder } from './canary-recorder';
 
 // Type for the Analytics Engine binding
 declare const ANALYTICS: AnalyticsEngine;
@@ -493,10 +494,34 @@ async function triggerScientist(
 /**
  * Request handler
  */
+/**
+ * Aggregate mirrored-candidate outcomes for live canary deployments and flush them to the Spec DO
+ * through ctx.waitUntil. Static candidates (no deployment) are skipped. Never throws and never
+ * touches the response.
+ */
+function recordCanaryMetrics(
+  results: Array<{ candidateId: string; response: Response; latencyMs: number }>,
+  config: ShadowConfig,
+  env: any,
+  ctx: ExecutionContext
+): void {
+  try {
+    if (!config.canaryDeployments?.size) return;
+    const recorder = getCanaryMetricsRecorder();
+    for (const r of results) {
+      const deploymentId = config.canaryDeployments.get(r.candidateId);
+      if (deploymentId) recorder.add(deploymentId, r.response.status, r.latencyMs);
+    }
+    if (recorder.shouldFlush()) ctx.waitUntil(recorder.flush(specDoFetcher(env)));
+  } catch (error) {
+    console.warn('[Shadow] canary metrics recording failed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 export default {
   async fetch(request: Request, env: any, ctx: ExecutionContext): Promise<Response> {
     // Auth gate - fail closed, applies to every route including /health
-    const denied = authGate(request, env);
+    const denied = await authGate(request, env);
     if (denied) return denied;
 
     const url = new URL(request.url);
@@ -650,6 +675,9 @@ export default {
     if (shouldFanOut) {
       // Fan out to candidates with classification
       const candidateResponses = await fanOutToCandidates(request, config, metrics, env);
+
+      // Canary metrics (M3 SLO loop): best effort, only candidates that are a live canary deployment
+      recordCanaryMetrics(candidateResponses, config, env, ctx);
       
       // Trigger Scientist comparison (async - don't wait)
       if (metrics) {

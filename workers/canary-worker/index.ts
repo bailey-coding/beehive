@@ -9,7 +9,7 @@ import { RollbackManager } from './rollback';
 import { SLOMonitor } from './slo';
 import { handleRollbackQueue } from './queues';
 import type { Env, RollbackTrigger, CanaryConfig } from './types';
-import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types';
+import type { ExecutionContext, MessageBatch, ScheduledController } from '@cloudflare/workers-types';
 
 async function readBody<T>(request: Request): Promise<T | Response> {
   try {
@@ -22,7 +22,7 @@ async function readBody<T>(request: Request): Promise<T | Response> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Auth gate - fail closed, applies to every route including /health
-    const denied = authGate(request, env);
+    const denied = await authGate(request, env);
     if (denied) return denied;
 
     const url = new URL(request.url);
@@ -114,6 +114,17 @@ export default {
     });
   },
   
+  // Cron (wrangler.toml [triggers]): one SLO pass over every live canary. Fetch auth does not apply
+  // here; the handler is only reachable by the platform's scheduler.
+  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
+    try {
+      await new SLOMonitor(env).runCycle(new RollbackManager(env));
+    } catch (error) {
+      // No verdict (bad config, live canaries unreadable): never a rollback. The next tick retries.
+      console.error('[Canary] SLO cycle skipped:', error instanceof Error ? error.message : String(error));
+    }
+  },
+
   // Queue consumer for rollback triggers
   async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext): Promise<void> {
     // Same rule as fetch: SPEC_DO stays the namespace
@@ -124,4 +135,5 @@ export default {
 type ExportedHandler<E = unknown> = {
   fetch: (request: Request, env: E, ctx: ExecutionContext) => Promise<Response>;
   queue: (batch: MessageBatch, env: E, ctx: ExecutionContext) => Promise<void>;
+  scheduled: (controller: ScheduledController, env: E, ctx: ExecutionContext) => Promise<void>;
 };

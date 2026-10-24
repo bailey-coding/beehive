@@ -66,7 +66,7 @@ interface CreateTaskBody {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Auth gate - fail closed, applies to every route including /health
-    const denied = authGate(request, env);
+    const denied = await authGate(request, env);
     if (denied) return denied;
 
     const url = new URL(request.url);

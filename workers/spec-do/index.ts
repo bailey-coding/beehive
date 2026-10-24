@@ -21,11 +21,13 @@ import {
   LIFECYCLE_COLUMNS,
   SERVICE_TOKENS_SQL,
   DEPLOY_REFS_SQL,
+  USER_TOKENS_SQL,
   IDEMPOTENCY_KEYS_SQL,
+  CANARY_METRICS_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm10';
+const LATEST_SCHEMA_VERSION = 'm11';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -192,6 +194,35 @@ function tokenView(t: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+// User tokens (RFC-0008). The edge validates the same rules; the DO re-checks them as the
+// store of record. The lifetime ceiling has a minute of slack for the edge-to-DO hop.
+const USER_TOKEN_SCOPES = ['read', 'read_write', 'maintainer'];
+const USER_TOKEN_PREFIX_SHAPE = /^bh_usr_[A-Za-z0-9_-]{5}$/;
+const MAX_USER_TOKEN_LIFETIME_MS = 90 * 24 * 3_600_000 + 60_000;
+const MAX_USER_TOKEN_NAME_CHARS = 64;
+// Live (not revoked, not expired) tokens per actor; one more mint is a 409
+const MAX_LIVE_USER_TOKENS = 10;
+// Explicit column list: views never select token_hash
+const USER_TOKEN_COLUMNS =
+  'id, actor_id, name, token_prefix, scope, created_by, created_via, created_at, expires_at, revoked_at, revoked_by, last_used_at';
+
+function userTokenView(t: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: t.id,
+    actorId: t.actor_id,
+    name: t.name,
+    prefix: t.token_prefix,
+    scope: t.scope,
+    createdBy: t.created_by,
+    createdVia: t.created_via,
+    createdAt: t.created_at,
+    expiresAt: t.expires_at,
+    revokedAt: t.revoked_at ?? null,
+    revokedBy: t.revoked_by ?? null,
+    lastUsedAt: t.last_used_at ?? null,
+  };
+}
+
 function accountView(r: Record<string, unknown>, tokens: Record<string, unknown>[]): Record<string, unknown> {
   return {
     id: r.id,
@@ -217,7 +248,7 @@ import { seedDatabase, isSeeded } from './seed';
 
 // Artifacts client
 import { createFork, createRepoToken, type ArtifactsConfig } from '../shared/artifacts';
-import { specDoAuthGate } from '../shared/spec-do-auth';
+import { specDoAuthGate, MAINTAINER_CAP_HEADER, USER_TOKEN_NOT_FOUND, USER_TOKEN_ACTOR_NOT_FOUND } from '../shared/spec-do-auth';
 
 // Promotion ledger contract (shared with the promotion worker)
 import type { ZodType } from 'zod';
@@ -265,6 +296,15 @@ import {
 // Deploy refs + canary deployments contract (shared with the canary worker and shadow router)
 import {
   DEPLOY_ROUTE,
+  RecordCanaryMetricsSchema,
+  MetricSourceSchema,
+  CANARY_METRICS_RETENTION_MINUTES,
+  CANARY_METRICS_MAX_WINDOW_MINUTES,
+  CANARY_METRICS_DEFAULT_WINDOW_MINUTES,
+  LATENCY_BUCKET_COUNT,
+  latencyP95FromBuckets,
+  type CanaryMetricsSummary,
+  type RecordCanaryMetrics,
   DeployRefSchema,
   DeployRungSchema,
   CanaryDeploymentSchema,
@@ -551,8 +591,13 @@ export class SpecDO {
       this.db.exec(DEPLOY_REFS_SQL);
       // version / failure columns on tournaments + merge_trains: likewise
       this.applyLedgerCas();
+      // user_tokens: likewise
+      this.db.exec(USER_TOKENS_SQL);
       // idempotency_keys: likewise
       this.db.exec(IDEMPOTENCY_KEYS_SQL);
+
+      // canary_metrics: likewise
+      this.db.exec(CANARY_METRICS_SQL);
 
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
@@ -688,7 +733,7 @@ export class SpecDO {
     if (typeof createdBy !== 'string' || !this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, createdBy).length) {
       throw new BadRequestError('createdBy (X-Actor-ID) must be an existing actor');
     }
-    if (this.isServiceActor(createdBy)) throw new ForbiddenError('a service account cannot mint service tokens');
+    if (this.isServiceActor(createdBy)) throw new ForbiddenError('a service account cannot mint or revoke tokens');
     return createdBy;
   }
 
@@ -825,6 +870,151 @@ export class SpecDO {
     });
   }
 
+  // ============================================================================
+  // USER TOKENS (RFC-0008: bh_usr_ tokens of one human actor)
+  // No entity_history rows: its CHECK has no user-token type (widening it needs a table
+  // rebuild). The token row is the audit record: created_by/via, revoked_at/by.
+  // ============================================================================
+
+  /**
+   * One token for a human actor, in one transactionSync with no await, so the live-token cap
+   * and the hash insert cannot interleave with another mint. The target must be type 'human'
+   * with a github_user_id and not a service account's actor. `maintainer` needs the target to
+   * hold the role now (and the request not to be capped). createdVia 'session': the settings
+   * page mints for the session's own actor only, so the minter must be the target. That is
+   * defence in depth (the real guard is at the edge): the session caller and the master route
+   * reach this one tier-2 route alike. 'admin': X-Actor-ID, or the reserved master actor.
+   */
+  mintUserToken(body: Record<string, unknown>, capped: boolean): Record<string, unknown> {
+    const { actorId, name, scope, createdVia, tokenHash, tokenPrefix, expiresAt } = body;
+    if (typeof actorId !== 'string' || actorId === '') throw new BadRequestError('actorId must be a non-empty string');
+    if (typeof name !== 'string' || name.trim() === '' || name.trim().length > MAX_USER_TOKEN_NAME_CHARS) {
+      throw new BadRequestError(`name must be a non-empty string of at most ${MAX_USER_TOKEN_NAME_CHARS} chars`);
+    }
+    if (typeof scope !== 'string' || !USER_TOKEN_SCOPES.includes(scope)) {
+      throw new BadRequestError(`scope must be one of ${USER_TOKEN_SCOPES.join(', ')}`);
+    }
+    if (createdVia !== 'session' && createdVia !== 'admin') throw new BadRequestError("createdVia must be 'session' or 'admin'");
+    if (typeof tokenHash !== 'string' || !SERVICE_TOKEN_HASH.test(tokenHash)) {
+      throw new BadRequestError('tokenHash must be a lowercase SHA-256 hex digest');
+    }
+    if (typeof tokenPrefix !== 'string' || !USER_TOKEN_PREFIX_SHAPE.test(tokenPrefix)) {
+      throw new BadRequestError('tokenPrefix must be the first 12 chars of a bh_usr_ token');
+    }
+    const at = now();
+    if (typeof expiresAt !== 'number' || !Number.isInteger(expiresAt) || expiresAt <= at || expiresAt > at + MAX_USER_TOKEN_LIFETIME_MS) {
+      throw new BadRequestError('expiresAt must be a future epoch-ms time at most 90 days away');
+    }
+    return this.state.storage.transactionSync(() => {
+      const target = this.queryAll(`SELECT type, github_user_id FROM actors WHERE id = ?`, actorId)[0];
+      if (!target) throw new BadRequestError(`actor ${actorId} not found`);
+      if (target.type !== 'human' || target.github_user_id == null || target.github_user_id === '' || this.isServiceActor(actorId)) {
+        throw new ForbiddenError('user tokens are for human actors with a GitHub identity only');
+      }
+      let createdBy: string;
+      if (createdVia === 'session') {
+        if (body.createdBy !== actorId) throw new ForbiddenError('a session mints user tokens for its own actor only');
+        createdBy = actorId;
+      } else {
+        createdBy = this.resolveMinter(body.createdBy, at);
+      }
+      if (scope === 'maintainer' && !this.isMaintainer(actorId, capped)) {
+        throw new ForbiddenError('the maintainer scope needs an actor with role=maintainer');
+      }
+      const live = this.queryAll(
+        `SELECT COUNT(*) AS n FROM user_tokens WHERE actor_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+        actorId,
+        at
+      )[0].n as number;
+      if (live >= MAX_LIVE_USER_TOKENS) {
+        throw new ConflictError(`actor already has ${MAX_LIVE_USER_TOKENS} live user tokens; revoke one first`);
+      }
+      // The unique index would refuse it too; a 409 instead of a 500
+      if (this.queryAll(`SELECT 1 AS x FROM user_tokens WHERE token_hash = ?`, tokenHash).length) {
+        throw new ConflictError('token already exists');
+      }
+      const id = generateId();
+      this.run(
+        `INSERT INTO user_tokens (id, actor_id, name, token_hash, token_prefix, scope, created_by, created_via, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        actorId,
+        name.trim(),
+        tokenHash,
+        tokenPrefix,
+        scope,
+        createdBy,
+        createdVia,
+        at,
+        expiresAt
+      );
+      return userTokenView(this.queryAll(`SELECT ${USER_TOKEN_COLUMNS} FROM user_tokens WHERE id = ?`, id)[0]);
+    });
+  }
+
+  /** Every token (revoked and expired included), newest first; of one actor when given. Never token_hash. */
+  listUserTokens(actorId: string | null): Record<string, unknown>[] {
+    const rows =
+      actorId === null
+        ? this.queryAll(`SELECT ${USER_TOKEN_COLUMNS} FROM user_tokens ORDER BY created_at DESC, id`)
+        : this.queryAll(`SELECT ${USER_TOKEN_COLUMNS} FROM user_tokens WHERE actor_id = ? ORDER BY created_at DESC, id`, actorId);
+    return rows.map(userTokenView);
+  }
+
+  /**
+   * Revokes one token; idempotent (the first revocation is kept). With `ownerActorId` (the
+   * settings page), a token of another actor is treated as unknown. Null when unknown.
+   */
+  revokeUserToken(id: string, revokedBy: unknown, ownerActorId: string | null): Record<string, unknown> | null {
+    return this.state.storage.transactionSync(() => {
+      const token = this.queryAll(`SELECT actor_id FROM user_tokens WHERE id = ?`, id)[0];
+      if (!token || (ownerActorId !== null && token.actor_id !== ownerActorId)) return null;
+      const at = now();
+      const by = this.resolveMinter(revokedBy, at);
+      this.run(`UPDATE user_tokens SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL`, at, by, id);
+      return userTokenView(this.queryAll(`SELECT ${USER_TOKEN_COLUMNS} FROM user_tokens WHERE id = ?`, id)[0]);
+    });
+  }
+
+  /** Revokes every unrevoked token of one actor (allowlist removal, docs/OPS.md). Null when the actor is unknown. */
+  revokeAllUserTokens(actorId: string, revokedBy: unknown): { revoked: number } | null {
+    return this.state.storage.transactionSync(() => {
+      if (!this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, actorId).length) return null;
+      const at = now();
+      const by = this.resolveMinter(revokedBy, at);
+      const n = this.queryAll(`SELECT COUNT(*) AS n FROM user_tokens WHERE actor_id = ? AND revoked_at IS NULL`, actorId)[0].n as number;
+      this.run(`UPDATE user_tokens SET revoked_at = ?, revoked_by = ? WHERE actor_id = ? AND revoked_at IS NULL`, at, by, actorId);
+      return { revoked: n };
+    });
+  }
+
+  /**
+   * The token's actor, id and scope, or null when the token is unknown, revoked or expired, or
+   * its actor is gone, not human, has no github_user_id, or is a service account's actor. Lookup
+   * is by hash (unique index); the DO never sees plaintext. The edge never caches the answer, so
+   * a revocation applies from the next request. The maintainer role is not checked here:
+   * isMaintainer reads it live on every request, so a demoted maintainer's token loses it at once.
+   */
+  verifyUserTokenHash(tokenHash: string): { actorId: string; userTokenId: string; scope: string } | null {
+    if (!SERVICE_TOKEN_HASH.test(tokenHash)) return null;
+    const at = now();
+    const r = this.queryAll(
+      `SELECT ut.id, ut.actor_id, ut.scope, ut.last_used_at
+       FROM user_tokens ut
+       JOIN actors a ON a.id = ut.actor_id
+       WHERE ut.token_hash = ? AND ut.revoked_at IS NULL AND ut.expires_at > ?
+         AND a.type = 'human' AND a.github_user_id IS NOT NULL AND a.github_user_id != ''
+         AND NOT EXISTS (SELECT 1 FROM service_accounts sa WHERE sa.actor_id = a.id)`,
+      tokenHash,
+      at
+    )[0];
+    if (!r) return null;
+    if (r.last_used_at == null || at - (r.last_used_at as number) >= LAST_USED_RESOLUTION_MS) {
+      this.run(`UPDATE user_tokens SET last_used_at = ? WHERE id = ?`, at, r.id as string);
+    }
+    return { actorId: r.actor_id as string, userTokenId: r.id as string, scope: r.scope as string };
+  }
+
   /**
    * Run schema migrations for existing databases, one step per version, in order.
    * Every step is additive and idempotent (IF NOT EXISTS, or an ALTER behind a PRAGMA
@@ -856,8 +1046,11 @@ export class SpecDO {
       // m7 -> m8: version columns on tournaments + merge_trains, tournament failure columns
       ['m8', () => this.applyLedgerCas()],
       // m8 -> m9: reserved for user tokens (M12)
+      ['m9', () => this.db!.exec(USER_TOKENS_SQL)],
       // m9 -> m10: idempotency keys table for preventing double-writes from at-least-once queue delivery
       ['m10', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
+      // m10 -> m11: canary metrics (M3 SLO loop; shadow-sourced until real canary traffic exists)
+      ['m11', () => this.db!.exec(CANARY_METRICS_SQL)],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -1838,6 +2031,25 @@ export class SpecDO {
     };
   }
 
+  /**
+   * Wire shape of an issue: the row (snake_case, what every existing reader uses) plus the camelCase
+   * names `IssueResponse` documents. Additive on purpose: during a mixed-version deploy an old UI
+   * or CLI still finds snake_case, a new one finds camelCase. Drop the snake_case copies once no
+   * reader needs them.
+   */
+  private issueView<T extends IssueRow | null>(row: T): T extends null ? null : IssueRow & Record<string, unknown> {
+    if (!row) return null as never;
+    return {
+      ...row,
+      repositoryId: row.repository_id,
+      createdAt: row.created_at,
+      createdBy: row.created_by,
+      closedAt: row.closed_at,
+      closedBy: row.closed_by,
+      commentPolicy: row.comment_policy,
+    } as never;
+  }
+
   private rowToIssue(stmt: { getRow(): Record<string, unknown> | null }): IssueRow | null {
     const row = stmt.getRow();
     if (!row) return null;
@@ -1901,8 +2113,8 @@ export class SpecDO {
     return mode;
   }
 
-  private async handleInternal(request: Request, path: string, method: string): Promise<Response> {
-    const lifecycle = await this.handleLifecycle(request, path, method);
+  private async handleInternal(request: Request, path: string, method: string, capped: boolean): Promise<Response> {
+    const lifecycle = await this.handleLifecycle(request, path, method, capped);
     if (lifecycle) return lifecycle;
 
     const json = (data: unknown, status = 200) =>
@@ -1923,6 +2135,18 @@ export class SpecDO {
     const readBody = async (): Promise<Record<string, unknown>> => {
       try {
         const body = await request.json();
+        if (body && typeof body === 'object' && !Array.isArray(body)) return body as Record<string, unknown>;
+      } catch {
+        // fall through
+      }
+      throw new BadRequestError('invalid JSON body');
+    };
+    // An empty body is {}; anything else must be a JSON object
+    const readOptionalBody = async (): Promise<Record<string, unknown>> => {
+      const text = await request.text();
+      if (text === '') return {};
+      try {
+        const body = JSON.parse(text);
         if (body && typeof body === 'object' && !Array.isArray(body)) return body as Record<string, unknown>;
       } catch {
         // fall through
@@ -1956,6 +2180,42 @@ export class SpecDO {
           ? json({ revoked: true })
           : fail('Not found', 404);
       }
+
+      // User tokens (RFC-0008). Tier 2 except verify. X-Actor-ID is the minting/revoking actor;
+      // the token's actor comes from the body (the edge sets it: the session's actor, or master's choice).
+      if (path === '/internal/user-tokens' && method === 'POST') {
+        const body = await readBody();
+        return json(this.mintUserToken({ ...body, createdBy: request.headers.get('X-Actor-ID') ?? undefined }, capped), 201);
+      }
+      if (path === '/internal/user-tokens' && method === 'GET') {
+        return json(this.listUserTokens(new URL(request.url).searchParams.get('actorId')));
+      }
+      if (path === '/internal/user-tokens/revoke-all' && method === 'POST') {
+        const body = await readBody();
+        if (typeof body.actorId !== 'string' || body.actorId === '') throw new BadRequestError('actorId must be a non-empty string');
+        const result = this.revokeAllUserTokens(body.actorId, actorId);
+        return result ? json(result) : fail(USER_TOKEN_ACTOR_NOT_FOUND, 404);
+      }
+      const userTokenRevoke = path.match(/^\/internal\/user-tokens\/([^\/]+)\/revoke$/);
+      if (userTokenRevoke && method === 'POST') {
+        // Optional body { actorId }: only that actor's token may be revoked (the settings page)
+        const body = await readOptionalBody();
+        if (body.actorId !== undefined && (typeof body.actorId !== 'string' || body.actorId === '')) {
+          throw new BadRequestError('actorId must be a non-empty string');
+        }
+        const token = this.revokeUserToken(decodeURIComponent(userTokenRevoke[1]), actorId, (body.actorId as string | undefined) ?? null);
+        return token ? json({ revoked: true, token }) : fail(USER_TOKEN_NOT_FOUND, 404);
+      }
+      // Always 200 for a well-formed hash: an old DO without this route answers 404, so the edge
+      // can tell "no such token" (401) from "no such route" (503) and never fails open.
+      if (path === '/internal/user-tokens/verify' && method === 'POST') {
+        const body = await readBody();
+        if (typeof body.tokenHash !== 'string' || !SERVICE_TOKEN_HASH.test(body.tokenHash)) {
+          throw new BadRequestError('tokenHash must be a SHA-256 hex digest');
+        }
+        const found = this.verifyUserTokenHash(body.tokenHash);
+        return json(found ? { found: true, ...found } : { found: false });
+      }
     } catch (e) {
       const status =
         e instanceof BadRequestError ? 400 : e instanceof ForbiddenError ? 403 : e instanceof NotFoundError ? 404 : e instanceof ConflictError ? 409 : 0;
@@ -1981,8 +2241,12 @@ export class SpecDO {
   /**
    * role='maintainer', and not a service account's actor. Service principals never
    * reach the lifecycle routes (edge: master only); the DO refuses them as well.
+   * `capped` (the request carried MAINTAINER_CAP_HEADER: a user token without the
+   * maintainer scope) makes it false whatever the role. It is a required parameter, so a
+   * call site that does not thread the request's cap fails typecheck.
    */
-  isMaintainer(actorId: string): boolean {
+  isMaintainer(actorId: string, capped: boolean): boolean {
+    if (capped) return false;
     return (
       this.queryAll(
         `SELECT 1 AS ok FROM actors a WHERE a.id = ? AND a.role = 'maintainer'
@@ -2214,8 +2478,8 @@ export class SpecDO {
    * current dry-run total. Batches of <= PURGE_BATCH_SIZE rows, one transaction
    * each, yielding between batches so promotion decisions can interleave.
    */
-  async purge(req: ParsedPurgeRequest, actorId: string): Promise<PurgeResult> {
-    if (!this.isMaintainer(actorId)) throw new ForbiddenError('purge requires a maintainer actor (X-Actor-ID with role=maintainer)');
+  async purge(req: ParsedPurgeRequest, actorId: string, capped: boolean): Promise<PurgeResult> {
+    if (!this.isMaintainer(actorId, capped)) throw new ForbiddenError('purge requires a maintainer actor (X-Actor-ID with role=maintainer)');
     // Named explicitly: refuse outright. A name-prefix match skips it instead (purgeBlocker 'reserved').
     if (req.orgIds?.includes(RESERVED_ORGANIZATION_ID)) {
       throw new ForbiddenError(`organization ${RESERVED_ORGANIZATION_ID} is reserved and cannot be purged`);
@@ -2274,7 +2538,7 @@ export class SpecDO {
    * Grant or revoke the maintainer role. The caller must be a maintainer, except
    * the bootstrap case: with no maintainer yet, an actor may grant it to itself.
    */
-  setActorRole(targetId: string, role: ActorRole | null, callerId: string): SetActorRoleResult {
+  setActorRole(targetId: string, role: ActorRole | null, callerId: string, capped: boolean): SetActorRoleResult {
     return this.state.storage.transactionSync(() => {
       if (!this.queryAll(`SELECT 1 AS x FROM actors WHERE id = ?`, targetId).length) {
         throw new NotFoundError(`actor ${targetId} not found`);
@@ -2283,8 +2547,9 @@ export class SpecDO {
         throw new ForbiddenError('a service account actor cannot hold a role');
       }
       const maintainers = this.queryAll(`SELECT COUNT(*) AS n FROM actors WHERE role = 'maintainer'`)[0].n as number;
-      const bootstrap = maintainers === 0 && role === 'maintainer' && callerId === targetId;
-      if (!bootstrap && !this.isMaintainer(callerId)) {
+      // A capped request never bootstraps either: self-grant is maintainer power too
+      const bootstrap = !capped && maintainers === 0 && role === 'maintainer' && callerId === targetId;
+      if (!bootstrap && !this.isMaintainer(callerId, capped)) {
         throw new ForbiddenError('changing a role requires a maintainer actor (or self-grant while none exists)');
       }
       this.run(`UPDATE actors SET role = ? WHERE id = ?`, role, targetId);
@@ -2301,7 +2566,7 @@ export class SpecDO {
     });
   }
 
-  private async handleLifecycle(request: Request, path: string, method: string): Promise<Response | null> {
+  private async handleLifecycle(request: Request, path: string, method: string, capped: boolean): Promise<Response | null> {
     const roleRoute = path.match(/^\/internal\/actors\/([^\/]+)\/role$/);
     if (method !== 'POST' || !(path === LIFECYCLE_PATHS.tombstone || path === LIFECYCLE_PATHS.purge || roleRoute)) {
       return null;
@@ -2331,11 +2596,11 @@ export class SpecDO {
       if (path === LIFECYCLE_PATHS.purge) {
         const body = PurgeRequestSchema.safeParse(raw);
         if (!body.success) return respond({ error: body.error.message }, 400);
-        return respond({ data: await this.purge(body.data, actorId) }, 200);
+        return respond({ data: await this.purge(body.data, actorId, capped) }, 200);
       }
       const body = SetActorRoleRequestSchema.safeParse(raw);
       if (!body.success) return respond({ error: body.error.message }, 400);
-      return respond({ data: this.setActorRole(decodeURIComponent(roleRoute![1]), body.data.role, actorId) }, 200);
+      return respond({ data: this.setActorRole(decodeURIComponent(roleRoute![1]), body.data.role, actorId, capped) }, 200);
     } catch (e) {
       const status = e instanceof NotFoundError ? 404 : e instanceof ForbiddenError ? 403 : e instanceof ConflictError ? 409 : 500;
       return respond({ error: e instanceof Error ? e.message : String(e) }, status);
@@ -2823,6 +3088,25 @@ export class SpecDO {
         }
       }
 
+      if (collection === 'canary-metrics' && id === undefined && sub === undefined) {
+        if (method === 'POST') {
+          const p = parse(RecordCanaryMetricsSchema, 'canary metrics');
+          if ('error' in p) return p.error;
+          return json(this.recordCanaryMetrics(p.data), 201);
+        }
+        if (method === 'GET') {
+          const deploymentId = url.searchParams.get('deploymentId');
+          const source = MetricSourceSchema.safeParse(url.searchParams.get('source'));
+          if (!deploymentId || !source.success) return fail('deploymentId and source (shadow|canary) required', 400);
+          const raw = url.searchParams.get('sinceMinutes');
+          const since = raw === null ? CANARY_METRICS_DEFAULT_WINDOW_MINUTES : Number(raw);
+          if (!Number.isInteger(since) || since < 1 || since > CANARY_METRICS_MAX_WINDOW_MINUTES) {
+            return fail(`sinceMinutes must be an integer 1-${CANARY_METRICS_MAX_WINDOW_MINUTES}`, 400);
+          }
+          return json(this.canaryMetricsSummary(deploymentId, source.data, since));
+        }
+      }
+
       if (collection === 'deploy-refs' && sub === undefined) {
         if ((id === undefined || id === 'head') && method === 'GET') {
           const specId = url.searchParams.get('specId');
@@ -2845,6 +3129,7 @@ export class SpecDO {
     } catch (e) {
       if (e instanceof NotFoundError) return fail(e.message, 404, RECORD_NOT_FOUND);
       if (e instanceof ConflictError) return fail(e.message, 409);
+      if (e instanceof BadRequestError) return fail(e.message, 400);
       throw e;
     }
 
@@ -2940,6 +3225,96 @@ export class SpecDO {
     return this.queryAll('SELECT * FROM canary_deployments WHERE candidate_id = ? ORDER BY created_at DESC, rowid DESC', candidateId).map(
       (r) => this.rowToCanaryDeployment(r)
     );
+  }
+
+  // --- canary metrics (M3 SLO loop, docs/M3-CANARY-SLO-PLAN.md) ---
+
+  /** Drop rows older than the retention window. Called on every write and read, so stale rows go even when traffic stops. */
+  private pruneCanaryMetrics(): void {
+    const cutoff = Math.floor(now() / 60_000) - CANARY_METRICS_RETENTION_MINUTES;
+    this.run('DELETE FROM canary_metrics WHERE minute_bucket < ?', cutoff);
+  }
+
+  /**
+   * Add samples to a live canary deployment's per-minute rows. Not idempotent (a retried POST double-counts;
+   * acceptable for telemetry). 404: no such deployment; 409: not 'deployed' (e.g. just rolled back), so the
+   * recorder drops the batch. Minutes must be within the last hour or the next 5 minutes.
+   */
+  recordCanaryMetrics(input: RecordCanaryMetrics): { recorded: number } {
+    return this.state.storage.transactionSync(() => {
+      const deployment = this.getCanaryDeployment(input.deploymentId);
+      if (!deployment) throw new NotFoundError('Canary deployment not found');
+      if (deployment.status !== 'deployed') throw new ConflictError(`Canary deployment is ${deployment.status}`);
+      const nowMinute = Math.floor(now() / 60_000);
+      for (const sample of input.samples) {
+        if (sample.minuteBucket < nowMinute - 60 || sample.minuteBucket > nowMinute + 5) {
+          throw new BadRequestError('minuteBucket must be within the last 60 minutes or the next 5');
+        }
+      }
+      for (const sample of input.samples) {
+        const row = this.queryAll(
+          'SELECT requests, errors, latency_sum_ms, latency_max_ms, latency_buckets FROM canary_metrics WHERE deployment_id = ? AND minute_bucket = ? AND source = ?',
+          input.deploymentId,
+          sample.minuteBucket,
+          input.source
+        )[0];
+        if (!row) {
+          this.run(
+            'INSERT INTO canary_metrics (deployment_id, minute_bucket, source, requests, errors, latency_sum_ms, latency_max_ms, latency_buckets, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            input.deploymentId, sample.minuteBucket, input.source, sample.requests, sample.errors,
+            sample.latencySumMs, sample.latencyMaxMs, JSON.stringify(sample.latencyBuckets), now()
+          );
+          continue;
+        }
+        const old = JSON.parse(String(row.latency_buckets)) as number[];
+        const merged = Array.from({ length: LATENCY_BUCKET_COUNT }, (_, i) => (old[i] ?? 0) + sample.latencyBuckets[i]);
+        this.run(
+          'UPDATE canary_metrics SET requests = ?, errors = ?, latency_sum_ms = ?, latency_max_ms = ?, latency_buckets = ?, updated_at = ? WHERE deployment_id = ? AND minute_bucket = ? AND source = ?',
+          Number(row.requests) + sample.requests,
+          Number(row.errors) + sample.errors,
+          Number(row.latency_sum_ms) + sample.latencySumMs,
+          Math.max(Number(row.latency_max_ms), sample.latencyMaxMs),
+          JSON.stringify(merged),
+          now(),
+          input.deploymentId, sample.minuteBucket, input.source
+        );
+      }
+      this.pruneCanaryMetrics();
+      return { recorded: input.samples.length };
+    });
+  }
+
+  /** Aggregate over the last `sinceMinutes` for one source. Unknown deployment or no rows is a 200 with zero requests, never a 404. */
+  canaryMetricsSummary(deploymentId: string, source: 'shadow' | 'canary', sinceMinutes: number): CanaryMetricsSummary {
+    return this.state.storage.transactionSync(() => {
+      this.pruneCanaryMetrics();
+      const from = Math.floor(now() / 60_000) - sinceMinutes + 1;
+      const rows = this.queryAll(
+        'SELECT requests, errors, latency_max_ms, latency_buckets FROM canary_metrics WHERE deployment_id = ? AND source = ? AND minute_bucket >= ?',
+        deploymentId, source, from
+      );
+      let requests = 0;
+      let errors = 0;
+      let maxMs = 0;
+      const buckets = new Array<number>(LATENCY_BUCKET_COUNT).fill(0);
+      for (const r of rows) {
+        requests += Number(r.requests);
+        errors += Number(r.errors);
+        maxMs = Math.max(maxMs, Number(r.latency_max_ms));
+        const b = JSON.parse(String(r.latency_buckets)) as number[];
+        for (let i = 0; i < LATENCY_BUCKET_COUNT; i++) buckets[i] += b[i] ?? 0;
+      }
+      return {
+        deploymentId,
+        source,
+        sinceMinutes,
+        requests,
+        errors,
+        errorRate: requests > 0 ? errors / requests : null,
+        latencyP95Ms: latencyP95FromBuckets(buckets, maxMs),
+        latencyMaxMs: maxMs,
+      };
+    });
   }
 
   getCanaryDeployment(id: string): CanaryDeployment | null {
@@ -3241,15 +3616,17 @@ export class SpecDO {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
-    
+    // Per request, never on the instance: input gates interleave requests at every await
+    const capped = request.headers.has(MAINTAINER_CAP_HEADER);
+
     try {
       if (path === '/health' || path === '/api/health') {
         return new Response('OK', { status: 200 });
       }
-      
+
       // Internal routes: built only by the beehive edge with fixed paths.
       if (path.startsWith('/internal/')) {
-        return await this.handleInternal(request, path, method);
+        return await this.handleInternal(request, path, method, capped);
       }
 
       // Promotion ledger: called by the promotion worker over the SPEC_DO binding
@@ -3269,7 +3646,7 @@ export class SpecDO {
 
       // Tombstoned rows are visible only to maintainers, and only on request
       const includeDeleted = url.searchParams.get(INCLUDE_DELETED_PARAM) === '1';
-      if (includeDeleted && !this.isMaintainer(actorId)) {
+      if (includeDeleted && !this.isMaintainer(actorId, capped)) {
         return new Response(
           JSON.stringify({ success: false, error: `${INCLUDE_DELETED_PARAM} requires a maintainer actor`, timestamp: Date.now() }),
           { status: 403, headers: { 'Content-Type': 'application/json' } }
@@ -3700,7 +4077,7 @@ export class SpecDO {
             throw new BadRequestError('labels must be an array of strings');
           }
           this.requireSameAuthor(body.createdBy, actorId);
-          return this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels);
+          return this.issueView(this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels));
         });
       }
       
@@ -3711,7 +4088,7 @@ export class SpecDO {
         const stage = url.searchParams.get('stage') ?? undefined;
         const status = url.searchParams.get('status') ?? undefined;
         const issues = this.listIssues(limit, offset, repositoryId, stage, status, includeDeleted);
-        return new Response(JSON.stringify({ success: true, data: issues, timestamp: Date.now() }), {
+        return new Response(JSON.stringify({ success: true, data: issues.map((i) => this.issueView(i)), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
@@ -3725,7 +4102,7 @@ export class SpecDO {
             headers: { 'Content-Type': 'application/json' },
           });
         }
-        return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
+        return new Response(JSON.stringify({ success: true, data: this.issueView(issue), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
@@ -3734,7 +4111,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         const body: UpdateIssueStageRequest = await request.json();
         this.transitionIssue(id, body.stage, actorId, body.notes);
-        const issue = this.getIssue(id);
+        const issue = this.issueView(this.getIssue(id));
         return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -3743,16 +4120,16 @@ export class SpecDO {
       if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
         return await this.issueRoute(request, 200, actorId, (body) => {
-          this.setIssueStatus(id, body.status as string, actorId);
-          return this.getIssue(id);
+          this.setIssueStatus(id, body.status as string, actorId, capped);
+          return this.issueView(this.getIssue(id));
         });
       }
 
       if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
         return await this.issueRoute(request, 200, actorId, (body) => {
-          this.updateIssueCommentPolicy(id, body.commentPolicy as string, actorId);
-          return this.getIssue(id);
+          this.updateIssueCommentPolicy(id, body.commentPolicy as string, actorId, capped);
+          return this.issueView(this.getIssue(id));
         });
       }
       
@@ -3764,7 +4141,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         return await this.issueRoute(request, 201, actorId, (body) => {
           this.requireSameAuthor(body.createdBy, actorId);
-          return this.createIssueComment(id, body.body as string, actorId);
+          return this.createIssueComment(id, body.body as string, actorId, capped);
         });
       }
       
@@ -4396,10 +4773,10 @@ export class SpecDO {
   // ============================================================================
 
   /** Maintainer only: without that, any actor could undo a lock. Throws Forbidden/BadRequest/NotFound. */
-  updateIssueCommentPolicy(id: string, commentPolicy: string, changedBy: string): void {
+  updateIssueCommentPolicy(id: string, commentPolicy: string, changedBy: string, capped: boolean): void {
     if (!this.db) throw new Error('Database not initialized');
     this.state.storage.transactionSync(() => {
-      if (!this.isMaintainer(changedBy)) throw new ForbiddenError('changing the comment policy requires a maintainer actor');
+      if (!this.isMaintainer(changedBy, capped)) throw new ForbiddenError('changing the comment policy requires a maintainer actor');
       if (!COMMENT_POLICIES.includes(commentPolicy)) {
         throw new BadRequestError(`commentPolicy must be one of ${COMMENT_POLICIES.join(', ')}`);
       }
@@ -4416,12 +4793,12 @@ export class SpecDO {
    * Close or reopen: the issue's creator or a maintainer (403 otherwise). The same status again
    * is a no-op. `stage` is left alone; the history row carries the current one.
    */
-  setIssueStatus(id: string, status: string, changedBy: string): void {
+  setIssueStatus(id: string, status: string, changedBy: string, capped: boolean): void {
     if (!this.db) throw new Error('Database not initialized');
     if (status !== 'open' && status !== 'closed') throw new BadRequestError("status must be 'open' or 'closed'");
     this.state.storage.transactionSync(() => {
       const issue = this.requireLiveIssue(id);
-      if (issue.created_by !== changedBy && !this.isMaintainer(changedBy)) {
+      if (issue.created_by !== changedBy && !this.isMaintainer(changedBy, capped)) {
         throw new ForbiddenError('only the issue creator or a maintainer may close or reopen it');
       }
       if (issue.status === status) return;
@@ -4446,13 +4823,13 @@ export class SpecDO {
    * `maintainers_only` issue takes comments from maintainers only (403 for anyone else); `open`
    * takes everyone's, and a `closed` issue still accepts comments. One transaction.
    */
-  createIssueComment(issueId: string, body: string, createdBy: string): IssueCommentResponse {
+  createIssueComment(issueId: string, body: string, createdBy: string, capped: boolean): IssueCommentResponse {
     if (!this.db) throw new Error('Database not initialized');
     if (typeof body !== 'string' || body.trim() === '') throw new BadRequestError('body must be a non-empty string');
     if (body.length > MAX_COMMENT_CHARS) throw new BadRequestError(`body must be at most ${MAX_COMMENT_CHARS} characters`);
     return this.state.storage.transactionSync(() => {
       const issue = this.requireLiveIssue(issueId);
-      if (issue.comment_policy !== 'open' && !this.isMaintainer(createdBy)) {
+      if (issue.comment_policy !== 'open' && !this.isMaintainer(createdBy, capped)) {
         throw new ForbiddenError(`issue is ${issue.comment_policy}: only maintainers may comment`);
       }
       const id = generateId();

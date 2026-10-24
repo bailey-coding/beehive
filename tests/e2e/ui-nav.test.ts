@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getConfig } from './config';
-import { createRequest, readJson } from './helpers';
+import { createRequest, ensureMaintainer, readJson } from './helpers';
 import { signSession } from '../../workers/api/ui';
 
 const config = getConfig();
@@ -80,14 +80,7 @@ describe.skipIf(!isLocal || !enabled)('Site navigation (local UI)', () => {
   }
 
   beforeAll(async () => {
-    const actors = await api('/api/actors?limit=1000');
-    const existing = (actors.json.data as { id: string; role?: string }[]).find((a) => a.role === 'maintainer');
-    if (existing) {
-      maintainer = existing.id;
-    } else {
-      maintainer = ((await api('/api/actors', 'POST', { type: 'human', name: 'e2e-ui-nav-maintainer' })).json.data as { id: string }).id;
-      expect((await api(`/api/admin/actors/${maintainer}/role`, 'POST', { role: 'maintainer' }, maintainer)).status).toBe(200);
-    }
+    maintainer = await ensureMaintainer(api, 'e2e-ui-nav-maintainer');
     creator = ((await api('/api/actors', 'POST', { type: 'human', name: 'e2e-ui-nav-creator' })).json.data as { id: string }).id;
     const session = await signSession({ login: 'e2e-ui-user', actorId: creator, exp: Math.floor(Date.now() / 1000) + 3600 }, config.apiToken);
     cookie = `__Host-beehive_session=${session}`;

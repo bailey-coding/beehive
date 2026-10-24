@@ -157,15 +157,8 @@ describe('SLO Monitoring', () => {
       // Create a SLOMonitor instance
       const slo = new SLOMonitor(mockEnv);
       
-      // Mock getMetric to return sample latencies
+      // Sample latencies; sort and calculate p95 manually
       const testLatencies = [100, 150, 200, 250, 300, 350, 400, 450, 500, 1500];
-      let callCount = 0;
-      vi.spyOn(slo as unknown as { getMetric: () => number }, 'getMetric').mockImplementation(() => {
-        return testLatencies[callCount++];
-      });
-      
-      // The actual implementation returns 0, so we test the logic here
-      // Sort and calculate p95 manually
       const sorted = [...testLatencies].sort((a, b) => a - b);
       const index = Math.ceil(sorted.length * 0.95) - 1;
       const p95 = sorted[index];

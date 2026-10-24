@@ -41,15 +41,33 @@ export interface RollbackTrigger {
   };
 }
 
-// SLO status
-export interface SLOStatus {
-  healthy: boolean;
+// Verdict for one live canary deployment (SLO loop, docs/M3-CANARY-SLO-PLAN.md)
+export interface DeploymentVerdict {
+  deploymentId: string;
+  candidateId: string;
+  specId: string;
+  autoRollback: boolean;
+  /** Where the samples came from. 'shadow' is mirrored traffic, not a canary SLO. */
+  source: 'shadow' | 'canary';
+  /**
+   * healthy: enough samples, within SLOs. violation: enough samples, an SLO broken.
+   * insufficient_data: fewer than the minimum requests, no verdict. unavailable: the metrics could not be
+   * read (old Spec DO, error), no verdict. Only 'violation' can lead to a rollback.
+   */
+  verdict: 'healthy' | 'violation' | 'insufficient_data' | 'unavailable';
   violations: RollbackTrigger[];
-  currentMetrics: {
-    latencyP95: number;
-    errorRate: number;
-    requestCount: number;
-  };
+  metrics?: { latencyP95: number | null; errorRate: number | null; requestCount: number };
+  detail?: string;
+}
+
+// SLO status of all live canaries
+export interface SLOStatus {
+  healthy: boolean; // no violation (insufficient/unavailable are not "violations", and not a clean bill of health either)
+  violations: RollbackTrigger[];
+  source: 'shadow' | 'canary';
+  windowMinutes: number;
+  minRequests: number;
+  deployments: DeploymentVerdict[];
 }
 
 // Canary deployment record (Spec DO canary_deployments; contract in shared/deploy-refs.ts)
@@ -72,4 +90,8 @@ export interface Env {
   API_AUTH_TOKEN?: string;
   CANARY_SLO_LATENCY_P95: string;
   CANARY_SLO_ERROR_RATE: string;
+  // Optional (SLO loop): defaults 50 requests, 15 minutes, source 'shadow'
+  CANARY_SLO_MIN_REQUESTS?: string;
+  CANARY_SLO_WINDOW_MINUTES?: string;
+  CANARY_SLO_SOURCE?: string;
 }
