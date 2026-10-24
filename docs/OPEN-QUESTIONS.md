@@ -791,7 +791,8 @@ Phase 0 of `docs/SANDBOX-BUILD-PLAN.md`, run by the maintainer-approved `wrangle
   Design consequence: pass the token only to the clone `exec`, and run the build in a separate `exec` without it. The repo, the
   token (expired anyway), the worker and its container application were deleted; the ten production workers were not touched.
   Not tried: the SDK 1.0 outbound handler that injects credentials per hostname.
-- **U1 not verified empirically; the docs say yes.** Production deploys are Workers Builds per worker (`docs/OPS.md`
+- **U1 VERIFIED later the same day (see "U1 result" below); the paragraph that follows is the earlier docs-only reasoning.**
+  **U1 was not verified empirically at this point; the docs said yes.** Production deploys are Workers Builds per worker (`docs/OPS.md`
   "Workers Builds watch paths"). Cloudflare documents that `wrangler deploy` in Workers Builds builds and publishes container
   images (only `wrangler versions upload`, the non-production default, does not). So a Dockerfile image should build on the
   push. The only real test is to deploy a Dockerfile-based worker through that flow, which deploys all ten; do it with the first
@@ -800,3 +801,18 @@ Phase 0 of `docs/SANDBOX-BUILD-PLAN.md`, run by the maintainer-approved `wrangle
 - **Constraint found in the docs:** Workers that implement Durable Objects (including Containers) get no version URLs
   and non-production Workers Builds runs create a version but do not roll out a new image, so the sandbox-runner must be
   deployed via the production branch's `wrangler deploy`, as today.
+
+### U1 result: the push deploy builds a Dockerfile image (2026-10-24)
+
+Pushing `35e8eec` to `cf` (which added `workers/sandbox-runner/Dockerfile`, a `[[containers]]` block with `image = "./Dockerfile"`,
+a `SANDBOX` Durable Object binding and migration `v1`) made Workers Builds run `wrangler deploy` for `beehive-sandbox-runner`:
+the worker redeployed at 18:56:28Z and container application `beehive-sandbox-runner-sandbox` appeared (`ready`, 0 instances) at
+18:56:46Z. `GET /sandbox/probe` (authenticated) then returned `{"success":true,"stdout":"v22.23.4\n0.25.0"}`: esbuild 0.25.0 is
+installed only by the Dockerfile's `RUN npm install -g esbuild@0.25.0`, so the image built in Workers Builds is the one running.
+No local Docker was involved. Sandbox SDK 1.0 (which needs a Dockerfile) is therefore deployable too.
+Two gotchas found on the way:
+- CI `npm run typecheck` resolves imports from the **root** `node_modules`: `@cloudflare/sandbox` had to be added to the root
+  `package.json` (a per-worker dependency alone fails with TS2307). vitest cannot load the SDK (`cloudflare:workers`), so tests
+  `vi.mock('@cloudflare/sandbox')`.
+- **Deleting `[triggers]` does not remove an existing cron.** After `35e8eec` the canary worker's `* * * * *` schedule kept firing
+  and every invocation threw "Handler does not export a scheduled() function" until `crons = []` is deployed (`3908e42`).
