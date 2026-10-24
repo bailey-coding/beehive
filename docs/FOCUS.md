@@ -21,15 +21,15 @@ Completed items are removed, not struck through; history lives in git.*
   `beehive-promotion-worker`, `-canary-worker` and `-shadow-router`); the Spec DO is on m8 after the empty legacy
   `service_accounts` table was dropped (`docs/OPEN-QUESTIONS.md` 2026-10-16); `bailey-coding` is the only
   maintainer; `scripts/prod-health.sh` passes.
-- M8 is on `main` but **not deployed** (2026-10-17): the Spec DO issue changes (atomic numbering, comment
+- M8 is on `main` and **deployed** (maintainer deploy of `main` at `831d9db`, 2026-10-24, not yet verified by an agent): the Spec DO issue changes (atomic numbering, comment
   rules, close/reopen, actor validation), the repo issue pages UI, and the CLI default actor
   (`BEEHIVE_ACTOR` / `defaultActor` / `--actor`, an admin stopgap until M12). Plan and reviews: `docs/M8-*.md`.
 - **M5a idempotency is merged and on `main`** (2026-10-19): queue-consumer idempotency fix implemented, idempotency
   keys moved from schema m9 to m10, legacy-shape migration tests added (production dump simulation for
   `service_accounts`, `actors`, `entity`, `promotion` tables), and the `agent/m5a-idempotency-fix` branch
   merged. See `docs/rfos/2026-10-14-migration-failures.md` for context.
-- M9 (site navigation) is **merged to `main`** (`agent/m9-nav` is 0 commits ahead, checked 2026-10-23); production deploy state unverified
-  (check `wrangler deployments list`). The independent code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
+- M9 (site navigation) is **merged to `main`** (`agent/m9-nav` is 0 commits ahead, checked 2026-10-23); **deployed** with the 2026-10-24
+  maintainer deploy of `main` at `831d9db` (not yet verified by an agent). The independent code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
   `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`. **Note:** schema m9 is now used by M5a idempotency
   (the idempotency keys table), so M12 references have been updated from m9 to m10.
 - Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
@@ -37,12 +37,12 @@ Completed items are removed, not struck through; history lives in git.*
   write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
 - Local checks on `main` (2026-10-23): typecheck clean, unit tests pass (excluding e2e); `tests/cli-behavior.test.ts` needs
   `npm ci` in `cli/` first. Last e2e run: 70 passed / 5 skipped / 0 failed on `agent/m9-nav` (2026-10-17, `E2E_UI=1`, `docs/SETUP.md`).
-- **Custom request types are merged** (PR #1, 2026-10-23, **not deployed**): branded request types in `workers/shared/principal.ts`
+- **Custom request types are merged** (PR #1, 2026-10-23, **deployed** 2026-10-24): branded request types in `workers/shared/principal.ts`
   (`AuthedRequest`, `ActorRequest`, `ReadRequest`, `WriteRequest`, `MaintainerRequest`), all 43 API handlers migrated,
   type-level tests in `principal.test-d.ts` (negative checks use `@ts-expect-error`). The brands are compile-time only and the scope
   wrappers re-check `principal.scopes`; `authorize()` stays the real enforcement. A master token without `X-Actor-ID` carries
   `'unknown'` and must still reach `/health` and bootstrap routes (fixed in `c2d4906`).
-- **Runtime validation in `authenticate()`** (2026-10-23, on `main`, **not deployed**): a master token's asserted `X-Actor-ID` must match
+- **Runtime validation in `authenticate()`** (2026-10-23, **deployed** 2026-10-24): a master token's asserted `X-Actor-ID` must match
   `ActorIdSchema` (1-128 printable ASCII, no spaces) or the request is a 400, logged as `master_actor_rejected` (no AE point,
   `docs/OPS.md`). The service and user verify-route bodies are parsed with zod (mismatch = 503, `found:false` = 401). The CLI rejects
   such an actor before sending. Cleanups landed the same day: `authGate` is now constant-time (async; a test requires every call to be
@@ -61,29 +61,29 @@ Completed items are removed, not struck through; history lives in git.*
    records the winner on a real candidate and fails the tournament when that is rejected, so a request naming a
    candidate the Spec DO does not know ends `failed`. That is intended. Verified in production 2026-10-18 with `scripts/prod-verify-promotion.sh`: a two-candidate tournament completed, the winner's stage is `passed_train`, the promotion mode was restored. It left a tombstoned `test-org-e2e-prodcheck-*` org (purge by prefix after `PURGE_MIN_AGE_HOURS`, `docs/OPS.md`).
 
-## Deploy M8 (needs the maintainer)
+## Post-deploy checks (maintainer deployed `main` at `831d9db` on 2026-10-24; none confirmed yet)
 
-1. **Push M8 to `cf`** (`git pull origin main && git push cf main`). The issue pages UI and the Spec DO change ship in the one `beehive`
-   worker, so there is no new-UI-on-old-DO window within the push. Then check: `scripts/prod-health.sh`, `wrangler deployments list`
-   shows a code deployment newer than the push for all ten workers, and a new issue through `/app/repos/<org>/<repo>/issues/new` gets
-   number 1 (production has no issues today).
-2. **Set `BEEHIVE_ACTOR` (or `defaultActor`) for CLI admin use** to a real maintainer actor id, or `issue create` and the other
-   ledger writes answer 403 (`docs/OPS.md` "CLI actor attribution").
-3. Defect 11 (a Spec DO catch-all 404 reads as "not found") stays open on purpose, pinned by a test.
+One push deployed all ten workers at once, covering M8, M9, M12 PR-B, custom request types, the auth hardening and the
+cleanups. Confirm, in this order:
+
+1. `scripts/prod-health.sh` passes, and `wrangler deployments list` shows a code deployment newer than the push for all ten
+   workers. The Spec DO migrates to schema `m10` on its first request (`init()`); a failed migration rethrows and is a full outage.
+2. A new issue through `/app/repos/<org>/<repo>/issues/new` gets number 1 (production had no issues). Click through `/app`:
+   navbar on each page type, org switcher, one flash after creating an org, sign-out (manual checklist: `docs/M9-NAV-PLAN.md`
+   section 5). Rollback is a normal revert push.
+3. Set `BEEHIVE_ACTOR` (or `defaultActor`) for CLI admin use to a real maintainer actor id, or `issue create` and the other
+   ledger writes answer 403 (`docs/OPS.md` "CLI actor attribution"). The CLI now rejects an actor with spaces or over 128
+   characters before sending, and the edge answers such a master `X-Actor-ID` with 400.
+4. Master requests without `X-Actor-ID` (`/health`, bootstrap) still work, and `master_actor_rejected` lines appear in Workers
+   Logs only for malformed ids.
+5. Defect 11 (a Spec DO catch-all 404 reads as "not found") stays open on purpose, pinned by a test.
    Details: `docs/OPEN-QUESTIONS.md` 2026-10-17 (review of `39a2669`, with corrections).
-
-## Deploy M9 (needs the maintainer; the L9 review and merge are done)
-
-One `beehive` worker change, UI only: `git pull origin main && git push cf main` (together with M8 if that is still undeployed).
-Then check `scripts/prod-health.sh` and click through `/app` (navbar on each page type, org switcher, one flash after
-creating an org, sign-out). Rollback is a normal revert push. The manual visual checklist (360/640/960px wrap, focus ring,
-`details` open, skip link on focus, `#search` kept by the GET form) is in `docs/M9-NAV-PLAN.md` section 5.
 
 ## M12 verified identity (plan: `docs/M12-IMPL-PLAN.md`)
 
 - PR-0 and push A are live (rollback floor `8de5485`, `docs/OPS.md`). PR-B (T2-T6d: user tokens, the
-  settings page, the master stage-1 log) is **merged to `main`** (`99fc4e2`; `agent/m12-pr-b` is 0 commits ahead, checked 2026-10-23), deploy state
-  unverified. Its user-token table landed as schema `m9` (the idempotency keys moved to `m10`, see above). Deploy steps: `docs/OPS.md` "User tokens" (push B deploy checks) and the plan, section 3.
+  settings page, the master stage-1 log) is **merged to `main`** (`99fc4e2`; `agent/m12-pr-b` is 0 commits ahead, checked 2026-10-23) and deployed
+  2026-10-24 (above). Its user-token table landed as schema `m9` (the idempotency keys moved to `m10`, see above). Deploy steps: `docs/OPS.md` "User tokens" (push B deploy checks) and the plan, section 3.
 - Next: PR-C (T7, CLI token support and the "CLI actor attribution" rewrite), then PR-D1/PR-D2 (T8/T9,
   `SESSION_SIGNING_KEY`).
 - **Verify assumption A4** (task): open one `beehive` invocation log for an authenticated `/api/*` request and one
