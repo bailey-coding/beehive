@@ -7,9 +7,14 @@
 
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 
-// The SDK imports `cloudflare:workers`, which node cannot load; the container itself is never started here.
-const exec = vi.fn();
-vi.mock('@cloudflare/sandbox', () => ({ getSandbox: vi.fn(() => ({ exec })), Sandbox: class {} }));
+// `cloudflare:workers` cannot be loaded by node; the container itself is never started here.
+vi.mock('cloudflare:workers', () => ({
+  DurableObject: class { constructor(public ctx: unknown, public env: unknown) {} },
+  WorkerEntrypoint: class { constructor(public ctx: unknown, public env: unknown) {} },
+}));
+const probe = vi.fn();
+const build = vi.fn();
+const getByName = vi.fn(() => ({ probe, build }));
 
 // Mock the fetch handler
 import handler from '../index';
@@ -41,7 +46,7 @@ const mockEnv = {
     get: vi.fn(),
   },
   ARTIFACTS: {},
-  SANDBOX: {},
+  SANDBOX: { getByName },
   API_AUTH_TOKEN: 'test-auth-token',
 };
 
@@ -356,16 +361,16 @@ describe('Sandbox Utilities', () => {
 });
 
 describe('GET /sandbox/probe', () => {
-  it('runs the tool versions in the build container and reports the result', async () => {
-    exec.mockResolvedValueOnce({ exitCode: 0, stdout: 'v22.23.4\n0.25.0\n', stderr: '' });
+  it('reports the tool versions of the build image', async () => {
+    probe.mockResolvedValueOnce({ exitCode: 0, stdout: 'v24\n0.25.0\ngit 2.47\n', stderr: '' });
     const res = await callHandler('/sandbox/probe');
     expect(res.status).toBe(200);
-    expect(await readJson(res)).toMatchObject({ success: true, stdout: 'v22.23.4\n0.25.0\n' });
-    expect(exec).toHaveBeenCalledWith('node --version; esbuild --version');
+    expect(await readJson(res)).toMatchObject({ success: true, stdout: 'v24\n0.25.0\ngit 2.47\n' });
+    expect(getByName).toHaveBeenCalledWith('probe');
   });
 
   it('answers 502 with the error when the container cannot start', async () => {
-    exec.mockRejectedValueOnce(new Error('no container'));
+    probe.mockRejectedValueOnce(new Error('no container'));
     const res = await callHandler('/sandbox/probe');
     expect(res.status).toBe(502);
     expect(await readJson(res)).toMatchObject({ success: false, error: 'no container' });
@@ -377,3 +382,56 @@ describe('GET /sandbox/probe', () => {
   });
 });
 
+describe('POST /sandbox/build', () => {
+  const sha = 'a'.repeat(40);
+  const bundle = { mainModule: 'index.js', modules: [{ name: 'index.js', content: 'x' }], compatibilityDate: '2026-10-01', source: 'esbuild' };
+
+  it('builds in a sandbox keyed by repo and short commit and returns the bundle', async () => {
+    build.mockResolvedValueOnce(bundle);
+    const res = await callHandler('/sandbox/build', 'POST', { repo: 'cand-1', commitSha: sha });
+    expect(res.status).toBe(200);
+    expect(await readJson(res)).toEqual({ success: true, bundle });
+    expect(getByName).toHaveBeenCalledWith(`build-cand-1-${'a'.repeat(8)}`);
+    expect(build).toHaveBeenCalledWith({ repo: 'cand-1', commitSha: sha });
+  });
+
+  it('rejects a repo or commit that is not well formed before any container work', async () => {
+    getByName.mockClear();
+    for (const body of [{ repo: '../x', commitSha: sha }, { repo: 'ok', commitSha: 'abc' }, {}]) {
+      const res = await callHandler('/sandbox/build', 'POST', body);
+      expect(res.status).toBe(400);
+      expect(await readJson(res)).toMatchObject({ success: false, code: 'BAD_REQUEST' });
+    }
+    expect(getByName).not.toHaveBeenCalled();
+  });
+
+  it('recovers the build error code from an RPC error and maps it to a status', async () => {
+    build.mockRejectedValueOnce(new Error('NO_ENTRY: the commit has neither dist/index.js nor src/index.ts'));
+    const res = await callHandler('/sandbox/build', 'POST', { repo: 'cand-1', commitSha: sha });
+    expect(res.status).toBe(422);
+    expect(await readJson(res)).toMatchObject({ success: false, code: 'NO_ENTRY' });
+  });
+
+  it('answers 502 for an unknown failure', async () => {
+    build.mockRejectedValueOnce(new Error('container exploded'));
+    const res = await callHandler('/sandbox/build', 'POST', { repo: 'cand-1', commitSha: sha });
+    expect(res.status).toBe(502);
+  });
+
+  it('returns a fixed bundle in stub mode only together with BEEHIVE_LOCAL_DEV=1', async () => {
+    getByName.mockClear();
+    const body = { repo: 'cand-1', commitSha: sha };
+    const stubbed = await handler.fetch(
+      createRequest('/sandbox/build', 'POST', body, { Authorization: 'Bearer test-auth-token' }),
+      { ...mockEnv, SANDBOX_MODE: 'stub', BEEHIVE_LOCAL_DEV: '1' } as never, mockCtx as never
+    );
+    expect((await readJson(stubbed)).bundle).toMatchObject({ mainModule: 'index.js' });
+    expect(getByName).not.toHaveBeenCalled();
+    build.mockResolvedValueOnce(bundle);
+    await handler.fetch(
+      createRequest('/sandbox/build', 'POST', body, { Authorization: 'Bearer test-auth-token' }),
+      { ...mockEnv, SANDBOX_MODE: 'stub' } as never, mockCtx as never // no BEEHIVE_LOCAL_DEV: the real path
+    );
+    expect(getByName).toHaveBeenCalled();
+  });
+});

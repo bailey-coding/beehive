@@ -12,16 +12,24 @@
  */
 
 
-import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { authGate } from '../shared/auth';
+import { parseBuildError, validateBuildRequest, type BuildErrorCode, type BuildResult, type BuildSandbox } from './build-sandbox';
 
-// The Sandbox Durable Object class must be exported from the entry module (wrangler.toml [[containers]]).
-export { Sandbox } from '@cloudflare/sandbox';
+// The Durable Object class (wrangler.toml [[containers]] / [exports]) and the outbound entrypoint it uses
+// (`ctx.exports.ArtifactsGateway`) must be exported from the entry module.
+export { BuildSandbox, ArtifactsGateway } from './build-sandbox';
+
+// Not exported: workerd treats every named export of this module as an entrypoint, and a plain object is not one.
+const BUILD_ERROR_STATUS: Record<BuildErrorCode, number> = {
+  BAD_REQUEST: 400, NOT_CONFIGURED: 503, CLONE_FAILED: 502, NO_ENTRY: 422, BUILD_FAILED: 422, TOO_LARGE: 413,
+};
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
   ARTIFACTS: unknown; // Cloudflare Artifacts binding
-  SANDBOX: DurableObjectNamespace<Sandbox>; // Sandbox SDK 0.x container (Dockerfile in this directory)
+  SANDBOX: DurableObjectNamespace<BuildSandbox>; // build container (Dockerfile in this directory)
+  BEEHIVE_LOCAL_DEV?: string;
+  SANDBOX_MODE?: string;
   API_AUTH_TOKEN?: string;
 }
 
@@ -85,14 +93,44 @@ export default {
       });
     }
 
-    // GET /sandbox/probe - Run tool versions in the build container (deploy check: proves the Dockerfile
-    // image built by Workers Builds is the one running, esbuild comes from the Dockerfile). Authenticated above.
+    // GET /sandbox/probe - Tool versions of the build image (deploy check: proves the Dockerfile image built by
+    // Workers Builds is the one running). Authenticated above.
     if (path === '/sandbox/probe' && method === 'GET') {
       try {
-        const sandbox = getSandbox(env.SANDBOX, 'probe');
-        const r = await sandbox.exec('node --version; esbuild --version');
+        const r = await env.SANDBOX.getByName('probe').probe();
         return Response.json({ success: r.exitCode === 0, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode });
       } catch (error) {
+        return Response.json({ success: false, error: error instanceof Error ? error.message : String(error) }, { status: 502 });
+      }
+    }
+
+    // POST /sandbox/build { repo, commitSha } - Build a candidate commit into a Worker bundle (CandidateBundle shape of
+    // workers/preview-manager/versions.ts). Local e2e: SANDBOX_MODE=stub with BEEHIVE_LOCAL_DEV=1 returns a fixed bundle.
+    if (path === '/sandbox/build' && method === 'POST') {
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+      }
+      try {
+        const input = validateBuildRequest(raw);
+        if (env.SANDBOX_MODE === 'stub' && env.BEEHIVE_LOCAL_DEV === '1') {
+          const stub: BuildResult = {
+            mainModule: 'index.js',
+            modules: [{ name: 'index.js', content: 'export default { fetch: () => new Response("stub candidate") };\n' }],
+            compatibilityDate: '2026-10-01',
+            source: 'prebuilt',
+          };
+          return Response.json({ success: true, bundle: stub });
+        }
+        // One sandbox per (repo, commit): a repeat build of the same commit serializes on the same Durable Object.
+        const bundle = await env.SANDBOX.getByName(`build-${input.repo}-${input.commitSha.slice(0, 8)}`).build(input);
+        return Response.json({ success: true, bundle });
+      } catch (error) {
+        // Also covers errors thrown inside the Durable Object, which arrive over RPC as plain Errors.
+        const known = parseBuildError(error);
+        if (known) return Response.json({ success: false, code: known.code, error: known.message }, { status: BUILD_ERROR_STATUS[known.code] });
         return Response.json({ success: false, error: error instanceof Error ? error.message : String(error) }, { status: 502 });
       }
     }
