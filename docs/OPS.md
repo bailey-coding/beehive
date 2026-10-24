@@ -400,10 +400,13 @@ rolls back the ones in violation. Plan and reasoning: `docs/M3-CANARY-SLO-PLAN.m
   chain stops; the first request after a restart re-arms if one is live). `beehive-canary-worker` consumes the queue and
   runs the same cycle as the cron, which stays as a fallback. **Create the queue before the deploy push**
   (`wrangler queues create canary-slo-ticks`, human step): both the producer binding in the root `wrangler.toml` and the
-  consumer need it to exist. Because Production canary deploys answer 501 (above), no canary ref is written in prod, so
+  consumer need it to exist. **If it does not, the deploy of the root `beehive` worker (ledger and API) fails, not just this
+  feature.** Because Production canary deploys answer 501 (above), no canary ref is written in prod, so
   **the alarm will not fire there until a Versions client exists**; the cron is the only trigger until then. Mixed
   versions: an old DO sends no ticks (cron covers); an old canary worker never reads the queue (messages expire). A
-  failed send is logged and the alarm re-arms anyway. Log line to look for: `canary_slo_cycle` from the queue path.
+  failed send is logged and the alarm re-arms anyway; if the alarm itself fails before a live canary is confirmed it does not
+  re-arm. Rolling back to a commit without `alarm()` leaves any pending alarm firing into a class with no handler; the runtime
+  retries then drops it (harmless, noisy). Log line to look for: `canary_slo_cycle` from the queue path.
 - **Turn it off:** remove the `[triggers]` section and redeploy (and the queue consumer/producer for the alarm path), or set a canary's switch with
   `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
 

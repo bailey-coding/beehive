@@ -3230,9 +3230,11 @@ export class SpecDO {
    * live nothing is re-armed, so the chain stops. Never throws (a throw would make the runtime retry with backoff).
    */
   async alarm(): Promise<void> {
+    let live = false;
     try {
       if (!this.db) await this.init();
       if (this.liveRefs('canary').length === 0) return;
+      live = true;
       try {
         await this.env.CANARY_SLO_TICKS?.send({ type: 'canary-slo-tick', at: now() });
       } catch (e) {
@@ -3241,8 +3243,9 @@ export class SpecDO {
       await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS);
     } catch (e) {
       console.error('[SpecDO] canary alarm failed:', e instanceof Error ? e.message : String(e));
-      // Best effort to keep the chain alive; the next request also re-arms
-      try { await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS); } catch { /* ignore */ }
+      // Keep the chain alive only if a canary was known to be live; a persistent init/read failure must not
+      // re-arm forever. The next request or canary deploy re-arms otherwise.
+      if (live) { try { await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS); } catch { /* ignore */ } }
     }
   }
 

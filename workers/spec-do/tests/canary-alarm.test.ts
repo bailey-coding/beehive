@@ -84,10 +84,20 @@ describe('arming', () => {
   it('a storage error while arming never fails the request', async () => {
     (store.state as any).storage.getAlarm = async () => { throw new Error('boom'); };
     expect((await deployCanary()).status).toBe(201);
+    expect(store.alarm.at).toBeNull();
   });
 });
 
 describe('alarm()', () => {
+  it('does not re-arm when reading the live refs fails (no endless chain while idle)', async () => {
+    await deployCanary();
+    store.alarm.at = null;
+    vi.spyOn(spec, 'liveRefs').mockImplementation(() => { throw new Error('schema'); });
+    await spec.alarm();
+    expect(sent).toHaveLength(0);
+    expect(store.alarm.at).toBeNull();
+  });
+
   it('sends one tick and re-arms while a canary is live', async () => {
     await deployCanary();
     vi.setSystemTime(1_060_000);

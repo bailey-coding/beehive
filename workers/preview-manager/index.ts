@@ -13,7 +13,7 @@
 import { authGate } from '../shared/auth';
 import { WorkersBuildsClient } from './builds';
 import { ArtifactsClient } from './artifacts';
-import { workerVersionsClientFor } from './versions';
+import { workerNameError, workerVersionsClientFor } from './versions';
 import { CanaryVersionRequestSchema } from './types';
 import type {
   PreviewManagerEnv,
@@ -300,6 +300,8 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
     }
 
     const workerName = `${PREVIEW_WORKER_PREFIX}${candidateId}`;
+    const nameError = versions.kind === 'api' ? workerNameError(workerName) : null;
+    if (nameError) return json({ success: false, error: `Candidate id cannot be a Worker name: ${nameError}` }, 400);
     const commitSha = candidate?.commitSha ?? parsed.data.commitSha ?? null;
     const version = await versions.createVersion({ workerName, candidateId, commitSha });
     return json({

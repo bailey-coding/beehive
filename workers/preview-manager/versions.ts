@@ -81,6 +81,13 @@ interface CfEnvelope<T> {
   errors?: Array<{ code: number; message: string }>;
 }
 
+/** Why `name` cannot be a candidate Worker (safe path segment, fits the version URL label), or null if it can. */
+export function workerNameError(name: string): string | null {
+  if (!/^[a-z0-9-]+$/.test(name)) return `Invalid Worker name: ${name}`;
+  if (name.length + 9 > MAX_LABEL) return `Worker name too long for a version URL label: ${name}`;
+  return null;
+}
+
 class CfApiError extends Error {
   constructor(readonly status: number, readonly codes: number[], message: string) {
     super(message);
@@ -103,8 +110,8 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
   ) {}
 
   async createVersion(input: CanaryVersionInput): Promise<CanaryVersion> {
-    if (!/^[a-z0-9-]+$/.test(input.workerName)) throw new Error(`Invalid Worker name: ${input.workerName}`);
-    if (input.workerName.length + 9 > MAX_LABEL) throw new Error(`Worker name too long for a version URL label: ${input.workerName}`);
+    const nameError = workerNameError(input.workerName);
+    if (nameError) throw new Error(nameError);
     const bundle = await this.cfg.bundle(input);
     const script = `/accounts/${this.cfg.accountId}/workers/scripts/${input.workerName}`;
     const annotations: Record<string, string> = { 'workers/tag': input.candidateId.slice(0, 100) };
@@ -113,15 +120,17 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
     let versionId: string;
     try {
       const res = await this.call<{ id: string }>('POST', `${script}/versions`, this.form(bundle, annotations));
-      versionId = res.id;
+      versionId = toUuid(res.id);
     } catch (error) {
       if (!(error instanceof CfApiError) || !error.codes.includes(WORKER_NOT_FOUND)) throw error;
       // First upload: creates the Worker, version 1 and a 100% deployment. The result's
       // `deployment_id` is that version's id as undashed hex.
       const res = await this.call<{ deployment_id: string }>('PUT', script, this.form(bundle, annotations));
       versionId = toUuid(res.deployment_id);
-      await this.call('POST', `${script}/subdomain`, JSON.stringify({ enabled: true, previews_enabled: true }));
     }
+    // Every call, not only the first: if the first call's subdomain step failed after the script upload, the
+    // Worker exists and the next call takes the version path; the POST is idempotent.
+    await this.call('POST', `${script}/subdomain`, JSON.stringify({ enabled: true, previews_enabled: true }));
     return { versionId, url: `https://${versionId.slice(0, 8)}-${input.workerName}.${this.cfg.subdomain}.workers.dev` };
   }
 
@@ -130,6 +139,12 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
    * 0.01..100 per version). Not used by the ref-driven canary path; here for completeness.
    */
   async setDeployment(workerName: string, versions: DeploymentVersion[]): Promise<string> {
+    const nameError = workerNameError(workerName);
+    if (nameError) throw new Error(nameError);
+    if (versions.length === 0 || versions.some((v) => !(v.percentage >= 0.01 && v.percentage <= 100))) {
+      throw new Error('Each version needs a percentage between 0.01 and 100 (a 0% entry is rejected, code 10210)');
+    }
+    if (Math.abs(versions.reduce((n, v) => n + v.percentage, 0) - 100) > 1e-6) throw new Error('Version percentages must total 100');
     const body = JSON.stringify({
       strategy: 'percentage',
       versions: versions.map((v) => ({ version_id: v.versionId, percentage: v.percentage })),
@@ -169,7 +184,8 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
   }
 }
 
-function toUuid(id: string): string {
+function toUuid(id: unknown): string {
+  if (typeof id !== 'string') throw new Error(`Unexpected version id from Cloudflare: ${String(id)}`);
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return id;
   if (!/^[0-9a-f]{32}$/.test(id)) throw new Error(`Unexpected version id from Cloudflare: ${id}`);
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;

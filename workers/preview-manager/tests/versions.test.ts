@@ -15,10 +15,10 @@ const client = (fetchFn: any) => new ApiWorkerVersionsClient({ accountId: 'acct1
 
 describe('ApiWorkerVersionsClient', () => {
   it('uploads a version to the candidate Worker and builds the version URL from the id prefix', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(ok({ id: V, number: 2 }));
+    const fetchFn = vi.fn().mockResolvedValueOnce(ok({ id: V, number: 2 })).mockResolvedValueOnce(ok({ enabled: true }));
     const v = await client(fetchFn).createVersion(input);
     expect(v).toEqual({ versionId: V, url: 'https://1496f34f-beehive-candidate-c1.sub.workers.dev' });
-    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(fetchFn).toHaveBeenCalledTimes(2); // version upload, then the idempotent subdomain enable
     const [url, init] = fetchFn.mock.calls[0];
     expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acct1/workers/scripts/beehive-candidate-c1/versions');
     expect(init.method).toBe('POST');
@@ -84,5 +84,32 @@ describe('workerVersionsClientFor', () => {
   it('stub still needs BEEHIVE_LOCAL_DEV=1', () => {
     expect(workerVersionsClientFor({ WORKER_VERSIONS_MODE: 'stub' })).toBeNull();
     expect(workerVersionsClientFor({ WORKER_VERSIONS_MODE: 'stub', BEEHIVE_LOCAL_DEV: '1' })?.kind).toBe('stub');
+  });
+
+  it('retries the subdomain enable on the next call when it failed after the first upload', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(fail(404, 10007, 'no worker'))
+      .mockResolvedValueOnce(ok({ deployment_id: V.replaceAll('-', '') }))
+      .mockResolvedValueOnce(fail(500, 1000, 'boom')) // subdomain step fails: Worker now exists
+      .mockResolvedValueOnce(ok({ id: V }))
+      .mockResolvedValueOnce(ok({ enabled: true }));
+    await expect(client(fetchFn).createVersion(input)).rejects.toThrow(/HTTP 500/);
+    await client(fetchFn).createVersion(input);
+    expect(fetchFn.mock.calls[4][0]).toMatch(/\/subdomain$/);
+  });
+
+  it('rejects a malformed version id from either path', async () => {
+    await expect(client(vi.fn().mockResolvedValue(ok({ number: 2 }))).createVersion(input)).rejects.toThrow(/Unexpected version id/);
+    await expect(client(vi.fn().mockResolvedValue(ok({ id: 'not-a-uuid' }))).createVersion(input)).rejects.toThrow(/Unexpected version id/);
+  });
+
+  it('setDeployment validates locally: name, per-version range, total of 100', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(ok({ id: 'dep1' }));
+    const c = client(fetchFn);
+    await expect(c.setDeployment('../x', [{ versionId: V, percentage: 100 }])).rejects.toThrow(/Invalid Worker name/);
+    await expect(c.setDeployment('beehive-candidate-c1', [{ versionId: V, percentage: 100 }, { versionId: V, percentage: 0 }])).rejects.toThrow(/0.01/);
+    await expect(c.setDeployment('beehive-candidate-c1', [{ versionId: V, percentage: 60 }, { versionId: V, percentage: 30 }])).rejects.toThrow(/total 100/);
+    expect(fetchFn).not.toHaveBeenCalled();
+    await expect(c.setDeployment('beehive-candidate-c1', [{ versionId: V, percentage: 99.5 }, { versionId: V, percentage: 0.5 }])).resolves.toBe('dep1');
   });
 });
