@@ -49,6 +49,7 @@ describe('ApiWorkerVersionsClient', () => {
     expect(limited).toHaveBeenCalledTimes(1);
     const denied = vi.fn().mockResolvedValue(fail(403, 10000, 'Authentication error'));
     await expect(client(denied).createVersion(input)).rejects.toThrow(/HTTP 403.*10000/);
+    await expect(client(denied).createVersion(input)).rejects.not.toThrow(/tok\b/); // the API token never reaches an error message
     const emptyOk = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     await expect(client(emptyOk).createVersion(input)).rejects.toThrow(/Cloudflare API/);
   });

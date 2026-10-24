@@ -278,7 +278,7 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
   if (!versions) {
     return json({
       success: false,
-      error: 'Workers Versions client not implemented (unverified API, docs/OPEN-QUESTIONS.md); the local stub needs WORKER_VERSIONS_MODE=stub and BEEHIVE_LOCAL_DEV=1 (scripts/start-e2e-workers.sh)',
+      error: 'Workers Versions client not enabled (the api client is not wired in production, docs/OPEN-QUESTIONS.md); the local stub needs WORKER_VERSIONS_MODE=stub and BEEHIVE_LOCAL_DEV=1 (scripts/start-e2e-workers.sh)',
     }, 501);
   }
 
