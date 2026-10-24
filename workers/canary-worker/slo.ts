@@ -1,5 +1,30 @@
 import { SLOStatus, RollbackTrigger, Env } from './types';
 
+export const DEFAULT_SLO_LATENCY_P95_MS = 1000;
+export const DEFAULT_SLO_ERROR_RATE = 0.01;
+
+function numberVar(name: string, raw: string | undefined, fallback: number, ok: (n: number) => boolean): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !ok(n)) throw new Error(`Invalid ${name}: ${JSON.stringify(raw)}`);
+  return n;
+}
+
+/**
+ * SLO thresholds from the environment. Unset or blank takes the default (the wrangler.toml values);
+ * a value that is set but unusable throws, so there is no verdict and no rollback. It must never
+ * degrade to NaN: `x > NaN` is false, which reads as "healthy" (fail open).
+ */
+export function sloThresholds(env: Pick<Env, 'CANARY_SLO_LATENCY_P95' | 'CANARY_SLO_ERROR_RATE'>): {
+  latencyP95: number;
+  errorRate: number;
+} {
+  return {
+    latencyP95: numberVar('CANARY_SLO_LATENCY_P95', env.CANARY_SLO_LATENCY_P95, DEFAULT_SLO_LATENCY_P95_MS, (n) => n > 0),
+    errorRate: numberVar('CANARY_SLO_ERROR_RATE', env.CANARY_SLO_ERROR_RATE, DEFAULT_SLO_ERROR_RATE, (n) => n > 0 && n <= 1),
+  };
+}
+
 export class SLOMonitor {
   private env: Env;
 
@@ -31,8 +56,7 @@ export class SLOMonitor {
     const requestCount = await this.getMetric('request_count');
 
     // Get SLO thresholds from environment
-    const latencyThreshold = parseInt(this.env.CANARY_SLO_LATENCY_P95);
-    const errorRateThreshold = parseFloat(this.env.CANARY_SLO_ERROR_RATE);
+    const { latencyP95: latencyThreshold, errorRate: errorRateThreshold } = sloThresholds(this.env);
 
     // Check for violations
     const violations: RollbackTrigger[] = [];
