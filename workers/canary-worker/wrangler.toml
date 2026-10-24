@@ -15,10 +15,6 @@ CANARY_SLO_MIN_REQUESTS = "50"
 CANARY_SLO_WINDOW_MINUTES = "15"
 CANARY_SLO_SOURCE = "shadow"
 
-# One SLO pass per minute over every live canary (rolls back violators with auto-rollback on)
-[triggers]
-crons = ["* * * * *"]
-
 # Durable Object binding for Spec DO (cross-script)
 [[durable_objects.bindings]]
 name = "SPEC_DO"
@@ -41,7 +37,7 @@ queue = "canary-rollback-triggers"
 max_batch_size = 100
 max_batch_timeout = 30
 
-# SLO ticks from the Spec DO alarm (docs/M3-CANARY-SLO-PLAN.md); the cron above stays as a fallback
+# SLO ticks from the Spec DO alarm (docs/M3-CANARY-SLO-PLAN.md); the only trigger of the SLO loop
 [[queues.consumers]]
 queue = "canary-slo-ticks"
 max_batch_size = 10

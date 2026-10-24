@@ -132,20 +132,20 @@ cleanups. Confirm, in this order:
 - **README drift — FIXED:** `tests/e2e/README.md` updated to match `docs/SETUP.md` (local e2e makes real HTTP
   calls, no mocks) (`54808ae`, `30eb73`, `bc155e0`, 2026-10-19).
 - **M3 canary SLO loop deployed** (2026-10-24, schema `m11`; plan `docs/M3-CANARY-SLO-PLAN.md`, runbook
-  `docs/OPS.md` "Canary SLO loop"): the shadow router posts per-deployment, per-minute samples to the Spec DO; a minute cron on the
-  canary worker evaluates each live canary and rolls back violators. **The input is shadow data** (`source = 'shadow'`), not canary
+  `docs/OPS.md` "Canary SLO loop"): the shadow router posts per-deployment, per-minute samples to the Spec DO; the canary worker evaluates each live
+  canary on a Spec DO alarm tick and rolls back violators (the minute cron was removed 2026-10-24). **The input is shadow data** (`source = 'shadow'`), not canary
   traffic. Deployed with `fe495d3`: `prod-health.sh` passed (all ten workers and the Spec DO, so the `m10 -> m11` migration ran), canary and shadow-router deployments 07:21-07:22Z. Cron confirmed firing (`canary_slo_cycle`, `source: shadow`, `checked: 0`, outcome ok, tailed 2026-10-24).
 - **Event-driven tick deployed** (2026-10-24, `7e17125`): the Spec DO arms a 60 s alarm on a canary deploy and sends one tick per
-  firing to queue `canary-slo-ticks` while a canary is live; the canary worker consumes it and runs the cron's cycle (cron kept as
-  fallback). Queue created by hand before the push (1 producer, 1 consumer). Not yet exercised: canary deploys answer 501 in
-  prod, so no alarm arms until the Versions client is wired in.
+  firing to queue `canary-slo-ticks` while a canary is live; the canary worker consumes it and runs one SLO cycle per batch. The cron was removed
+  2026-10-24, so the tick is the only trigger. Queue created by hand before the push (1 producer, 1 consumer). **Consequence:**
+  canary deploys answer 501 in prod, so no alarm arms and the SLO loop does not run there until the Versions client is wired in.
 - **Workers Versions API verified; client built, not wired** (2026-10-24, `140e629`, `docs/OPEN-QUESTIONS.md`):
   `ApiWorkerVersionsClient` behind `WORKER_VERSIONS_MODE=api`, only mocked-fetch tested. To wire (human): pass a
   `CandidateBundleSource` to `workerVersionsClientFor` (`workers/preview-manager/index.ts`), set `WORKER_VERSIONS_MODE=api`,
   `CLOUDFLARE_API_TOKEN`, `WORKERS_SUBDOMAIN`; handle `versionsClient: 'api'` in the response; clean up `beehive-candidate-*`
   Workers on purge. Candidates must be stateless (no version URLs for DO/Container/Sandbox Workers). Unverified: 429 behavior,
   bindings, switch propagation bound, the source of the built bundle.
-- **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; the canary SLO loop now runs from a cron
+- **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; the canary SLO loop runs from the alarm tick
   (shadow data only, see above); no producer for `canary-rollback-triggers` (the consumer stays) or
   `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
   config, not an SDK integration. Production canary deploys answer 501 until a real Workers Versions

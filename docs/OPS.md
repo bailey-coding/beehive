@@ -369,8 +369,9 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
 
 ### Canary SLO loop (m11, M3)
 
-A cron on `beehive-canary-worker` (`[triggers] crons = ["* * * * *"]`) evaluates every live canary once a minute and
-rolls back the ones in violation. Plan and reasoning: `docs/M3-CANARY-SLO-PLAN.md`.
+`beehive-canary-worker` evaluates every live canary on each tick from the Spec DO alarm (queue `canary-slo-ticks`, see
+"Event-driven tick" below) and rolls back the ones in violation. There is no cron (removed 2026-10-24). Plan and reasoning:
+`docs/M3-CANARY-SLO-PLAN.md`.
 
 - **Data:** the shadow router aggregates each mirrored candidate result per (deployment, minute) and posts batches to
   the Spec DO (`POST /canary-metrics`, table `canary_metrics`, migration `m10 -> m11`, additive). Rows older than 24 h are
@@ -392,22 +393,23 @@ rolls back the ones in violation. Plan and reasoning: `docs/M3-CANARY-SLO-PLAN.m
 - **Logs:** one `canary_slo_cycle` JSON line per tick (`checked`, `rolledBack`, `alreadyHandled`, `skipped`, `errors`).
   A rollback answering 404/409 means it already happened and is not an error.
 - **Mixed versions / rollback of the deploy:** a new router with an older Spec DO logs `canary metrics not recorded ... 404`
-  and carries on; an older router records nothing, so the loop sees `insufficient_data`; a new cron with an older DO sees
+  and carries on; an older router records nothing, so the loop sees `insufficient_data`; a new canary worker with an older DO sees
   `unavailable` and never rolls back. Redeploying the previous commit leaves `canary_metrics` idle (the rollback floor
   skips the newer schema version).
 - **Event-driven tick:** the Spec DO (in the `beehive` worker) arms an alarm 60 s after a canary deploy; each firing,
   while a canary head is live, sends one message to queue `canary-slo-ticks` and re-arms (no live canary: no re-arm, the
   chain stops; the first request after a restart re-arms if one is live). `beehive-canary-worker` consumes the queue and
-  runs the same cycle as the cron, which stays as a fallback. **Create the queue before the deploy push**
+  runs one SLO cycle per batch. It is the only trigger: the minute cron was removed 2026-10-24. **Create the queue before the deploy push**
   (`wrangler queues create canary-slo-ticks`, human step): both the producer binding in the root `wrangler.toml` and the
   consumer need it to exist. **If it does not, the deploy of the root `beehive` worker (ledger and API) fails, not just this
   feature.** Because Production canary deploys answer 501 (above), no canary ref is written in prod, so
-  **the alarm will not fire there until a Versions client exists**; the cron is the only trigger until then. Mixed
-  versions: an old DO sends no ticks (cron covers); an old canary worker never reads the queue (messages expire). A
+  **the alarm will not fire there until a Versions client exists, so the SLO loop does not run in prod until then**
+  (no canary exists to evaluate or roll back). Mixed versions: an old DO sends no ticks, so nothing evaluates until
+  the new DO is live; an old canary worker never reads the queue (messages expire). A
   failed send is logged and the alarm re-arms anyway; if the alarm itself fails before a live canary is confirmed it does not
   re-arm. Rolling back to a commit without `alarm()` leaves any pending alarm firing into a class with no handler; the runtime
   retries then drops it (harmless, noisy). Log line to look for: `canary_slo_cycle` from the queue path.
-- **Turn it off:** remove the `[triggers]` section and redeploy (and the queue consumer/producer for the alarm path), or set a canary's switch with
+- **Turn it off:** remove the `canary-slo-ticks` consumer (canary worker) and producer (root `wrangler.toml`) and redeploy, or set a canary's switch with
   `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
 
 ### Promotion ledger concurrency (m7 -> m8)

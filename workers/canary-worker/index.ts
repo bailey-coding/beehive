@@ -9,7 +9,7 @@ import { RollbackManager } from './rollback';
 import { SLOMonitor } from './slo';
 import { handleRollbackQueue } from './queues';
 import type { Env, RollbackTrigger, CanaryConfig } from './types';
-import type { ExecutionContext, MessageBatch, ScheduledController } from '@cloudflare/workers-types';
+import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types';
 
 async function readBody<T>(request: Request): Promise<T | Response> {
   try {
@@ -23,7 +23,7 @@ async function readBody<T>(request: Request): Promise<T | Response> {
 // (local `wrangler dev` fails with "Incorrect type for map entry").
 const SLO_TICK_QUEUE = 'canary-slo-ticks';
 
-/** One SLO pass over every live canary; shared by the cron and the tick queue. Never throws. */
+/** One SLO pass over every live canary; run for each batch of the tick queue. Never throws. */
 export async function runSloCycle(env: Env): Promise<void> {
   try {
     await new SLOMonitor(env).runCycle(new RollbackManager(env));
@@ -128,12 +128,6 @@ export default {
     });
   },
   
-  // Cron (wrangler.toml [triggers]): one SLO pass over every live canary. Fetch auth does not apply
-  // here; the handler is only reachable by the platform's scheduler.
-  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    await runSloCycle(env);
-  },
-
   // Queue consumer for rollback triggers and SLO ticks
   async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext): Promise<void> {
     if (batch.queue === SLO_TICK_QUEUE) {
@@ -150,5 +144,4 @@ export default {
 type ExportedHandler<E = unknown> = {
   fetch: (request: Request, env: E, ctx: ExecutionContext) => Promise<Response>;
   queue: (batch: MessageBatch, env: E, ctx: ExecutionContext) => Promise<void>;
-  scheduled: (controller: ScheduledController, env: E, ctx: ExecutionContext) => Promise<void>;
 };

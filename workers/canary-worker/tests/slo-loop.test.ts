@@ -204,21 +204,6 @@ describe('config', () => {
   });
 });
 
-describe('scheduled handler', () => {
-  it('runs a cycle and rolls back a violator', async () => {
-    const { env, rollbacks } = makeEnv([{ id: 'd1', candidateId: 'c1', specId: 's1', metrics: { requests: 100, errors: 50, p95: 100 } }]);
-    await handler.scheduled({} as any, env, {} as any);
-    expect(rollbacks).toEqual([{ id: 'd1', reason: 'error_rate' }]);
-  });
-
-  it('never throws on no verdict: logs and waits for the next tick', async () => {
-    const { env, rollbacks } = makeEnv([{ id: 'd1', candidateId: 'c1', specId: 's1', metrics: { requests: 100, errors: 50, p95: 100 } }], { liveDown: true });
-    await expect(handler.scheduled({} as any, env, {} as any)).resolves.toBeUndefined();
-    expect(rollbacks).toEqual([]);
-    expect(console.error).toHaveBeenCalled();
-  });
-});
-
 describe('tick queue handler', () => {
   const batch = (queue: string) => ({ queue, messages: [], ackAll: vi.fn(), retryAll: vi.fn() }) as any;
 
@@ -235,6 +220,7 @@ describe('tick queue handler', () => {
     const b = batch('canary-slo-ticks');
     await expect(handler.queue(b, env, {} as any)).resolves.toBeUndefined();
     expect(rollbacks).toEqual([]);
+    expect(console.error).toHaveBeenCalled();
     expect(b.ackAll).toHaveBeenCalled();
   });
 
