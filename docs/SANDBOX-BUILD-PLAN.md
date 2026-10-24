@@ -1,6 +1,6 @@
 # Sandbox build plan: candidate bundles built in `beehive-sandbox-runner`
 
-Status: **PLAN, not accepted** (2026-10-24). Spine-adjacent (agent code executes here); needs maintainer sign-off before
+Status: **PLAN; Phase 0 partly done** (2026-10-24; findings in `docs/OPEN-QUESTIONS.md` "Sandbox build spike"). Containers work on the account, a registry-image deploy needs no local Docker, and node/git/esbuild bundling works in a 0.x sandbox; U1 (Artifacts-push builds a Dockerfile) and U3 (Artifacts clone auth) remain open. Not accepted for Phase 1. Spine-adjacent (agent code executes here); needs maintainer sign-off before
 Phase 1. Goal: give `ApiWorkerVersionsClient` (`workers/preview-manager/versions.ts`) a real `CandidateBundleSource`, so a
 candidate's commit can become a Worker version (canary deploys stop answering 501). Maintainer chose "build in
 sandbox-runner" (2026-10-24).

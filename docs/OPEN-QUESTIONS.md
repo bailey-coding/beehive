@@ -764,3 +764,20 @@ M5a now closes the at-least-once double-write for all nine POST routes in `IDEMP
 - **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
 
 **Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.
+
+## Sandbox build spike: containers deploy and build work (2026-10-24)
+
+Phase 0 of `docs/SANDBOX-BUILD-PLAN.md`, run by the maintainer-approved `wrangler deploy` of a throwaway worker
+`beehive-sandbox-spike` (SDK 0.x `@cloudflare/sandbox@0.12.14`, image `docker.io/cloudflare/sandbox:0.12.14`, `lite`,
+`max_instances = 1`). The worker and its container application were deleted afterwards; the ten production workers were not touched.
+
+- **Containers are entitled on the account.** The first `wrangler deploy` created the container application directly.
+- **No local Docker is needed for a registry image.** This host has no `docker`; a `docker.io/...` image reference deployed
+  fine. A `./Dockerfile` image does need Docker (or Workers Builds). **Still unanswered (U1):** whether the Artifacts push
+  deploy flow builds a Dockerfile image; the registry-image route avoids the question for the 0.x SDK.
+- **The container has node v22, git 2.34.1 and npm 10.9.** `npx esbuild@0.25.0 src/index.js --bundle --format=esm` produced a
+  112-byte ESM bundle that `sandbox.readFile` returned.
+- **Timing:** first request (cold container, includes provisioning) ~57 s; `npx esbuild` with a fresh npm fetch ~28 s; a warm
+  `exec` ~5 s over the default HTTP transport. Preinstall esbuild in the image and keep builds off request paths with a timeout.
+- Not tried: SDK 1.0 (needs a `Dockerfile` copying `sandbox-shim`, so Docker or Workers Builds), cloning from an Artifacts
+  repo (U3), outbound-handler credential injection, snapshots, cost at volume.
