@@ -103,6 +103,83 @@ export type CanaryMoveResult = z.infer<typeof CanaryMoveResultSchema>;
 export type LiveRef = z.infer<typeof LiveRefSchema>;
 
 // ============================================================================
+// CANARY METRICS (M3 SLO loop, docs/M3-CANARY-SLO-PLAN.md)
+// ============================================================================
+
+/** Where the samples came from. 'shadow' = mirrored traffic; never reported as canary SLOs. */
+export const MetricSourceSchema = z.enum(['shadow', 'canary']);
+export type MetricSource = z.infer<typeof MetricSourceSchema>;
+
+/**
+ * Fixed latency histogram: sample counts per upper bound in ms; the last bucket is open-ended
+ * (its p95 reads the recorded maximum). Writers and the Spec DO must agree on this array.
+ */
+export const LATENCY_BUCKET_BOUNDS_MS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000] as const;
+export const LATENCY_BUCKET_COUNT = LATENCY_BUCKET_BOUNDS_MS.length + 1;
+
+export const CANARY_METRICS_MAX_SAMPLES_PER_POST = 60;
+export const CANARY_METRICS_RETENTION_MINUTES = 24 * 60;
+export const CANARY_METRICS_MAX_WINDOW_MINUTES = CANARY_METRICS_RETENTION_MINUTES;
+export const CANARY_METRICS_DEFAULT_WINDOW_MINUTES = 15;
+
+export const CanaryMetricSampleSchema = z
+  .object({
+    /** Epoch minute (Math.floor(ms / 60000)). */
+    minuteBucket: z.number().int().nonnegative(),
+    requests: z.number().int().positive(),
+    errors: z.number().int().nonnegative(),
+    latencySumMs: z.number().nonnegative(),
+    latencyMaxMs: z.number().nonnegative(),
+    latencyBuckets: z.array(z.number().int().nonnegative()).length(LATENCY_BUCKET_COUNT),
+  })
+  .refine((s) => s.errors <= s.requests, 'errors cannot exceed requests')
+  .refine((s) => s.latencyBuckets.reduce((a, b) => a + b, 0) === s.requests, 'latencyBuckets must sum to requests');
+
+export const RecordCanaryMetricsSchema = z.object({
+  deploymentId: z.string().min(1),
+  source: MetricSourceSchema,
+  samples: z.array(CanaryMetricSampleSchema).min(1).max(CANARY_METRICS_MAX_SAMPLES_PER_POST),
+});
+
+export const CanaryMetricsRecordedSchema = z.object({ recorded: z.number().int().nonnegative() });
+
+export const CanaryMetricsSummarySchema = z.object({
+  deploymentId: z.string(),
+  source: MetricSourceSchema,
+  sinceMinutes: z.number().int().positive(),
+  requests: z.number().int().nonnegative(),
+  errors: z.number().int().nonnegative(),
+  /** null when there are no requests. */
+  errorRate: z.number().nullable(),
+  /** Upper bound of the bucket holding the 95th percentile; null when there are no requests. */
+  latencyP95Ms: z.number().nullable(),
+  latencyMaxMs: z.number(),
+});
+
+export type CanaryMetricSample = z.infer<typeof CanaryMetricSampleSchema>;
+export type RecordCanaryMetrics = z.infer<typeof RecordCanaryMetricsSchema>;
+export type CanaryMetricsSummary = z.infer<typeof CanaryMetricsSummarySchema>;
+
+/** Bucket index for a latency in ms (the last index is the open-ended bucket). */
+export function latencyBucketIndex(ms: number): number {
+  const i = LATENCY_BUCKET_BOUNDS_MS.findIndex((bound) => ms <= bound);
+  return i === -1 ? LATENCY_BUCKET_BOUNDS_MS.length : i;
+}
+
+/** p95 from summed bucket counts: the upper bound of the bucket reached; the open bucket reads maxMs. */
+export function latencyP95FromBuckets(buckets: number[], maxMs: number): number | null {
+  const total = buckets.reduce((a, b) => a + b, 0);
+  if (total === 0) return null;
+  const target = Math.ceil(total * 0.95);
+  let seen = 0;
+  for (let i = 0; i < buckets.length; i++) {
+    seen += buckets[i];
+    if (seen >= target) return i < LATENCY_BUCKET_BOUNDS_MS.length ? LATENCY_BUCKET_BOUNDS_MS[i] : maxMs;
+  }
+  return maxMs;
+}
+
+// ============================================================================
 // ROUTES (Spec DO, internal: reached over the SPEC_DO binding only)
 // ============================================================================
 
@@ -114,9 +191,10 @@ export const DEPLOY_PATHS = {
   deployRefHead: '/deploy-refs/head',
   deployRefRollback: '/deploy-refs/rollback',
   liveRefs: '/deploy-refs/live',
+  canaryMetrics: '/canary-metrics',
 } as const;
 
-export const DEPLOY_ROUTE = /^\/(canary-deployments|deploy-refs)(?:\/([^\/]+))?(?:\/(rollback))?$/;
+export const DEPLOY_ROUTE = /^\/(canary-deployments|deploy-refs|canary-metrics)(?:\/([^\/]+))?(?:\/(rollback))?$/;
 
 // ============================================================================
 // CLIENT
@@ -161,6 +239,17 @@ export class DeployRefsClient {
 
   liveRefs(rung: DeployRung): Promise<DeployResult<LiveRef[]>> {
     return this.send(`${DEPLOY_PATHS.liveRefs}?rung=${rung}`, 'GET', undefined, undefined, z.array(LiveRefSchema));
+  }
+
+  /** Add samples for a live canary deployment. Any non-ok result means the metrics are unavailable. */
+  recordCanaryMetrics(request: RecordCanaryMetrics, actorId?: string): Promise<DeployResult<{ recorded: number }>> {
+    return this.send(DEPLOY_PATHS.canaryMetrics, 'POST', RecordCanaryMetricsSchema.parse(request), actorId, CanaryMetricsRecordedSchema);
+  }
+
+  /** Aggregate over the last `sinceMinutes`. A non-ok result is "unavailable", never "no data". */
+  canaryMetrics(deploymentId: string, source: MetricSource, sinceMinutes = CANARY_METRICS_DEFAULT_WINDOW_MINUTES): Promise<DeployResult<CanaryMetricsSummary>> {
+    const q = `deploymentId=${encodeURIComponent(deploymentId)}&source=${source}&sinceMinutes=${sinceMinutes}`;
+    return this.send(`${DEPLOY_PATHS.canaryMetrics}?${q}`, 'GET', undefined, undefined, CanaryMetricsSummarySchema);
   }
 
   private async send<T>(

@@ -23,10 +23,11 @@ import {
   DEPLOY_REFS_SQL,
   USER_TOKENS_SQL,
   IDEMPOTENCY_KEYS_SQL,
+  CANARY_METRICS_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm10';
+const LATEST_SCHEMA_VERSION = 'm11';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -295,6 +296,15 @@ import {
 // Deploy refs + canary deployments contract (shared with the canary worker and shadow router)
 import {
   DEPLOY_ROUTE,
+  RecordCanaryMetricsSchema,
+  MetricSourceSchema,
+  CANARY_METRICS_RETENTION_MINUTES,
+  CANARY_METRICS_MAX_WINDOW_MINUTES,
+  CANARY_METRICS_DEFAULT_WINDOW_MINUTES,
+  LATENCY_BUCKET_COUNT,
+  latencyP95FromBuckets,
+  type CanaryMetricsSummary,
+  type RecordCanaryMetrics,
   DeployRefSchema,
   DeployRungSchema,
   CanaryDeploymentSchema,
@@ -585,6 +595,9 @@ export class SpecDO {
       this.db.exec(USER_TOKENS_SQL);
       // idempotency_keys: likewise
       this.db.exec(IDEMPOTENCY_KEYS_SQL);
+
+      // canary_metrics: likewise
+      this.db.exec(CANARY_METRICS_SQL);
 
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
@@ -1036,6 +1049,8 @@ export class SpecDO {
       ['m9', () => this.db!.exec(USER_TOKENS_SQL)],
       // m9 -> m10: idempotency keys table for preventing double-writes from at-least-once queue delivery
       ['m10', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
+      // m10 -> m11: canary metrics (M3 SLO loop; shadow-sourced until real canary traffic exists)
+      ['m11', () => this.db!.exec(CANARY_METRICS_SQL)],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -3073,6 +3088,25 @@ export class SpecDO {
         }
       }
 
+      if (collection === 'canary-metrics' && id === undefined && sub === undefined) {
+        if (method === 'POST') {
+          const p = parse(RecordCanaryMetricsSchema, 'canary metrics');
+          if ('error' in p) return p.error;
+          return json(this.recordCanaryMetrics(p.data), 201);
+        }
+        if (method === 'GET') {
+          const deploymentId = url.searchParams.get('deploymentId');
+          const source = MetricSourceSchema.safeParse(url.searchParams.get('source'));
+          if (!deploymentId || !source.success) return fail('deploymentId and source (shadow|canary) required', 400);
+          const raw = url.searchParams.get('sinceMinutes');
+          const since = raw === null ? CANARY_METRICS_DEFAULT_WINDOW_MINUTES : Number(raw);
+          if (!Number.isInteger(since) || since < 1 || since > CANARY_METRICS_MAX_WINDOW_MINUTES) {
+            return fail(`sinceMinutes must be an integer 1-${CANARY_METRICS_MAX_WINDOW_MINUTES}`, 400);
+          }
+          return json(this.canaryMetricsSummary(deploymentId, source.data, since));
+        }
+      }
+
       if (collection === 'deploy-refs' && sub === undefined) {
         if ((id === undefined || id === 'head') && method === 'GET') {
           const specId = url.searchParams.get('specId');
@@ -3095,6 +3129,7 @@ export class SpecDO {
     } catch (e) {
       if (e instanceof NotFoundError) return fail(e.message, 404, RECORD_NOT_FOUND);
       if (e instanceof ConflictError) return fail(e.message, 409);
+      if (e instanceof BadRequestError) return fail(e.message, 400);
       throw e;
     }
 
@@ -3190,6 +3225,96 @@ export class SpecDO {
     return this.queryAll('SELECT * FROM canary_deployments WHERE candidate_id = ? ORDER BY created_at DESC, rowid DESC', candidateId).map(
       (r) => this.rowToCanaryDeployment(r)
     );
+  }
+
+  // --- canary metrics (M3 SLO loop, docs/M3-CANARY-SLO-PLAN.md) ---
+
+  /** Drop rows older than the retention window. Called on every write and read, so stale rows go even when traffic stops. */
+  private pruneCanaryMetrics(): void {
+    const cutoff = Math.floor(now() / 60_000) - CANARY_METRICS_RETENTION_MINUTES;
+    this.run('DELETE FROM canary_metrics WHERE minute_bucket < ?', cutoff);
+  }
+
+  /**
+   * Add samples to a live canary deployment's per-minute rows. Not idempotent (a retried POST double-counts;
+   * acceptable for telemetry). 404: no such deployment; 409: not 'deployed' (e.g. just rolled back), so the
+   * recorder drops the batch. Minutes must be within the last hour or the next 5 minutes.
+   */
+  recordCanaryMetrics(input: RecordCanaryMetrics): { recorded: number } {
+    return this.state.storage.transactionSync(() => {
+      const deployment = this.getCanaryDeployment(input.deploymentId);
+      if (!deployment) throw new NotFoundError('Canary deployment not found');
+      if (deployment.status !== 'deployed') throw new ConflictError(`Canary deployment is ${deployment.status}`);
+      const nowMinute = Math.floor(now() / 60_000);
+      for (const sample of input.samples) {
+        if (sample.minuteBucket < nowMinute - 60 || sample.minuteBucket > nowMinute + 5) {
+          throw new BadRequestError('minuteBucket must be within the last 60 minutes or the next 5');
+        }
+      }
+      for (const sample of input.samples) {
+        const row = this.queryAll(
+          'SELECT requests, errors, latency_sum_ms, latency_max_ms, latency_buckets FROM canary_metrics WHERE deployment_id = ? AND minute_bucket = ? AND source = ?',
+          input.deploymentId,
+          sample.minuteBucket,
+          input.source
+        )[0];
+        if (!row) {
+          this.run(
+            'INSERT INTO canary_metrics (deployment_id, minute_bucket, source, requests, errors, latency_sum_ms, latency_max_ms, latency_buckets, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            input.deploymentId, sample.minuteBucket, input.source, sample.requests, sample.errors,
+            sample.latencySumMs, sample.latencyMaxMs, JSON.stringify(sample.latencyBuckets), now()
+          );
+          continue;
+        }
+        const old = JSON.parse(String(row.latency_buckets)) as number[];
+        const merged = Array.from({ length: LATENCY_BUCKET_COUNT }, (_, i) => (old[i] ?? 0) + sample.latencyBuckets[i]);
+        this.run(
+          'UPDATE canary_metrics SET requests = ?, errors = ?, latency_sum_ms = ?, latency_max_ms = ?, latency_buckets = ?, updated_at = ? WHERE deployment_id = ? AND minute_bucket = ? AND source = ?',
+          Number(row.requests) + sample.requests,
+          Number(row.errors) + sample.errors,
+          Number(row.latency_sum_ms) + sample.latencySumMs,
+          Math.max(Number(row.latency_max_ms), sample.latencyMaxMs),
+          JSON.stringify(merged),
+          now(),
+          input.deploymentId, sample.minuteBucket, input.source
+        );
+      }
+      this.pruneCanaryMetrics();
+      return { recorded: input.samples.length };
+    });
+  }
+
+  /** Aggregate over the last `sinceMinutes` for one source. Unknown deployment or no rows is a 200 with zero requests, never a 404. */
+  canaryMetricsSummary(deploymentId: string, source: 'shadow' | 'canary', sinceMinutes: number): CanaryMetricsSummary {
+    return this.state.storage.transactionSync(() => {
+      this.pruneCanaryMetrics();
+      const from = Math.floor(now() / 60_000) - sinceMinutes + 1;
+      const rows = this.queryAll(
+        'SELECT requests, errors, latency_max_ms, latency_buckets FROM canary_metrics WHERE deployment_id = ? AND source = ? AND minute_bucket >= ?',
+        deploymentId, source, from
+      );
+      let requests = 0;
+      let errors = 0;
+      let maxMs = 0;
+      const buckets = new Array<number>(LATENCY_BUCKET_COUNT).fill(0);
+      for (const r of rows) {
+        requests += Number(r.requests);
+        errors += Number(r.errors);
+        maxMs = Math.max(maxMs, Number(r.latency_max_ms));
+        const b = JSON.parse(String(r.latency_buckets)) as number[];
+        for (let i = 0; i < LATENCY_BUCKET_COUNT; i++) buckets[i] += b[i] ?? 0;
+      }
+      return {
+        deploymentId,
+        source,
+        sinceMinutes,
+        requests,
+        errors,
+        errorRate: requests > 0 ? errors / requests : null,
+        latencyP95Ms: latencyP95FromBuckets(buckets, maxMs),
+        latencyMaxMs: maxMs,
+      };
+    });
   }
 
   getCanaryDeployment(id: string): CanaryDeployment | null {

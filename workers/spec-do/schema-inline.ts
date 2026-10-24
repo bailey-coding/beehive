@@ -622,7 +622,7 @@ export const USER_TOKENS_SQL = `
 -- the cap of 10 live tokens per actor are enforced in code
 -- (SpecDO.mintUserToken), so either can change without a table rebuild. The
 -- table references actors only, and m9 adds no index on actors (a unique
--- actors.github_user_id index is M11's m11). Timestamps are epoch milliseconds.
+-- actors.github_user_id index is M11's, now m12). Timestamps are epoch milliseconds.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS user_tokens (
@@ -672,4 +672,29 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
 
 CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires ON idempotency_keys(expires_at);
 CREATE INDEX IF NOT EXISTS idx_idempotency_keys_endpoint ON idempotency_keys(endpoint, created_at);
+`;
+
+// Canary metrics (m10 -> m11, additive). Per-deployment, per-minute, per-source request outcomes the SLO loop reads.
+export const CANARY_METRICS_SQL = `
+-- ============================================================================
+-- CANARY METRICS (m10 -> m11, additive)
+-- One row per (deployment, epoch minute, source). source 'shadow' is mirrored traffic and is never
+-- reported as a canary SLO. No foreign keys and no org column (like canary_deployments), so org purge
+-- does not touch it; rows older than 24 hours are pruned on every write and read.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS canary_metrics (
+  deployment_id TEXT NOT NULL,
+  minute_bucket INTEGER NOT NULL,
+  source TEXT NOT NULL CHECK(source IN ('shadow', 'canary')),
+  requests INTEGER NOT NULL,
+  errors INTEGER NOT NULL,
+  latency_sum_ms REAL NOT NULL,
+  latency_max_ms REAL NOT NULL,
+  latency_buckets TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (deployment_id, minute_bucket, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_canary_metrics_minute ON canary_metrics(minute_bucket);
 `;

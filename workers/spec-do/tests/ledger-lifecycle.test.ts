@@ -109,14 +109,14 @@ describe('m4 -> m5 migration', () => {
 
     const restarted = makeSqliteState(raw, fresh.kv);
     await makeSpecDo(restarted).init();
-    // m5 -> m6 (service tokens) up to m9 -> m10 (idempotency keys) run in the same pass
-    expect(version(restarted)).toBe('m10');
+    // m5 -> m6 (service tokens) up to m10 -> m11 (canary metrics) run in the same pass
+    expect(version(restarted)).toBe('m11');
     expect(columns(restarted, 'organizations')).toEqual(expect.arrayContaining(['deleted_at', 'deleted_by', 'delete_reason']));
     expect(columns(restarted, 'actors')).toContain('role');
     expect(raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org' AND deleted_at IS NULL").get()).toEqual({ n: 1 });
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m10');
+    expect(version(restarted)).toBe('m11');
   });
 
   it('does not touch the entity_history CHECK', () => {
@@ -304,6 +304,20 @@ describe('purge', () => {
     expect(result.total).toBe(10);
     expect(count('SELECT COUNT(*) AS n FROM organizations')).toBe(1);
     expect(count(`SELECT COUNT(*) AS n FROM purge_log WHERE action = 'purge' AND outcome = 'dry_run'`)).toBe(1);
+  });
+
+  it('leaves canary_metrics alone: it has no org column and no foreign keys (m11), and the purge counts are unchanged', async () => {
+    const a = seedOrg('org-a');
+    store.raw
+      .prepare("INSERT INTO canary_metrics VALUES ('dep-1', ?, 'shadow', 3, 1, 30, 20, '[3,0,0,0,0,0,0,0,0,0]', 0)")
+      .run(Math.floor(Date.now() / 60_000));
+    await tombstone(`/api/organizations/${a.org.id}`);
+    ageTombstones();
+    const { total } = await data<PurgeResult>(await purge({ orgNamePrefix: 'org-' }));
+    const res = await purge({ orgNamePrefix: 'org-', dryRun: false, confirm: total });
+    expect(res.status).toBe(200);
+    expect(count('SELECT COUNT(*) AS n FROM organizations')).toBe(0);
+    expect(count('SELECT COUNT(*) AS n FROM canary_metrics')).toBe(1);
   });
 
   it('hard-deletes with the matching confirm, keeping entity_history and purge_log', async () => {

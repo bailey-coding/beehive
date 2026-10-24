@@ -28,7 +28,7 @@ const columns = (s: SqliteState, table: string) =>
 async function freshLatestLedger(): Promise<SqliteState> {
   const s = makeSqliteState();
   await makeSpecDo(s).init();
-  expect(version(s)).toBe('m10');
+  expect(version(s)).toBe('m11');
   return s;
 }
 
@@ -55,7 +55,7 @@ async function populatedM3(): Promise<SqliteState> {
   // Drop tables added after m3
   const raw = fresh.raw;
   raw.exec('PRAGMA foreign_keys = OFF');
-  for (const t of ['canary_deployments', 'deploy_refs', 'service_tokens', 'promotion_states', 'tournaments', 'merge_trains', 'purge_log']) {
+  for (const t of ['canary_metrics', 'canary_deployments', 'deploy_refs', 'service_tokens', 'promotion_states', 'tournaments', 'merge_trains', 'purge_log']) {
     raw.exec(`DROP TABLE ${t}`);
   }
   
@@ -279,7 +279,7 @@ describe('legacy schema shape detection - service_accounts', () => {
     
     // Should succeed and reach the latest version
     await spec.init();
-    expect(version(restarted)).toBe('m10');
+    expect(version(restarted)).toBe('m11');
     
     // Verify service_accounts has all required columns
     const cols = columns(restarted, 'service_accounts');
@@ -339,7 +339,7 @@ describe('legacy schema shape detection - actors table', () => {
     await spec.init();
     
     // Should reach the latest version; m5 adds the role column idempotently
-    expect(version(restarted)).toBe('m10');
+    expect(version(restarted)).toBe('m11');
     
     // Verify role column was added
     const cols = columns(restarted, 'actors');
@@ -385,7 +385,7 @@ describe('legacy schema shape detection - entity tables', () => {
     await spec.init();
     
     // Should reach the latest version
-    expect(version(restarted)).toBe('m10');
+    expect(version(restarted)).toBe('m11');
     
     // Verify tombstone columns were added
     const cols = columns(restarted, 'organizations');
@@ -429,7 +429,7 @@ describe('legacy schema shape detection - promotion ledger tables', () => {
     
     // Should succeed - m8 adds columns idempotently via applyLedgerCas
     await spec.init();
-    expect(version(restarted)).toBe('m10');
+    expect(version(restarted)).toBe('m11');
     
     // Verify failure columns were added to tournaments
     const cols = columns(restarted, 'tournaments');
@@ -516,7 +516,7 @@ describe('production schema dump simulation', () => {
     
     // Now migration should succeed
     await spec.init();
-    expect(version(restarted)).toBe('m10');
+    expect(version(restarted)).toBe('m11');
     
     // Verify service_accounts was recreated with correct schema
     const cols = columns(restarted, 'service_accounts');
@@ -554,6 +554,7 @@ describe('legacy schema validation utilities', () => {
       'merge_trains',
       'deploy_refs',
       'canary_deployments',
+      'canary_metrics',
       'purge_log',
     ];
     
