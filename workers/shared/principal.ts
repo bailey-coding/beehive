@@ -44,6 +44,19 @@ export interface Principal {
 }
 
 
+/**
+ * The one scope test: authorize() (workers/api/principal.ts), requireScope() and the
+ * with*Scope() wrappers below all go through it, so the typed requests cannot drift from the
+ * edge's enforcement. Scopes are stored expanded (maintainer => write => read, see Principal).
+ */
+export function hasScope(p: Pick<Principal, 'scopes'>, scope: Scope): boolean {
+  return p.scopes.includes(scope);
+}
+
+export function requireScope(p: Pick<Principal, 'scopes'>, scope: Scope): Response | null {
+  return hasScope(p, scope) ? null : jsonError('Forbidden', 403);
+}
+
 // =============================================================================
 // Custom Request Types for compile-time auth safety
 // "Validate by parsing" principle: encode auth invariants in the type system
@@ -134,12 +147,11 @@ export function withActor(request: Request, principal: Principal): ActorRequest 
 /**
  * Assert read scope on an AuthedRequest.
  * Returns 403 if scope not present.
- * Note: This asserts; actual enforcement is in authorize() (defense in depth).
+ * Shares hasScope() with authorize(), so the two cannot disagree on what a scope means.
  */
 export function withReadScope(req: AuthedRequest): ReadRequest | Response {
-  if (!req.principal.scopes.includes('read')) {
-    return jsonError('Forbidden', 403);
-  }
+  const denied = requireScope(req.principal, 'read');
+  if (denied) return denied;
   return Object.assign(req, {
     scopes: req.principal.scopes as Scope[] & ['read', ...Scope[]],
   }) as ReadRequest;
@@ -148,12 +160,11 @@ export function withReadScope(req: AuthedRequest): ReadRequest | Response {
 /**
  * Assert write scope on an AuthedRequest.
  * Returns 403 if scope not present.
- * Note: This asserts; actual enforcement is in authorize() (defense in depth).
+ * Shares hasScope() with authorize(), so the two cannot disagree on what a scope means.
  */
 export function withWriteScope(req: AuthedRequest): WriteRequest | Response {
-  if (!req.principal.scopes.includes('write')) {
-    return jsonError('Forbidden', 403);
-  }
+  const denied = requireScope(req.principal, 'write');
+  if (denied) return denied;
   return Object.assign(req, {
     scopes: req.principal.scopes as Scope[] & ['write', ...Scope[]],
   }) as WriteRequest;
@@ -162,12 +173,11 @@ export function withWriteScope(req: AuthedRequest): WriteRequest | Response {
 /**
  * Assert maintainer scope on an AuthedRequest.
  * Returns 403 if scope not present.
- * Note: This asserts; actual enforcement is in authorize() (defense in depth).
+ * Shares hasScope() with authorize(), so the two cannot disagree on what a scope means.
  */
 export function withMaintainerScope(req: AuthedRequest): MaintainerRequest | Response {
-  if (!req.principal.scopes.includes('maintainer')) {
-    return jsonError('Forbidden', 403);
-  }
+  const denied = requireScope(req.principal, 'maintainer');
+  if (denied) return denied;
   return Object.assign(req, {
     scopes: req.principal.scopes as Scope[] & ['maintainer', ...Scope[]],
   }) as MaintainerRequest;

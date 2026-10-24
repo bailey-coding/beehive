@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import { jsonError } from '../shared/auth';
-import { ACTOR_ID_MAX_CHARS, ActorIdSchema, type Principal, type Scope } from '../shared/principal';
+import { ACTOR_ID_MAX_CHARS, ActorIdSchema, hasScope, requireScope, type Principal, type Scope } from '../shared/principal';
 import {
   SERVICE_TOKEN_PREFIX,
   USER_TOKEN_PREFIX,
@@ -54,6 +54,49 @@ const UserVerifySchema = z.union([
     }),
   }),
 ]);
+
+// Failed bh_usr_ verifications per client IP, best effort and per isolate: every well-formed fake
+// token costs one Spec DO request (RFC-0008 decision 8), so a source that keeps failing is answered
+// 429 without that request. Per isolate on purpose: no new binding or config, so it is safe in a
+// mixed-version deploy; a global (Workers rate-limiting binding) limit is a follow-up.
+export const USER_TOKEN_FAIL_LIMIT = 20;
+export const USER_TOKEN_FAIL_WINDOW_MS = 60_000;
+const USER_TOKEN_FAIL_MAX_TRACKED = 5_000;
+const userTokenFailures = new Map<string, { count: number; resetAt: number }>();
+
+function clientIp(request: Request): string | null {
+  return request.headers.get('cf-connecting-ip');
+}
+
+function failureBlocked(ip: string | null, now: number): boolean {
+  if (!ip) return false;
+  const e = userTokenFailures.get(ip);
+  if (!e) return false;
+  if (e.resetAt <= now) {
+    userTokenFailures.delete(ip);
+    return false;
+  }
+  return e.count >= USER_TOKEN_FAIL_LIMIT;
+}
+
+function recordFailure(ip: string | null, now: number): void {
+  if (!ip) return;
+  const e = userTokenFailures.get(ip);
+  if (e && e.resetAt > now) {
+    e.count++;
+    return;
+  }
+  if (userTokenFailures.size >= USER_TOKEN_FAIL_MAX_TRACKED) {
+    for (const [k, v] of userTokenFailures) if (v.resetAt <= now) userTokenFailures.delete(k);
+    if (userTokenFailures.size >= USER_TOKEN_FAIL_MAX_TRACKED) userTokenFailures.delete(userTokenFailures.keys().next().value as string);
+  }
+  userTokenFailures.set(ip, { count: 1, resetAt: now + USER_TOKEN_FAIL_WINDOW_MS });
+}
+
+/** Test hook: forget all tracked failures. */
+export function resetUserTokenFailures(): void {
+  userTokenFailures.clear();
+}
 
 export interface AuthEnv {
   API_AUTH_TOKEN?: string;
@@ -149,6 +192,12 @@ export async function authenticate(
   // cache), so a revocation or an expiry applies from the next request.
   if (bearer !== null && bearer.startsWith(USER_TOKEN_PREFIX)) {
     if (!looksLikeUserToken(bearer)) return jsonError('Unauthorized', 401);
+    const ip = clientIp(request);
+    if (failureBlocked(ip, Date.now())) {
+      const res = jsonError('Too many failed token attempts', 429);
+      res.headers.set('Retry-After', String(Math.ceil(USER_TOKEN_FAIL_WINDOW_MS / 1000)));
+      return res;
+    }
     const tokenHash = await hashToken(bearer);
     let res: Response;
     try {
@@ -169,7 +218,11 @@ export async function authenticate(
       const body = UserVerifySchema.safeParse(await res.json());
       if (!body.success) return jsonError('Auth backend unavailable', 503);
       const d = body.data.data;
-      if (!d.found) return jsonError('Unauthorized', 401);
+      if (!d.found) {
+        recordFailure(ip, Date.now());
+        return jsonError('Unauthorized', 401);
+      }
+      userTokenFailures.delete(ip ?? '');
       const scopes = USER_TOKEN_SCOPES[d.scope];
       return {
         kind: 'user',
@@ -228,18 +281,16 @@ const matches = (routes: Array<{ method: string; path: RegExp }>, method: string
 export function authorize(p: Principal, method: string, path: string): Response | null {
   if (p.kind === 'master') return null;
   const isRead = method === 'GET' || method === 'HEAD';
-  if (isRead && p.scopes.includes('read')) {
+  if (isRead && hasScope(p, 'read')) {
     if (path === '/health' || path === '/api/health' || path === '/api/whoami') return null;
     if (path.startsWith('/api/') && !path.startsWith('/api/admin/') && path !== '/api/admin') return null;
   }
   // Service principals are read-only whatever they hold; only user tokens write
   if (p.kind === 'user' && !isRead) {
-    if (p.scopes.includes('write') && matches(USER_WRITE_ROUTES, method, path)) return null;
-    if (p.scopes.includes('maintainer') && matches(USER_MAINTAINER_ROUTES, method, path)) return null;
+    if (hasScope(p, 'write') && matches(USER_WRITE_ROUTES, method, path)) return null;
+    if (hasScope(p, 'maintainer') && matches(USER_MAINTAINER_ROUTES, method, path)) return null;
   }
   return jsonError('Forbidden', 403);
 }
 
-export function requireScope(p: Principal, scope: Scope): Response | null {
-  return p.scopes.includes(scope) ? null : jsonError('Forbidden', 403);
-}
+export { requireScope };

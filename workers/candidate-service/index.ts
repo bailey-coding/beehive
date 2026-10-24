@@ -51,7 +51,7 @@ function previewUrlFor(env: { WORKERS_SUBDOMAIN?: string }, workerName: string):
 const candidateServiceHandler = {
   async fetch(request: Request, env: CandidateServiceEnv, ctx: ExecutionContext): Promise<Response> {
     // Auth gate - fail closed, applies to every route including /health
-    const denied = authGate(request, env);
+    const denied = await authGate(request, env);
     if (denied) return denied;
 
     const url = new URL(request.url);

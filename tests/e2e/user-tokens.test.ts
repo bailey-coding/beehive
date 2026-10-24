@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getConfig } from './config';
-import { createRequest, readJson } from './helpers';
+import { createRequest, ensureMaintainer, readJson } from './helpers';
 
 const config = getConfig();
 const isLocal = config.environment === 'local';
@@ -44,13 +44,7 @@ describe.skipIf(!isLocal)('User tokens (local)', () => {
   };
 
   beforeAll(async () => {
-    // A maintainer to grant the role (reused from earlier runs, or bootstrapped by self-grant)
-    const actors = await master('/api/actors?limit=1000');
-    let granter = (actors.json.data as { id: string; role?: string }[]).find((a) => a.role === 'maintainer')?.id;
-    if (!granter) {
-      granter = (await master('/api/actors', 'POST', { type: 'human', name: 'e2e-maintainer' })).json.data.id as string;
-      expect((await master(`/api/admin/actors/${granter}/role`, 'POST', { role: 'maintainer' }, granter)).status).toBe(200);
-    }
+    const granter = await ensureMaintainer(master, 'e2e-maintainer');
     // User tokens need a human actor with a GitHub id
     alice = (await master('/api/actors', 'POST', { type: 'human', name: `e2e-alice-${run}`, githubUserId: `e2e-${run}-a` })).json.data.id;
     maint = (await master('/api/actors', 'POST', { type: 'human', name: `e2e-maint-${run}`, githubUserId: `e2e-${run}-m` })).json.data.id;

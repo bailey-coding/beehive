@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { getConfig } from './config';
-import { createRequest, readJson } from './helpers';
+import { createRequest, ensureMaintainer, readJson } from './helpers';
 
 const isLocal = getConfig().environment === 'local';
 const PREFIX = 'test-org-e2e-';
@@ -31,17 +31,7 @@ describe.skipIf(!isLocal)('Ledger lifecycle (local)', () => {
   const orgName = `${PREFIX}lifecycle-${Date.now()}`;
 
   beforeAll(async () => {
-    // Reuse an existing maintainer (earlier runs) or bootstrap one by self-grant
-    const actors = await call('/api/actors?limit=1000');
-    const existing = (actors.json.data as { id: string; role?: string }[]).find((a) => a.role === 'maintainer');
-    if (existing) {
-      maintainer = existing.id;
-    } else {
-      const created = await call('/api/actors', 'POST', { type: 'human', name: 'e2e-maintainer' });
-      maintainer = (created.json.data as { id: string }).id;
-      const granted = await call(`/api/admin/actors/${maintainer}/role`, 'POST', { role: 'maintainer' }, maintainer);
-      expect(granted.status).toBe(200);
-    }
+    maintainer = await ensureMaintainer(call, 'e2e-maintainer');
     outsider = ((await call('/api/actors', 'POST', { type: 'agent', name: 'e2e-outsider' })).json.data as { id: string }).id;
 
     const org = await call('/api/organizations', 'POST', { name: orgName, type: 'artifacts' }, maintainer);

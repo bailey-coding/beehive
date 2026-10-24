@@ -2016,6 +2016,25 @@ export class SpecDO {
     };
   }
 
+  /**
+   * Wire shape of an issue: the row (snake_case, what every existing reader uses) plus the camelCase
+   * names `IssueResponse` documents. Additive on purpose: during a mixed-version deploy an old UI
+   * or CLI still finds snake_case, a new one finds camelCase. Drop the snake_case copies once no
+   * reader needs them.
+   */
+  private issueView<T extends IssueRow | null>(row: T): T extends null ? null : IssueRow & Record<string, unknown> {
+    if (!row) return null as never;
+    return {
+      ...row,
+      repositoryId: row.repository_id,
+      createdAt: row.created_at,
+      createdBy: row.created_by,
+      closedAt: row.closed_at,
+      closedBy: row.closed_by,
+      commentPolicy: row.comment_policy,
+    } as never;
+  }
+
   private rowToIssue(stmt: { getRow(): Record<string, unknown> | null }): IssueRow | null {
     const row = stmt.getRow();
     if (!row) return null;
@@ -3933,7 +3952,7 @@ export class SpecDO {
             throw new BadRequestError('labels must be an array of strings');
           }
           this.requireSameAuthor(body.createdBy, actorId);
-          return this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels);
+          return this.issueView(this.createIssue(body.number, body.repositoryId, body.title, body.body || '', actorId, body.labels));
         });
       }
       
@@ -3944,7 +3963,7 @@ export class SpecDO {
         const stage = url.searchParams.get('stage') ?? undefined;
         const status = url.searchParams.get('status') ?? undefined;
         const issues = this.listIssues(limit, offset, repositoryId, stage, status, includeDeleted);
-        return new Response(JSON.stringify({ success: true, data: issues, timestamp: Date.now() }), {
+        return new Response(JSON.stringify({ success: true, data: issues.map((i) => this.issueView(i)), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
@@ -3958,7 +3977,7 @@ export class SpecDO {
             headers: { 'Content-Type': 'application/json' },
           });
         }
-        return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
+        return new Response(JSON.stringify({ success: true, data: this.issueView(issue), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
@@ -3967,7 +3986,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         const body: UpdateIssueStageRequest = await request.json();
         this.transitionIssue(id, body.stage, actorId, body.notes);
-        const issue = this.getIssue(id);
+        const issue = this.issueView(this.getIssue(id));
         return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -3977,7 +3996,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         return await this.issueRoute(request, 200, actorId, (body) => {
           this.setIssueStatus(id, body.status as string, actorId, capped);
-          return this.getIssue(id);
+          return this.issueView(this.getIssue(id));
         });
       }
 
@@ -3985,7 +4004,7 @@ export class SpecDO {
         const id = this.extractParentId(path);
         return await this.issueRoute(request, 200, actorId, (body) => {
           this.updateIssueCommentPolicy(id, body.commentPolicy as string, actorId, capped);
-          return this.getIssue(id);
+          return this.issueView(this.getIssue(id));
         });
       }
       

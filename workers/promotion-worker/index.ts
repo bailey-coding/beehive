@@ -32,7 +32,7 @@ async function handleFetch(
   ctx: ExecutionContext
 ): Promise<Response> {
   // Auth gate - fail closed, applies to every route
-  const denied = authGate(request, env);
+  const denied = await authGate(request, env);
   if (denied) return denied;
 
   const url = new URL(request.url);

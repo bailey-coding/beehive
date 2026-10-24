@@ -40,7 +40,7 @@ const FLUSH_INTERVAL_MS = 5000;
 const scientistHandler = {
   async fetch(request: Request, env: ScientistEnv, ctx: ExecutionContext): Promise<Response> {
     // Auth gate - fail closed, applies to every route including /health
-    const denied = authGate(request, env);
+    const denied = await authGate(request, env);
     if (denied) return denied;
 
     const url = new URL(request.url);

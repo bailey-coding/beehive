@@ -10,6 +10,7 @@
  */
 
 import { getSpecDoStub, type SpecDoCallerEnv } from './spec-do-auth';
+import { constantTimeEqual } from './service-tokens';
 
 export interface AuthEnv {
   API_AUTH_TOKEN?: string;
@@ -26,20 +27,22 @@ export function jsonError(error: string, status: number): Response {
  * Returns a Response to send when the request is not authorized,
  * or null when the request may proceed.
  */
-export function authGate(request: Request, env: AuthEnv): Response | null {
+export async function authGate(request: Request, env: AuthEnv): Promise<Response | null> {
   const expected = env.API_AUTH_TOKEN;
 
   if (!expected) {
     return jsonError('API_AUTH_TOKEN not configured', 503);
   }
 
+  // Constant-time (digest compare), like the edge's authenticate(): no early exit on the first
+  // differing byte.
   const authorization = request.headers.get('Authorization');
-  if (authorization === `Bearer ${expected}`) {
+  if (authorization !== null && (await constantTimeEqual(authorization, `Bearer ${expected}`))) {
     return null;
   }
 
   const apiToken = request.headers.get('X-API-Token');
-  if (apiToken === expected) {
+  if (apiToken !== null && (await constantTimeEqual(apiToken, expected))) {
     return null;
   }
 
