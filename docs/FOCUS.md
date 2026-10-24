@@ -134,7 +134,7 @@ cleanups. Confirm, in this order:
 - **M3 canary SLO loop deployed** (2026-10-24, schema `m11`; plan `docs/M3-CANARY-SLO-PLAN.md`, runbook
   `docs/OPS.md` "Canary SLO loop"): the shadow router posts per-deployment, per-minute samples to the Spec DO; a minute cron on the
   canary worker evaluates each live canary and rolls back violators. **The input is shadow data** (`source = 'shadow'`), not canary
-  traffic. Deployed with `fe495d3`: `prod-health.sh` passed (all ten workers and the Spec DO, so the `m10 -> m11` migration ran), canary and shadow-router deployments 07:21-07:22Z. Not yet confirmed: `canary_slo_cycle` log lines from the cron.
+  traffic. Deployed with `fe495d3`: `prod-health.sh` passed (all ten workers and the Spec DO, so the `m10 -> m11` migration ran), canary and shadow-router deployments 07:21-07:22Z. Cron confirmed firing (`canary_slo_cycle`, `source: shadow`, `checked: 0`, outcome ok, tailed 2026-10-24).
 - **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; the canary SLO loop now runs from a cron
   (shadow data only, see above); no producer for `canary-rollback-triggers` (the consumer stays) or
   `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
