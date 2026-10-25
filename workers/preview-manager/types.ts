@@ -48,6 +48,8 @@ export interface PreviewManagerEnv {
   // real client and also needs CLOUDFLARE_API_TOKEN, WORKERS_SUBDOMAIN and a bundle source; else 501
   WORKER_VERSIONS_MODE?: string;
   BEEHIVE_LOCAL_DEV?: string;
+  // Service binding to beehive-sandbox-runner: builds the candidate bundle for the api Versions client
+  SANDBOX_RUNNER?: Fetcher;
 }
 
 // ============================================================================

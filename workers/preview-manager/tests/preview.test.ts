@@ -5,7 +5,7 @@
  * Tests health checks, bindings, and basic functionality.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Import the handler
 import handler from '../index';
@@ -332,3 +332,132 @@ describe('Preview Manager - canary version', () => {
     expect((await post(broken.env, { candidateId: 'c1', specId: 's1' })).status).toBe(502);
   });
 });
+
+// ============================================================================
+// Canary version route in api mode (real client, sandbox-runner bundle source, mocked Cloudflare API)
+// ============================================================================
+
+describe('Preview Manager - canary version, api mode', () => {
+  const auth = { Authorization: 'Bearer test-auth-token' };
+  const UUID = '0f1e2d3c-4b5a-4968-8777-665544332211';
+  const SHA = 'c'.repeat(40);
+  const V = '1496f34f-7587-4bfb-b75d-97dab053a92b';
+  const bundle = { mainModule: 'index.js', modules: [{ name: 'index.js', content: 'export default {}' }], compatibilityDate: '2026-10-01', source: 'esbuild' };
+
+  function setup(opts: { candidate?: Record<string, unknown> | null; repo?: { status: number; body: unknown }; runner?: Response | Error; noRunner?: boolean } = {}) {
+    const candidate = opts.candidate === undefined ? { id: UUID, specId: 's1', repositoryId: 'repo-id-1', commitSha: SHA } : opts.candidate;
+    const specFetch = vi.fn(async (req: Request) => {
+      const url = new URL(req.url);
+      if (url.pathname.startsWith('/api/candidates/')) {
+        return candidate ? new Response(JSON.stringify({ success: true, data: candidate }), { status: 200 }) : new Response('{}', { status: 404 });
+      }
+      if (url.pathname.startsWith('/api/repositories/')) {
+        const r = opts.repo ?? { status: 200, body: { success: true, data: { name: 'repo-1' } } };
+        return new Response(JSON.stringify(r.body), { status: r.status });
+      }
+      return new Response('{}', { status: 500 });
+    });
+    const runnerFetch = vi.fn(async () => {
+      const r = opts.runner ?? new Response(JSON.stringify({ success: true, bundle }), { status: 200 });
+      if (r instanceof Error) throw r;
+      return r;
+    });
+    const env = {
+      ...baseMockEnv,
+      WORKER_VERSIONS_MODE: 'api',
+      CLOUDFLARE_ACCOUNT_ID: 'acct1',
+      CLOUDFLARE_API_TOKEN: 'cf-tok',
+      WORKERS_SUBDOMAIN: 'acct',
+      API_AUTH_TOKEN: 'test-auth-token',
+      ...(opts.noRunner ? {} : { SANDBOX_RUNNER: { fetch: runnerFetch } }),
+      SPEC_DO: { ...baseMockEnv.SPEC_DO, get: vi.fn().mockReturnValue({ fetch: specFetch }) } as any,
+    } as unknown as PreviewManagerEnv;
+    return { env, specFetch, runnerFetch };
+  }
+
+  const cfOk = (result: unknown) => new Response(JSON.stringify({ success: true, result, errors: [] }), { status: 200 });
+  const post = (env: PreviewManagerEnv, body: unknown) => handler.fetch(createRequest('/api/preview/canary', 'POST', body, auth), env, mockCtx);
+  const del = (env: PreviewManagerEnv, id: string) => handler.fetch(createRequest(`/api/preview/canary/${id}`, 'DELETE', undefined, auth), env, mockCtx);
+
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('builds the candidate commit in the sandbox, uploads it as a version, and answers with versionsClient api', async () => {
+    const { env, runnerFetch } = setup();
+    const cf = vi.fn().mockResolvedValueOnce(cfOk({ id: V })).mockResolvedValueOnce(cfOk({ enabled: true }));
+    vi.stubGlobal('fetch', cf);
+    const res = await post(env, { candidateId: UUID, specId: 's1' });
+    expect(res.status).toBe(200);
+    expect(await readJson(res)).toMatchObject({ success: true, versionsClient: 'api', workerName: `beehive-candidate-${UUID}`, versionId: V, commitSha: SHA });
+    const [, init] = (runnerFetch.mock.calls[0] as unknown as [string, RequestInit]);
+    expect(JSON.parse(init.body as string)).toEqual({ repo: 'repo-1', commitSha: SHA });
+    expect(cf.mock.calls[0][0]).toContain(`/workers/scripts/beehive-candidate-${UUID}/versions`);
+  });
+
+  it('refuses a candidate id that is not a UUID (it would name a platform worker), without any build or API call', async () => {
+    const { env, runnerFetch, specFetch } = setup();
+    const cf = vi.fn();
+    vi.stubGlobal('fetch', cf);
+    for (const id of ['service', 'c1', '../x']) {
+      const res = await post(env, { candidateId: id, specId: 's1' });
+      expect(res.status).toBe(400);
+    }
+    expect(runnerFetch).not.toHaveBeenCalled();
+    expect(cf).not.toHaveBeenCalled();
+    expect(specFetch).toHaveBeenCalled(); // the candidate lookup happens first, but nothing is built
+  });
+
+  it('requires the candidate to be in the ledger and to have a repository (422)', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    expect((await post(setup({ candidate: null }).env, { candidateId: UUID, specId: 's1' })).status).toBe(422);
+    expect((await post(setup({ candidate: { id: UUID, specId: 's1', commitSha: SHA } }).env, { candidateId: UUID, specId: 's1' })).status).toBe(422);
+    expect((await post(setup({ repo: { status: 404, body: {} } }).env, { candidateId: UUID, specId: 's1' })).status).toBe(422);
+    expect((await post(setup({ repo: { status: 500, body: {} } }).env, { candidateId: UUID, specId: 's1' })).status).toBe(502);
+  });
+
+  it('maps a sandbox build failure to its status and code, and an unreachable service to 504', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const noEntry = setup({ runner: new Response(JSON.stringify({ success: false, code: 'NO_ENTRY', error: 'no entry file' }), { status: 422 }) });
+    const res = await post(noEntry.env, { candidateId: UUID, specId: 's1' });
+    expect(res.status).toBe(422);
+    expect(await readJson(res)).toMatchObject({ success: false, code: 'NO_ENTRY' });
+    const down = setup({ runner: new Error('refused') });
+    expect((await post(down.env, { candidateId: UUID, specId: 's1' })).status).toBe(504);
+    const broken = setup({ runner: new Response('boom', { status: 500 }) });
+    expect((await post(broken.env, { candidateId: UUID, specId: 's1' })).status).toBe(502);
+  });
+
+  it('answers 501 in api mode when the SANDBOX_RUNNER binding is missing (no bundle source, no Cloudflare API call)', async () => {
+    const cf = vi.fn();
+    vi.stubGlobal('fetch', cf);
+    const res = await post(setup({ noRunner: true }).env, { candidateId: UUID, specId: 's1' });
+    expect(res.status).toBe(501);
+    expect(cf).not.toHaveBeenCalled();
+  });
+
+  describe('DELETE /api/preview/canary/:candidateId', () => {
+    it('deletes the candidate worker', async () => {
+      const cf = vi.fn().mockResolvedValue(cfOk(null));
+      vi.stubGlobal('fetch', cf);
+      const res = await del(setup().env, UUID);
+      expect(res.status).toBe(200);
+      expect(await readJson(res)).toMatchObject({ success: true, deleted: true, workerName: `beehive-candidate-${UUID}`, versionsClient: 'api' });
+      expect(cf.mock.calls[0][1].method).toBe('DELETE');
+    });
+
+    it('refuses ids that would name a platform worker, with no API call', async () => {
+      const cf = vi.fn();
+      vi.stubGlobal('fetch', cf);
+      for (const id of ['service', 'c1']) expect((await del(setup().env, id)).status).toBe(400);
+      expect(cf).not.toHaveBeenCalled();
+    });
+
+    it('answers 501 with no Versions client, and requires the bearer token', async () => {
+      const { env } = setup();
+      const noMode = { ...env, WORKER_VERSIONS_MODE: undefined } as unknown as PreviewManagerEnv;
+      expect((await del(noMode, UUID)).status).toBe(501);
+      const unauth = await handler.fetch(createRequest(`/api/preview/canary/${UUID}`, 'DELETE'), env, mockCtx);
+      expect(unauth.status).toBe(401);
+    });
+  });
+});
+

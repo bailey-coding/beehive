@@ -19,6 +19,11 @@ class_name = "SpecDO"
 script_name = "beehive"
 
 # Analytics Engine for per-candidate metrics
+# Builds candidate bundles for the api Versions client (workers/preview-manager/bundle-source.ts)
+[[services]]
+binding = "SANDBOX_RUNNER"
+service = "beehive-sandbox-runner"
+
 [[analytics_engine_datasets]]
 binding = "ANALYTICS"
 dataset = "beehive-metrics"

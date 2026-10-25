@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, type Mock } from 'vitest';
-import { ApiWorkerVersionsClient, workerVersionsClientFor, type CandidateBundleSource } from '../versions';
+import { ApiWorkerVersionsClient, workerNameError, workerVersionsClientFor, type CandidateBundleSource } from '../versions';
 
 const bundle: CandidateBundleSource = async () => ({
   mainModule: 'index.js',
@@ -132,4 +132,37 @@ describe('workerVersionsClientFor', () => {
     expect(fetchFn).not.toHaveBeenCalled();
     await expect(c.setDeployment('beehive-candidate-c1', [{ versionId: V, percentage: 99.5 }, { versionId: V, percentage: 0.5 }])).resolves.toBe('dep1');
   });
+
+  it('refuses a platform worker name (beehive-candidate-service shares the candidate prefix)', async () => {
+    const fetchFn = vi.fn();
+    await expect(client(fetchFn).createVersion({ ...input, workerName: 'beehive-candidate-service' })).rejects.toThrow(/reserved/);
+    await expect(client(fetchFn).createVersion({ ...input, workerName: 'beehive' })).rejects.toThrow(/reserved/);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(workerNameError('beehive-candidate-0f1e2d3c')).toBeNull();
+  });
+
+  describe('deleteWorker', () => {
+    it('deletes a candidate worker with a bodyless DELETE and accepts result: null', async () => {
+      const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true, result: null, errors: [] }), { status: 200 }));
+      await expect(client(fetchFn).deleteWorker('beehive-candidate-c1')).resolves.toBe(true);
+      const [url, init] = fetchFn.mock.calls[0];
+      expect(url).toBe('https://api.cloudflare.com/client/v4/accounts/acct1/workers/scripts/beehive-candidate-c1');
+      expect(init.method).toBe('DELETE');
+      expect(init.body).toBeUndefined();
+    });
+
+    it('resolves false when the worker does not exist, and surfaces other errors', async () => {
+      await expect(client(vi.fn().mockResolvedValue(fail(404, 10007, 'gone'))).deleteWorker('beehive-candidate-c1')).resolves.toBe(false);
+      await expect(client(vi.fn().mockResolvedValue(fail(403, 10000, 'denied'))).deleteWorker('beehive-candidate-c1')).rejects.toThrow(/HTTP 403/);
+    });
+
+    it('never deletes outside the candidate prefix or a platform worker, with no API call', async () => {
+      const fetchFn = vi.fn();
+      for (const name of ['beehive-candidate-service', 'beehive', 'beehive-canary-worker', 'other-worker', '../x']) {
+        await expect(client(fetchFn).deleteWorker(name)).rejects.toThrow();
+      }
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+  });
 });
+

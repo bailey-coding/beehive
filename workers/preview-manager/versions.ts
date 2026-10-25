@@ -15,6 +15,8 @@ export interface CanaryVersionInput {
   workerName: string;
   candidateId: string;
   commitSha: string | null;
+  /** Artifacts repository the candidate lives in; the api bundle source builds from it. */
+  repoName?: string;
 }
 
 export interface CanaryVersion {
@@ -25,7 +27,21 @@ export interface CanaryVersion {
 export interface WorkerVersionsClient {
   readonly kind: 'stub' | 'api';
   createVersion(input: CanaryVersionInput): Promise<CanaryVersion>;
+  /** Delete the candidate Worker (cleanup). Resolves false when it did not exist. Stub: nothing to delete. */
+  deleteWorker(workerName: string): Promise<boolean>;
 }
+
+/** Prefix of every candidate Worker; the route builds `<prefix><candidateId>`. */
+export const CANDIDATE_WORKER_PREFIX = 'beehive-candidate-';
+
+/**
+ * Names of the platform's own workers (docs/OPS.md). `beehive-candidate-service` shares the candidate prefix, so a
+ * candidate id of `service` would otherwise upload a version to, or delete, a production worker.
+ */
+export const RESERVED_WORKER_NAMES: ReadonlySet<string> = new Set([
+  'beehive', 'beehive-gate-workflow', 'beehive-queue-consumer', 'beehive-shadow-router', 'beehive-scientist-comparator',
+  'beehive-preview-manager', 'beehive-candidate-service', 'beehive-canary-worker', 'beehive-promotion-worker', 'beehive-sandbox-runner',
+]);
 
 /**
  * Local stand-in: a fresh `stub-<uuid>` version id per call and a version
@@ -36,6 +52,10 @@ export class StubWorkerVersionsClient implements WorkerVersionsClient {
   readonly kind = 'stub' as const;
 
   constructor(private readonly subdomain?: string) {}
+
+  async deleteWorker(): Promise<boolean> {
+    return false;
+  }
 
   async createVersion(input: CanaryVersionInput): Promise<CanaryVersion> {
     const uuid = crypto.randomUUID();
@@ -83,6 +103,7 @@ interface CfEnvelope<T> {
 
 /** Why `name` cannot be a candidate Worker (safe path segment, fits the version URL label), or null if it can. */
 export function workerNameError(name: string): string | null {
+  if (RESERVED_WORKER_NAMES.has(name)) return `Worker name is reserved for a platform worker: ${name}`;
   if (!/^[a-z0-9-]+$/.test(name)) return `Invalid Worker name: ${name}`;
   if (name.length + 9 > MAX_LABEL) return `Worker name too long for a version URL label: ${name}`;
   return null;
@@ -135,6 +156,23 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
   }
 
   /**
+   * Delete a candidate Worker (cleanup). Only `beehive-candidate-*` names that pass the same checks as createVersion
+   * (never a platform worker). Resolves false when the Worker does not exist.
+   */
+  async deleteWorker(workerName: string): Promise<boolean> {
+    if (!workerName.startsWith(CANDIDATE_WORKER_PREFIX)) throw new Error(`Refusing to delete a Worker outside ${CANDIDATE_WORKER_PREFIX}*: ${workerName}`);
+    const nameError = workerNameError(workerName);
+    if (nameError) throw new Error(nameError);
+    try {
+      await this.call('DELETE', `/accounts/${this.cfg.accountId}/workers/scripts/${workerName}`);
+      return true;
+    } catch (error) {
+      if (error instanceof CfApiError && error.codes.includes(WORKER_NOT_FOUND)) return false;
+      throw error;
+    }
+  }
+
+  /**
    * Switch the Worker's live deployment (percentages must total 100; the API accepts
    * 0.01..100 per version). Not used by the ref-driven canary path; here for completeness.
    */
@@ -172,18 +210,19 @@ export class ApiWorkerVersionsClient implements WorkerVersionsClient {
     return form;
   }
 
-  private async call<T>(method: string, path: string, body: FormData | string): Promise<T> {
+  private async call<T>(method: string, path: string, body?: FormData | string): Promise<T> {
     const headers: Record<string, string> = { Authorization: `Bearer ${this.cfg.apiToken}` };
     if (typeof body === 'string') headers['Content-Type'] = 'application/json';
     const res = await this.fetchFn(`${API_BASE}${path}`, { method, headers, body });
     const env = (await res.json().catch(() => ({}))) as CfEnvelope<T>;
-    if (!res.ok || env.success === false || env.result === undefined) {
+    // A DELETE answers `result: null`; every other call must carry a result.
+    if (!res.ok || env.success === false || (env.result === undefined && method !== 'DELETE')) {
       const errors = env.errors ?? [];
       const detail = errors.map((e) => `${e.code}: ${e.message}`).join('; ') || 'no error body';
       const retry = res.status === 429 ? ` (rate limited, retry-after ${res.headers.get('Retry-After') ?? 'unknown'}s)` : '';
       throw new CfApiError(errors.map((e) => e.code), `Cloudflare API ${method} ${path} -> HTTP ${res.status}${retry}: ${detail}`);
     }
-    return env.result;
+    return env.result as T;
   }
 }
 
