@@ -344,7 +344,7 @@ describe('Preview Manager - canary version, api mode', () => {
   const V = '1496f34f-7587-4bfb-b75d-97dab053a92b';
   const bundle = { mainModule: 'index.js', modules: [{ name: 'index.js', content: 'export default {}' }], compatibilityDate: '2026-10-01', source: 'esbuild' };
 
-  function setup(opts: { candidate?: Record<string, unknown> | null; repo?: { status: number; body: unknown }; runner?: Response | Error; noRunner?: boolean } = {}) {
+  function setup(opts: { candidate?: Record<string, unknown> | null; repo?: { status: number; body: unknown }; runner?: Response | Error; noRunner?: boolean; deployments?: Array<{ status: string }> | 'down'; artifactsNamespace?: string } = {}) {
     const candidate = opts.candidate === undefined ? { id: UUID, specId: 's1', repositoryId: 'repo-id-1', commitSha: SHA } : opts.candidate;
     const specFetch = vi.fn(async (req: Request) => {
       const url = new URL(req.url);
@@ -352,8 +352,17 @@ describe('Preview Manager - canary version, api mode', () => {
         return candidate ? new Response(JSON.stringify({ success: true, data: candidate }), { status: 200 }) : new Response('{}', { status: 404 });
       }
       if (url.pathname.startsWith('/api/repositories/')) {
-        const r = opts.repo ?? { status: 200, body: { success: true, data: { name: 'repo-1' } } };
+        const r = opts.repo ?? { status: 200, body: { success: true, data: { name: 'repo-1', namespace: 'default' } } };
         return new Response(JSON.stringify(r.body), { status: r.status });
+      }
+      if (url.pathname === '/canary-deployments') {
+        if (opts.deployments === 'down') return new Response('{}', { status: 500 });
+        const full = (opts.deployments ?? []).map((d, i) => ({
+          id: `dep-${i}`, candidateId: UUID, specId: 's1', status: d.status, url: 'https://x.workers.dev', workerVersionId: V, commitSha: SHA,
+          trafficPercentage: 10, holdoutPercentage: 5, autoRollback: true, deployRefId: `ref-${i}`, rollbackReason: null,
+          createdAt: '2026-10-25T00:00:00Z', updatedAt: '2026-10-25T00:00:00Z',
+        }));
+        return new Response(JSON.stringify({ success: true, data: full }), { status: 200 });
       }
       return new Response('{}', { status: 500 });
     });
@@ -369,6 +378,7 @@ describe('Preview Manager - canary version, api mode', () => {
       CLOUDFLARE_API_TOKEN: 'cf-tok',
       WORKERS_SUBDOMAIN: 'acct',
       API_AUTH_TOKEN: 'test-auth-token',
+      ...(opts.artifactsNamespace ? { ARTIFACTS_NAMESPACE: opts.artifactsNamespace } : {}),
       ...(opts.noRunner ? {} : { SANDBOX_RUNNER: { fetch: runnerFetch } }),
       SPEC_DO: { ...baseMockEnv.SPEC_DO, get: vi.fn().mockReturnValue({ fetch: specFetch }) } as any,
     } as unknown as PreviewManagerEnv;
@@ -414,6 +424,29 @@ describe('Preview Manager - canary version, api mode', () => {
     expect((await post(setup({ repo: { status: 500, body: {} } }).env, { candidateId: UUID, specId: 's1' })).status).toBe(502);
   });
 
+  it('refuses a candidate repository recorded in a namespace the build service does not read (422), and honors ARTIFACTS_NAMESPACE', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const other = setup({ repo: { status: 200, body: { success: true, data: { name: 'repo-1', namespace: 'beehive-demo' } } } });
+    const res = await post(other.env, { candidateId: UUID, specId: 's1' });
+    expect(res.status).toBe(422);
+    expect((await readJson(res)).error).toContain("namespace 'beehive-demo'");
+    expect(other.runnerFetch).not.toHaveBeenCalled();
+    const cf = vi.fn().mockResolvedValueOnce(cfOk({ id: V })).mockResolvedValueOnce(cfOk({ enabled: true }));
+    vi.stubGlobal('fetch', cf);
+    const configured = setup({ repo: { status: 200, body: { success: true, data: { name: 'repo-1', namespace: 'beehive-demo' } } }, artifactsNamespace: 'beehive-demo' });
+    expect((await post(configured.env, { candidateId: UUID, specId: 's1' })).status).toBe(200);
+    // a repository row without a usable name or namespace is refused too
+    for (const data of [{ name: 123, namespace: 'default' }, { name: 'r' }, {}]) {
+      expect((await post(setup({ repo: { status: 200, body: { success: true, data } } }).env, { candidateId: UUID, specId: 's1' })).status).toBe(422);
+    }
+  });
+
+  it('refuses a candidate that belongs to another spec in api mode (409) before any build', async () => {
+    const { env, runnerFetch } = setup({ candidate: { id: UUID, specId: 'other', repositoryId: 'r', commitSha: SHA } });
+    expect((await post(env, { candidateId: UUID, specId: 's1' })).status).toBe(409);
+    expect(runnerFetch).not.toHaveBeenCalled();
+  });
+
   it('maps a sandbox build failure to its status and code, and an unreachable service to 504', async () => {
     vi.stubGlobal('fetch', vi.fn());
     const noEntry = setup({ runner: new Response(JSON.stringify({ success: false, code: 'NO_ENTRY', error: 'no entry file' }), { status: 422 }) });
@@ -442,6 +475,26 @@ describe('Preview Manager - canary version, api mode', () => {
       expect(res.status).toBe(200);
       expect(await readJson(res)).toMatchObject({ success: true, deleted: true, workerName: `beehive-candidate-${UUID}`, versionsClient: 'api' });
       expect(cf.mock.calls[0][1].method).toBe('DELETE');
+    });
+
+    it('refuses to delete the worker of a candidate with a live canary (409), and fails closed when the ledger check fails', async () => {
+      const cf = vi.fn();
+      vi.stubGlobal('fetch', cf);
+      const live = await del(setup({ deployments: [{ status: 'rolled_back' }, { status: 'deployed' }] }).env, UUID);
+      expect(live.status).toBe(409);
+      expect(await readJson(live)).toMatchObject({ success: false });
+      expect((await del(setup({ deployments: 'down' }).env, UUID)).status).toBe(502);
+      expect(cf).not.toHaveBeenCalled();
+      cf.mockResolvedValue(cfOk(null));
+      expect((await del(setup({ deployments: [{ status: 'superseded' }, { status: 'rolled_back' }] }).env, UUID)).status).toBe(200);
+    });
+
+    it('answers 400, not an exception, for a malformed percent-encoded id', async () => {
+      const cf = vi.fn();
+      vi.stubGlobal('fetch', cf);
+      const res = await del(setup().env, '%E0%A4%A');
+      expect(res.status).toBe(400);
+      expect(cf).not.toHaveBeenCalled();
     });
 
     it('refuses ids that would name a platform worker, with no API call', async () => {

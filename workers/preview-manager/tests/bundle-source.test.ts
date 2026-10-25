@@ -34,9 +34,23 @@ describe('sandboxBundleSource', () => {
     await expect(sandboxBundleSource(asFetcher(r), 'tok')(input)).rejects.toMatchObject({ code: 'NO_ENTRY', status: 422, message: expect.stringContaining('neither') });
   });
 
-  it('checks Response.ok even when the body is not JSON (a 404 is an error, never an empty bundle)', async () => {
+  it('checks Response.ok even when the body is not JSON (a 404 is an error, never an empty bundle) and does not blame the candidate for it', async () => {
     const r = runner(new Response('Not found', { status: 404 }));
-    await expect(sandboxBundleSource(asFetcher(r), 'tok')(input)).rejects.toMatchObject({ code: 'UNAVAILABLE', status: 404 });
+    await expect(sandboxBundleSource(asFetcher(r), 'tok')(input)).rejects.toMatchObject({ code: 'UNAVAILABLE', status: 502 });
+  });
+
+  it('maps a build-service fault (401, 403, 404, 429, 500) to 502 and keeps 503/504, so it never looks like a candidate problem', async () => {
+    for (const [status, expected] of [[401, 502], [403, 502], [404, 502], [429, 502], [500, 502], [503, 503], [504, 504]] as const) {
+      const r = runner(j({ success: false, error: 'x' }, status));
+      await expect(sandboxBundleSource(asFetcher(r), 'tok')(input)).rejects.toMatchObject({ status: expected });
+    }
+    // A candidate-attributable code only keeps its 4xx status when the status is a 4xx
+    const odd = runner(j({ success: false, code: 'NO_ENTRY', error: 'x' }, 500));
+    await expect(sandboxBundleSource(asFetcher(odd), 'tok')(input)).rejects.toMatchObject({ code: 'NO_ENTRY', status: 502 });
+    for (const code of ['BAD_REQUEST', 'BUILD_FAILED', 'TOO_LARGE']) {
+      const r = runner(j({ success: false, code, error: 'x' }, 422));
+      await expect(sandboxBundleSource(asFetcher(r), 'tok')(input)).rejects.toMatchObject({ code, status: 422 });
+    }
   });
 
   it('rejects a 200 whose body is not a valid bundle', async () => {
@@ -52,10 +66,33 @@ describe('sandboxBundleSource', () => {
     await expect(sandboxBundleSource(asFetcher(runner(j({ success: true, bundle: other }))), 'tok')(input)).rejects.toMatchObject({ code: 'BUILD_FAILED' });
   });
 
-  it('reports an unreachable service as 504 or UNAVAILABLE without hanging', async () => {
+  it('reports an unreachable service as UNAVAILABLE with status 504', async () => {
     const r = runner(new Error('connection refused'));
     const err = await sandboxBundleSource(asFetcher(r), 'tok')(input).then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(SandboxBuildError);
-    expect(err).toMatchObject({ code: 'UNAVAILABLE' });
+    expect(err).toMatchObject({ code: 'UNAVAILABLE', status: 504 });
+  });
+
+  it('aborts a build service that never answers after the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = { fetch: vi.fn((_u: string, init: RequestInit) => new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(new Error('aborted'))))) };
+      const p = sandboxBundleSource(r as unknown as Fetcher, 'tok')(input).then(() => null, (e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(320_001);
+      expect(await p).toMatchObject({ code: 'UNAVAILABLE', status: 504, message: expect.stringContaining('did not answer in time') });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('only accepts text that really starts an export statement as an ES module', async () => {
+    const withContent = (content: string) => runner(j({ success: true, bundle: { ...okBundle, modules: [{ name: 'index.js', content }] } }));
+    for (const ok of ['export default {};', '// x\nvar a=1;export{a as default};', 'var a = 1;\nexport const b = 2;', 'export*from"./x";', 'export async function f() {}']) {
+      await expect(sandboxBundleSource(asFetcher(withContent(ok)), 'tok')(input)).resolves.toMatchObject({ mainModule: 'index.js' });
+    }
+    // a symlink's checked-out text, a path that contains the word, and a comment that mentions it
+    for (const bad of ['/usr/local/bin/node', '../export/index.js', '/opt/export/main', '// this will export later\nvar a = 1;', 'addEventListener("fetch", () => {});']) {
+      await expect(sandboxBundleSource(asFetcher(withContent(bad)), 'tok')(input)).rejects.toMatchObject({ code: 'BUILD_FAILED', status: 422 });
+    }
   });
 });

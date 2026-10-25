@@ -155,6 +155,8 @@ export function scrub(text: string, max: number): string {
 export class BuildSandbox extends DurableObject<BuildEnv> {
   /** Tail of the call chain: build() and probe() on one instance run one at a time. */
   private chain: Promise<unknown> = Promise.resolve();
+  /** Builds in progress by `repo@sha`: a repeat call for the same commit (a retry after a caller's timeout) shares the running build. */
+  private inflight = new Map<string, Promise<BuildResult>>();
 
   constructor(ctx: DurableObjectState, env: BuildEnv) {
     super(ctx, env);
@@ -212,7 +214,13 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
 
   build(input: BuildRequest): Promise<BuildResult> {
     const req = validateBuildRequest(input);
-    return this.serialize(() => this.guarded(() => this.buildInner(req)));
+    const key = `${req.repo}@${req.commitSha}`;
+    const running = this.inflight.get(key);
+    if (running) return running;
+    const result = this.serialize(() => this.guarded(() => this.buildInner(req))).finally(() => { this.inflight.delete(key); });
+    result.catch(() => undefined); // a caller that gave up must not leave an unhandled rejection behind
+    this.inflight.set(key, result);
+    return result;
   }
 
   private async buildInner(req: BuildRequest): Promise<BuildResult> {

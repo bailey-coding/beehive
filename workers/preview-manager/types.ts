@@ -50,6 +50,8 @@ export interface PreviewManagerEnv {
   BEEHIVE_LOCAL_DEV?: string;
   // Service binding to beehive-sandbox-runner: builds the candidate bundle for the api Versions client
   SANDBOX_RUNNER?: Fetcher;
+  // Artifacts namespace the sandbox runner builds from (default 'default'); a candidate repo in another namespace is refused
+  ARTIFACTS_NAMESPACE?: string;
 }
 
 // ============================================================================

@@ -27,8 +27,14 @@ const BuildResponseSchema = z.object({
 const ErrorResponseSchema = z.object({ code: z.string().optional(), error: z.string().optional() });
 
 const SHA_RE = /^[0-9a-f]{40}$/;
-/** The build can take up to the runner's 150 s deadline plus queueing behind another build of the same commit. */
-const BUILD_TIMEOUT_MS = 170_000;
+/**
+ * A build is bounded by the runner's 150 s deadline, and calls for one commit are coalesced, but another commit of the same
+ * repo can be building ahead on the same instance: allow two deadlines. Callers that time out may retry safely (the retry
+ * joins the running build).
+ */
+const BUILD_TIMEOUT_MS = 320_000;
+/** Runner codes that blame the candidate; any other failure of the build service is not the candidate's fault. */
+const CANDIDATE_FAULT_CODES = new Set(['BAD_REQUEST', 'NO_ENTRY', 'BUILD_FAILED', 'TOO_LARGE']);
 
 export function sandboxBundleSource(runner: Fetcher, apiToken: string | undefined): CandidateBundleSource {
   return async (input) => {
@@ -59,7 +65,10 @@ export function sandboxBundleSource(runner: Fetcher, apiToken: string | undefine
     if (!res.ok) {
       const parsed = ErrorResponseSchema.safeParse(body);
       const detail = parsed.success ? parsed.data : {};
-      throw new SandboxBuildError(detail.code ?? 'UNAVAILABLE', res.status, detail.error ?? `the build service answered HTTP ${res.status}`);
+      const candidateFault = !!detail.code && CANDIDATE_FAULT_CODES.has(detail.code) && res.status >= 400 && res.status < 500;
+      // 401/403/404/429 from the build service are our problem, not the candidate's: they must not look like a missing candidate.
+      const status = candidateFault ? res.status : res.status === 503 || res.status === 504 ? res.status : 502;
+      throw new SandboxBuildError(detail.code ?? 'UNAVAILABLE', status, detail.error ?? `the build service answered HTTP ${res.status}`);
     }
     const parsed = BuildResponseSchema.safeParse(body);
     if (!parsed.success) throw new SandboxBuildError('UNAVAILABLE', 502, 'the build service returned an unexpected response');
@@ -67,8 +76,9 @@ export function sandboxBundleSource(runner: Fetcher, apiToken: string | undefine
     const { mainModule, modules, compatibilityDate } = parsed.data.bundle;
     const main = modules.find((m) => m.name === mainModule);
     if (!main) throw new SandboxBuildError('BUILD_FAILED', 422, 'the bundle has no main module');
-    // A module Worker must export a handler. This also catches a checked-out symlink (a text file holding only a path).
-    if (!/\bexport\b/.test(main.content)) throw new SandboxBuildError('BUILD_FAILED', 422, 'the built file is not an ES module (it has no export)');
+    // A module Worker must export a handler. This also catches a checked-out symlink (a text file holding only a path):
+    // an export statement has to start a statement, so a word inside a path or a comment does not count.
+    if (!/(^|[;\n{}])\s*export\s*(\{|default\b|\*|const\b|let\b|var\b|function\b|class\b|async\b)/.test(main.content)) throw new SandboxBuildError('BUILD_FAILED', 422, 'the built file is not an ES module (it has no export)');
     return { mainModule, modules: modules.map((m) => ({ name: m.name, content: m.content })), compatibilityDate };
   };
 }

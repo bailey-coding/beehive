@@ -215,7 +215,7 @@ describe('BuildSandbox.build', () => {
 describe('BuildSandbox lifecycle', () => {
   beforeEach(() => { createRepoToken.mockClear(); });
 
-  it('runs concurrent builds one at a time on one instance, and each destroys only its own container', async () => {
+  it('runs builds of different commits one at a time on one instance, and each destroys only its own container', async () => {
     let active = 0;
     let maxActive = 0;
     const { sb, container } = makeSandbox((cmd) => {
@@ -223,10 +223,24 @@ describe('BuildSandbox lifecycle', () => {
       if (cmd.join(' ').includes('wc -c')) active--;
       return happy(cmd);
     });
-    const results = await Promise.all([1, 2, 3].map(() => sb.build({ repo: 'cand-1', commitSha: SHA })));
+    const results = await Promise.all(['1', '2', '3'].map((c) => sb.build({ repo: 'cand-1', commitSha: c.repeat(40) })));
     expect(results).toHaveLength(3);
     expect(maxActive).toBe(1);
     expect(container.destroy).toHaveBeenCalledTimes(3);
+    expect(container.start).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares one running build between repeat calls for the same commit (a retry after a caller timeout) and builds a new commit separately', async () => {
+    const { sb, container } = makeSandbox(happy);
+    const [a, b] = await Promise.all([sb.build({ repo: 'cand-1', commitSha: SHA }), sb.build({ repo: 'cand-1', commitSha: SHA })]);
+    expect(b).toBe(a);
+    expect(container.start).toHaveBeenCalledTimes(1);
+    expect(createRepoToken).toHaveBeenCalledTimes(1);
+    const other = await sb.build({ repo: 'cand-1', commitSha: 'f'.repeat(40) });
+    expect(other).not.toBe(a);
+    expect(container.start).toHaveBeenCalledTimes(2);
+    // once finished, the same commit builds again (nothing is cached)
+    await sb.build({ repo: 'cand-1', commitSha: SHA });
     expect(container.start).toHaveBeenCalledTimes(3);
   });
 
@@ -234,7 +248,7 @@ describe('BuildSandbox lifecycle', () => {
     let first = true;
     const { sb } = makeSandbox((cmd) => (cmd.includes('clone') && first ? ((first = false), { exitCode: 128 }) : happy(cmd)));
     const a = sb.build({ repo: 'cand-1', commitSha: SHA });
-    const b = sb.build({ repo: 'cand-1', commitSha: SHA });
+    const b = sb.build({ repo: 'cand-1', commitSha: 'e'.repeat(40) });
     await expect(a).rejects.toThrow(/CLONE_FAILED/);
     await expect(b).resolves.toMatchObject({ source: 'esbuild' });
   });

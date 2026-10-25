@@ -858,3 +858,23 @@ digest-pinned non-root image. Live checks against throwaway repos (deleted after
   only commits reachable from the repository branches or tags can be built"), cost at volume.
 - **Known limits, by design:** an `import` of an absolute path in candidate source makes esbuild bundle that container file (the container holds
   no secrets); a committed `dist/index.js` silently takes precedence over `src/` (the bundle reports `source: prebuilt`).
+
+### Sandbox Phase 2: preview-manager builds through the sandbox runner (2026-10-25)
+
+`workers/preview-manager` now builds a candidate commit through the service binding `SANDBOX_RUNNER` -> `beehive-sandbox-runner`
+(`bundle-source.ts`, zod-checked, `Response.ok`-checked) and uploads it with the api Versions client. Production still answers 501 until
+`WORKER_VERSIONS_MODE=api`. A Sonnet review (no blockers) led to these rules, all unit-tested:
+- **Safety:** a candidate id must be a UUID in api mode, and `RESERVED_WORKER_NAMES` (the ten platform workers) are refused by the shared name check.
+  Without them a candidate id `service` would have uploaded a version to, or deleted, the production `beehive-candidate-service` worker.
+- **Ledger:** api mode needs the candidate and its repository in the ledger; the repo name comes from `GET /api/repositories/:id`. The repo's
+  recorded `namespace` must equal `ARTIFACTS_NAMESPACE` (default `default`, the namespace the runner reads), else 422.
+- **Errors:** candidate-attributable runner codes (`BAD_REQUEST`, `NO_ENTRY`, `BUILD_FAILED`, `TOO_LARGE`) keep their 4xx; a runner 401/403/404/429/500
+  becomes 502, 503/504 stay, so an infrastructure fault never looks like a missing candidate.
+- **Timeouts and retries:** the build call aborts after 320 s (two runner deadlines). The runner coalesces repeat builds of the same `repo@commit`, so a
+  retry after a caller's timeout joins the running build instead of queueing another.
+- **Built file check:** the main module must start an `export` statement, which catches a checked-out symlink (a text file holding a path).
+- **DELETE `/api/preview/canary/:candidateId`** deletes `beehive-candidate-<uuid>` (api mode only); it refuses while the candidate has a `deployed`
+  canary (409) and when that check fails (502). **It is not called by anything yet** (no purge hook; purge is a spine path in `beehive`), so it is
+  dead code until the maintainer decides how purge triggers it.
+- **Known gap, unverified:** if two uploads for one candidate worker race (for example two different callers), both can take the first-upload path and
+  create two versions/deployments; coalescing makes this unlikely for retries but not impossible. Not tested against the real API.

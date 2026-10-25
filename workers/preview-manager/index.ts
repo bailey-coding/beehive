@@ -26,6 +26,7 @@ import type {
   DeployPreviewRequestBody,
 } from './types';
 import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
+import { DeployRefsClient } from '../shared/deploy-refs';
 
 // ============================================================================
 // Constants
@@ -33,6 +34,7 @@ import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
 
 const DEFAULT_SPEC_DO_NAME = 'main';
 const PREVIEW_WORKER_PREFIX = CANDIDATE_WORKER_PREFIX;
+const DEFAULT_ARTIFACTS_NAMESPACE = 'default';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function previewUrlFor(env: { WORKERS_SUBDOMAIN?: string }, workerName: string): string {
@@ -80,7 +82,8 @@ const previewManagerHandler = {
     // Delete a candidate's Worker (cleanup after purge). api mode only.
     const canaryDelete = path.match(/^\/api\/preview\/canary\/([^/]+)$/);
     if (canaryDelete && request.method === 'DELETE') {
-      return await handleCanaryDeleteRequest(decodeURIComponent(canaryDelete[1]), env);
+      // No decoding: a candidate id is a UUID, which needs none (an encoded id simply fails the UUID rule).
+      return await handleCanaryDeleteRequest(canaryDelete[1], env);
     }
 
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -311,8 +314,13 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
       const nameError = workerNameError(workerName);
       if (nameError) return json({ success: false, error: `Candidate id cannot be a Worker name: ${nameError}` }, 400);
       if (!candidate) return json({ success: false, error: `Candidate ${candidateId} is not in the ledger, so there is nothing to build` }, 422);
-      const repo = await lookupRepositoryName(stub, candidate.repositoryId);
+      const repo = await lookupRepository(stub, candidate.repositoryId);
       if (!repo.ok) return json({ success: false, error: repo.error }, repo.status);
+      // The sandbox runner reads from one Artifacts namespace; a repo recorded under another would be a different repo.
+      const expected = env.ARTIFACTS_NAMESPACE ?? DEFAULT_ARTIFACTS_NAMESPACE;
+      if (repo.namespace !== expected) {
+        return json({ success: false, error: `The candidate repository is in namespace '${repo.namespace}', the build service reads '${expected}'` }, 422);
+      }
       repoName = repo.name;
     }
     const commitSha = candidate?.commitSha ?? parsed.data.commitSha ?? null;
@@ -349,20 +357,21 @@ function versionsClientUnavailable(json: (data: unknown, status?: number) => Res
   }, 501);
 }
 
-/** Resolve the Artifacts repository name of a candidate from the ledger. */
-async function lookupRepositoryName(
+/** Resolve the Artifacts repository (name and namespace) of a candidate from the ledger. */
+async function lookupRepository(
   stub: SpecDoStub,
   repositoryId: string | undefined
-): Promise<{ ok: true; name: string } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; name: string; namespace: string } | { ok: false; status: number; error: string }> {
   if (!repositoryId) return { ok: false, status: 422, error: 'The candidate has no repository' };
   const res = await stub.fetch(
     new Request(`https://spec-do.internal/api/repositories/${encodeURIComponent(repositoryId)}`, { headers: { 'X-Actor-ID': 'preview-manager' } })
   );
   if (res.status === 404) return { ok: false, status: 422, error: 'The candidate repository is not in the ledger' };
   if (!res.ok) return { ok: false, status: 502, error: `Spec DO repository lookup failed: ${res.status}` };
-  const name = ((await res.json()) as { data?: { name?: string } }).data?.name;
-  if (!name) return { ok: false, status: 422, error: 'The candidate repository has no name' };
-  return { ok: true, name };
+  const data = ((await res.json().catch(() => ({}))) as { data?: { name?: unknown; namespace?: unknown } }).data;
+  if (typeof data?.name !== 'string' || !data.name) return { ok: false, status: 422, error: 'The candidate repository has no name' };
+  if (typeof data.namespace !== 'string' || !data.namespace) return { ok: false, status: 422, error: 'The candidate repository has no namespace' };
+  return { ok: true, name: data.name, namespace: data.namespace };
 }
 
 /**
@@ -381,6 +390,15 @@ async function handleCanaryDeleteRequest(candidateId: string, env: PreviewManage
     if (nameError) return json({ success: false, error: nameError }, 400);
   }
   try {
+    if (versions.kind === 'api') {
+      // Deleting the Worker of a live canary would leave the SLO loop and the shadow router pointing at a dead URL.
+      const stub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
+      const deployments = await new DeployRefsClient({ fetch: (p, init) => stub.fetch(`https://spec-do.internal${p}`, init) }).listCanaryDeployments(candidateId);
+      if (!deployments.ok) return json({ success: false, error: `Could not check the candidate's canary deployments: ${deployments.error}` }, 502);
+      if (deployments.data.some((d) => d.status === 'deployed')) {
+        return json({ success: false, error: 'The candidate has a live canary deployment; roll it back first' }, 409);
+      }
+    }
     const deleted = await versions.deleteWorker(workerName);
     return json({ success: true, candidateId, workerName, deleted, versionsClient: versions.kind });
   } catch (error) {
