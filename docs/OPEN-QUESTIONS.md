@@ -929,3 +929,19 @@ live canary and the chain stopped (no ticks for 2+ minutes); `slo-status` showed
   requests produce too few samples to verdict. Candidate URLs are chosen by a hash of the request URL, so a test can pick URLs that land in the split.
 - **Throwaway resources:** two test candidates and their Workers (`beehive-candidate-<uuid>`), org `test-org-e2e-sbx-1792918848` (tombstoned, purge after
   24 h), Artifacts repo (deleted), probe Worker `beehive-fetch-probe-tmp` (deleted). Left: actor `e2e-sbx-probe-actor`.
+
+### Shadow router fix verified: a failing canary is rolled back by the loop (2026-10-25, `4bfba1e`)
+
+Deployed by the push to `cf` (compat flag `global_fetch_strictly_public` on `beehive-shadow-router` confirmed in the worker settings, header allowlist for
+candidates). Re-ran the failing-canary test against production with a candidate whose second commit answers HTTP 500 to everything:
+- Canary deployed at 10:28:32 with `autoRollback: true`; 119 URLs from the 0.5% hash range sent through the shadow router (after the version URL had
+  ~25 s to propagate). `slo-status`: **`violation`, errorRate 1, 101 requests, `error_rate`**. (Before the fix the same candidate read `healthy`, 0 errors.)
+- The queue tick at **10:30:39** logged `canary_slo_cycle ... rolledBack: [<deployment id>]` (the earlier tick at 10:29:39 saw too few flushed samples:
+  `rolledBack: []`). The deployment record: `status: rolled_back`, `rollbackReason: error_rate`, `updatedAt` 10:30:40, about two minutes after deploy,
+  with no human call. No tick followed (chain stopped); the live-canary list was empty.
+- Cleanup: Worker deleted through the DELETE route, org tombstoned (cascade 1 org/repo/spec/candidate), Artifacts repo deleted, health green.
+- **Not verified live:** that the candidate no longer receives `Authorization`/cookies (covered by `tests/candidate-headers.test.ts`; the candidate's
+  response is discarded by the router, so there is no cheap live probe). The sandbox-runner redeploy of this push was still building its image when the
+  test ran; its previous deployment served (identical code).
+- First-minute caveat seen again: a Worker's version URL can take tens of seconds after its first upload before it serves; requests in that window are
+  recorded with whatever the edge answered (with the old behavior always a 404). Give a new canary ~25 s before sending traffic.
