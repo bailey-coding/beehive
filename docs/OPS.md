@@ -374,7 +374,8 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
 `docs/M3-CANARY-SLO-PLAN.md`.
 
 - **Data:** the shadow router aggregates each mirrored candidate result per (deployment, minute) and posts batches to
-  the Spec DO (`POST /canary-metrics`, table `canary_metrics`, migration `m10 -> m11`, additive). Rows older than 24 h are
+  the Spec DO (`POST /canary-metrics`, table `canary_metrics`, migration `m10 -> m11`, additive). A batch is posted at 20 samples or 10 s
+  after the first, and the tail of a burst is posted 10 s later through `ctx.waitUntil` (`scheduleTailFlush`). Rows older than 24 h are
   pruned on every write and read; the table has no org column and no foreign keys, so a purge does not touch it.
 - **It is shadow data, not canary data.** The router mirrors and discards, so every row is `source = 'shadow'`. The loop
   reads `CANARY_SLO_SOURCE` (default `shadow`); set it to `canary` only when real canary traffic records rows with that

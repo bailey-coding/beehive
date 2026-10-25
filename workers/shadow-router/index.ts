@@ -513,7 +513,13 @@ function recordCanaryMetrics(
       const deploymentId = config.canaryDeployments.get(r.candidateId);
       if (deploymentId) recorder.add(deploymentId, r.response.status, r.latencyMs);
     }
-    if (recorder.shouldFlush()) ctx.waitUntil(recorder.flush(specDoFetcher(env)));
+    if (recorder.shouldFlush()) {
+      ctx.waitUntil(recorder.flush(specDoFetcher(env)));
+    } else {
+      // The tail of a burst: send it after FLUSH_AFTER_MS even if no further canary request arrives
+      const tail = recorder.scheduleTailFlush(specDoFetcher(env));
+      if (tail) ctx.waitUntil(tail);
+    }
   } catch (error) {
     console.warn('[Shadow] canary metrics recording failed:', error instanceof Error ? error.message : String(error));
   }

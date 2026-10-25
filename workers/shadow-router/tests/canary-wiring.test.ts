@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import handler from '../index';
-import { FLUSH_AFTER_SAMPLES } from '../canary-recorder';
+import { FLUSH_AFTER_MS, FLUSH_AFTER_SAMPLES } from '../canary-recorder';
 
 // Same hash as classifyRequest: the top-level split is 1% canary by default, so pick URLs that land in it
 function inTopLevelCanary(url: string, method = 'GET'): boolean {
@@ -63,6 +63,8 @@ const pending: Promise<unknown>[] = [];
 const ctx = { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
 
 beforeEach(() => {
+  // The recorder's tail flush waits FLUSH_AFTER_MS inside ctx.waitUntil; fake only the timers so it can be advanced
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   pending.length = 0;
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -78,17 +80,23 @@ beforeEach(() => {
     })
   );
 });
-afterEach(() => {
+afterEach(async () => {
+  await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS); // let any outstanding tail flush finish so the shared recorder is idle again
+  await Promise.allSettled(pending);
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-async function mirror(env: unknown, count: number): Promise<Response[]> {
+async function mirror(env: unknown, count: number, settle = true): Promise<Response[]> {
   const responses: Response[] = [];
   for (const url of mirroredUrls(count)) {
     responses.push(await handler.fetch(new Request(url, { headers: { Authorization: 'Bearer tok' } }), env, ctx));
   }
-  await Promise.allSettled(pending);
+  if (settle) {
+    await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS); // outstanding tail flushes run (a no-op once the count threshold flushed)
+    await Promise.allSettled(pending);
+  }
   return responses;
 }
 
@@ -113,5 +121,18 @@ describe('shadow router -> canary metrics wiring', () => {
       expect(responses.every((r) => r.status === 200)).toBe(true);
       expect(posts.length).toBeGreaterThanOrEqual(1); // it tried, was refused, carried on
     }
+  });
+
+  it('the tail of a short burst (fewer than FLUSH_AFTER_SAMPLES) is posted after FLUSH_AFTER_MS without another request', async () => {
+    const { env, posts } = makeEnv(201);
+    const responses = await mirror(env, FLUSH_AFTER_SAMPLES - 5, false);
+    expect(responses.every((r) => r.status === 200)).toBe(true);
+    expect(posts).toHaveLength(0); // not enough samples and not old enough: nothing sent yet
+    await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS - 1);
+    expect(posts).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.allSettled(pending);
+    const total = posts.flatMap((p) => p.samples).reduce((a: number, s: any) => a + s.requests, 0);
+    expect(total).toBe(FLUSH_AFTER_SAMPLES - 5);
   });
 });

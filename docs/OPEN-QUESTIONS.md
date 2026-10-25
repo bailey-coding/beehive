@@ -945,3 +945,14 @@ candidates). Re-ran the failing-canary test against production with a candidate 
   test ran; its previous deployment served (identical code).
 - First-minute caveat seen again: a Worker's version URL can take tens of seconds after its first upload before it serves; requests in that window are
   recorded with whatever the edge answered (with the old behavior always a 404). Give a new canary ~25 s before sending traffic.
+
+### Canary metrics recorder: the tail of a burst is now flushed (2026-10-25)
+
+`CanaryMetricsRecorder.shouldFlush()` was only asked when another sample was added, so the last <20 samples of a burst stayed in the isolate
+(and were lost if it recycled): a live run of 119 canary-range requests recorded 98. Fix: `scheduleTailFlush()` hands `ctx.waitUntil` a one-shot
+promise that waits `FLUSH_AFTER_MS` (10 s, inside the ~30 s the platform gives `waitUntil` work after the response) and then flushes whatever is
+still pending; at most one is outstanding per isolate, it is a no-op if the count/age path already flushed, a failing or missing Spec DO is
+swallowed, and the pending set is still taken before sending so nothing is sent twice. Tests: `canary-recorder.test.ts` (fake timers) and
+`canary-wiring.test.ts` (through the handler; the tail test fails if the call in `recordCanaryMetrics` is removed). **Not verified live** (needs a deploy).
+Note: a competing change (`scratch/mistral-recorder-flush`, a `setTimeout` that only cleared a field and still relied on the next sample) was not used:
+it did not flush anything by itself.

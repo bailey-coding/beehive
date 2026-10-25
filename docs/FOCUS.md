@@ -12,6 +12,7 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Where we are
 
+- **Newest (2026-10-25):** the canary pipeline is live in production, including real candidate builds in a sandbox container and automatic rollback by the SLO loop (see "Canary pipeline" under Open work).
 - The agent stack is merged and on `origin/main`: spine items 1 and 3 (promotion ledger routes,
   ledger lifecycle), CI-only workflow, service tokens, canary deploy/rollback as Spec DO refs, review
   fixes, Spec DO internal auth, shadow-router ref cache, the ledger compare-and-swap with the tournament
@@ -131,36 +132,28 @@ cleanups. Confirm, in this order:
     binding cycle may need two passes).
 - **README drift — FIXED:** `tests/e2e/README.md` updated to match `docs/SETUP.md` (local e2e makes real HTTP
   calls, no mocks) (`54808ae`, `30eb73`, `bc155e0`, 2026-10-19).
-- **M3 canary SLO loop deployed** (2026-10-24, schema `m11`; plan `docs/M3-CANARY-SLO-PLAN.md`, runbook
-  `docs/OPS.md` "Canary SLO loop"): the shadow router posts per-deployment, per-minute samples to the Spec DO; the canary worker evaluates each live
-  canary on a Spec DO alarm tick and rolls back violators (the minute cron was removed 2026-10-24). **The input is shadow data** (`source = 'shadow'`), not canary
-  traffic. Deployed with `fe495d3`: `prod-health.sh` passed (all ten workers and the Spec DO, so the `m10 -> m11` migration ran), canary and shadow-router deployments 07:21-07:22Z. Cron confirmed firing (`canary_slo_cycle`, `source: shadow`, `checked: 0`, outcome ok, tailed 2026-10-24).
-- **Event-driven tick deployed** (2026-10-24, `7e17125`): the Spec DO arms a 60 s alarm on a canary deploy and sends one tick per
-  firing to queue `canary-slo-ticks` while a canary is live; the canary worker consumes it and runs one SLO cycle per batch. The cron was removed
-  2026-10-24, so the tick is the only trigger. Queue created by hand before the push (1 producer, 1 consumer). **Consequence:**
-  canary deploys answer 501 in prod, so no alarm arms and the SLO loop does not run there until the Versions client is wired in.
-- **Sandbox build deployed** (2026-10-25, `7733d4b`, `docs/SANDBOX-BUILD-PLAN.md` Phase 1): `beehive-sandbox-runner` builds a candidate
-  commit in a no-Internet container (`POST /sandbox/build {repo, commitSha}`, git clone through a credential-injecting intercept, esbuild
-  with no install scripts, 60 s / 1 MiB limits) and returns the bundle the Versions client needs. Verified live with a throwaway repo.
-  `CLOUDFLARE_API_TOKEN` is set as a secret on the worker. A review's 10 should-fix items were fixed and verified live the same day (`bb1ec51`, `OPEN-QUESTIONS`). Remaining (Phase 2, then 3): `preview-manager` calls `/sandbox/build` through a
-  service binding as its `CandidateBundleSource`; handle `versionsClient: 'api'`; purge cleanup of `beehive-candidate-*`; then you set
-  `WORKER_VERSIONS_MODE=api`. **Phase 2 is deployed (2026-10-25, `21bea5a`), reviewed, behind the 501 default** (`OPEN-QUESTIONS` "Sandbox Phase 2"): `SANDBOX_RUNNER` binding live, health green, both new routes answer 501. **Phase 3 DONE 2026-10-25: `WORKER_VERSIONS_MODE=api` is live and a first real canary worked end to end (`OPEN-QUESTIONS` "First real canary"); production canary deploys no longer answer 501.** Original Phase 3 notes: set `WORKER_VERSIONS_MODE=api` on `beehive-preview-manager` (the account id and workers.dev subdomain are plain vars in its `wrangler.toml` now; its `CLOUDFLARE_API_TOKEN` secret must have Workers Scripts:Edit, which the first call will confirm or refuse with a 403), then run a first canary for a ledger candidate whose repo has a buildable commit. The cleanup route `DELETE /api/preview/canary/:id` exists but nothing calls it: wiring it to the ledger purge is yours to decide. The canary cron is gone (cleared 2026-10-25 after a scheduler lag, `OPEN-QUESTIONS`).
-- **Shadow router fix deployed and verified (2026-10-25, `4bfba1e`):** workers.dev error 1042 had turned every mirrored request into a 404, so a failing canary
-  looked healthy. With `global_fetch_strictly_public` and a credential-free header allowlist for candidates, the same failing candidate read `violation`
-  (error rate 1.0, 101 requests) and the queue-driven loop rolled it back by itself in about two minutes (`OPEN-QUESTIONS` "Shadow router fix verified").
-  The M3 canary SLO loop is now exercised end to end on shadow data. Still open: SLO data is `source = shadow` (not live canary traffic), the recorder
-  flushes only on the next sample, and only 5xx counts as an error.
-- **Workers Versions API verified; client built, not wired** (2026-10-24, `140e629`, `docs/OPEN-QUESTIONS.md`):
-  `ApiWorkerVersionsClient` behind `WORKER_VERSIONS_MODE=api`, only mocked-fetch tested. To wire (human): pass a
-  `CandidateBundleSource` to `workerVersionsClientFor` (`workers/preview-manager/index.ts`), set `WORKER_VERSIONS_MODE=api`,
-  `CLOUDFLARE_API_TOKEN`, `WORKERS_SUBDOMAIN`; handle `versionsClient: 'api'` in the response; clean up `beehive-candidate-*`
-  Workers on purge. Candidates must be stateless (no version URLs for DO/Container/Sandbox Workers). Unverified: 429 behavior,
-  bindings, switch propagation bound, the source of the built bundle.
-- **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; the canary SLO loop runs from the alarm tick
-  (shadow data only, see above); no producer for `canary-rollback-triggers` (the consumer stays) or
-  `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
-  config, not an SDK integration. Production canary deploys answer 501 until a real Workers Versions
-  client exists (OPEN-QUESTIONS 2026-10-16).
+- **Canary pipeline (M3 loop + sandbox build): LIVE in production, verified end to end 2026-10-25.** Details and dated evidence: `docs/OPEN-QUESTIONS.md`
+  (entries from 2026-10-24 on); runbook: `docs/OPS.md` "Canary SLO loop" and "Sandbox build container"; plans: `docs/M3-CANARY-SLO-PLAN.md`,
+  `docs/SANDBOX-BUILD-PLAN.md`. How it works now:
+  - `WORKER_VERSIONS_MODE=api` on `beehive-preview-manager` (a line in its `wrangler.toml`; delete it and push to get 501 again). A canary request
+    (`POST /deploy-canary` on the canary worker) makes preview-manager read the ledger candidate + repository (UUID candidate id, repo namespace must
+    equal the runner's), call `beehive-sandbox-runner` `POST /sandbox/build`, and upload the bundle as Worker `beehive-candidate-<uuid>`.
+  - The sandbox runner builds the exact commit in a no-Internet container (`BuildSandbox`, container DO API, git clone through a credential-injecting
+    gateway, esbuild with no install scripts, 60 s / 150 s / 1 MiB limits, builds of one commit coalesced).
+  - The Spec DO arms a 60 s alarm on a canary deploy and sends ticks to queue `canary-slo-ticks`; the canary worker evaluates each live canary
+    (`canary_slo_cycle`) and rolls back violators; the chain stops when no canary is live. There is no cron (cleared 2026-10-25).
+  - The shadow router mirrors to live canaries (`global_fetch_strictly_public`; candidates get no `Authorization`/cookies) and posts per-minute
+    samples; a failing candidate (error rate 1.0) was rolled back by the loop in about two minutes. `DELETE /api/preview/canary/:id` deletes a
+    candidate Worker (refused while a canary is live).
+  - **Known limits:** SLO data is `source = shadow`, not live canary traffic; only 5xx counts as an error; the default 1% top-level canary split
+    yields few samples; the recorder tail flush (`fix/recorder-flush`, below) is not deployed yet.
+  - **Pending decisions / work:** (1) wire the DELETE route into the ledger purge (a spine path in `beehive`; nothing calls it today); (2) purge the three
+    tombstoned test orgs `test-org-e2e-sbx-*` after 2026-10-26 ~11:00 UTC (24 h age rule; needs the maintainer actor, `docs/OPS.md` "Ledger cleanup")
+    and decide whether to delete actor `e2e-sbx-probe-actor`; (3) add `wrangler deploy --dry-run` per worker to CI Enhanced (a missing zod install
+    only failed at deploy time); (4) a review of the post-review changes (sandbox runner fixes `bb1ec51`, Phase 2 fixes `b768300`, shadow router `4bfba1e`)
+    was started on 2026-10-25 but the agent hit its session limit: re-run it; (5) local `main` carries an unpushed commit `0dd6edf` from another
+    agent whose recorder "fix" does not flush anything; it is also on branch `scratch/mistral-recorder-flush`: drop it from `main` (`git reset --hard origin/main`
+    after confirming nothing else is unpushed).
 - **M1 ledger lifecycle** is deployed with m8; the production purge is untested against real data. Use
   tombstone then purge (`docs/OPS.md` "Ledger cleanup"), never delete the worker.
 - **Cloudflare Flagship:** OPEN-QUESTIONS.md section restored (`c1039e5`, 2026-10-19) with adoption
