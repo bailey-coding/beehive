@@ -102,7 +102,7 @@ retries), so a bad deploy is loud rather than half-migrated.
 7. Read-only verification (changes nothing; an agent may run these with a read-only API token, and
    narrow the output, e.g. `| head -30` or `--json`, since results stay in its context):
    - `wrangler secret list --name <worker>`: the nine tier-1 workers hold `SPEC_DO_INTERNAL_TOKEN`,
-     `beehive` also `SPEC_DO_ADMIN_TOKEN`, `beehive-sandbox-runner` neither (names only, no values).
+     `beehive` also `SPEC_DO_ADMIN_TOKEN`, `beehive-sandbox-runner` neither but holds `CLOUDFLARE_API_TOKEN` (Artifacts read-token minting for builds; names only, no values).
    - `wrangler deployments list --name <worker>` (or `wrangler versions list`): each worker runs the
      commit you meant to deploy; `beehive-promotion-worker` must be the one deployed after `beehive`.
    - `wrangler queues list`: the four queues of step 2 exist.
@@ -475,3 +475,17 @@ The `KV namespaces ... Authentication error` printed by `wrangler delete` is har
 Symptom lookup for deploy and auth failures: `docs/TROUBLESHOOTING.md`. First-time setup and
 self-hosting: `docs/SETUP.md`. See `docs/OPEN-QUESTIONS.md` for dated findings (Artifacts behavior, wrangler config
 gotchas, deploy learnings).
+
+### Sandbox build container (beehive-sandbox-runner, 2026-10-25)
+
+`POST /sandbox/build {repo, commitSha}` (bearer auth) builds a candidate commit in a container-backed Durable Object (`BuildSandbox`) and
+returns a Worker bundle; `GET /sandbox/probe` returns the image's tool versions (deploy check: node, esbuild, git). Design and limits:
+`docs/SANDBOX-BUILD-PLAN.md`; verification and gotchas: `docs/OPEN-QUESTIONS.md` "Sandbox build on the container DO API works in production".
+- **Secret:** `CLOUDFLARE_API_TOKEN` on `beehive-sandbox-runner` (Artifacts scope) mints 5-minute read tokens inside `ArtifactsGateway`; it never
+  reaches the container. `CLOUDFLARE_ACCOUNT_ID` and `ARTIFACTS_NAMESPACE` are plain vars in its `wrangler.toml`.
+- **Deploys:** the image is built by Workers Builds' `wrangler deploy` (~2 min). A change to the container class or its binding is a Durable Object
+  lifecycle change: rename rather than delete a class that the live worker binds (error 10086), and delete a superseded container application by hand
+  (`wrangler containers list`, then `wrangler containers delete <id>`).
+- **Cost:** no instance runs until a build or probe starts one (`lite`), and every build destroys its container.
+- **Local e2e / CI:** the worker is not started by `scripts/start-e2e-workers.sh`; `SANDBOX_MODE=stub` with `BEEHIVE_LOCAL_DEV=1` returns a fixed bundle.
+

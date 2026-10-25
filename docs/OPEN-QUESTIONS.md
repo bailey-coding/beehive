@@ -816,3 +816,26 @@ Two gotchas found on the way:
   `vi.mock('@cloudflare/sandbox')`.
 - **Deleting `[triggers]` does not remove an existing cron.** After `35e8eec` the canary worker's `* * * * *` schedule kept firing
   and every invocation threw "Handler does not export a scheduled() function" until `crons = []` is deployed (`3908e42`).
+
+### Sandbox build on the container DO API works in production (2026-10-25)
+
+`beehive-sandbox-runner` now runs `BuildSandbox` (Durable Object driving `ctx.container`, the Sandbox SDK 1.0 model, no
+`@cloudflare/sandbox` package) with `ArtifactsGateway` as the outbound intercept. Deployed by the push to `cf` (`7733d4b`).
+- **Verified live:** `GET /sandbox/probe` returns node v24.22.1, esbuild 0.25.0, git 2.47.3 (the Dockerfile image).
+  `POST /sandbox/build {repo, commitSha}` against a throwaway Artifacts repo with `src/index.ts` + `src/helper.ts` cloned the exact
+  commit through the intercept (the container has no Internet and never holds a token), bundled it with esbuild and returned the
+  ESM module. Error paths: malformed commit 400 `BAD_REQUEST`; missing repo 502 `CLONE_FAILED` ("Empty reply from server");
+  unknown commit 502 `CLONE_FAILED`. The throwaway repo was deleted. The `.env` `CLOUDFLARE_API_TOKEN` (set as a secret on the
+  worker) has Artifacts scope.
+- **Not tried:** a `dist/index.js` prebuilt path in production, the 60 s build timeout, the 1 MiB cap, concurrent builds, cold-start
+  timing of `/sandbox/build` (it completed within one 200 s request), cost at volume, a candidate that imports npm packages (there is
+  no `npm install`, so it fails at the bundle step by design).
+- **Gotcha 1: a `deleted` tombstone fails while the live worker binds the class** (build log, code 10086: "Cannot delete the Durable
+  Object namespace ... still referenced by the binding"). Re-pointing the binding and deleting the class in one deploy is not
+  allowed. Fix used: `state = "renamed"`, `renamed_to = "BuildSandbox"` (namespace and binding carry over; the old class held no data).
+- **Gotcha 2: the old 0.x container application is not removed by the deploy.** Delete it by hand
+  (`wrangler containers delete <id>`, id from `wrangler containers list`) before the deploy that moves the class to a new container config.
+- **Gotcha 3: `crons = []` clears the schedule, but the scheduler lags.** `GET .../schedules` returned `[]` immediately, yet the
+  minute cron kept firing (and throwing) for ~10 minutes after the deploy; it stopped without further action.
+- **Gotcha 4: Workers Builds termination was transient.** The ten builds for `34c1864` were terminated after ~5.5 minutes with no log;
+  the next push (`22149a3`) built nine workers in about a minute each. The sandbox-runner build (with the Docker image) takes ~2 minutes.

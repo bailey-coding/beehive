@@ -139,6 +139,12 @@ cleanups. Confirm, in this order:
   firing to queue `canary-slo-ticks` while a canary is live; the canary worker consumes it and runs one SLO cycle per batch. The cron was removed
   2026-10-24, so the tick is the only trigger. Queue created by hand before the push (1 producer, 1 consumer). **Consequence:**
   canary deploys answer 501 in prod, so no alarm arms and the SLO loop does not run there until the Versions client is wired in.
+- **Sandbox build deployed** (2026-10-25, `7733d4b`, `docs/SANDBOX-BUILD-PLAN.md` Phase 1): `beehive-sandbox-runner` builds a candidate
+  commit in a no-Internet container (`POST /sandbox/build {repo, commitSha}`, git clone through a credential-injecting intercept, esbuild
+  with no install scripts, 60 s / 1 MiB limits) and returns the bundle the Versions client needs. Verified live with a throwaway repo.
+  `CLOUDFLARE_API_TOKEN` is set as a secret on the worker. Remaining (Phase 2, then 3): `preview-manager` calls `/sandbox/build` through a
+  service binding as its `CandidateBundleSource`; handle `versionsClient: 'api'`; purge cleanup of `beehive-candidate-*`; then you set
+  `WORKER_VERSIONS_MODE=api`. The canary cron is gone (cleared 2026-10-25 after a scheduler lag, `OPEN-QUESTIONS`).
 - **Workers Versions API verified; client built, not wired** (2026-10-24, `140e629`, `docs/OPEN-QUESTIONS.md`):
   `ApiWorkerVersionsClient` behind `WORKER_VERSIONS_MODE=api`, only mocked-fetch tested. To wire (human): pass a
   `CandidateBundleSource` to `workerVersionsClientFor` (`workers/preview-manager/index.ts`), set `WORKER_VERSIONS_MODE=api`,
