@@ -387,12 +387,30 @@ describe('POST /sandbox/build', () => {
   const bundle = { mainModule: 'index.js', modules: [{ name: 'index.js', content: 'x' }], compatibilityDate: '2026-10-01', source: 'esbuild' };
 
   it('builds in a sandbox keyed by repo and short commit and returns the bundle', async () => {
-    build.mockResolvedValueOnce(bundle);
+    build.mockResolvedValueOnce({ ...bundle, namespace: 'default' });
     const res = await callHandler('/sandbox/build', 'POST', { repo: 'cand-1', commitSha: sha });
     expect(res.status).toBe(200);
-    expect(await readJson(res)).toEqual({ success: true, bundle });
+    expect(await readJson(res)).toEqual({ success: true, bundle, namespace: 'default' });
     expect(getByName).toHaveBeenCalledWith(`build-cand-1-${'a'.repeat(8)}`);
     expect(build).toHaveBeenCalledWith({ repo: 'cand-1', commitSha: sha });
+  });
+
+  it('keys the sandbox by namespace too, passes it on, and echoes it beside the bundle', async () => {
+    build.mockResolvedValueOnce({ ...bundle, namespace: 'my-org' });
+    const res = await callHandler('/sandbox/build', 'POST', { repo: 'cand-1', commitSha: sha, namespace: 'my-org' });
+    expect(await readJson(res)).toEqual({ success: true, bundle, namespace: 'my-org' });
+    expect(getByName).toHaveBeenLastCalledWith(`build-my-org/cand-1-${'a'.repeat(8)}`);
+    expect(build).toHaveBeenLastCalledWith({ repo: 'cand-1', commitSha: sha, namespace: 'my-org' });
+  });
+
+  it('rejects an invalid namespace with 422 BAD_NAMESPACE before any container work', async () => {
+    getByName.mockClear();
+    for (const namespace of ['my.org', '', null, 5, 'a/b']) {
+      const res = await callHandler('/sandbox/build', 'POST', { repo: 'cand-1', commitSha: sha, namespace });
+      expect(res.status).toBe(422);
+      expect(await readJson(res)).toMatchObject({ success: false, code: 'BAD_NAMESPACE' });
+    }
+    expect(getByName).not.toHaveBeenCalled();
   });
 
   it('rejects a repo or commit that is not well formed before any container work', async () => {

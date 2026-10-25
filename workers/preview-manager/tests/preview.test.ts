@@ -344,7 +344,7 @@ describe('Preview Manager - canary version, api mode', () => {
   const V = '1496f34f-7587-4bfb-b75d-97dab053a92b';
   const bundle = { mainModule: 'index.js', modules: [{ name: 'index.js', content: 'export default {}' }], compatibilityDate: '2026-10-01', source: 'esbuild' };
 
-  function setup(opts: { candidate?: Record<string, unknown> | null; repo?: { status: number; body: unknown }; runner?: Response | Error; noRunner?: boolean; deployments?: Array<{ status: string }> | 'down'; artifactsNamespace?: string } = {}) {
+  function setup(opts: { candidate?: Record<string, unknown> | null; repo?: { status: number; body: unknown }; runner?: Response | Error; noRunner?: boolean; deployments?: Array<{ status: string }> | 'down'} = {}) {
     const candidate = opts.candidate === undefined ? { id: UUID, specId: 's1', repositoryId: 'repo-id-1', commitSha: SHA } : opts.candidate;
     const specFetch = vi.fn(async (req: Request) => {
       const url = new URL(req.url);
@@ -366,8 +366,10 @@ describe('Preview Manager - canary version, api mode', () => {
       }
       return new Response('{}', { status: 500 });
     });
-    const runnerFetch = vi.fn(async () => {
-      const r = opts.runner ?? new Response(JSON.stringify({ success: true, bundle }), { status: 200 });
+    const runnerFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      // like the real runner, answer with the namespace that was asked for
+      const asked = init?.body ? (JSON.parse(init.body as string) as { namespace?: string }).namespace : undefined;
+      const r = opts.runner ?? new Response(JSON.stringify({ success: true, bundle, namespace: asked }), { status: 200 });
       if (r instanceof Error) throw r;
       return r;
     });
@@ -378,7 +380,6 @@ describe('Preview Manager - canary version, api mode', () => {
       CLOUDFLARE_API_TOKEN: 'cf-tok',
       WORKERS_SUBDOMAIN: 'acct',
       API_AUTH_TOKEN: 'test-auth-token',
-      ...(opts.artifactsNamespace ? { ARTIFACTS_NAMESPACE: opts.artifactsNamespace } : {}),
       ...(opts.noRunner ? {} : { SANDBOX_RUNNER: { fetch: runnerFetch } }),
       SPEC_DO: { ...baseMockEnv.SPEC_DO, get: vi.fn().mockReturnValue({ fetch: specFetch }) } as any,
     } as unknown as PreviewManagerEnv;
@@ -399,7 +400,7 @@ describe('Preview Manager - canary version, api mode', () => {
     expect(res.status).toBe(200);
     expect(await readJson(res)).toMatchObject({ success: true, versionsClient: 'api', workerName: `beehive-candidate-${UUID}`, versionId: V, commitSha: SHA });
     const [, init] = (runnerFetch.mock.calls[0] as unknown as [string, RequestInit]);
-    expect(JSON.parse(init.body as string)).toEqual({ repo: 'repo-1', commitSha: SHA });
+    expect(JSON.parse(init.body as string)).toEqual({ repo: 'repo-1', commitSha: SHA, namespace: 'default' });
     expect(cf.mock.calls[0][0]).toContain(`/workers/scripts/beehive-candidate-${UUID}/versions`);
   });
 
@@ -424,21 +425,28 @@ describe('Preview Manager - canary version, api mode', () => {
     expect((await post(setup({ repo: { status: 500, body: {} } }).env, { candidateId: UUID, specId: 's1' })).status).toBe(502);
   });
 
-  it('refuses a candidate repository recorded in a namespace the build service does not read (422), and honors ARTIFACTS_NAMESPACE', async () => {
-    vi.stubGlobal('fetch', vi.fn());
-    const other = setup({ repo: { status: 200, body: { success: true, data: { name: 'repo-1', namespace: 'beehive-demo' } } } });
-    const res = await post(other.env, { candidateId: UUID, specId: 's1' });
-    expect(res.status).toBe(422);
-    expect((await readJson(res)).error).toContain("namespace 'beehive-demo'");
-    expect(other.runnerFetch).not.toHaveBeenCalled();
+  it('builds a fork-created candidate from its own namespace, and answers 422 naming the organization when that name is not a valid namespace', async () => {
     const cf = vi.fn().mockResolvedValueOnce(cfOk({ id: V })).mockResolvedValueOnce(cfOk({ enabled: true }));
     vi.stubGlobal('fetch', cf);
-    const configured = setup({ repo: { status: 200, body: { success: true, data: { name: 'repo-1', namespace: 'beehive-demo' } } }, artifactsNamespace: 'beehive-demo' });
-    expect((await post(configured.env, { candidateId: UUID, specId: 's1' })).status).toBe(200);
+    const fork = setup({ repo: { status: 200, body: { success: true, data: { name: 'repo-1', namespace: 'my-org' } } } });
+    expect((await post(fork.env, { candidateId: UUID, specId: 's1' })).status).toBe(200);
+    expect(JSON.parse((fork.runnerFetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toEqual({ repo: 'repo-1', commitSha: SHA, namespace: 'my-org' });
+    vi.stubGlobal('fetch', vi.fn());
+    const bad = setup({ repo: { status: 200, body: { success: true, data: { name: 'repo-1', namespace: 'my.org' } } } });
+    const res = await post(bad.env, { candidateId: UUID, specId: 's1' });
+    expect(res.status).toBe(422);
+    expect(await readJson(res)).toMatchObject({ code: 'BAD_NAMESPACE', error: expect.stringContaining("'my.org'") });
+    expect(bad.runnerFetch).not.toHaveBeenCalled();
     // a repository row without a usable name or namespace is refused too
     for (const data of [{ name: 123, namespace: 'default' }, { name: 'r' }, {}]) {
       expect((await post(setup({ repo: { status: 200, body: { success: true, data } } }).env, { candidateId: UUID, specId: 's1' })).status).toBe(422);
     }
+  });
+
+  it('refuses an older runner that does not echo the namespace (502), so it cannot build default/<repo> by mistake', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const old = setup({ runner: new Response(JSON.stringify({ success: true, bundle }), { status: 200 }) });
+    expect((await post(old.env, { candidateId: UUID, specId: 's1' })).status).toBe(502);
   });
 
   it('refuses a candidate that belongs to another spec in api mode (409) before any build', async () => {

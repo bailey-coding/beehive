@@ -867,7 +867,7 @@ digest-pinned non-root image. Live checks against throwaway repos (deleted after
 - **Safety:** a candidate id must be a UUID in api mode, and `RESERVED_WORKER_NAMES` (the ten platform workers) are refused by the shared name check.
   Without them a candidate id `service` would have uploaded a version to, or deleted, the production `beehive-candidate-service` worker.
 - **Ledger:** api mode needs the candidate and its repository in the ledger; the repo name comes from `GET /api/repositories/:id`. The repo's
-  recorded `namespace` must equal `ARTIFACTS_NAMESPACE` (default `default`, the namespace the runner reads), else 422.
+  recorded `namespace` must equal `ARTIFACTS_NAMESPACE` (default `default`, the namespace the runner reads), else 422. (Superseded 2026-10-25: the namespace is sent per request, see SF-8.)
 - **Errors:** candidate-attributable runner codes (`BAD_REQUEST`, `NO_ENTRY`, `BUILD_FAILED`, `TOO_LARGE`) keep their 4xx; a runner 401/403/404/429/500
   becomes 502, 503/504 stay, so an infrastructure fault never looks like a missing candidate.
 - **Timeouts and retries:** the build call aborts after 320 s (two runner deadlines). The runner coalesces repeat builds of the same `repo@commit`, so a
@@ -978,7 +978,7 @@ Fixed in the commit after `c0cfa86` (unit-tested; **not deployed**; the zombie-b
 - **SF-7 samples added during an in-flight tail flush were stranded.** The "scheduled" flag is cleared when the timer fires, before the flush.
 - Also: the Scientist queue message no longer persists `Authorization`/cookies; the gateway read-token TTL is 240 s (was 600).
 **Left open on purpose:**
-- **SF-8 namespace.** Fork-created candidate repos get `repositories.namespace = org.name` in the ledger (`spec-do/index.ts:1504`), while the runner and the
+- **SF-8 namespace (resolved in code 2026-10-25, not yet deployed: `docs/SF-8-NAMESPACE-PLAN.md`; the runner takes the namespace per request and echoes it, `preview-manager` refuses a runner that does not echo it).** Was: fork-created candidate repos get `repositories.namespace = org.name` in the ledger (`spec-do/index.ts:1504`), while the runner and the
   preview-manager read `ARTIFACTS_NAMESPACE` (`default`). Such a candidate is refused with 422 on every canary deploy (fails closed). Decide whether the runner
   takes the namespace per request (widens which namespaces it can mint read tokens for) or the ledger records the real Artifacts namespace.
 - **Local dev:** `global_fetch_strictly_public` blocks loopback/private targets, so mirroring to `http://localhost:8787` under `wrangler dev` probably stops;

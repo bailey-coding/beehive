@@ -17,6 +17,8 @@ export interface CanaryVersionInput {
   commitSha: string | null;
   /** Artifacts repository the candidate lives in; the api bundle source builds from it. */
   repoName?: string;
+  /** Artifacts namespace of that repository (ledger `repositories.namespace`); always sent to the build service. */
+  repoNamespace?: string;
 }
 
 export interface CanaryVersion {

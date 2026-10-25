@@ -67,6 +67,13 @@ describe('validation helpers', () => {
     }
   });
 
+  it('accepts an optional namespace and rejects one that is present but not a valid namespace name', () => {
+    expect(validateBuildRequest({ repo: 'r', commitSha: SHA, namespace: 'my-org' })).toEqual({ repo: 'r', commitSha: SHA, namespace: 'my-org' });
+    for (const bad of ['', 'my.org', '_x', 'a b', 'a/b', '..', 'x'.repeat(65), null, 5, {}]) {
+      expect(() => validateBuildRequest({ repo: 'r', commitSha: SHA, namespace: bad })).toThrow(/BAD_NAMESPACE/);
+    }
+  });
+
   it('allows only a read-only clone of exactly one repository, with no extra query', () => {
     const u = (p: string, q = '') => new URL(`https://h${p}${q}`);
     const base = '/git/default/cand-1.git';
@@ -233,6 +240,31 @@ describe('BuildSandbox lifecycle', () => {
     expect(maxActive).toBe(1);
     expect(container.destroy).toHaveBeenCalledTimes(3);
     expect(container.start).toHaveBeenCalledTimes(3);
+  });
+
+  it('builds from the namespace named in the request (token, clone URL, gateway props), falling back to the environment', async () => {
+    const forked = makeSandbox(happy);
+    const out = await forked.sb.build({ repo: 'cand-1', commitSha: SHA, namespace: 'my-org' });
+    expect(out.namespace).toBe('my-org');
+    expect(createRepoToken).toHaveBeenCalledWith({ accountId: 'acct', apiToken: 'tok', namespace: 'my-org' }, 'cand-1', 'read', 240);
+    expect(JSON.stringify(forked.calls)).toContain('/git/my-org/cand-1.git');
+    expect(JSON.stringify(forked.calls)).not.toContain('/git/default/');
+    createRepoToken.mockClear();
+    const fallback = await makeSandbox(happy).sb.build({ repo: 'cand-1', commitSha: SHA });
+    expect(fallback.namespace).toBe('default');
+    expect(createRepoToken).toHaveBeenCalledWith(expect.objectContaining({ namespace: 'default' }), 'cand-1', 'read', 240);
+  });
+
+  it('does not share a running build between two namespaces with the same repo name and commit', async () => {
+    const { sb, container } = makeSandbox(happy);
+    const [a, b] = await Promise.all([
+      sb.build({ repo: 'cand-1', commitSha: SHA, namespace: 'org-a' }),
+      sb.build({ repo: 'cand-1', commitSha: SHA, namespace: 'org-b' }),
+    ]);
+    expect(b).not.toBe(a);
+    expect([a.namespace, b.namespace]).toEqual(['org-a', 'org-b']);
+    expect(container.start).toHaveBeenCalledTimes(2);
+    expect(createRepoToken).toHaveBeenCalledTimes(2);
   });
 
   it('shares one running build between repeat calls for the same commit (a retry after a caller timeout) and builds a new commit separately', async () => {

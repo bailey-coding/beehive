@@ -21,7 +21,7 @@ export { BuildSandbox, ArtifactsGateway } from './build-sandbox';
 
 // Not exported: workerd treats every named export of this module as an entrypoint, and a plain object is not one.
 const BUILD_ERROR_STATUS: Record<BuildErrorCode, number> = {
-  BAD_REQUEST: 400, NOT_CONFIGURED: 503, CLONE_FAILED: 502, NO_ENTRY: 422, BUILD_FAILED: 422, TOO_LARGE: 413,
+  BAD_REQUEST: 400, BAD_NAMESPACE: 422, NOT_CONFIGURED: 503, CLONE_FAILED: 502, NO_ENTRY: 422, BUILD_FAILED: 422, TOO_LARGE: 413,
 };
 
 interface Env {
@@ -31,6 +31,7 @@ interface Env {
   BEEHIVE_LOCAL_DEV?: string;
   SANDBOX_MODE?: string;
   API_AUTH_TOKEN?: string;
+  ARTIFACTS_NAMESPACE?: string;
 }
 
 // Types for sandbox execution
@@ -105,7 +106,7 @@ export default {
       }
     }
 
-    // POST /sandbox/build { repo, commitSha } - Build a candidate commit into a Worker bundle (CandidateBundle shape of
+    // POST /sandbox/build { repo, commitSha, namespace? } - Build a candidate commit into a Worker bundle (CandidateBundle shape of
     // workers/preview-manager/versions.ts). Local e2e: SANDBOX_MODE=stub with BEEHIVE_LOCAL_DEV=1 returns a fixed bundle.
     if (path === '/sandbox/build' && method === 'POST') {
       let raw: unknown;
@@ -122,12 +123,17 @@ export default {
             modules: [{ name: 'index.js', content: 'export default { fetch: () => new Response("stub candidate") };\n' }],
             compatibilityDate: '2026-10-01',
             source: 'prebuilt',
+            namespace: input.namespace ?? env.ARTIFACTS_NAMESPACE ?? 'default',
           };
-          return Response.json({ success: true, bundle: stub });
+          const { namespace: stubNamespace, ...stubBundle } = stub;
+          return Response.json({ success: true, bundle: stubBundle, namespace: stubNamespace });
         }
         // One sandbox per (repo, commit). Calls on the same instance are queued inside the Durable Object (BuildSandbox.serialize).
-        const bundle = await env.SANDBOX.getByName(`build-${input.repo}-${input.commitSha.slice(0, 8)}`).build(input);
-        return Response.json({ success: true, bundle });
+        // The namespace is part of the instance name ('/' cannot occur in a namespace or a repo name), so equal repo names in two
+        // namespaces never share a sandbox. Without a namespace in the request the name is the old one, and the DO uses its fallback.
+        const instance = input.namespace ? `build-${input.namespace}/${input.repo}-${input.commitSha.slice(0, 8)}` : `build-${input.repo}-${input.commitSha.slice(0, 8)}`;
+        const { namespace, ...bundle } = await env.SANDBOX.getByName(instance).build(input);
+        return Response.json({ success: true, bundle, namespace });
       } catch (error) {
         // Also covers errors thrown inside the Durable Object, which arrive over RPC as plain Errors.
         const known = parseBuildError(error);

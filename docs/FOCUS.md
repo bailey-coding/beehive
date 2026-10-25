@@ -152,7 +152,7 @@ cleanups. Confirm, in this order:
     and decide whether to delete actor `e2e-sbx-probe-actor`; (3) add `wrangler deploy --dry-run` per worker to CI Enhanced (a missing zod install
     only failed at deploy time); (4) the review of the post-review changes ran (no blockers, 8 should-fix); 7 are fixed and **deployed** (`ebb5c75`, 2026-10-25: shadow router: bodies to every target,
     no baseline replay of writes, canary ref/url validation, 10 s timeout; runner: abandoned-build guard, bounded cleanup; recorder tail flush, ordering fixed) and
-    verified live for the POST-body path (`OPEN-QUESTIONS` "Review fixes deployed and verified"); open: SF-8 (ledger namespace vs the runner's `default`; fork-created repos are refused) needs a decision (`OPEN-QUESTIONS` "Review of the post-review changes"); (5) local `main` carries an unpushed commit `0dd6edf` from another
+    verified live for the POST-body path (`OPEN-QUESTIONS` "Review fixes deployed and verified"); SF-8 (namespace per request) is implemented on `fix/recorder-flush`, not deployed (`docs/SF-8-NAMESPACE-PLAN.md`); (5) local `main` carries an unpushed commit `0dd6edf` from another
     agent whose recorder "fix" does not flush anything; it is also on branch `scratch/mistral-recorder-flush`: drop it from `main` (`git reset --hard origin/main`
     after confirming nothing else is unpushed).
 - **M1 ledger lifecycle** is deployed with m8; the production purge is untested against real data. Use

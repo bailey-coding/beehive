@@ -13,11 +13,12 @@
 
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import { createRepoToken } from '../shared/artifacts';
+import { isValidNamespace } from '../shared/namespace';
 
 export interface BuildEnv {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
-  /** Artifacts namespace of candidate repos. */
+  /** Fallback Artifacts namespace when a build request names none (docs/SF-8-NAMESPACE-PLAN.md). */
   ARTIFACTS_NAMESPACE?: string;
 }
 
@@ -26,6 +27,8 @@ export interface BuildRequest {
   repo: string;
   /** Full 40-hex commit to build. */
   commitSha: string;
+  /** Artifacts namespace of the repository; absent = the `ARTIFACTS_NAMESPACE` fallback. */
+  namespace?: string;
 }
 
 export interface BuildModule {
@@ -40,9 +43,11 @@ export interface BuildResult {
   compatibilityDate: string;
   /** `prebuilt` = the commit's `dist/index.js`, `esbuild` = bundled from `src/index.ts`. */
   source: 'prebuilt' | 'esbuild';
+  /** Namespace the commit was built from; the route echoes it beside (not inside) the bundle. */
+  namespace: string;
 }
 
-export const BUILD_ERROR_CODES = ['BAD_REQUEST', 'NOT_CONFIGURED', 'CLONE_FAILED', 'NO_ENTRY', 'BUILD_FAILED', 'TOO_LARGE'] as const;
+export const BUILD_ERROR_CODES = ['BAD_REQUEST', 'BAD_NAMESPACE', 'NOT_CONFIGURED', 'CLONE_FAILED', 'NO_ENTRY', 'BUILD_FAILED', 'TOO_LARGE'] as const;
 export type BuildErrorCode = (typeof BUILD_ERROR_CODES)[number];
 
 /**
@@ -82,7 +87,6 @@ const FORWARDED_HEADERS = ['content-type', 'accept', 'git-protocol', 'content-en
 
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
-const NAMESPACE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export function validateBuildRequest(body: unknown): BuildRequest {
   const b = (body ?? {}) as Record<string, unknown>;
@@ -92,7 +96,11 @@ export function validateBuildRequest(body: unknown): BuildRequest {
   if (typeof b.commitSha !== 'string' || !SHA_RE.test(b.commitSha)) {
     throw new BuildError('BAD_REQUEST', 'commitSha must be a full 40-character lowercase hex commit');
   }
-  return { repo: b.repo, commitSha: b.commitSha };
+  // Present but not a valid namespace is an error, never a silent fallback to another namespace's repository.
+  if (b.namespace !== undefined && !isValidNamespace(b.namespace)) {
+    throw new BuildError('BAD_NAMESPACE', 'namespace must be an Artifacts namespace name');
+  }
+  return b.namespace === undefined ? { repo: b.repo, commitSha: b.commitSha } : { repo: b.repo, commitSha: b.commitSha, namespace: b.namespace };
 }
 
 export function artifactsHost(accountId: string): string {
@@ -115,7 +123,7 @@ export interface GatewayProps {
 }
 
 function validGatewayProps(p: Partial<GatewayProps> | undefined): p is GatewayProps {
-  return !!p && typeof p.repo === 'string' && REPO_RE.test(p.repo) && typeof p.namespace === 'string' && NAMESPACE_RE.test(p.namespace)
+  return !!p && typeof p.repo === 'string' && REPO_RE.test(p.repo) && isValidNamespace(p.namespace)
     && typeof p.token === 'string' && p.token.length > 0;
 }
 
@@ -163,7 +171,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
 export class BuildSandbox extends DurableObject<BuildEnv> {
   /** Tail of the call chain: build() and probe() on one instance run one at a time. */
   private chain: Promise<unknown> = Promise.resolve();
-  /** Builds in progress by `repo@sha`: a repeat call for the same commit (a retry after a caller's timeout) shares the running build. */
+  /** Builds in progress by `namespace/repo@sha`: a repeat call for the same commit (a retry after a caller's timeout) shares the running build. */
   private inflight = new Map<string, Promise<BuildResult>>();
   /**
    * Identity of the build that owns the container right now. When the deadline abandons a build its work keeps running in the
@@ -237,7 +245,8 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
 
   build(input: BuildRequest): Promise<BuildResult> {
     const req = validateBuildRequest(input);
-    const key = `${req.repo}@${req.commitSha}`;
+    // The namespace is part of the key: the same repo name and commit in two namespaces are two different builds.
+    const key = `${req.namespace ?? this.env.ARTIFACTS_NAMESPACE ?? 'default'}/${req.repo}@${req.commitSha}`;
     const running = this.inflight.get(key);
     if (running) return running;
     const result = this.serialize(() => this.guarded((token) => this.buildInner(req, token))).finally(() => { this.inflight.delete(key); });
@@ -250,9 +259,9 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     // Every container action goes through here: an abandoned build (deadline) throws on its next step instead of acting
     const run = (cmd: string[], env?: Record<string, string>) => { this.assertActive(token); return this.run(cmd, env); };
     const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken, ARTIFACTS_NAMESPACE: ns } = this.env;
-    const namespace = ns ?? 'default';
+    const namespace = req.namespace ?? ns ?? 'default';
     if (!accountId || !apiToken) throw new BuildError('NOT_CONFIGURED', 'the build service is not configured');
-    if (!NAMESPACE_RE.test(namespace)) throw new BuildError('NOT_CONFIGURED', 'the build service is not configured');
+    if (!isValidNamespace(namespace)) throw new BuildError('NOT_CONFIGURED', 'the build service is not configured');
 
     // One token per build, held by the gateway props. If this fails nothing has started yet.
     let readToken: string;
@@ -316,7 +325,7 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     if (size > MAX_BUNDLE_BYTES) throw new BuildError('TOO_LARGE', `the bundle is ${size} bytes, the limit is ${MAX_BUNDLE_BYTES}`);
     const content = await run(['cat', outFile]);
     if (content.exitCode !== 0) throw new BuildError('BUILD_FAILED', 'could not read the build output');
-    return { mainModule: 'index.js', modules: [{ name: 'index.js', content: content.stdout }], compatibilityDate: COMPATIBILITY_DATE, source };
+    return { mainModule: 'index.js', modules: [{ name: 'index.js', content: content.stdout }], compatibilityDate: COMPATIBILITY_DATE, source, namespace };
   }
 
   private async start(): Promise<void> {

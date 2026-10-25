@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { SandboxBuildError, sandboxBundleSource } from '../bundle-source';
 
 const SHA = 'a'.repeat(40);
-const input = { workerName: 'beehive-candidate-c1', candidateId: 'c1', commitSha: SHA, repoName: 'repo-1' };
+const input = { workerName: 'beehive-candidate-c1', candidateId: 'c1', commitSha: SHA, repoName: 'repo-1', repoNamespace: 'default' };
 const okBundle = { mainModule: 'index.js', modules: [{ name: 'index.js', content: 'export default {}' }], compatibilityDate: '2026-10-01', source: 'esbuild' };
 const runner = (res: Response | Error) => ({ fetch: vi.fn(async () => { if (res instanceof Error) throw res; return res; }) });
 const j = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
@@ -10,17 +10,37 @@ const asFetcher = (r: ReturnType<typeof runner>) => r as unknown as Fetcher;
 
 describe('sandboxBundleSource', () => {
   it('posts repo and full commit with the bearer token and returns the bundle', async () => {
-    const r = runner(j({ success: true, bundle: okBundle }));
+    const r = runner(j({ success: true, bundle: okBundle, namespace: 'default' }));
     const out = await sandboxBundleSource(asFetcher(r), 'tok')(input);
     expect(out).toEqual({ mainModule: 'index.js', modules: [{ name: 'index.js', content: 'export default {}' }], compatibilityDate: '2026-10-01' });
     const [url, init] = r.fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://sandbox-runner.internal/sandbox/build');
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok');
-    expect(JSON.parse(init.body as string)).toEqual({ repo: 'repo-1', commitSha: SHA });
+    expect(JSON.parse(init.body as string)).toEqual({ repo: 'repo-1', commitSha: SHA, namespace: 'default' });
+  });
+
+  it('sends a fork namespace and requires the runner to echo exactly that namespace', async () => {
+    const fork = { ...input, repoNamespace: 'my-org' };
+    const ok = runner(j({ success: true, bundle: okBundle, namespace: 'my-org' }));
+    await sandboxBundleSource(asFetcher(ok), 'tok')(fork);
+    expect(JSON.parse((ok.fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toMatchObject({ namespace: 'my-org' });
+    // an older runner ignores the field and answers without an echo (it built default/<repo>): refused, also for 'default'
+    for (const [i, echo] of [[fork, undefined], [input, undefined], [fork, 'default'], [input, 'other']] as const) {
+      const r = runner(j({ success: true, bundle: okBundle, ...(echo ? { namespace: echo } : {}) }));
+      await expect(sandboxBundleSource(asFetcher(r), 'tok')(i)).rejects.toMatchObject({ code: 'UNAVAILABLE', status: 502, message: expect.stringContaining('namespace') });
+    }
+  });
+
+  it('refuses a missing or invalid namespace before calling the build service (422, not the candidate\'s fault)', async () => {
+    const r = runner(j({ success: true, bundle: okBundle, namespace: 'default' }));
+    for (const repoNamespace of [undefined, '', 'my.org', '_x', 'a b', 'x'.repeat(65), 'a/b']) {
+      await expect(sandboxBundleSource(asFetcher(r), 'tok')({ ...input, repoNamespace })).rejects.toMatchObject({ code: 'BAD_NAMESPACE', status: 422 });
+    }
+    expect(r.fetch).not.toHaveBeenCalled();
   });
 
   it('refuses to call the build service without a repo, a full commit or a token', async () => {
-    const r = runner(j({ success: true, bundle: okBundle }));
+    const r = runner(j({ success: true, bundle: okBundle, namespace: 'default' }));
     const src = sandboxBundleSource(asFetcher(r), 'tok');
     await expect(src({ ...input, repoName: undefined })).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 422 });
     await expect(src({ ...input, commitSha: 'abc' })).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 422 });
@@ -61,9 +81,9 @@ describe('sandboxBundleSource', () => {
 
   it('rejects a built file that is not an ES module (e.g. a checked-out symlink holding a path) and a missing main module', async () => {
     const text = { ...okBundle, modules: [{ name: 'index.js', content: '/usr/local/bin/node' }] };
-    await expect(sandboxBundleSource(asFetcher(runner(j({ success: true, bundle: text }))), 'tok')(input)).rejects.toMatchObject({ code: 'BUILD_FAILED', status: 422 });
+    await expect(sandboxBundleSource(asFetcher(runner(j({ success: true, bundle: text, namespace: 'default' }))), 'tok')(input)).rejects.toMatchObject({ code: 'BUILD_FAILED', status: 422 });
     const other = { ...okBundle, mainModule: 'main.js' };
-    await expect(sandboxBundleSource(asFetcher(runner(j({ success: true, bundle: other }))), 'tok')(input)).rejects.toMatchObject({ code: 'BUILD_FAILED' });
+    await expect(sandboxBundleSource(asFetcher(runner(j({ success: true, bundle: other, namespace: 'default' }))), 'tok')(input)).rejects.toMatchObject({ code: 'BUILD_FAILED' });
   });
 
   it('reports an unreachable service as UNAVAILABLE with status 504', async () => {
@@ -86,7 +106,7 @@ describe('sandboxBundleSource', () => {
   });
 
   it('only accepts text that really starts an export statement as an ES module', async () => {
-    const withContent = (content: string) => runner(j({ success: true, bundle: { ...okBundle, modules: [{ name: 'index.js', content }] } }));
+    const withContent = (content: string) => runner(j({ success: true, bundle: { ...okBundle, modules: [{ name: 'index.js', content }] }, namespace: 'default' }));
     for (const ok of ['export default {};', '// x\nvar a=1;export{a as default};', 'var a = 1;\nexport const b = 2;', 'export*from"./x";', 'export async function f() {}']) {
       await expect(sandboxBundleSource(asFetcher(withContent(ok)), 'tok')(input)).resolves.toMatchObject({ mainModule: 'index.js' });
     }

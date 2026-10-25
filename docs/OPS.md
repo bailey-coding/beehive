@@ -483,7 +483,7 @@ gotchas, deploy learnings).
 returns a Worker bundle; `GET /sandbox/probe` returns the image's tool versions (deploy check: node, esbuild, git). Design and limits:
 `docs/SANDBOX-BUILD-PLAN.md`; verification and gotchas: `docs/OPEN-QUESTIONS.md` "Sandbox build on the container DO API works in production".
 - **Secret:** `CLOUDFLARE_API_TOKEN` on `beehive-sandbox-runner` (Artifacts scope) mints 5-minute read tokens inside `ArtifactsGateway`; it never
-  reaches the container. `CLOUDFLARE_ACCOUNT_ID` and `ARTIFACTS_NAMESPACE` are plain vars in its `wrangler.toml`.
+  reaches the container. `CLOUDFLARE_ACCOUNT_ID` and `ARTIFACTS_NAMESPACE` are plain vars in its `wrangler.toml`; `ARTIFACTS_NAMESPACE` is only the fallback, `preview-manager` sends the ledger repository's namespace on every build and requires the runner to echo it.
 - **Deploys:** the image is built by Workers Builds' `wrangler deploy` (~2 min). A change to the container class or its binding is a Durable Object
   lifecycle change: rename rather than delete a class that the live worker binds (error 10086), and delete a superseded container application by hand
   (`wrangler containers list`, then `wrangler containers delete <id>`).

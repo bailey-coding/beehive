@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { isValidNamespace } from '../shared/namespace';
 import type { CandidateBundleSource } from './versions';
 
 /** A failed build, carrying the sandbox-runner's error code and an HTTP status for the route to answer with. */
@@ -22,6 +23,8 @@ const BuildResponseSchema = z.object({
     compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     source: z.enum(['prebuilt', 'esbuild']),
   }),
+  // Optional only so an older runner still parses; sandboxBundleSource then refuses it (it did not confirm the namespace).
+  namespace: z.string().optional(),
 });
 
 const ErrorResponseSchema = z.object({ code: z.string().optional(), error: z.string().optional() });
@@ -44,6 +47,12 @@ export function sandboxBundleSource(runner: Fetcher, apiToken: string | undefine
       throw new SandboxBuildError('BAD_REQUEST', 422, 'the candidate has no full 40-character commit to build');
     }
 
+    // Always sent, `default` included: the runner would otherwise fall back to its own setting.
+    if (!input.repoNamespace || !isValidNamespace(input.repoNamespace)) {
+      throw new SandboxBuildError('BAD_NAMESPACE', 422, 'the candidate repository\'s namespace is not a valid Artifacts namespace name');
+    }
+    const namespace = input.repoNamespace;
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), BUILD_TIMEOUT_MS);
     let res: Response;
@@ -51,7 +60,7 @@ export function sandboxBundleSource(runner: Fetcher, apiToken: string | undefine
       res = await runner.fetch('https://sandbox-runner.internal/sandbox/build', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo: input.repoName, commitSha: input.commitSha }),
+        body: JSON.stringify({ repo: input.repoName, commitSha: input.commitSha, namespace }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -73,6 +82,10 @@ export function sandboxBundleSource(runner: Fetcher, apiToken: string | undefine
     const parsed = BuildResponseSchema.safeParse(body);
     if (!parsed.success) throw new SandboxBuildError('UNAVAILABLE', 502, 'the build service returned an unexpected response');
 
+    // An older runner ignores the namespace and would build `default/<repo>`, a different repository: exact echo or refuse.
+    if (parsed.data.namespace !== namespace) {
+      throw new SandboxBuildError('UNAVAILABLE', 502, 'the build service did not confirm the repository namespace');
+    }
     const { mainModule, modules, compatibilityDate } = parsed.data.bundle;
     const main = modules.find((m) => m.name === mainModule);
     if (!main) throw new SandboxBuildError('BUILD_FAILED', 422, 'the bundle has no main module');

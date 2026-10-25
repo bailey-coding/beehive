@@ -11,6 +11,7 @@
  */
 
 import { authGate } from '../shared/auth';
+import { isValidNamespace } from '../shared/namespace';
 import { WorkersBuildsClient } from './builds';
 import { ArtifactsClient } from './artifacts';
 import { sandboxBundleSource, SandboxBuildError } from './bundle-source';
@@ -34,7 +35,6 @@ import { DeployRefsClient } from '../shared/deploy-refs';
 
 const DEFAULT_SPEC_DO_NAME = 'main';
 const PREVIEW_WORKER_PREFIX = CANDIDATE_WORKER_PREFIX;
-const DEFAULT_ARTIFACTS_NAMESPACE = 'default';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function previewUrlFor(env: { WORKERS_SUBDOMAIN?: string }, workerName: string): string {
@@ -307,6 +307,7 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
 
     const workerName = `${PREVIEW_WORKER_PREFIX}${candidateId}`;
     let repoName: string | undefined;
+    let repoNamespace: string | undefined;
     if (versions.kind === 'api') {
       // The real client creates and uploads a Worker named after the candidate: only a UUID may do that (the name must
       // never collide with a platform worker such as beehive-candidate-service), and only a ledger candidate has a repo.
@@ -316,15 +317,16 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
       if (!candidate) return json({ success: false, error: `Candidate ${candidateId} is not in the ledger, so there is nothing to build` }, 422);
       const repo = await lookupRepository(stub, candidate.repositoryId);
       if (!repo.ok) return json({ success: false, error: repo.error }, repo.status);
-      // The sandbox runner reads from one Artifacts namespace; a repo recorded under another would be a different repo.
-      const expected = env.ARTIFACTS_NAMESPACE ?? DEFAULT_ARTIFACTS_NAMESPACE;
-      if (repo.namespace !== expected) {
-        return json({ success: false, error: `The candidate repository is in namespace '${repo.namespace}', the build service reads '${expected}'` }, 422);
+      // The runner takes the namespace per request. A name it would refuse (org names are not validated before docs/SF-8-NAMESPACE-PLAN.md)
+      // is the organization's problem, not the candidate's.
+      if (!isValidNamespace(repo.namespace)) {
+        return json({ success: false, code: 'BAD_NAMESPACE', error: `The organization name '${repo.namespace}' is not a valid Artifacts namespace name (letters, digits, '_' and '-', at most 64, starting with a letter or digit), so its repositories cannot be built` }, 422);
       }
+      repoNamespace = repo.namespace;
       repoName = repo.name;
     }
     const commitSha = candidate?.commitSha ?? parsed.data.commitSha ?? null;
-    const version = await versions.createVersion({ workerName, candidateId, commitSha, repoName });
+    const version = await versions.createVersion({ workerName, candidateId, commitSha, repoName, repoNamespace });
     return json({
       success: true,
       candidateId,
