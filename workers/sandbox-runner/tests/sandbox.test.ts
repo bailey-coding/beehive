@@ -369,11 +369,11 @@ describe('GET /sandbox/probe', () => {
     expect(getByName).toHaveBeenCalledWith('probe');
   });
 
-  it('answers 502 with the error when the container cannot start', async () => {
+  it('answers 502 with a generic message when the container cannot start', async () => {
     probe.mockRejectedValueOnce(new Error('no container'));
     const res = await callHandler('/sandbox/probe');
     expect(res.status).toBe(502);
-    expect(await readJson(res)).toMatchObject({ success: false, error: 'no container' });
+    expect(await readJson(res)).toMatchObject({ success: false, error: 'the build container could not be started' });
   });
 
   it('requires the bearer token', async () => {

@@ -100,7 +100,8 @@ export default {
         const r = await env.SANDBOX.getByName('probe').probe();
         return Response.json({ success: r.exitCode === 0, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode });
       } catch (error) {
-        return Response.json({ success: false, error: error instanceof Error ? error.message : String(error) }, { status: 502 });
+        console.error('[Sandbox] probe failed:', error instanceof Error ? error.message : String(error));
+        return Response.json({ success: false, error: 'the build container could not be started' }, { status: 502 });
       }
     }
 
@@ -124,14 +125,15 @@ export default {
           };
           return Response.json({ success: true, bundle: stub });
         }
-        // One sandbox per (repo, commit): a repeat build of the same commit serializes on the same Durable Object.
+        // One sandbox per (repo, commit). Calls on the same instance are queued inside the Durable Object (BuildSandbox.serialize).
         const bundle = await env.SANDBOX.getByName(`build-${input.repo}-${input.commitSha.slice(0, 8)}`).build(input);
         return Response.json({ success: true, bundle });
       } catch (error) {
         // Also covers errors thrown inside the Durable Object, which arrive over RPC as plain Errors.
         const known = parseBuildError(error);
         if (known) return Response.json({ success: false, code: known.code, error: known.message }, { status: BUILD_ERROR_STATUS[known.code] });
-        return Response.json({ success: false, error: error instanceof Error ? error.message : String(error) }, { status: 502 });
+        console.error('[Sandbox] build failed:', error instanceof Error ? error.message : String(error));
+        return Response.json({ success: false, error: 'the build failed for an internal reason' }, { status: 502 });
       }
     }
 
