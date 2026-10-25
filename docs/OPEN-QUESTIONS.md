@@ -887,3 +887,22 @@ the importing worker's `node_modules`. Fix: the worker's `postinstall` installs 
 as `canary-worker` and `sandbox-runner` already did (`21bea5a`). Reproduced in a clean worktree: `wrangler deploy --dry-run` fails without the
 postinstall and bundles with it. Neither unit tests, `tsc` nor CI Enhanced catch this (local `shared/node_modules` hides it; CI Enhanced only checks
 that installs succeed). A `wrangler deploy --dry-run` per worker in a clean install in CI Enhanced would (sandbox-runner needs Docker for its container build).
+
+### First real canary through the sandbox build (2026-10-25, `e6f6948`)
+
+`WORKER_VERSIONS_MODE = "api"` is set in `workers/preview-manager/wrangler.toml` (maintainer-approved Phase 3; remove the line and push to turn it off:
+the canary route then answers 501 again). A throwaway candidate was run end to end against production:
+1. Artifacts repo with `src/index.ts` + `src/helper.ts` (TypeScript, one import), ledger actor/org (`test-org-e2e-sbx-...`)/repository (`candidate`,
+   namespace `default`)/spec/candidate with the full 40-hex commit.
+2. `POST /deploy-canary` on the canary worker: **200 in 6.9 s**. The preview-manager read the candidate and its repository from the ledger, the sandbox
+   runner cloned and bundled the commit, the api client created Worker `beehive-candidate-<uuid>` and its version (first-upload path, `PUT` + subdomain enable),
+   the canary worker moved the canary deploy ref and recorded the deployment (`status: deployed`).
+3. The version URL `https://<8 hex>-beehive-candidate-<uuid>.bz23711.workers.dev` answered 200 `hello from beehive sandbox e2e`: the bundled TypeScript.
+   The token on the preview-manager has Workers Scripts:Edit.
+4. `DELETE /api/preview/canary/<id>` while the canary was live: **409** (guard works). `POST /rollback` (manual): deployment `rolled_back` (a ref move, no
+   redeploy). The DELETE then returned `deleted: true`, and the version URL answered 404.
+5. Cleanup: org tombstoned (cascade: 1 org, 1 repo, 1 spec, 1 candidate), Artifacts repo deleted. **Left behind:** the tombstoned org (purge needs
+   `PURGE_MIN_AGE_HOURS` = 24 h and a maintainer) and one actor `e2e-sbx-probe-actor` (`acaf5d73-b21e-48b2-8e7d-4a47556262b7`), created by a probe call.
+Not exercised: the alarm-driven SLO tick with a live canary (the canary was rolled back within minutes; `canary-slo-ticks` consumption was not observed),
+shadow traffic reaching the canary URL, a second upload to an existing candidate Worker (the plain `POST /versions` path against the real API), and
+concurrent callers.
