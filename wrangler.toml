@@ -45,6 +45,13 @@ queue = "canary-slo-ticks"
 binding = "GATE_WORKFLOW"
 service = "beehive-gate-workflow"
 
+# Service binding to the Preview Manager: a real ledger purge deletes the Workers of the candidates it removes first
+# (workers/api/purge-cleanup.ts). A binding to a worker that does not exist yet fails the deploy of this one; the first
+# deploy to an empty account therefore needs two passes (docs/OPEN-QUESTIONS.md).
+[[services]]
+binding = "PREVIEW_MANAGER"
+service = "beehive-preview-manager"
+
 # DO migration - SQLite-backed (required for state.storage.sql)
 [[migrations]]
 tag = "v1"

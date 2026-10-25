@@ -24,6 +24,7 @@ import {
   type LifecycleResult,
 } from '../shared/ledger-lifecycle';
 import type { SpecDoStub } from '../shared/spec-do-auth';
+import type { CandidateWorkerCleanup, WorkerCleanupReport } from './purge-cleanup';
 
 const ROLE_ROUTE = /^\/api\/admin\/actors\/([^\/]+)\/role$/;
 const TombstoneBodySchema = TombstoneRequestSchema.pick({ reason: true });
@@ -61,7 +62,8 @@ export async function handleLifecycleRoutes(
   request: Request,
   url: URL,
   principal: Principal,
-  stub: SpecDoStub
+  stub: SpecDoStub,
+  workerCleanup: CandidateWorkerCleanup | null = null
 ): Promise<Response | null> {
   const path = url.pathname;
   const method = request.method;
@@ -110,7 +112,44 @@ export async function handleLifecycleRoutes(
     if (body.data.orgIds?.includes(RESERVED_ORGANIZATION_ID)) {
       return err(`organization ${RESERVED_ORGANIZATION_ID} is reserved and cannot be purged`, 403);
     }
-    return relay(await client.purge(body.data, actorId));
+    if (body.data.dryRun) return relay(await client.purge(body.data, actorId));
+
+    // A real purge first deletes the Workers of the candidates it is about to hard-delete (the ledger cannot name them afterwards).
+    // The plan comes from a dry run of the same selector: it also gives every refusal (not a maintainer, active promotion, ...) before
+    // any Worker is touched. Failure of a Worker delete aborts the purge; nothing has been purged and the call can be repeated.
+    let cleanup: WorkerCleanupReport = { status: 'skipped', reason: 'no preview manager binding' };
+    const cleaned = new Set<string>();
+    let reportsIds = false;
+    if (workerCleanup) {
+      const { confirm: _confirm, ...selector } = body.data;
+      let plan = await client.purge({ ...selector, dryRun: true, withCandidateIds: true }, actorId);
+      if (!plan.ok && plan.status === 400) {
+        // An older Spec DO does not know withCandidateIds: purge as before, without Worker cleanup
+        plan = await client.purge({ ...selector, dryRun: true }, actorId);
+        if (plan.ok) cleanup = { status: 'skipped', reason: 'the Spec DO does not report candidate ids yet' };
+      }
+      if (!plan.ok) return relay(plan);
+      if (plan.data.candidateIds) {
+        reportsIds = true;
+        const outcome = await workerCleanup.deleteWorkers(plan.data.candidateIds);
+        if (!outcome.ok) return err(outcome.error, outcome.status);
+        cleanup = outcome.report;
+        if (outcome.report.status === 'done') [...outcome.report.deleted, ...outcome.report.absent].forEach((id) => cleaned.add(id));
+      }
+    }
+    const purged = await client.purge({ ...body.data, ...(reportsIds ? { withCandidateIds: true } : {}) }, actorId);
+    if (!purged.ok) return relay(purged);
+    // Candidates that appeared between the dry run and the purge (a tombstone in that window): delete their Workers now, best effort
+    let late: string[] = [];
+    if (workerCleanup && reportsIds && cleanup.status === 'done') {
+      const missed = (purged.data.candidateIds ?? []).filter((id) => !cleaned.has(id));
+      if (missed.length) {
+        const outcome = await workerCleanup.deleteWorkers(missed);
+        late = outcome.ok ? [] : missed;
+      }
+    }
+    const { candidateIds: _ids, ...result } = purged.data;
+    return json({ ...result, workerCleanup: cleanup, ...(late.length ? { workersNotDeleted: late } : {}) }, purged.status);
   }
   const body = SetActorRoleRequestSchema.safeParse(read.body);
   if (!body.success) return err(body.error.message, 400);

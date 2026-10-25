@@ -1,6 +1,6 @@
 ---
 category: planning
-status: draft (awaiting acceptance)
+status: A, B, C implemented on fix/recorder-flush (not pushed or deployed); item 4 done (fbd3820)
 audience: human,agent
 ---
 

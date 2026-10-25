@@ -289,6 +289,17 @@ describe('purge', () => {
     expect((await purge({ orgNamePrefix: 'org-' }, 'unknown')).status).toBe(403);
   });
 
+  it('reports the candidate ids of the plan only when asked (withCandidateIds), so an older edge never sees the field', async () => {
+    const a = seedOrg('org-a');
+    await tombstone(`/api/organizations/${a.org.id}`);
+    ageTombstones();
+    const plain = await data<PurgeResult>(await purge({ orgNamePrefix: 'org-' }));
+    expect(plain.candidateIds).toBeUndefined();
+    const asked = await data<PurgeResult>(await purge({ orgNamePrefix: 'org-', withCandidateIds: true }));
+    expect(asked.candidateIds).toEqual(expect.any(Array));
+    expect(asked.candidateIds).toHaveLength(asked.counts.candidates);
+  });
+
   it('dry-runs by default, counting tombstoned rows and their dependents without deleting', async () => {
     const a = seedOrg('org-a');
     await tombstone(`/api/organizations/${a.org.id}`);

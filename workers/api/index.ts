@@ -14,6 +14,8 @@ interface Env {
   SPEC_DO_INTERNAL_TOKEN?: string;
   SPEC_DO_ADMIN_TOKEN?: string;
   API_AUTH_TOKEN?: string;
+  // Service binding to beehive-preview-manager: deletes the Workers of purged candidates (workers/api/purge-cleanup.ts)
+  PREVIEW_MANAGER?: { fetch(input: string, init?: RequestInit): Promise<Response> };
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   ALLOWED_GITHUB_USERS?: string;
@@ -27,6 +29,7 @@ import type { ActorRequest } from '../shared/principal';
 import { handleServiceAccountRoutes } from './service-accounts';
 import { handleUserTokenRoutes } from './user-tokens';
 import { handleLifecycleRoutes } from './lifecycle';
+import { createCandidateWorkerCleanup } from './purge-cleanup';
 import { handleUi } from './ui';
 
 
@@ -129,7 +132,10 @@ export default {
     if (userTokenResponse) return userTokenResponse;
 
     // Ledger lifecycle: tombstones, purge, maintainer role, ?include_deleted=1 reads
-    const lifecycleResponse = await handleLifecycleRoutes(request, url, principal, specDoStub);
+    const lifecycleResponse = await handleLifecycleRoutes(
+      request, url, principal, specDoStub,
+      env.PREVIEW_MANAGER && env.API_AUTH_TOKEN ? createCandidateWorkerCleanup(env.PREVIEW_MANAGER, env.API_AUTH_TOKEN) : null
+    );
     if (lifecycleResponse) return lifecycleResponse;
 
     // Health check

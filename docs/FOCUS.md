@@ -147,7 +147,7 @@ cleanups. Confirm, in this order:
     candidate Worker (refused while a canary is live).
   - **Known limits:** SLO data is `source = shadow`, not live canary traffic; only 5xx counts as an error; the default 1% top-level canary split
     yields few samples; the recorder tail flush is deployed (`ebb5c75`) but its effect on sample counts was not measured separately.
-  - **Pending decisions / work:** (1) wire the DELETE route into the ledger purge (a spine path in `beehive`; nothing calls it today); (2) purge the three
+  - **Pending decisions / work:** (1) DONE (not deployed): the ledger purge deletes candidate Workers first (`docs/CLEANUP-PLAN-2026-10-25.md` C, `docs/OPS.md` "Ledger cleanup"); (2) purge the three
     tombstoned test orgs `test-org-e2e-sbx-*` after 2026-10-26 ~11:00 UTC (24 h age rule; needs the maintainer actor, `docs/OPS.md` "Ledger cleanup")
     and decide whether to delete actor `e2e-sbx-probe-actor`; (3) DONE: `wrangler deploy --dry-run` runs per worker and for the root worker in `ci.yml` (the former CI Enhanced); (4) the review of the post-review changes ran (no blockers, 8 should-fix); 7 are fixed and **deployed** (`ebb5c75`, 2026-10-25: shadow router: bodies to every target,
     no baseline replay of writes, canary ref/url validation, 10 s timeout; runner: abandoned-build guard, bounded cleanup; recorder tail flush, ordering fixed) and

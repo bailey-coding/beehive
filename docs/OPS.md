@@ -217,6 +217,12 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    their dependent rows (comments, links, verdicts, trials, promotions), in batches of at most
    500 rows, one transaction each. Refused (409) if a target candidate has an active
    promotion. `entity_history` and `purge_log` survive.
+   **Candidate Workers:** a real run (not the dry run) first plans with a dry run, then deletes the Worker `beehive-candidate-<uuid>` of every
+   candidate in the plan through the `PREVIEW_MANAGER` service binding (`DELETE /api/preview/canary/:id`, `workers/api/purge-cleanup.ts`), and
+   only then purges. A failed delete (a live canary: 409, or any error: 502) aborts the call with nothing purged; repeat it after fixing the cause
+   (roll the canary back first). More than 40 candidate Workers in one purge is refused (409): narrow the selector. The response carries
+   `workerCleanup` (`done` with `deleted`/`absent`, or `skipped` with the reason: no Versions client, no binding, or an older Spec DO) and
+   `workersNotDeleted` for candidates tombstoned between the plan and the purge whose Worker could not be deleted.
 
 ### CLI actor attribution (stopgap until M12)
 

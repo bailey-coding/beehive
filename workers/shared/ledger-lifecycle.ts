@@ -48,6 +48,9 @@ export const PurgeRequestSchema = z
     orgIds: z.array(z.string().min(1)).min(1).max(100).optional(),
     dryRun: z.boolean().default(true),
     confirm: z.number().int().nonnegative().optional(),
+    // Ask for the candidate ids in the plan (the edge deletes their Workers before a real purge). Opt-in so that an older edge,
+    // whose strict result schema does not know the field, never receives it; an older Spec DO rejects it with a 400.
+    withCandidateIds: z.boolean().optional(),
   })
   .strict()
   .refine((b) => (b.orgNamePrefix === undefined) !== (b.orgIds === undefined), {
@@ -76,6 +79,7 @@ export const PurgeResultSchema = z
     counts: RowCountsSchema,
     total: z.number().int().nonnegative(),
     batches: z.number().int().nonnegative(),
+    candidateIds: z.array(z.string()).optional(),
   })
   .strict();
 

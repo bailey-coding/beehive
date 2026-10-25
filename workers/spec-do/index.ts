@@ -2509,6 +2509,7 @@ export class SpecDO {
       counts: plan.counts,
       total: plan.total,
       batches,
+      ...(req.withCandidateIds ? { candidateIds: plan.candidateIds } : {}),
     });
     const refuse = (detail: string) => {
       this.logLifecycle({ ...log, outcome: 'refused', detail, finishedAt: now() });
