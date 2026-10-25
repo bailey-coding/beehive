@@ -4,7 +4,7 @@ This document explores the idea of using Beehive to run its own CI workflows, in
 
 ## Current State
 
-Beehive currently uses GitHub Actions for CI (`ci.yml` and `ci-enhanced.yml`). These workflows:
+Beehive currently uses GitHub Actions for CI (`ci.yml`; until 2026-10-25 also `ci-enhanced.yml` and `ci-skip.yml`, merged into it). These workflows:
 - Run on GitHub-hosted runners (Ubuntu)
 - Perform clean per-worker installs
 - Run typecheck, unit tests, and migration tests

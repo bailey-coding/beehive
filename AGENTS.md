@@ -117,7 +117,7 @@ See `docs/ARTIFACTS-SETUP.md` for verified setup patterns, CLI commands, authent
 
 ## Deployment Topology & Ops
 
-Ten Workers. GitHub runs CI only (`ci.yml`: typecheck + unit tests); the maintainer deploys by
+Ten Workers. GitHub runs CI only (`ci.yml`: clean installs, dry-run builds, typecheck, tests); the maintainer deploys by
 pushing to the Cloudflare Artifacts repo (human-only). Each has its
 own wrangler config and the worker `name` there is the source of truth for URLs. The web UI
 is served by the `beehive` worker (`workers/api/ui.ts`); the React app in `ui/` is **not**

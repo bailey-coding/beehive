@@ -116,7 +116,7 @@ cleanups. Confirm, in this order:
 
 ## Open work
 
-- **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci-enhanced.yml` now builds
+- **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci.yml` (formerly ci-enhanced.yml) now builds
   from a `git archive` copy with no root `node_modules` and installs only in each worker folder (`d3b42ff`, 2026-10-19).
   This prevents the root-level dependency resolution that allowed the zod failure to reach production.
 - **Tournament creation race:** two requests creating a tournament for the same spec at the same moment make
@@ -149,8 +149,7 @@ cleanups. Confirm, in this order:
     yields few samples; the recorder tail flush is deployed (`ebb5c75`) but its effect on sample counts was not measured separately.
   - **Pending decisions / work:** (1) wire the DELETE route into the ledger purge (a spine path in `beehive`; nothing calls it today); (2) purge the three
     tombstoned test orgs `test-org-e2e-sbx-*` after 2026-10-26 ~11:00 UTC (24 h age rule; needs the maintainer actor, `docs/OPS.md` "Ledger cleanup")
-    and decide whether to delete actor `e2e-sbx-probe-actor`; (3) add `wrangler deploy --dry-run` per worker to CI Enhanced (a missing zod install
-    only failed at deploy time); (4) the review of the post-review changes ran (no blockers, 8 should-fix); 7 are fixed and **deployed** (`ebb5c75`, 2026-10-25: shadow router: bodies to every target,
+    and decide whether to delete actor `e2e-sbx-probe-actor`; (3) DONE: `wrangler deploy --dry-run` runs per worker and for the root worker in `ci.yml` (the former CI Enhanced); (4) the review of the post-review changes ran (no blockers, 8 should-fix); 7 are fixed and **deployed** (`ebb5c75`, 2026-10-25: shadow router: bodies to every target,
     no baseline replay of writes, canary ref/url validation, 10 s timeout; runner: abandoned-build guard, bounded cleanup; recorder tail flush, ordering fixed) and
     verified live for the POST-body path (`OPEN-QUESTIONS` "Review fixes deployed and verified"); SF-8 (namespace per request, plus 400 for new org names that are not valid namespaces) is implemented on `fix/recorder-flush`, not deployed (`docs/SF-8-NAMESPACE-PLAN.md`); (5) local `main` carries an unpushed commit `0dd6edf` from another
     agent whose recorder "fix" does not flush anything; it is also on branch `scratch/mistral-recorder-flush`: drop it from `main` (`git reset --hard origin/main`
