@@ -112,9 +112,20 @@ describe('mirror fan-out through the handler', () => {
       return new Response('ok', { status: 200 });
     }));
   });
+  // Only setTimeout is faked; reading a request body and the like is real async work that fake-timer advances do not wait for.
+  // A timer the handler creates late (the 10 s candidate abort) is therefore missed by a fixed number of advances, and a test
+  // that waits for it hangs. Alternate fake-time advances with a real macrotask turn until the condition holds (bounded).
+  async function settleUntil(done: () => boolean): Promise<void> {
+    for (let i = 0; i < 2_000 && !done(); i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+
   afterEach(async () => {
-    await vi.advanceTimersByTimeAsync(10_000);
-    await Promise.allSettled(pending);
+    let settled = false;
+    void Promise.allSettled(pending).then(() => { settled = true; });
+    await settleUntil(() => settled);
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -143,11 +154,11 @@ describe('mirror fan-out through the handler', () => {
   it('a candidate that never answers is aborted after the timeout and still answers the caller', async () => {
     hang = true;
     const pendingResponse = send('GET');
-    // Advance in steps until the router answers: the abort timer is created only once the handler reaches the candidate fetch, and
-    // how many microtask turns that takes differs between machines, so a single big advance can run before the timer exists.
+    // Advance until the router answers: the abort timer is created only once the handler reaches the candidate fetch, and how
+    // long that takes differs between machines and under load (see settleUntil).
     let answered = false;
     void pendingResponse.then(() => { answered = true; });
-    for (let i = 0; i < 60 && !answered; i++) await vi.advanceTimersByTimeAsync(1_000);
+    await settleUntil(() => answered);
     expect(answered).toBe(true);
     const res = await pendingResponse;
     expect(res.status).toBe(200);
