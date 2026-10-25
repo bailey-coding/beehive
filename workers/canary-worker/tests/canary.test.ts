@@ -511,6 +511,23 @@ describe('Canary Deployment', () => {
     expect(mockSpecDoStub.fetch).not.toHaveBeenCalled();
   });
 
+  it('answers 400 before any build for a candidate id the Spec DO would refuse (a static target id, a non-token)', async () => {
+    for (const candidateId of ['beehive-main', 'a b', '../x']) {
+      mockPreviewManager.fetch.mockClear();
+      const response = await new CanaryWorker(mockEnv).deployCanary({ ...config, candidateId });
+      expect(response.status, candidateId).toBe(400);
+      expect(mockPreviewManager.fetch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('answers 400, not 500, when the preview manager returns a url that is not an https workers.dev Worker, and records nothing', async () => {
+    mockPreviewManager.fetch.mockResolvedValueOnce(json({ success: true, url: 'https://evil.example', versionId: 'v' }));
+    mockSpecDoStub.fetch.mockClear();
+    const response = await new CanaryWorker(mockEnv).deployCanary(config);
+    expect(response.status).toBe(400);
+    expect(mockSpecDoStub.fetch).not.toHaveBeenCalled();
+  });
+
   it('relays a Spec DO refusal (e.g. 404 tombstoned candidate)', async () => {
     mockPreviewManager.fetch.mockResolvedValueOnce(json({ success: true, url: 'https://u.acct.workers.dev', versionId: 'v' }));
     mockSpecDoStub.fetch.mockResolvedValueOnce(json({ success: false, error: 'Candidate candidate-001 not found' }, 404));

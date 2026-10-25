@@ -115,7 +115,7 @@ describe('canary deploy request validation (trust boundary for the shadow router
   });
 
   it('refuses a url that is not an https workers.dev Worker without credentials, writing nothing', async () => {
-    for (const url of ['http://c.acct.workers.dev', 'https://evil.example', 'https://workers.dev', 'https://user:pw@c.acct.workers.dev', 'https://c.acct.workers.dev.evil.example', 'ftp://c.acct.workers.dev', 'u', 'https://localhost:8787']) {
+    for (const url of ['http://c.acct.workers.dev', 'https://evil.example', 'https://workers.dev', 'https://user:pw@c.acct.workers.dev', 'https://c.acct.workers.dev.evil.example', 'ftp://c.acct.workers.dev', 'https://c.acct.workers.dev:8443', 'https://.workers.dev', 'https://..workers.dev', 'u', 'https://localhost:8787']) {
       const res = await call('/canary-deployments', 'POST', body({ url }));
       expect(res.status, url).toBe(400);
     }

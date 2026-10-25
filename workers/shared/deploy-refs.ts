@@ -67,7 +67,9 @@ export const CanaryDeploymentSchema = z
 export function isAcceptableCanaryUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    return u.protocol === 'https:' && u.hostname.endsWith('.workers.dev') && !u.username && !u.password;
+    const label = u.hostname.endsWith('.workers.dev') ? u.hostname.slice(0, -'.workers.dev'.length) : '';
+    // Known limit: any account's workers.dev subdomain passes, not only ours (pinning needs the subdomain in every caller's env).
+    return u.protocol === 'https:' && label !== '' && !label.startsWith('.') && u.port === '' && !u.username && !u.password;
   } catch {
     return false;
   }
@@ -77,7 +79,12 @@ export function isAcceptableCanaryUrl(url: string): boolean {
  * A canary candidate id is a plain token (a ledger UUID in practice) and never starts with `beehive-`: the shadow router's
  * static targets (`beehive-main`, the trusted baseline, and the local-dev ports) use that prefix, and a ref must not take their place.
  */
+// The `i` flag is deliberate: it makes the `beehive-` lookahead case-insensitive. Do not remove it.
 const CANARY_CANDIDATE_ID_RE = /^(?!beehive-)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/i;
+
+export function isValidCanaryCandidateId(id: unknown): id is string {
+  return typeof id === 'string' && CANARY_CANDIDATE_ID_RE.test(id);
+}
 
 // Body of POST /canary-deployments: record the deployment and move the canary ref
 export const CanaryDeployRequestSchema = z
@@ -235,7 +242,10 @@ export class DeployRefsClient {
   constructor(private readonly specDo: SpecDoFetcher) {}
 
   deployCanary(request: CanaryDeployRequest, actorId: string): Promise<DeployResult<CanaryMoveResult>> {
-    return this.send(DEPLOY_PATHS.canaryDeployments, 'POST', CanaryDeployRequestSchema.parse(request), actorId, CanaryMoveResultSchema);
+    // A request the Spec DO would refuse is a 400 result here, never a throw (the DO's own 400 is relayed the same way)
+    const parsed = CanaryDeployRequestSchema.safeParse(request);
+    if (!parsed.success) return Promise.resolve({ ok: false, status: 400, error: `Invalid canary deployment: ${parsed.error.message}` });
+    return this.send(DEPLOY_PATHS.canaryDeployments, 'POST', parsed.data, actorId, CanaryMoveResultSchema);
   }
 
   getCanaryDeployment(id: string): Promise<DeployResult<CanaryDeployment>> {

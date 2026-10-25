@@ -970,7 +970,7 @@ Fixed in the commit after `c0cfa86` (unit-tested; **not deployed**; the zombie-b
   writes to the router; if something outside does, this is the safe default.
 - **SF-3 a live canary ref could replace the baseline target.** The Spec DO accepts any `candidateId` and `url`, and the router trusted the id string
   `beehive-main` for full headers. `applyCanaryRefs` now ignores a ref whose id is a static target and one whose url is not `https://*.workers.dev`
-  (no credentials in the url). **Closed 2026-10-25:** the Spec DO route now validates both (`CanaryDeployRequestSchema`: id is a plain token not starting with `beehive-`; url is https `*.workers.dev` without credentials; the shared `isAcceptableCanaryUrl`); the router keeps its own check for rows written before. Not yet deployed at the time of writing.
+  (no credentials in the url). **Closed 2026-10-25:** the Spec DO route now validates both (`CanaryDeployRequestSchema`: id is a plain token not starting with `beehive-`; url is https `*.workers.dev` without credentials; the shared `isAcceptableCanaryUrl`); the router keeps its own check for rows written before. Known limit: any account's `*.workers.dev` passes, not only ours (pinning needs the account subdomain in the Spec DO and the router env; open). Not yet deployed at the time of writing.
 - **SF-4 no timeout on the candidate fetch.** 10 s abort (a plain `setTimeout`, cleared in `finally`), recorded as a synthetic 5xx; `redirect: 'manual'`.
 - **SF-5 an abandoned (deadline) build could act on the next build's container.** Each build now owns an identity token; every container step and the
   intercept registration check it, so leftover work throws instead.

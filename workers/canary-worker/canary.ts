@@ -1,5 +1,5 @@
 import { getSpecDoStub } from '../shared/spec-do-auth';
-import { DeployRefsClient, type CanaryDeployment } from '../shared/deploy-refs';
+import { DeployRefsClient, isValidCanaryCandidateId, type CanaryDeployment } from '../shared/deploy-refs';
 import { CanaryConfig, Env } from './types';
 
 export const CANARY_ACTOR_ID = 'canary-worker';
@@ -111,7 +111,7 @@ export class CanaryWorker {
 
   private validateConfig(config: CanaryConfig): boolean {
     return (
-      !!config.candidateId &&
+      isValidCanaryCandidateId(config.candidateId) &&
       !!config.specId &&
       config.trafficPercentage > 0 &&
       config.trafficPercentage <= 100 &&
