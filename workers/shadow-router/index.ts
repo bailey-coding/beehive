@@ -57,7 +57,7 @@ async function getShadowConfig(env: any): Promise<ShadowConfig> {
   // Production uses production worker URLs; either way the canary targets
   // come from the Spec DO deploy refs (the traffic pointer)
   const base = isLocal ? getLocalDevShadowConfig() : getProductionShadowConfig();
-  return applyCanaryRefs(base, specDoFetcher(env), getLiveRefsCache(env));
+  return applyCanaryRefs(base, specDoFetcher(env), getLiveRefsCache(env), env.WORKERS_SUBDOMAIN);
 }
 
 export function specDoFetcher(env: any): SpecDoFetcher | null {

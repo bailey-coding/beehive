@@ -21,6 +21,8 @@ compatibility_date = "2026-10-09"
 # Spec DO internal auth (hard prerequisite, docs/OPS.md): wrangler secret put SPEC_DO_INTERNAL_TOKEN and SPEC_DO_ADMIN_TOKEN (this worker is the only holder of the admin token)
 [vars]
 CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
+# The account's workers.dev subdomain: canary urls must be Workers of this account (shared/deploy-refs.ts isAcceptableCanaryUrl)
+WORKERS_SUBDOMAIN = "bz23711"
 ALLOWED_GITHUB_USERS = "bailey-coding, OliverVermeulen"
 
 # Durable Object for Spec coordination (class exported by this script)

@@ -319,6 +319,7 @@ import {
   type CanaryDeployRequest,
   type CanaryMoveResult,
   type LiveRef,
+  isAcceptableCanaryUrl,
 } from '../shared/deploy-refs';
 
 // Types
@@ -366,6 +367,8 @@ interface Env {
   SPEC_DO_ADMIN_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  // The account's workers.dev subdomain: when set, a canary url must be one of its Workers (shared/deploy-refs.ts)
+  WORKERS_SUBDOMAIN?: string;
   // Minimum tombstone age before purge may hard-delete (hours, default 24). Local e2e sets 0.
   PURGE_MIN_AGE_HOURS?: string;
   // Producer for canary SLO ticks (docs/M3-CANARY-SLO-PLAN.md). Optional: an unbound DO still arms and re-arms.
@@ -3075,6 +3078,9 @@ export class SpecDO {
         if (id === undefined && method === 'POST') {
           const p = parse(CanaryDeployRequestSchema, 'canary deployment');
           if ('error' in p) return p.error;
+          if (!isAcceptableCanaryUrl(p.data.url, this.env.WORKERS_SUBDOMAIN)) {
+            return fail(`Invalid canary deployment: url must be an https Worker on this account's workers.dev subdomain`, 400);
+          }
           const moved = this.deployCanary(p.data, actorId);
           await this.armCanaryAlarm();
           return json(moved, 201);

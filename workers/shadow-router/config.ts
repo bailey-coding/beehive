@@ -216,7 +216,8 @@ export function getPresetByName(name: string): TrafficSplitConfig {
 export async function applyCanaryRefs(
   config: ShadowConfig,
   specDo: SpecDoFetcher | null,
-  cache?: LiveRefsCache
+  cache?: LiveRefsCache,
+  workersSubdomain?: string
 ): Promise<ShadowConfig> {
   if (!specDo) return config;
   const load = async (): Promise<LiveRef[] | null> => {
@@ -244,7 +245,7 @@ export async function applyCanaryRefs(
       console.warn(`[Shadow] ignoring live canary ref ${ref.candidateId}: the id is a static target`);
       continue;
     }
-    if (!isAcceptableCanaryUrl(deployment.url)) {
+    if (!isAcceptableCanaryUrl(deployment.url, workersSubdomain)) {
       console.warn(`[Shadow] ignoring live canary ref ${ref.candidateId}: url is not an https workers.dev host`);
       continue;
     }

@@ -64,11 +64,13 @@ export const CanaryDeploymentSchema = z
  * Mirrored traffic may only go to a Worker on workers.dev over https, without credentials. The shadow router checks this again
  * before it sends anything (applyCanaryRefs); the Spec DO checks it first, so a bad value never becomes ledger state.
  */
-export function isAcceptableCanaryUrl(url: string): boolean {
+export function isAcceptableCanaryUrl(url: string, subdomain?: string): boolean {
   try {
     const u = new URL(url);
+    // With the account's workers.dev subdomain configured (WORKERS_SUBDOMAIN) the host must be a Worker of that account;
+    // without it any workers.dev host passes (a worker deployed before its var exists, or a self-hoster, keeps working).
+    if (subdomain && !(/^[A-Za-z0-9-]+$/.test(subdomain) && u.hostname.endsWith(`.${subdomain.toLowerCase()}.workers.dev`))) return false;
     const label = u.hostname.endsWith('.workers.dev') ? u.hostname.slice(0, -'.workers.dev'.length) : '';
-    // Known limit: any account's workers.dev subdomain passes, not only ours (pinning needs the subdomain in every caller's env).
     return u.protocol === 'https:' && label !== '' && !label.startsWith('.') && u.port === '' && !u.username && !u.password;
   } catch {
     return false;

@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import type { CanaryDeployment, CanaryMoveResult, DeployRef, LiveRef } from '../../shared/deploy-refs';
 
 let store: SqliteState;
@@ -125,6 +126,26 @@ describe('canary deploy request validation (trust boundary for the shadow router
   it('accepts a UUID candidate id with a workers.dev url', async () => {
     const res = await call('/canary-deployments', 'POST', body({ candidateId: '0f1e2d3c-4b5a-4968-8777-665544332211' }));
     expect(res.status).toBe(201);
+  });
+});
+
+describe('canary url pinned to the account subdomain (WORKERS_SUBDOMAIN)', () => {
+  const post = (target: SpecDO, url: string) => target.fetch(new Request('https://spec-do.internal/canary-deployments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Actor-ID': 'canary-worker' },
+    body: JSON.stringify({ candidateId: 'cand-pin', specId: 's', url, workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0 }),
+  }));
+
+  it('accepts only Workers of the configured subdomain, and any workers.dev host when it is unset', async () => {
+    const pinnedState = makeSqliteState();
+    const pinned = new SpecDO(pinnedState.state as never, { ...TEST_DO_TOKENS, WORKERS_SUBDOMAIN: 'bz23711' } as never);
+    const authed = authedDo(pinned);
+    await authed.init();
+    for (const url of ['https://x.evil.workers.dev', 'https://bz23711.workers.dev', 'https://x.bz237110.workers.dev', 'https://x.bz23711.workers.dev.evil.example', 'https://x.other.workers.dev']) {
+      expect((await post(authed, url)).status, url).toBe(400);
+    }
+    expect((await post(authed, 'https://aa11-beehive-candidate-x.bz23711.workers.dev')).status).toBe(201);
+    expect((await post(spec, 'https://x.evil.workers.dev')).status).toBe(201); // the default fixture has no pin
   });
 });
 

@@ -12,6 +12,8 @@ compatibility_flags = ["global_fetch_strictly_public"]
 
 # Cloudflare Artifacts configuration
 [vars]
+# Only canary targets on this account's workers.dev subdomain are mirrored to (shared/deploy-refs.ts isAcceptableCanaryUrl)
+WORKERS_SUBDOMAIN = "bz23711"
 
 # Durable Object binding for Spec DO (cross-script): the canary deploy refs
 # (traffic pointer) are read from it on every mirrored request

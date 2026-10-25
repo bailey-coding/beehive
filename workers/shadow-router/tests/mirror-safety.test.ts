@@ -58,6 +58,20 @@ describe('applyCanaryRefs: what a live ref may do', () => {
     expect(isAcceptableCanaryUrl('https://workers.dev')).toBe(false);
     expect(isAcceptableCanaryUrl('ftp://a.workers.dev')).toBe(false);
   });
+
+  it('with the account subdomain configured, only that account\'s Workers pass', () => {
+    expect(isAcceptableCanaryUrl('https://a.bz23711.workers.dev', 'bz23711')).toBe(true);
+    for (const url of ['https://a.evil.workers.dev', 'https://bz23711.workers.dev', 'https://a.bz237110.workers.dev', 'https://a.bz23711.workers.dev.evil.example']) {
+      expect(isAcceptableCanaryUrl(url, 'bz23711'), url).toBe(false);
+    }
+    expect(isAcceptableCanaryUrl('https://a.evil.workers.dev')).toBe(true); // unset: any workers.dev, as before
+  });
+
+  it('a live ref on another account is not mirrored to when the subdomain is configured', async () => {
+    const ref = liveRef('cand-x', 'https://aa11-beehive-candidate-x.evil.workers.dev');
+    expect((await applyCanaryRefs(base(), fetcherOf([ref]), undefined, 'bz23711')).candidatePreviews.has('cand-x')).toBe(false);
+    expect((await applyCanaryRefs(base(), fetcherOf([ref]))).candidatePreviews.has('cand-x')).toBe(true);
+  });
 });
 
 describe('scientistSafeHeaders', () => {
