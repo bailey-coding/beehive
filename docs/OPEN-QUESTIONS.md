@@ -839,3 +839,22 @@ Two gotchas found on the way:
   minute cron kept firing (and throwing) for ~10 minutes after the deploy; it stopped without further action.
 - **Gotcha 4: Workers Builds termination was transient.** The ten builds for `34c1864` were terminated after ~5.5 minutes with no log;
   the next push (`22149a3`) built nine workers in about a minute each. The sandbox-runner build (with the Docker image) takes ~2 minutes.
+
+### Sandbox build review fixes verified live (2026-10-25)
+
+A Sonnet review (10 should-fix items, no blockers) led to `bb1ec51` (deployed by the push to `cf`): symlinks disabled at checkout, builds
+serialized per Durable Object instance, an alarm backstop and a 150 s deadline, a hardened `ArtifactsGateway` (one read token minted per build
+and passed in props, redirects refused, header allowlist, exact query, props validated), scrubbed error text, `--tsconfig-raw={}`, a
+digest-pinned non-root image. Live checks against throwaway repos (deleted afterwards):
+- **Non-root image works:** probe returns node v24.22.1, esbuild 0.25.0, git 2.47.3; a clone through the intercept and an esbuild bundle of
+  `src/index.ts` succeeded in ~1.6 s warm (the container could read the CA file and write `/workspace` as `node`).
+- **The error code survives the RPC hop:** a repo with only a README returned HTTP 422 `{"code":"NO_ENTRY"}` (the message prefix is preserved,
+  so `parseBuildError` works; the reviewer's main uncovered risk).
+- **Symlinks are neutralized:** a commit with `dist/index.js -> /usr/local/bin/node` was checked out as a plain 19-byte file holding the path
+  text, so no read of the real file happened. It is returned as a `prebuilt` bundle, which the version upload will reject as invalid JavaScript.
+- **Concurrency:** three parallel builds of one commit all returned 200, ~1.5 s, ~3.5 s and ~4.5 s: they ran one after another.
+- **Not tried live:** the 150 s deadline and the alarm backstop (unit-tested with fakes only), a DO restart mid-build, the 60 s esbuild and
+  30 s checkout timeouts, a bundle over 1 MiB, commits reachable only from `scratch/*` refs (checkout fails with "the commit was not found;
+  only commits reachable from the repository branches or tags can be built"), cost at volume.
+- **Known limits, by design:** an `import` of an absolute path in candidate source makes esbuild bundle that container file (the container holds
+  no secrets); a committed `dist/index.js` silently takes precedence over `src/` (the bundle reports `source: prebuilt`).

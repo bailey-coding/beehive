@@ -142,7 +142,7 @@ cleanups. Confirm, in this order:
 - **Sandbox build deployed** (2026-10-25, `7733d4b`, `docs/SANDBOX-BUILD-PLAN.md` Phase 1): `beehive-sandbox-runner` builds a candidate
   commit in a no-Internet container (`POST /sandbox/build {repo, commitSha}`, git clone through a credential-injecting intercept, esbuild
   with no install scripts, 60 s / 1 MiB limits) and returns the bundle the Versions client needs. Verified live with a throwaway repo.
-  `CLOUDFLARE_API_TOKEN` is set as a secret on the worker. Remaining (Phase 2, then 3): `preview-manager` calls `/sandbox/build` through a
+  `CLOUDFLARE_API_TOKEN` is set as a secret on the worker. A review's 10 should-fix items were fixed and verified live the same day (`bb1ec51`, `OPEN-QUESTIONS`). Remaining (Phase 2, then 3): `preview-manager` calls `/sandbox/build` through a
   service binding as its `CandidateBundleSource`; handle `versionsClient: 'api'`; purge cleanup of `beehive-candidate-*`; then you set
   `WORKER_VERSIONS_MODE=api`. The canary cron is gone (cleared 2026-10-25 after a scheduler lag, `OPEN-QUESTIONS`).
 - **Workers Versions API verified; client built, not wired** (2026-10-24, `140e629`, `docs/OPEN-QUESTIONS.md`):
