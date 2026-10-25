@@ -7,6 +7,10 @@ main = "index.ts"
 compatibility_date = "2026-10-09"
 
 [vars]
+# Needed by the api Versions client (WORKER_VERSIONS_MODE=api, deliberately NOT set here: production stays at 501 until the
+# maintainer flips it, docs/FOCUS.md). The subdomain is the account's workers.dev subdomain (docs/OPS.md, scripts/prod-health.sh).
+CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
+WORKERS_SUBDOMAIN = "bz23711"
 
 # Cloudflare API Token for Workers Builds and Artifacts
 # Set via: wrangler secret put CLOUDFLARE_API_TOKEN

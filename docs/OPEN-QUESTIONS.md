@@ -878,3 +878,12 @@ digest-pinned non-root image. Live checks against throwaway repos (deleted after
   dead code until the maintainer decides how purge triggers it.
 - **Known gap, unverified:** if two uploads for one candidate worker race (for example two different callers), both can take the first-upload path and
   create two versions/deployments; coalescing makes this unlikely for retries but not impossible. Not tested against the real API.
+
+### Preview-manager deploy failure: `Could not resolve "zod"` from workers/shared (2026-10-25)
+
+The first Phase 2 push failed only for `beehive-preview-manager` (build `120736d4`, 22 s): the worker started importing `workers/shared/deploy-refs.ts`
+(the live-canary guard of the DELETE route), which imports `zod`, and Node/esbuild resolve a shared file's imports from `workers/shared` upward, never from
+the importing worker's `node_modules`. Fix: the worker's `postinstall` installs `workers/shared`'s dependencies (`npm install --prefix ../shared ...`),
+as `canary-worker` and `sandbox-runner` already did (`21bea5a`). Reproduced in a clean worktree: `wrangler deploy --dry-run` fails without the
+postinstall and bundles with it. Neither unit tests, `tsc` nor CI Enhanced catch this (local `shared/node_modules` hides it; CI Enhanced only checks
+that installs succeed). A `wrangler deploy --dry-run` per worker in a clean install in CI Enhanced would (sandbox-runner needs Docker for its container build).
