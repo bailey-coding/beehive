@@ -984,3 +984,17 @@ Fixed in the commit after `c0cfa86` (unit-tested; **not deployed**; the zombie-b
 - **Local dev:** `global_fetch_strictly_public` blocks loopback/private targets, so mirroring to `http://localhost:8787` under `wrangler dev` probably stops;
   check at the next local e2e run. `BUILD_FAILED` is used for platform conditions (the 150 s deadline) as well as candidate faults and maps to 422; the
   `Dockerfile` digest should be confirmed as the multi-arch index digest; an `export` after a leading block comment on one line is missed by the heuristic.
+
+### Review fixes deployed and verified: POST bodies reach canaries, the loop rolls back on them (2026-10-25, `ebb5c75`)
+
+Pushed to `cf` (all ten builds succeeded; the sandbox-runner Worker code was live at 12:45Z, its container rollout step unchanged). Live test against
+production with a candidate that answers HTTP 500 **only** to a POST whose body is exactly `fail-me` (and `ok` to GETs):
+- Canary deployed 12:46:10 (`autoRollback: true`); 119 POSTs with body `fail-me` to URLs in the 0.5% hash range of `POST:<url>` sent through the shadow router.
+- The first queue tick at **12:47:12** logged `canary_slo_cycle ... rolledBack: [<deployment id>]`; the record: `status: rolled_back`, `rollbackReason: error_rate`.
+  Because the candidate only fails when the body arrives intact, this shows the SF-1 fix works in production: the body reaches the canary target and the SLO
+  loop sees body-carrying traffic (before the fix the canary request was silently never made for any POST).
+- Cleanup: Worker deleted through the DELETE route, org tombstoned (cascade 1 org/repo/spec/candidate), Artifacts repo deleted, health green.
+- **Not verified live:** that the production baseline is no longer replayed for POSTs (unit-tested; nothing observable from outside), the 10 s candidate timeout,
+  the abandoned-build guard and the bounded cleanup (unit tests with fakes only), SF-8 (still open). A first attempt at this test failed in setup, not in the
+  product: `wrangler artifacts repos create` returned no repo once (transient), and the shell chain went on to register a candidate with an empty commit;
+  the half-made org was tombstoned. Use `set -e` style checks in fixture scripts.
