@@ -443,7 +443,15 @@ describe('POST /sandbox/build', () => {
       createRequest('/sandbox/build', 'POST', body, { Authorization: 'Bearer test-auth-token' }),
       { ...mockEnv, SANDBOX_MODE: 'stub', BEEHIVE_LOCAL_DEV: '1' } as never, mockCtx as never
     );
-    expect((await readJson(stubbed)).bundle).toMatchObject({ mainModule: 'index.js' });
+    const stubBody = await readJson(stubbed);
+    expect(stubBody.bundle).toMatchObject({ mainModule: 'index.js' });
+    expect(stubBody).toMatchObject({ namespace: expect.any(String) });
+    expect(stubBody.bundle.namespace).toBeUndefined(); // beside the bundle, not inside it
+    const forked = await handler.fetch(
+      createRequest('/sandbox/build', 'POST', { ...body, namespace: 'my-org' }, { Authorization: 'Bearer test-auth-token' }),
+      { ...mockEnv, SANDBOX_MODE: 'stub', BEEHIVE_LOCAL_DEV: '1' } as never, mockCtx as never
+    );
+    expect((await readJson(forked)).namespace).toBe('my-org');
     expect(getByName).not.toHaveBeenCalled();
     build.mockResolvedValueOnce(bundle);
     await handler.fetch(

@@ -243,10 +243,15 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     }));
   }
 
+  /** The request's namespace, else the environment's fallback. */
+  private namespaceFor(req: BuildRequest): string {
+    return req.namespace ?? this.env.ARTIFACTS_NAMESPACE ?? 'default';
+  }
+
   build(input: BuildRequest): Promise<BuildResult> {
     const req = validateBuildRequest(input);
     // The namespace is part of the key: the same repo name and commit in two namespaces are two different builds.
-    const key = `${req.namespace ?? this.env.ARTIFACTS_NAMESPACE ?? 'default'}/${req.repo}@${req.commitSha}`;
+    const key = `${this.namespaceFor(req)}/${req.repo}@${req.commitSha}`;
     const running = this.inflight.get(key);
     if (running) return running;
     const result = this.serialize(() => this.guarded((token) => this.buildInner(req, token))).finally(() => { this.inflight.delete(key); });
@@ -258,8 +263,8 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
   private async buildInner(req: BuildRequest, token: symbol): Promise<BuildResult> {
     // Every container action goes through here: an abandoned build (deadline) throws on its next step instead of acting
     const run = (cmd: string[], env?: Record<string, string>) => { this.assertActive(token); return this.run(cmd, env); };
-    const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken, ARTIFACTS_NAMESPACE: ns } = this.env;
-    const namespace = req.namespace ?? ns ?? 'default';
+    const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = this.env;
+    const namespace = this.namespaceFor(req);
     if (!accountId || !apiToken) throw new BuildError('NOT_CONFIGURED', 'the build service is not configured');
     if (!isValidNamespace(namespace)) throw new BuildError('NOT_CONFIGURED', 'the build service is not configured');
 

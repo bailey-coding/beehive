@@ -1,6 +1,6 @@
 ---
 category: planning
-status: implemented on fix/recorder-flush, not deployed (two commits)
+status: implemented and reviewed (agent), on fix/recorder-flush; deployment status in docs/FOCUS.md
 audience: human,agent
 ---
 

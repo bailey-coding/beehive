@@ -25,9 +25,16 @@ describe('sandboxBundleSource', () => {
     await sandboxBundleSource(asFetcher(ok), 'tok')(fork);
     expect(JSON.parse((ok.fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toMatchObject({ namespace: 'my-org' });
     // an older runner ignores the field and answers without an echo (it built default/<repo>): refused, also for 'default'
-    for (const [i, echo] of [[fork, undefined], [input, undefined], [fork, 'default'], [input, 'other']] as const) {
+    for (const [i, echo] of [[fork, undefined], [input, undefined], [fork, 'default'], [input, 'other'], [input, '']] as const) {
       const r = runner(j({ success: true, bundle: okBundle, ...(echo ? { namespace: echo } : {}) }));
       await expect(sandboxBundleSource(asFetcher(r), 'tok')(i)).rejects.toMatchObject({ code: 'UNAVAILABLE', status: 502, message: expect.stringContaining('namespace') });
+    }
+  });
+
+  it('refuses a non-string echo too', async () => {
+    for (const echo of [null, 5, {}]) {
+      const r = runner(j({ success: true, bundle: okBundle, namespace: echo }));
+      await expect(sandboxBundleSource(asFetcher(r), 'tok')(input)).rejects.toMatchObject({ code: 'UNAVAILABLE', status: 502 });
     }
   });
 
