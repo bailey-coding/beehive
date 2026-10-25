@@ -48,11 +48,11 @@ describe('Idempotency Keys', () => {
       const endpoint = '/api/organizations';
       
       // First request with body A
-      const bodyA = { name: 'Test Org A', type: 'github' as const };
+      const bodyA = { name: 'Test-Org-A', type: 'github' as const };
       const responseA = await call(endpoint, 'POST', bodyA, { 'Idempotency-Key': key });
       
       // Second request with same key but different body
-      const bodyB = { name: 'Test Org B', type: 'github' as const };
+      const bodyB = { name: 'Test-Org-B', type: 'github' as const };
       const responseB = await call(endpoint, 'POST', bodyB, { 'Idempotency-Key': key });
       
       expect(responseB.status).toBe(409);
@@ -63,7 +63,7 @@ describe('Idempotency Keys', () => {
     it('should allow same request with same key (return cached response)', async () => {
       const key = makeIdempotencyKey();
       const endpoint = '/api/organizations';
-      const body = { name: `Test Org ${Date.now()}`, type: 'github' as const };
+      const body = { name: `Test-Org-${Date.now()}`, type: 'github' as const };
       
       // First request
       const response1 = await call(endpoint, 'POST', body, { 'Idempotency-Key': key });
@@ -82,7 +82,7 @@ describe('Idempotency Keys', () => {
 
     it('should allow requests without idempotency key (backwards compatibility)', async () => {
       const endpoint = '/api/organizations';
-      const body = { name: `Test Org No Key ${Date.now()}`, type: 'github' as const };
+      const body = { name: `Test-Org-No-Key-${Date.now()}`, type: 'github' as const };
       
       // Request without idempotency key should work
       const response = await call(endpoint, 'POST', body);
@@ -103,7 +103,7 @@ describe('Idempotency Keys', () => {
 
     it('should handle missing Idempotency-Key header gracefully', async () => {
       const endpoint = '/api/organizations';
-      const body = { name: `Test Org ${Date.now()}`, type: 'github' as const };
+      const body = { name: `Test-Org-${Date.now()}`, type: 'github' as const };
       
       const response = await call(endpoint, 'POST', body);
       expect(response.status).toBe(201);
@@ -119,7 +119,7 @@ describe('Idempotency Keys', () => {
     });
 
     it('works for candidates mutations', async () => {
-      const org = (await (await call('/api/organizations', 'POST', { name: 'Cand Org', type: 'github' })).json()).data;
+      const org = (await (await call('/api/organizations', 'POST', { name: 'Cand-Org', type: 'github' })).json()).data;
       const actorId = (await (await call('/api/actors', 'POST', { type: 'human', name: 'alice' })).json()).data.id;
       const specRes = await call('/api/specs', 'POST', {
         name: 'Cand Spec', contract: '{}', declaredDeltaSurface: [], organizationId: org.id,
@@ -148,7 +148,7 @@ describe('Idempotency Keys', () => {
   describe('Scoping', () => {
     it('does not replay one actor\'s response to another actor using the same key', async () => {
       const key = makeIdempotencyKey();
-      const body = { name: 'Scoped Org', type: 'github' as const };
+      const body = { name: 'Scoped-Org', type: 'github' as const };
       const a = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': key, 'X-Actor-ID': 'actor-a' });
       const b = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': key, 'X-Actor-ID': 'actor-b' });
       const aAgain = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': key, 'X-Actor-ID': 'actor-a' });
@@ -164,7 +164,7 @@ describe('Idempotency Keys', () => {
 
     it('does not replay a response on a different route with the same key', async () => {
       const key = makeIdempotencyKey();
-      const org = await call('/api/organizations', 'POST', { name: 'Route Org', type: 'github' }, { 'Idempotency-Key': key });
+      const org = await call('/api/organizations', 'POST', { name: 'Route-Org', type: 'github' }, { 'Idempotency-Key': key });
       const actor = await call('/api/actors', 'POST', { type: 'human', name: 'bob' }, { 'Idempotency-Key': key });
       expect(org.status).toBe(201);
       expect(actor.status).toBe(201);
@@ -186,7 +186,7 @@ describe('Idempotency Keys', () => {
 
     it('stores the response with the mutation: replay body equals the original', async () => {
       const key = makeIdempotencyKey();
-      const body = { name: 'Atomic Org', type: 'github' as const };
+      const body = { name: 'Atomic-Org', type: 'github' as const };
       const first = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': key });
       const text1 = await first.text();
       const replay = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': key });
@@ -198,12 +198,12 @@ describe('Idempotency Keys', () => {
   describe('Expiry', () => {
     it('treats an expired key as new and re-runs the mutation', async () => {
       const key = makeIdempotencyKey();
-      const body = { name: 'Expiring Org', type: 'github' as const };
+      const body = { name: 'Expiring-Org', type: 'github' as const };
       const first = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': key });
       expect(first.status).toBe(201);
       state.raw.prepare('UPDATE idempotency_keys SET expires_at = 1').run();
 
-      const again = await call('/api/organizations', 'POST', { name: 'Expiring Org 2', type: 'github' }, {
+      const again = await call('/api/organizations', 'POST', { name: 'Expiring-Org-2', type: 'github' }, {
         'Idempotency-Key': key,
       });
       expect(again.status).toBe(201);
@@ -223,14 +223,14 @@ describe('Idempotency Keys', () => {
 
   describe('Header validation', () => {
     it('rejects keys over 255 characters with 400 and runs no mutation', async () => {
-      const body = { name: 'Long Key Org', type: 'github' as const };
+      const body = { name: 'Long-Key-Org', type: 'github' as const };
       const response = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': 'a'.repeat(256) });
       expect(response.status).toBe(400);
       expect(rowCount('organizations')).toBe(0);
     });
 
     it('accepts a key of exactly 255 characters', async () => {
-      const body = { name: 'Max Key Org', type: 'github' as const };
+      const body = { name: 'Max-Key-Org', type: 'github' as const };
       const response = await call('/api/organizations', 'POST', body, { 'Idempotency-Key': 'a'.repeat(255) });
       expect(response.status).toBe(201);
     });
@@ -239,7 +239,7 @@ describe('Idempotency Keys', () => {
   describe('Entity history POST route', () => {
     it('should support POST to /api/entities/candidate/:id/history with idempotency', async () => {
       // First create a candidate
-      const org = (await (await call('/api/organizations', 'POST', { name: 'History Org', type: 'github' })).json()).data;
+      const org = (await (await call('/api/organizations', 'POST', { name: 'History-Org', type: 'github' })).json()).data;
       const actorId = (await (await call('/api/actors', 'POST', { type: 'human', name: 'alice' })).json()).data.id;
       const specRes = await call('/api/specs', 'POST', {
         name: 'History Spec', contract: '{}', declaredDeltaSurface: [], organizationId: org.id,
@@ -282,7 +282,7 @@ describe('Idempotency Keys', () => {
     it('should handle concurrent requests with same key gracefully', async () => {
       const key = makeIdempotencyKey();
       const endpoint = '/api/organizations';
-      const body = { name: `Test Org Concurrent ${Date.now()}`, type: 'github' as const };
+      const body = { name: `Test-Org-Concurrent-${Date.now()}`, type: 'github' as const };
       
       // Send multiple requests with the same key
       const promises = Array(3).fill(null).map(() =>

@@ -1,6 +1,6 @@
 ---
 category: planning
-status: part 1 implemented (runner + preview-manager); part 2 (org-name validation) pending
+status: implemented on fix/recorder-flush, not deployed (two commits)
 audience: human,agent
 ---
 
