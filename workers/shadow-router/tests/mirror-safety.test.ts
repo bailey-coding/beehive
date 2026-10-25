@@ -143,8 +143,12 @@ describe('mirror fan-out through the handler', () => {
   it('a candidate that never answers is aborted after the timeout and still answers the caller', async () => {
     hang = true;
     const pendingResponse = send('GET');
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(10_001);
+    // Advance in steps until the router answers: the abort timer is created only once the handler reaches the candidate fetch, and
+    // how many microtask turns that takes differs between machines, so a single big advance can run before the timer exists.
+    let answered = false;
+    void pendingResponse.then(() => { answered = true; });
+    for (let i = 0; i < 60 && !answered; i++) await vi.advanceTimersByTimeAsync(1_000);
+    expect(answered).toBe(true);
     const res = await pendingResponse;
     expect(res.status).toBe(200);
     const hung = calls.find((c) => c.url.startsWith('https://cand-a'));

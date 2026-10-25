@@ -18,6 +18,11 @@ import {
 } from '../build-sandbox';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
+
+/** Advance fake timers in steps until `settled()` is true: how many microtask turns pass before a timer is created differs between machines. */
+async function advanceUntil(settled: () => boolean, stepMs = 1_000, maxSteps = 400): Promise<void> {
+  for (let i = 0; i < maxSteps && !settled(); i++) await vi.advanceTimersByTimeAsync(stepMs);
+}
 const enc = (s: string) => new TextEncoder().encode(s);
 
 type Script = (cmd: string[]) => { exitCode: number; stdout?: string; stderr?: string } | undefined;
@@ -270,9 +275,11 @@ describe('BuildSandbox lifecycle', () => {
       const { sb, container } = makeSandbox((cmd) => (cmd.includes('clone') ? undefined : happy(cmd)));
       container.exec.mockImplementationOnce(async () => ({ output: async () => ({ exitCode: 0, stdout: enc(''), stderr: enc('') }) })); // rm -rf
       container.exec.mockImplementationOnce(() => new Promise(() => {})); // clone never returns
+      let done = false;
       const p = sb.build({ repo: 'cand-1', commitSha: SHA });
       const assertion = expect(p).rejects.toThrow(/BUILD_FAILED: the build exceeded 150s/);
-      await vi.advanceTimersByTimeAsync(BUILD_DEADLINE_MS + 1);
+      void p.then(() => { done = true; }, () => { done = true; });
+      await advanceUntil(() => done);
       await assertion;
       expect(container.destroy).toHaveBeenCalled();
     } finally {
@@ -305,8 +312,9 @@ describe('BuildSandbox: abandoned work and hung cleanup', () => {
         if (cmd.includes('clone') && ++clones === 1) await new Promise<void>((resolve) => { releaseA = resolve; }); // A's clone hangs
         return defaultImpl(cmd, opts);
       });
-      const a = sb.build({ repo: 'cand-1', commitSha: SHA_A }).then(() => null, (e: Error) => e);
-      await vi.advanceTimersByTimeAsync(BUILD_DEADLINE_MS + 1);
+      let aDone = false;
+      const a = sb.build({ repo: 'cand-1', commitSha: SHA_A }).then(() => null, (e: Error) => e).finally(() => { aDone = true; });
+      await advanceUntil(() => aDone);
       expect(await a).toMatchObject({ message: expect.stringContaining('exceeded') });
 
       const b = await sb.build({ repo: 'cand-1', commitSha: SHA_B }); // the next build runs while A's clone is still hanging
@@ -326,11 +334,13 @@ describe('BuildSandbox: abandoned work and hung cleanup', () => {
     try {
       const { sb, container } = makeSandbox(happy);
       container.destroy.mockImplementationOnce(() => new Promise<void>(() => {})); // hangs
-      const first = sb.build({ repo: 'cand-1', commitSha: '1'.repeat(40) });
-      const second = sb.build({ repo: 'cand-1', commitSha: '2'.repeat(40) });
-      await vi.advanceTimersByTimeAsync(10_001);
+      let firstDone = false;
+      let secondDone = false;
+      const first = sb.build({ repo: 'cand-1', commitSha: '1'.repeat(40) }).finally(() => { firstDone = true; });
+      const second = sb.build({ repo: 'cand-1', commitSha: '2'.repeat(40) }).finally(() => { secondDone = true; });
+      await advanceUntil(() => firstDone && secondDone, 1_000, 100);
+      expect(firstDone && secondDone).toBe(true);
       await expect(first).resolves.toMatchObject({ source: 'esbuild' });
-      await vi.advanceTimersByTimeAsync(10_001);
       await expect(second).resolves.toMatchObject({ source: 'esbuild' });
     } finally {
       vi.useRealTimers();
