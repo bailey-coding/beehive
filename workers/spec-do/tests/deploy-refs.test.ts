@@ -93,10 +93,38 @@ describe('canary deploy (promote move)', () => {
     expect((await call('/canary-deployments', 'POST', { candidateId: 'c', specId: 's', url: 'u', workerVersionId: 'v', trafficPercentage: 150, holdoutPercentage: 0 })).status).toBe(400);
     const { candidate } = seedCandidate();
     store.raw.prepare('UPDATE candidates SET deleted_at = 1 WHERE id = ?').run(candidate.id);
-    const res = await call('/canary-deployments', 'POST', { candidateId: candidate.id, specId: 's', url: 'u', workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0 });
+    const res = await call('/canary-deployments', 'POST', { candidateId: candidate.id, specId: 's', url: 'https://u.acct.workers.dev', workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0 });
     expect(res.status).toBe(404);
     expect(count('SELECT COUNT(*) AS n FROM deploy_refs')).toBe(0);
     expect(count('SELECT COUNT(*) AS n FROM canary_deployments')).toBe(0);
+  });
+});
+
+describe('canary deploy request validation (trust boundary for the shadow router)', () => {
+  const body = (over: Record<string, unknown>) => ({
+    candidateId: 'cand-ok', specId: 's', url: 'https://c.acct.workers.dev', workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0, ...over,
+  });
+
+  it('refuses a candidate id that could take the place of a static mirror target or is not a plain token, writing nothing', async () => {
+    for (const candidateId of ['beehive-main', 'beehive-gate', 'Beehive-Main', 'beehive-anything', 'a b', 'a/b', '../x', '-x', 'x'.repeat(129)]) {
+      const res = await call('/canary-deployments', 'POST', body({ candidateId }));
+      expect(res.status, candidateId).toBe(400);
+    }
+    expect(count('SELECT COUNT(*) AS n FROM deploy_refs')).toBe(0);
+    expect(count('SELECT COUNT(*) AS n FROM canary_deployments')).toBe(0);
+  });
+
+  it('refuses a url that is not an https workers.dev Worker without credentials, writing nothing', async () => {
+    for (const url of ['http://c.acct.workers.dev', 'https://evil.example', 'https://workers.dev', 'https://user:pw@c.acct.workers.dev', 'https://c.acct.workers.dev.evil.example', 'ftp://c.acct.workers.dev', 'u', 'https://localhost:8787']) {
+      const res = await call('/canary-deployments', 'POST', body({ url }));
+      expect(res.status, url).toBe(400);
+    }
+    expect(count('SELECT COUNT(*) AS n FROM deploy_refs')).toBe(0);
+  });
+
+  it('accepts a UUID candidate id with a workers.dev url', async () => {
+    const res = await call('/canary-deployments', 'POST', body({ candidateId: '0f1e2d3c-4b5a-4968-8777-665544332211' }));
+    expect(res.status).toBe(201);
   });
 });
 

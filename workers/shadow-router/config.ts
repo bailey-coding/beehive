@@ -4,7 +4,10 @@
  */
 
 import type { TrafficSplitConfig, ShadowConfig } from './types';
-import { DeployRefsClient, type LiveRef, type SpecDoFetcher } from '../shared/deploy-refs';
+import { DeployRefsClient, isAcceptableCanaryUrl, type LiveRef, type SpecDoFetcher } from '../shared/deploy-refs';
+
+// Mirrored traffic may only go to a Worker on workers.dev over https; the check lives in shared/deploy-refs.ts (the Spec DO applies it too)
+export { isAcceptableCanaryUrl };
 import type { LiveRefsCache } from './live-refs-cache';
 
 // ============================================================================
@@ -210,16 +213,6 @@ export function getPresetByName(name: string): TrafficSplitConfig {
  * unchanged; if the read fails, no canary target is added (after at most one extra
  * TTL of the last good value).
  */
-/** Mirrored traffic may only go to a Worker on workers.dev over https (candidate Workers are named by the platform). */
-export function isAcceptableCanaryUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' && u.hostname.endsWith('.workers.dev') && !u.username && !u.password;
-  } catch {
-    return false;
-  }
-}
-
 export async function applyCanaryRefs(
   config: ShadowConfig,
   specDo: SpecDoFetcher | null,

@@ -512,7 +512,7 @@ describe('Canary Deployment', () => {
   });
 
   it('relays a Spec DO refusal (e.g. 404 tombstoned candidate)', async () => {
-    mockPreviewManager.fetch.mockResolvedValueOnce(json({ success: true, url: 'https://u', versionId: 'v' }));
+    mockPreviewManager.fetch.mockResolvedValueOnce(json({ success: true, url: 'https://u.acct.workers.dev', versionId: 'v' }));
     mockSpecDoStub.fetch.mockResolvedValueOnce(json({ success: false, error: 'Candidate candidate-001 not found' }, 404));
     const response = await new CanaryWorker(mockEnv).deployCanary(config);
     expect(response.status).toBe(404);

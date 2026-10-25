@@ -60,12 +60,31 @@ export const CanaryDeploymentSchema = z
   })
   .strict();
 
+/**
+ * Mirrored traffic may only go to a Worker on workers.dev over https, without credentials. The shadow router checks this again
+ * before it sends anything (applyCanaryRefs); the Spec DO checks it first, so a bad value never becomes ledger state.
+ */
+export function isAcceptableCanaryUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.hostname.endsWith('.workers.dev') && !u.username && !u.password;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A canary candidate id is a plain token (a ledger UUID in practice) and never starts with `beehive-`: the shadow router's
+ * static targets (`beehive-main`, the trusted baseline, and the local-dev ports) use that prefix, and a ref must not take their place.
+ */
+const CANARY_CANDIDATE_ID_RE = /^(?!beehive-)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/i;
+
 // Body of POST /canary-deployments: record the deployment and move the canary ref
 export const CanaryDeployRequestSchema = z
   .object({
-    candidateId: z.string().min(1),
+    candidateId: z.string().regex(CANARY_CANDIDATE_ID_RE, "candidateId must be letters, digits, '_' or '-' (at most 128) and must not start with 'beehive-'"),
     specId: z.string().min(1),
-    url: z.string().min(1),
+    url: z.string().refine(isAcceptableCanaryUrl, { message: 'url must be an https://*.workers.dev URL without credentials' }),
     workerVersionId: z.string().min(1),
     commitSha: z.string().min(1).nullable().optional(),
     trafficPercentage: z.number().gt(0).max(100),
