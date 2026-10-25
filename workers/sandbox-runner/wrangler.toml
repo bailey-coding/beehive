@@ -32,15 +32,18 @@ dockerfile = "./Dockerfile"
 name = "SANDBOX"
 class_name = "BuildSandbox"
 
-# Declarative class lifecycle (replaces the legacy migrations v1 that created the 0.x `Sandbox` class). The 0.x
-# class had no data; its tombstone deletes the namespace. Its container application is deleted by hand (OPS.md).
+# Declarative class lifecycle (replaces the legacy migrations v1 that created the 0.x `Sandbox` class). A tombstone
+# `deleted` fails while the live worker still binds the namespace (error 10086, seen on the first attempt), so the old
+# class (no data) is renamed: the namespace and the SANDBOX binding carry over to BuildSandbox. The 0.x container
+# application was deleted by hand before this deploy.
 [exports.BuildSandbox]
 type = "durable-object"
 storage = "sqlite"
 
 [exports.Sandbox]
 type = "durable-object"
-state = "deleted"
+state = "renamed"
+renamed_to = "BuildSandbox"
 
 # Analytics Engine for per-candidate metrics
 [[analytics_engine_datasets]]
