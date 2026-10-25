@@ -222,6 +222,9 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    only then purges. A failed delete (a live canary: 409, or any error: 502) aborts the call with nothing purged; repeat it after fixing the cause
    (roll the canary back first). More than 40 candidate Workers in one purge is refused (409): narrow the selector. The response carries
    `workerCleanup` (`done` with `deleted`/`absent`, or `skipped` with the reason: no Versions client, no binding, or an older Spec DO) and
+   Deploy note: the `PREVIEW_MANAGER` binding needs `beehive-preview-manager` to exist (it does in production); a preview manager older than
+   the DELETE route answers 404, which aborts a real purge with 502 until it is deployed. `confirm` is checked against the plan before any Worker
+   is deleted; a candidate that gains an active promotion between the plan and the purge can still lose its Worker (small window).
    `workersNotDeleted` for candidates tombstoned between the plan and the purge whose Worker could not be deleted.
 
 ### CLI actor attribution (stopgap until M12)

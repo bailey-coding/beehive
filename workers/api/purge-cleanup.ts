@@ -69,7 +69,7 @@ export function createCandidateWorkerCleanup(preview: PreviewManagerFetcher, api
         return {
           ok: false,
           status,
-          error: `could not delete the Worker of ${failed.length} candidate(s); nothing was purged, repeat after fixing: ${failed.map((f) => `${f.candidateId}: ${f.error}`).join('; ')}`,
+          error: `could not delete the Worker of ${failed.length} candidate(s); no ledger rows were purged (Workers of other candidates in this call may already be deleted; a repeat is safe), repeat after fixing: ${failed.map((f) => `${f.candidateId}: ${f.error}`).join('; ')}`,
           failed,
         };
       }

@@ -166,6 +166,14 @@ describe('real purge deletes candidate Workers first (docs/CLEANUP-PLAN-2026-10-
     expect(log2.some((l) => l.startsWith('del:'))).toBe(false);
   });
 
+  it('checks confirm against the plan total before deleting any Worker (a wrong confirm leaves every Worker alone)', async () => {
+    const log: string[] = [];
+    const res = await runReal(doReply(log), cleanupWith(log, () => ok(true)), { ...real, confirm: 4 });
+    expect(res?.status).toBe(409);
+    expect(((await res!.json()) as { error: string }).error).toContain('does not match');
+    expect(log).toEqual(['do:plan+ids']);
+  });
+
   it('refuses a purge that would delete more than 40 candidate Workers, without purging', async () => {
     const ids = Array.from({ length: 41 }, (_, i) => `${String(i).padStart(8, '0')}-4b5a-4968-8777-665544332211`);
     const log: string[] = [];

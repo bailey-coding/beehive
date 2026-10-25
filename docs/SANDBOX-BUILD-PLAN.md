@@ -39,7 +39,7 @@ sandbox-runner" (2026-10-24).
    Mode stays `WORKER_VERSIONS_MODE` unset until the maintainer flips it.
 4. **Remaining wiring** (from `docs/FOCUS.md`): handle `versionsClient: 'api'` in the route response; delete
    `beehive-candidate-*` Workers on candidate purge; document env/token in `docs/OPS.md`.
-5. **Local/CI**: containers need Docker. `scripts/start-e2e-workers.sh` and CI Enhanced must keep working without it:
+5. **Local/CI**: containers need Docker. `scripts/start-e2e-workers.sh` and CI (`ci.yml`) must keep working without it:
    a `SANDBOX_MODE=stub` (like `WORKER_VERSIONS_MODE=stub`, needs `BEEHIVE_LOCAL_DEV=1`) returns a fixed tiny bundle.
 6. **Mixed-version window**: additive only. New DO class migration is additive; new routes are called only by the new
    preview-manager; an old preview-manager never calls them.

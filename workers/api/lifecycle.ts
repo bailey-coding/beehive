@@ -129,6 +129,10 @@ export async function handleLifecycleRoutes(
         if (plan.ok) cleanup = { status: 'skipped', reason: 'the Spec DO does not report candidate ids yet' };
       }
       if (!plan.ok) return relay(plan);
+      // The confirm gate must hold before any Worker is touched (the DO only checks it in the real purge, after the deletes)
+      if (body.data.confirm !== plan.data.total) {
+        return err(`confirm ${body.data.confirm} does not match the current dry-run total ${plan.data.total}; rerun the dry run`, 409);
+      }
       if (plan.data.candidateIds) {
         reportsIds = true;
         const outcome = await workerCleanup.deleteWorkers(plan.data.candidateIds);
