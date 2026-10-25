@@ -39,7 +39,7 @@ describe('shadow router -> candidate request headers (through the handler)', () 
   const live = {
     ref: { id: 'ref-a', specId: 'spec-1', rung: 'canary', candidateId: 'cand-a', commitSha: null, workerVersionId: 'v', prevRefId: null, action: 'promote', movedBy: 'canary-worker', movedAt: 1 },
     deployment: {
-      id: 'dep-a', candidateId: 'cand-a', specId: 'spec-1', status: 'deployed', url: 'https://cand-a.example', workerVersionId: 'v', commitSha: null,
+      id: 'dep-a', candidateId: 'cand-a', specId: 'spec-1', status: 'deployed', url: 'https://cand-a.bz23711.workers.dev', workerVersionId: 'v', commitSha: null,
       trafficPercentage: 100, holdoutPercentage: 0, autoRollback: true, deployRefId: 'ref-a', rollbackReason: null,
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
     },
@@ -69,7 +69,7 @@ describe('shadow router -> candidate request headers (through the handler)', () 
     expect(url).not.toBe('');
     const res = await handler.fetch(new Request(url, { headers: { Authorization: 'Bearer tok', Cookie: 'session=abc', 'X-Actor-ID': 'actor-1', Accept: 'text/html' } }), env, ctx);
     expect(res.status).toBe(200);
-    const toCandidate = seen.filter((s) => s.url.startsWith('https://cand-a.example'));
+    const toCandidate = seen.filter((s) => s.url.startsWith('https://cand-a.bz23711.workers.dev'));
     expect(toCandidate.length).toBeGreaterThan(0);
     for (const call of toCandidate) {
       expect(call.headers.get('authorization')).toBeNull();

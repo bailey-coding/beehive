@@ -482,10 +482,10 @@ describe('Shadow Router - canary deploy refs', () => {
   });
 
   it('adds each live canary as a mirror target with its split, read from /deploy-refs/live', async () => {
-    const specDo = fetcher([live('cand-a', 'https://a.example')]);
+    const specDo = fetcher([live('cand-a', 'https://a.bz23711.workers.dev')]);
     const config = await applyCanaryRefs(getDefaultShadowConfig(), specDo);
     expect(specDo.fetch).toHaveBeenCalledWith('/deploy-refs/live?rung=canary', expect.objectContaining({ method: 'GET' }));
-    expect(config.candidatePreviews.get('cand-a')).toBe('https://a.example');
+    expect(config.candidatePreviews.get('cand-a')).toBe('https://a.bz23711.workers.dev');
     expect(config.statsig.splits['cand-a']).toEqual({ canaryPercentage: 10, holdoutPercentage: 5, baselinePercentage: 85 });
   });
 

@@ -138,7 +138,7 @@ describe('BuildSandbox.build', () => {
     const out = await sb.build({ repo: 'cand-1', commitSha: SHA });
     expect(out).toMatchObject({ mainModule: 'index.js', source: 'esbuild', modules: [{ name: 'index.js', content: 'export default {}' }] });
     expect(createRepoToken).toHaveBeenCalledTimes(1);
-    expect(createRepoToken).toHaveBeenCalledWith({ accountId: 'acct', apiToken: 'tok', namespace: 'default' }, 'cand-1', 'read', 600);
+    expect(createRepoToken).toHaveBeenCalledWith({ accountId: 'acct', apiToken: 'tok', namespace: 'default' }, 'cand-1', 'read', 240);
     expect(container.start).toHaveBeenCalledWith(expect.objectContaining({ image: 'img', enableInternet: false }));
     expect(container.interceptOutboundHttps).toHaveBeenCalledWith('acct.artifacts.cloudflare.net', expect.anything());
     expect(gateway).toHaveBeenCalledWith({ props: { repo: 'cand-1', namespace: 'default', token: 'secret-read-token' } });
@@ -288,3 +288,53 @@ describe('BuildSandbox.probe', () => {
     expect(container.destroy).toHaveBeenCalled();
   });
 });
+
+describe('BuildSandbox: abandoned work and hung cleanup', () => {
+  beforeEach(() => { createRepoToken.mockClear(); });
+
+  it('an abandoned build (deadline) cannot act on the container of the build started after it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { sb, container } = makeSandbox(happy);
+      const SHA_A = 'a'.repeat(40);
+      const SHA_B = 'b'.repeat(40);
+      const defaultImpl = container.exec.getMockImplementation()!;
+      let releaseA: () => void = () => {};
+      let clones = 0;
+      container.exec.mockImplementation(async (cmd: string[], opts?: { env?: Record<string, string> }) => {
+        if (cmd.includes('clone') && ++clones === 1) await new Promise<void>((resolve) => { releaseA = resolve; }); // A's clone hangs
+        return defaultImpl(cmd, opts);
+      });
+      const a = sb.build({ repo: 'cand-1', commitSha: SHA_A }).then(() => null, (e: Error) => e);
+      await vi.advanceTimersByTimeAsync(BUILD_DEADLINE_MS + 1);
+      expect(await a).toMatchObject({ message: expect.stringContaining('exceeded') });
+
+      const b = await sb.build({ repo: 'cand-1', commitSha: SHA_B }); // the next build runs while A's clone is still hanging
+      expect(b.source).toBe('esbuild');
+      releaseA(); // A's clone finally returns, inside B's world
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      const aSteps = container.exec.mock.calls.filter((c: unknown[]) => (c[0] as string[]).includes('checkout') && (c[0] as string[]).includes(SHA_A));
+      expect(aSteps).toHaveLength(0); // the abandoned build stopped at its next step
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a destroy() that never returns does not hold the queue: the build still settles and the next one runs', async () => {
+    vi.useFakeTimers();
+    try {
+      const { sb, container } = makeSandbox(happy);
+      container.destroy.mockImplementationOnce(() => new Promise<void>(() => {})); // hangs
+      const first = sb.build({ repo: 'cand-1', commitSha: '1'.repeat(40) });
+      const second = sb.build({ repo: 'cand-1', commitSha: '2'.repeat(40) });
+      await vi.advanceTimersByTimeAsync(10_001);
+      await expect(first).resolves.toMatchObject({ source: 'esbuild' });
+      await vi.advanceTimersByTimeAsync(10_001);
+      await expect(second).resolves.toMatchObject({ source: 'esbuild' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+

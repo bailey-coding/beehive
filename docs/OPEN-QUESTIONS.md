@@ -956,3 +956,31 @@ swallowed, and the pending set is still taken before sending so nothing is sent 
 `canary-wiring.test.ts` (through the handler; the tail test fails if the call in `recordCanaryMetrics` is removed). **Not verified live** (needs a deploy).
 Note: a competing change (`scratch/mistral-recorder-flush`, a `setTimeout` that only cleared a field and still relied on the next sample) was not used:
 it did not flush anything by itself.
+
+### Review of the post-review changes and what it led to (2026-10-25)
+
+A Sonnet review of `bb1ec51`, `b768300`..`3a8bdc1`, `e6f6948`/`4bfba1e` and the recorder tail flush found no blockers and eight should-fix items.
+Fixed in the commit after `c0cfa86` (unit-tested; **not deployed**; the zombie-build and tail-flush tests were checked by mutation):
+- **SF-1 request bodies reached only the first mirror target.** The router handed the same body stream to every target, so it locked after the first (the
+  production baseline `beehive-main`, first in the map) and every canary after it was silently never called, with no sample recorded: a candidate that 500s
+  every POST would have stayed `healthy`. The body is now read once (cap 1 MiB, larger bodies are not mirrored) and each target gets its own copy; a failure
+  to build the request is now a recorded synthetic 5xx instead of a dropped promise.
+- **SF-2 mirrored writes reached production with the caller's credentials.** With `global_fetch_strictly_public` the baseline mirror is real, and it
+  carries the original headers. Non-`GET`/`HEAD` requests are no longer replayed against the baseline (candidates still get them). Nothing in the repo sends
+  writes to the router; if something outside does, this is the safe default.
+- **SF-3 a live canary ref could replace the baseline target.** The Spec DO accepts any `candidateId` and `url`, and the router trusted the id string
+  `beehive-main` for full headers. `applyCanaryRefs` now ignores a ref whose id is a static target and one whose url is not `https://*.workers.dev`
+  (no credentials in the url). **Open:** the Spec DO route itself still accepts anything (the trust boundary); validate there too.
+- **SF-4 no timeout on the candidate fetch.** 10 s abort (a plain `setTimeout`, cleared in `finally`), recorded as a synthetic 5xx; `redirect: 'manual'`.
+- **SF-5 an abandoned (deadline) build could act on the next build's container.** Each build now owns an identity token; every container step and the
+  intercept registration check it, so leftover work throws instead.
+- **SF-6 a hung `destroy()`/`setAlarm()`/`deleteAlarm()` blocked the serialized queue.** Each is abandoned after 10 s.
+- **SF-7 samples added during an in-flight tail flush were stranded.** The "scheduled" flag is cleared when the timer fires, before the flush.
+- Also: the Scientist queue message no longer persists `Authorization`/cookies; the gateway read-token TTL is 240 s (was 600).
+**Left open on purpose:**
+- **SF-8 namespace.** Fork-created candidate repos get `repositories.namespace = org.name` in the ledger (`spec-do/index.ts:1504`), while the runner and the
+  preview-manager read `ARTIFACTS_NAMESPACE` (`default`). Such a candidate is refused with 422 on every canary deploy (fails closed). Decide whether the runner
+  takes the namespace per request (widens which namespaces it can mint read tokens for) or the ledger records the real Artifacts namespace.
+- **Local dev:** `global_fetch_strictly_public` blocks loopback/private targets, so mirroring to `http://localhost:8787` under `wrangler dev` probably stops;
+  check at the next local e2e run. `BUILD_FAILED` is used for platform conditions (the 150 s deadline) as well as candidate faults and maps to 422; the
+  `Dockerfile` digest should be confirmed as the multi-arch index digest; an `export` after a leading block comment on one line is missed by the heuristic.

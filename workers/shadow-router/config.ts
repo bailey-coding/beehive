@@ -210,6 +210,16 @@ export function getPresetByName(name: string): TrafficSplitConfig {
  * unchanged; if the read fails, no canary target is added (after at most one extra
  * TTL of the last good value).
  */
+/** Mirrored traffic may only go to a Worker on workers.dev over https (candidate Workers are named by the platform). */
+export function isAcceptableCanaryUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.hostname.endsWith('.workers.dev') && !u.username && !u.password;
+  } catch {
+    return false;
+  }
+}
+
 export async function applyCanaryRefs(
   config: ShadowConfig,
   specDo: SpecDoFetcher | null,
@@ -235,6 +245,16 @@ export async function applyCanaryRefs(
   const splits = { ...config.statsig.splits };
   for (const { ref, deployment } of live) {
     if (!ref.candidateId || !deployment) continue;
+    // A live ref must never replace a statically configured target (the trusted baseline `beehive-main`), and its URL must be a
+    // Worker on workers.dev: the Spec DO accepts any id and url, so this is the last check before mirrored traffic is sent there.
+    if (config.candidatePreviews.has(ref.candidateId)) {
+      console.warn(`[Shadow] ignoring live canary ref ${ref.candidateId}: the id is a static target`);
+      continue;
+    }
+    if (!isAcceptableCanaryUrl(deployment.url)) {
+      console.warn(`[Shadow] ignoring live canary ref ${ref.candidateId}: url is not an https workers.dev host`);
+      continue;
+    }
     candidatePreviews.set(ref.candidateId, deployment.url);
     canaryDeployments.set(ref.candidateId, deployment.id);
     splits[ref.candidateId] = normalizeTrafficSplitConfig({

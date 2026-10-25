@@ -8,6 +8,7 @@
  */
 export const BASELINE_TARGET_ID = 'beehive-main';
 
+const SECRET_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization', 'x-actor-id', 'x-api-key']);
 const CANDIDATE_HEADER_ALLOWLIST = ['accept', 'accept-language', 'content-type', 'user-agent', 'x-request-id'];
 
 export function headersForTarget(targetId: string, source: Headers): Headers {
@@ -16,6 +17,15 @@ export function headersForTarget(targetId: string, source: Headers): Headers {
   for (const name of CANDIDATE_HEADER_ALLOWLIST) {
     const value = source.get(name);
     if (value !== null) out.set(name, value);
+  }
+  return out;
+}
+
+/** Headers worth keeping in a Scientist queue message: the caller's credentials must not be persisted in queue messages. */
+export function scientistSafeHeaders(source: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of source.entries()) {
+    if (!SECRET_HEADERS.has(name.toLowerCase())) out[name] = value;
   }
   return out;
 }

@@ -69,9 +69,13 @@ export class CanaryMetricsRecorder {
     if (this.pendingSamples === 0 || this.tailFlushScheduled) return null;
     this.tailFlushScheduled = true;
     return new Promise<void>((resolve) => setTimeout(resolve, waitMs))
-      .then(() => this.flush(specDo))
-      .catch(() => undefined)
-      .finally(() => { this.tailFlushScheduled = false; });
+      .then(() => {
+        // Cleared before the flush, not after: flush() takes the pending set first, so samples added while its Spec DO call is in
+        // flight belong to a new batch and must be able to schedule their own tail flush instead of being stranded.
+        this.tailFlushScheduled = false;
+        return this.flush(specDo);
+      })
+      .catch(() => undefined);
   }
 
   /** Send what is pending. The pending set is taken first, so concurrent requests never double-send. Never throws. */

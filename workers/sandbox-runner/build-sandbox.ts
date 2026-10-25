@@ -67,7 +67,9 @@ export const BUILD_DEADLINE_MS = 150_000;
 const BUILD_TIMEOUT_S = 60;
 const CLONE_TIMEOUT_S = 60;
 const CHECKOUT_TIMEOUT_S = 30;
-const TOKEN_TTL_S = 600;
+const TOKEN_TTL_S = 240; // a build is bounded by BUILD_DEADLINE_MS (150 s) plus clone/checkout, so the read token need not outlive it by much
+/** destroy()/setAlarm()/deleteAlarm() must never hold the serialized queue: a hung call is abandoned after this long. */
+const CLEANUP_TIMEOUT_MS = 10_000;
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 /** The alarm only has to outlive the deadline; it destroys a container a restarted Durable Object forgot. */
 const ALARM_AFTER_MS = BUILD_DEADLINE_MS + 60_000;
@@ -152,11 +154,23 @@ export function scrub(text: string, max: number): string {
     .replace(/https?:\/\/[^\s'"]*artifacts\.cloudflare\.net[^\s'"]*/g, '<artifacts-url>').trim().slice(0, max);
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms); });
+  return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
 export class BuildSandbox extends DurableObject<BuildEnv> {
   /** Tail of the call chain: build() and probe() on one instance run one at a time. */
   private chain: Promise<unknown> = Promise.resolve();
   /** Builds in progress by `repo@sha`: a repeat call for the same commit (a retry after a caller's timeout) shares the running build. */
   private inflight = new Map<string, Promise<BuildResult>>();
+  /**
+   * Identity of the build that owns the container right now. When the deadline abandons a build its work keeps running in the
+   * background; every container action checks this first, so that leftover work throws instead of acting on the container of the
+   * build that was started after it.
+   */
+  private active: symbol | null = null;
 
   constructor(ctx: DurableObjectState, env: BuildEnv) {
     super(ctx, env);
@@ -178,24 +192,31 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
   }
 
   /** Runs `fn` with a wall-clock deadline and an alarm backstop, and always stops the container afterwards. */
-  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+  private async guarded<T>(fn: (token: symbol) => Promise<T>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const token = Symbol('build');
+    this.active = token;
     try {
-      await this.ctx.storage.setAlarm(Date.now() + ALARM_AFTER_MS);
+      await withTimeout(this.ctx.storage.setAlarm(Date.now() + ALARM_AFTER_MS), CLEANUP_TIMEOUT_MS, 'setAlarm');
       const deadline = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new BuildError('BUILD_FAILED', `the build exceeded ${BUILD_DEADLINE_MS / 1000}s`)), BUILD_DEADLINE_MS);
       });
-      return await Promise.race([fn(), deadline]);
+      return await Promise.race([fn(token), deadline]);
     } finally {
       if (timer) clearTimeout(timer);
+      this.active = null; // abandoned work stops acting on the container before it is destroyed and reused
       await this.stop();
-      try { await this.ctx.storage.deleteAlarm(); } catch { /* the alarm is only a backstop */ }
+      try { await withTimeout(this.ctx.storage.deleteAlarm(), CLEANUP_TIMEOUT_MS, 'deleteAlarm'); } catch { /* the alarm is only a backstop */ }
     }
   }
 
   /** Backstop for a container left running by a restart mid-build; also harmless when nothing is running. */
   async alarm(): Promise<void> {
     await this.stop();
+  }
+
+  private assertActive(token: symbol): void {
+    if (this.active !== token) throw new BuildError('BUILD_FAILED', 'the build was abandoned');
   }
 
   private async run(cmd: string[], env?: Record<string, string>): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -206,8 +227,10 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
 
   /** Tool versions of the running image; proves a deploy shipped the image this code expects. */
   probe(): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    return this.serialize(() => this.guarded(async () => {
+    return this.serialize(() => this.guarded(async (token) => {
+      this.assertActive(token);
       await this.start();
+      this.assertActive(token);
       return this.run(['sh', '-c', 'node --version; esbuild --version; git --version']);
     }));
   }
@@ -217,33 +240,37 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     const key = `${req.repo}@${req.commitSha}`;
     const running = this.inflight.get(key);
     if (running) return running;
-    const result = this.serialize(() => this.guarded(() => this.buildInner(req))).finally(() => { this.inflight.delete(key); });
+    const result = this.serialize(() => this.guarded((token) => this.buildInner(req, token))).finally(() => { this.inflight.delete(key); });
     result.catch(() => undefined); // a caller that gave up must not leave an unhandled rejection behind
     this.inflight.set(key, result);
     return result;
   }
 
-  private async buildInner(req: BuildRequest): Promise<BuildResult> {
+  private async buildInner(req: BuildRequest, token: symbol): Promise<BuildResult> {
+    // Every container action goes through here: an abandoned build (deadline) throws on its next step instead of acting
+    const run = (cmd: string[], env?: Record<string, string>) => { this.assertActive(token); return this.run(cmd, env); };
     const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken, ARTIFACTS_NAMESPACE: ns } = this.env;
     const namespace = ns ?? 'default';
     if (!accountId || !apiToken) throw new BuildError('NOT_CONFIGURED', 'the build service is not configured');
     if (!NAMESPACE_RE.test(namespace)) throw new BuildError('NOT_CONFIGURED', 'the build service is not configured');
 
     // One token per build, held by the gateway props. If this fails nothing has started yet.
-    let token: string;
+    let readToken: string;
     try {
-      token = (await createRepoToken({ accountId, apiToken, namespace }, req.repo, 'read', TOKEN_TTL_S)).token;
+      readToken = (await createRepoToken({ accountId, apiToken, namespace }, req.repo, 'read', TOKEN_TTL_S)).token;
     } catch (error) {
       console.error('[BuildSandbox] read token mint failed:', error instanceof Error ? error.message : String(error));
       throw new BuildError('CLONE_FAILED', 'could not obtain read access to the repository');
     }
 
+    this.assertActive(token);
     await this.start();
+    this.assertActive(token);
     // Registering again replaces an earlier intercept, so this is safe on every build.
     await this.container.interceptOutboundHttps(
       artifactsHost(accountId),
       (this.ctx.exports as unknown as { ArtifactsGateway: (o: { props: GatewayProps }) => Fetcher }).ArtifactsGateway({
-        props: { repo: req.repo, namespace, token },
+        props: { repo: req.repo, namespace, token: readToken },
       })
     );
     const url = `https://${artifactsHost(accountId)}/git/${namespace}/${req.repo}.git`;
@@ -251,27 +278,27 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     const gitEnv = { GIT_SSL_CAINFO: CA_CERT, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
     const git = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.symlinks=false'];
 
-    await this.run(['rm', '-rf', WORKDIR, OUTDIR]);
-    const clone = await this.run(['timeout', '--kill-after=5', String(CLONE_TIMEOUT_S), ...git, 'clone', '--quiet', '--no-checkout', url, WORKDIR], gitEnv);
+    await run(['rm', '-rf', WORKDIR, OUTDIR]);
+    const clone = await run(['timeout', '--kill-after=5', String(CLONE_TIMEOUT_S), ...git, 'clone', '--quiet', '--no-checkout', url, WORKDIR], gitEnv);
     if (clone.exitCode !== 0) {
       console.error(`[BuildSandbox] clone of ${req.repo} failed (${clone.exitCode}):`, scrub(clone.stderr, 500));
       throw new BuildError('CLONE_FAILED', `git clone failed (exit ${clone.exitCode}); the repository may not exist or may not be readable`);
     }
-    const checkout = await this.run(['timeout', '--kill-after=5', String(CHECKOUT_TIMEOUT_S), ...git, '-C', WORKDIR, 'checkout', '--quiet', req.commitSha], gitEnv);
+    const checkout = await run(['timeout', '--kill-after=5', String(CHECKOUT_TIMEOUT_S), ...git, '-C', WORKDIR, 'checkout', '--quiet', req.commitSha], gitEnv);
     if (checkout.exitCode !== 0) {
       console.error(`[BuildSandbox] checkout ${req.commitSha} failed (${checkout.exitCode}):`, scrub(checkout.stderr, 500));
       throw new BuildError('CLONE_FAILED', 'the commit was not found; only commits reachable from the repository branches or tags can be built');
     }
 
-    const hasPrebuilt = (await this.run(['test', '-f', `${WORKDIR}/dist/index.js`])).exitCode === 0;
+    const hasPrebuilt = (await run(['test', '-f', `${WORKDIR}/dist/index.js`])).exitCode === 0;
     let outFile = `${WORKDIR}/dist/index.js`;
     let source: BuildResult['source'] = 'prebuilt';
     if (!hasPrebuilt) {
-      const entry = (await this.run(['sh', '-c', `for f in src/index.ts src/index.js; do [ -f ${WORKDIR}/$f ] && echo $f && break; done`])).stdout.trim();
+      const entry = (await run(['sh', '-c', `for f in src/index.ts src/index.js; do [ -f ${WORKDIR}/$f ] && echo $f && break; done`])).stdout.trim();
       if (!entry) throw new BuildError('NO_ENTRY', 'the commit has neither dist/index.js nor src/index.ts (or src/index.js)');
       outFile = `${OUTDIR}/index.js`;
       source = 'esbuild';
-      const bundle = await this.run([
+      const bundle = await run([
         'timeout', '--kill-after=5', String(BUILD_TIMEOUT_S),
         'esbuild', `${WORKDIR}/${entry}`, '--bundle', '--format=esm', '--target=es2022', '--platform=neutral',
         '--tsconfig-raw={}', `--outfile=${outFile}`, '--log-level=warning', '--color=false',
@@ -284,10 +311,10 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
       }
     }
     // Bytes of the real file (a symlink was checked out as a plain file anyway), measured before it is read.
-    const size = Number((await this.run(['sh', '-c', `wc -c < ${outFile}`])).stdout.trim());
+    const size = Number((await run(['sh', '-c', `wc -c < ${outFile}`])).stdout.trim());
     if (!Number.isFinite(size) || size <= 0) throw new BuildError('BUILD_FAILED', 'the build produced no output');
     if (size > MAX_BUNDLE_BYTES) throw new BuildError('TOO_LARGE', `the bundle is ${size} bytes, the limit is ${MAX_BUNDLE_BYTES}`);
-    const content = await this.run(['cat', outFile]);
+    const content = await run(['cat', outFile]);
     if (content.exitCode !== 0) throw new BuildError('BUILD_FAILED', 'could not read the build output');
     return { mainModule: 'index.js', modules: [{ name: 'index.js', content: content.stdout }], compatibilityDate: COMPATIBILITY_DATE, source };
   }
@@ -306,7 +333,7 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
   /** One container per build: always stop it, even after a failure. */
   private async stop(): Promise<void> {
     try {
-      if (this.ctx.container?.running) await this.ctx.container.destroy('build finished');
+      if (this.ctx.container?.running) await withTimeout(this.ctx.container.destroy('build finished'), CLEANUP_TIMEOUT_MS, 'destroy');
     } catch (error) {
       console.error('[BuildSandbox] destroy failed:', error instanceof Error ? error.message : String(error));
     }

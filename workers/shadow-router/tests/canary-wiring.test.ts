@@ -31,7 +31,7 @@ function mirroredUrls(n: number): string[] {
 const live = {
   ref: { id: 'ref-a', specId: 'spec-1', rung: 'canary', candidateId: 'cand-a', commitSha: null, workerVersionId: 'v', prevRefId: null, action: 'promote', movedBy: 'canary-worker', movedAt: 1 },
   deployment: {
-    id: 'dep-a', candidateId: 'cand-a', specId: 'spec-1', status: 'deployed', url: 'https://cand-a.example', workerVersionId: 'v', commitSha: null,
+    id: 'dep-a', candidateId: 'cand-a', specId: 'spec-1', status: 'deployed', url: 'https://cand-a.bz23711.workers.dev', workerVersionId: 'v', commitSha: null,
     trafficPercentage: 100, holdoutPercentage: 0, autoRollback: true, deployRefId: 'ref-a', rollbackReason: null,
     createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
   },
@@ -75,7 +75,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (input: Request | string) => {
       const url = typeof input === 'string' ? input : input.url;
-      if (!url.startsWith('https://cand-a.example')) return new Response('ok', { status: 200 }); // static candidates
+      if (!url.startsWith('https://cand-a.bz23711.workers.dev')) return new Response('ok', { status: 200 }); // static candidates
       return new Response('ok', { status: n++ % 10 === 0 ? 503 : 200 });
     })
   );
