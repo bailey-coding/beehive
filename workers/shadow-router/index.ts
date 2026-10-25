@@ -10,6 +10,7 @@
  * - Writes metrics to Analytics Engine
  */
 
+import { headersForTarget } from './candidate-headers';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub } from '../shared/spec-do-auth';
 import { MetricsCollector } from '../shared/analytics';
@@ -313,7 +314,7 @@ async function fetchCandidate(
   // Clone request for candidate with absolute URL
   const candidateRequest = new Request(candidateUrl, {
     method: request.method,
-    headers: request.headers,
+    headers: headersForTarget(candidateId, request.headers),
     body: request.body,
   });
   

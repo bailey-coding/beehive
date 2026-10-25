@@ -906,3 +906,26 @@ the canary route then answers 501 again). A throwaway candidate was run end to e
 Not exercised: the alarm-driven SLO tick with a live canary (the canary was rolled back within minutes; `canary-slo-ticks` consumption was not observed),
 shadow traffic reaching the canary URL, a second upload to an existing candidate Worker (the plain `POST /versions` path against the real API), and
 concurrent callers.
+
+### The shadow router never reached candidates: workers.dev error 1042 (2026-10-25)
+
+Found while running a longer canary against production (alarm ticks, shadow traffic, SLO loop). **What worked:** the Spec DO alarm armed 60 s after
+the canary deploy; `canary-slo-ticks` messages were consumed every ~61 s (`canary_slo_cycle`, `checked: 1`); after a rollback the next alarm found no
+live canary and the chain stopped (no ticks for 2+ minutes); `slo-status` showed `healthy` with real numbers (105 requests, p95 50 ms, 0 errors).
+**What did not:** a candidate that answers HTTP 500 to everything was still recorded as `healthy` with 98 then 206 requests and **0 errors**.
+- **Cause:** the shadow router mirrors with `fetch('https://<ver>-beehive-candidate-<uuid>.bz23711.workers.dev/...')`. A Worker's global `fetch()` to
+  another Worker on the same account's `workers.dev` is blocked by default and answered `404` with body `error code: 1042`. Verified with a probe
+  Worker: it received `{"status":404,"body":"error code: 1042"}` for the very URL that answers `500 simulated failure` when called directly. A 404 is
+  not a 5xx, so the recorder counted every mirrored request as a success. The same holds for the baseline target `beehive-main`.
+  So mirroring, Scientist comparison and the SLO verdict all saw 404s in production; none of it ever ran against candidate code.
+- **Fix:** compatibility flag `global_fetch_strictly_public` on `beehive-shadow-router` (the documented remedy; the probe Worker then received the
+  candidate's real 500). **Companion fix, required before the flag ships:** the router forwarded every incoming header to candidate URLs, including the
+  caller's `Authorization` (the platform bearer token), cookies and `X-Actor-ID`; once mirroring really reaches candidates that would hand credentials to
+  agent-written code. `candidate-headers.ts` now sends candidates only `accept`, `accept-language`, `content-type`, `user-agent`, `x-request-id`; the
+  trusted baseline (`beehive-main`) keeps the original headers. Tests: `tests/candidate-headers.test.ts` (unit + through the handler).
+- **Related, by design but worth knowing:** the recorder counts only `status >= 500` as an error, so a candidate that answers 4xx to everything (for
+  example one that requires auth) is `healthy`. Unflushed tail: the recorder flushes only when another sample is added (20 samples or 10 s since the
+  first), so a short burst leaves its last <20 samples unsent until the next canary request; with the default 1% top-level canary split a few hundred
+  requests produce too few samples to verdict. Candidate URLs are chosen by a hash of the request URL, so a test can pick URLs that land in the split.
+- **Throwaway resources:** two test candidates and their Workers (`beehive-candidate-<uuid>`), org `test-org-e2e-sbx-1792918848` (tombstoned, purge after
+  24 h), Artifacts repo (deleted), probe Worker `beehive-fetch-probe-tmp` (deleted). Left: actor `e2e-sbx-probe-actor`.
