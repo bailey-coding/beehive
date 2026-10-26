@@ -57,6 +57,8 @@ describe('migration matrix: init over every historical ledger shape', () => {
 
   it('the latest version is the fresh ledger version and the matrix starts below it', () => {
     expect(LATEST_VERSION).toMatch(/^m\d+$/);
+    // LATEST_VERSION comes from a fresh ledger, so pin a floor: lowering the constant and removing the last step together must not pass
+    expect(Number(LATEST_VERSION.slice(1))).toBeGreaterThanOrEqual(11);
     expect(legacyFixtures().length).toBeGreaterThanOrEqual(14);
   });
 
@@ -87,19 +89,36 @@ describe('migration matrix: init over every historical ledger shape', () => {
       expect(originalColumnRows(s, tablesBefore)).toEqual(rowsBefore);
     });
 
-    // A3 and A4 compare against a fresh ledger or a rerun; a shape with a recorded finding is expected to fail them
-    const convergent = fx.finding ? it.fails : it;
+    // A shape with a recorded finding (no user_tokens, never created by the current m9 step) is exempt from exactly that table; every
+    // other assertion runs normally, so any other regression on these shapes still fails
+    const missingTable = fx.finding ? 'user_tokens' : null;
+    const hasTable = (x: SqliteState, t: string) => userTables(x).includes(t);
 
-    convergent('A3: a second init changes nothing, and re-running any step from its predecessor changes nothing', async () => {
+    if (fx.finding) {
+      it('finding: init leaves user_tokens absent on this shape (a fix flips this test; remove the exemption then)', async () => {
+        const s = start();
+        await makeSpecDo(s).init();
+        expect(hasTable(s, 'user_tokens')).toBe(false);
+      });
+    }
+
+    it('A3a: a second init changes nothing', async () => {
       const s = start();
       await makeSpecDo(s).init();
       const objects = master(s);
       const rows = rowsDump(s);
-
       await makeSpecDo(s).init();
       expect(master(s)).toEqual(objects);
       expect(rowsDump(s)).toEqual(rows);
+    });
 
+    // Re-running from m8 creates user_tokens on a finding shape, so the step loop cannot hold there until the finding is fixed
+    const stepsConverge = fx.finding ? it.fails : it;
+    stepsConverge('A3b: re-running any step from its predecessor changes nothing', async () => {
+      const s = start();
+      await makeSpecDo(s).init();
+      const objects = master(s);
+      const rows = rowsDump(s);
       for (let n = 1; n < Number(LATEST_VERSION.slice(1)); n++) {
         s.raw.exec(`UPDATE metadata SET value = 'm${n}' WHERE key = 'schema_version'`);
         await makeSpecDo(s).init();
@@ -109,14 +128,14 @@ describe('migration matrix: init over every historical ledger shape', () => {
       }
     });
 
-    convergent('A4: the result has the same tables, columns and indexes as a fresh ledger', async () => {
+    it('A4: the result has the same tables, columns and indexes as a fresh ledger', async () => {
       const s = start();
       await makeSpecDo(s).init();
       const fresh = await freshLedger();
-      expect(userTables(s)).toEqual(userTables(fresh));
+      expect(userTables(s)).toEqual(userTables(fresh).filter((t) => t !== missingTable));
       const skip = (t: string, name: unknown) => t === 'candidates' && PREVIEW_COLUMNS.includes(String(name));
       const byName = (a: { name: unknown }, b: { name: unknown }) => String(a.name).localeCompare(String(b.name));
-      for (const t of userTables(fresh)) {
+      for (const t of userTables(fresh).filter((x) => x !== missingTable)) {
         const shape = (x: SqliteState) => columnsOf(x, t).filter((c) => !skip(t, c.name)).map((c) => ({ name: c.name, type: c.type, notnull: c.notnull, dflt: c.dflt_value, pk: c.pk }));
         // column order differs when a column was appended by ALTER: compare sorted by name
         expect(shape(s).sort(byName), `columns of ${t}`).toEqual(shape(fresh).sort(byName));
