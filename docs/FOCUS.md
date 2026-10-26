@@ -8,11 +8,19 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-23
+**Last updated:** 2026-10-26
 
 ## Where we are
 
-- **Newest (2026-10-25):** the canary pipeline is live in production, including real candidate builds in a sandbox container and automatic rollback by the SLO loop (see "Canary pipeline" under Open work).
+- **Newest (2026-10-26):** production runs `main` at `f21024d` (all ten workers except the unchanged `beehive-sandbox-runner` redeployed 2026-10-25 20:55Z,
+  `scripts/prod-health.sh` green; GitHub CI green). Since `ebb5c75` that added: namespace per request for sandbox builds (SF-8; fork-created candidates can be
+  built) with a 400 on new org names that are not valid Artifacts namespaces; the Spec DO validating canary candidate ids and urls (`beehive-` ids refused,
+  https `*.bz23711.workers.dev` only, `WORKERS_SUBDOMAIN` pin; unset = any `*.workers.dev`); a real ledger purge deleting candidate Workers first
+  (`PREVIEW_MANAGER` binding on `beehive`); one CI workflow (`ci.yml`, formerly CI Enhanced; `ci-skip.yml` removed) incl. a root-worker dry-run; the flaky
+  shadow-router timer test fixed. Plans: `docs/SF-8-NAMESPACE-PLAN.md`, `docs/CLEANUP-PLAN-2026-10-25.md`.
+- **Not exercised in production yet (verify next):** the purge cleanup (first real run = the `test-org-e2e-sbx-*` purge below), the 400 for a bad org name
+  and for a bad canary id/url/subdomain, a canary build of a fork-created candidate (needs approval: AGENTS.md forbids e2e against production without it).
+- Earlier (2026-10-25): the canary pipeline is live in production, including real candidate builds in a sandbox container and automatic rollback by the SLO loop (see "Canary pipeline" under Open work).
 - The agent stack is merged and on `origin/main`: spine items 1 and 3 (promotion ledger routes,
   ledger lifecycle), CI-only workflow, service tokens, canary deploy/rollback as Spec DO refs, review
   fixes, Spec DO internal auth, shadow-router ref cache, the ledger compare-and-swap with the tournament
@@ -54,8 +62,8 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Next session, first (needs the maintainer)
 
-1. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
-   command output); switch that remote to a credential helper.
+1. The Artifacts access token was rotated by the maintainer (2026-10-26). The `cf` remote URL (and the `meta-notes` one) still embeds a token, so it can
+   appear in command output again (`git remote -v`, `git push` errors): redact it, or switch those remotes to a credential helper.
 2. Fill the remaining `TODO(maintainer)` in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys.
 3. Heads-up (promotion-routes-fix, deployed 2026-10-16 22:08 UTC, all ten workers verified): tournament mode now
@@ -107,6 +115,10 @@ cleanups. Confirm, in this order:
 
 ## Cleanup
 
+- 2026-10-26: local `agent/*` branches 0 commits ahead of `main` were deleted where possible; twelve of them (e.g. `m12-pr-a`, `m12-pr-b`, `m9-nav`,
+  `m3-event-driven`, `versions-spike`, `recorder-flush`, `merge/m12-prb`) are checked out in sibling worktrees (`git worktree list`) and stay until those
+  worktrees are removed. On `origin`, `agent/m3-event-driven`, `agent/versions-spike` and `claude/pr1-review-lmgqik` are 0 ahead and can go
+  (`git push origin --delete <name>`; the auto-mode classifier blocked it, so the maintainer runs it). Review/plan branches still ahead of `main` stay.
 - Merged `agent/*` branches: **15 merged agent/* remote branches deleted earlier** (2026-10-19, `2dc02e`, `a78017c`),
   plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). As of 2026-10-23 another 15 `agent/*`/`merge/*` branches are 0 commits ahead of `main` (e.g. `m8-issues-do`, `m8-issues-ui`,
   `m9-nav`, `m12-pr-a`, `m12-pr-b`, `merge/m12-prb`) and can be deleted; the review/plan branches that are still ahead
@@ -147,13 +159,10 @@ cleanups. Confirm, in this order:
     candidate Worker (refused while a canary is live).
   - **Known limits:** SLO data is `source = shadow`, not live canary traffic; only 5xx counts as an error; the default 1% top-level canary split
     yields few samples; the recorder tail flush is deployed (`ebb5c75`) but its effect on sample counts was not measured separately.
-  - **Pending decisions / work:** (1) DONE (not deployed): the ledger purge deletes candidate Workers first (`docs/CLEANUP-PLAN-2026-10-25.md` C, `docs/OPS.md` "Ledger cleanup"); (2) purge the three
-    tombstoned test orgs `test-org-e2e-sbx-*` after 2026-10-26 ~11:00 UTC (24 h age rule; needs the maintainer actor, `docs/OPS.md` "Ledger cleanup")
+  - **Pending decisions / work:** (1) DONE and deployed (`f21024d`, untested against real data): the ledger purge deletes candidate Workers first (`docs/CLEANUP-PLAN-2026-10-25.md` C, `docs/OPS.md` "Ledger cleanup"); (2) purge the tombstoned test orgs `test-org-e2e-sbx-*` (three in the doc, four per the maintainer: dry-run first) from 2026-10-26 ~11:00 UTC (24 h age rule; needs the maintainer actor, `docs/OPS.md` "Ledger cleanup")
     and decide whether to delete actor `e2e-sbx-probe-actor`; (3) DONE: `wrangler deploy --dry-run` runs per worker and for the root worker in `ci.yml` (the former CI Enhanced); (4) the review of the post-review changes ran (no blockers, 8 should-fix); 7 are fixed and **deployed** (`ebb5c75`, 2026-10-25: shadow router: bodies to every target,
     no baseline replay of writes, canary ref/url validation, 10 s timeout; runner: abandoned-build guard, bounded cleanup; recorder tail flush, ordering fixed) and
-    verified live for the POST-body path (`OPEN-QUESTIONS` "Review fixes deployed and verified"); SF-8 (namespace per request, plus 400 for new org names that are not valid namespaces) is implemented on `fix/recorder-flush`, not deployed (`docs/SF-8-NAMESPACE-PLAN.md`); (5) local `main` carries an unpushed commit `0dd6edf` from another
-    agent whose recorder "fix" does not flush anything; it is also on branch `scratch/mistral-recorder-flush`: drop it from `main` (`git reset --hard origin/main`
-    after confirming nothing else is unpushed).
+    verified live for the POST-body path (`OPEN-QUESTIONS` "Review fixes deployed and verified"); SF-8 (namespace per request, plus 400 for new org names that are not valid namespaces) is **deployed** (`3bdddd9`/`f21024d`, `docs/SF-8-NAMESPACE-PLAN.md`); (5) DONE 2026-10-26: local `main` reset to `origin/main`; `0dd6edf` (another agent's recorder "fix": the timer never flushes anything) was dropped and its scratch branch deleted.
 - **M1 ledger lifecycle** is deployed with m8; the production purge is untested against real data. Use
   tombstone then purge (`docs/OPS.md` "Ledger cleanup"), never delete the worker.
 - **Cloudflare Flagship:** OPEN-QUESTIONS.md section restored (`c1039e5`, 2026-10-19) with adoption
