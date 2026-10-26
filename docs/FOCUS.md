@@ -115,10 +115,13 @@ cleanups. Confirm, in this order:
 
 ## Cleanup
 
-- 2026-10-26: local `agent/*` branches 0 commits ahead of `main` were deleted where possible; twelve of them (e.g. `m12-pr-a`, `m12-pr-b`, `m9-nav`,
-  `m3-event-driven`, `versions-spike`, `recorder-flush`, `merge/m12-prb`) are checked out in sibling worktrees (`git worktree list`) and stay until those
-  worktrees are removed. On `origin`, `agent/m3-event-driven`, `agent/versions-spike` and `claude/pr1-review-lmgqik` are 0 ahead and can go
-  (`git push origin --delete <name>`; the auto-mode classifier blocked it, so the maintainer runs it). Review/plan branches still ahead of `main` stay.
+- 2026-10-26: all local branches 0 commits ahead of `main` are deleted, and so are the eleven clean sibling worktrees that held them (no uncommitted work;
+  four held only a `node_modules` symlink). Left on purpose: worktrees of branches still ahead of `main` (plan/review branches `m12-plan`, `m12-*review`,
+  `m9-codereview`, `m9-plan`, `m9-review`, `test-nits-m11-pointer`; their docs are on `main`, remove with `git worktree remove` once nothing needs them) and
+  `../beehive-recorder-flush` (branch `agent/recorder-flush`), which has **uncommitted** edits to `workers/shadow-router/{canary-recorder,index}.ts`: an earlier,
+  unshipped draft of the recorder tail flush (`armDelayedFlush` with a `waitUntil` timer) that differs from the deployed `c0cfa86`; keep or discard. On `origin`,
+  `agent/m3-event-driven`, `agent/versions-spike` and `claude/pr1-review-lmgqik` are 0 ahead and can go (`git push origin --delete <name>`; the auto-mode
+  classifier blocked it, so the maintainer runs it).
 - Merged `agent/*` branches: **15 merged agent/* remote branches deleted earlier** (2026-10-19, `2dc02e`, `a78017c`),
   plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). As of 2026-10-23 another 15 `agent/*`/`merge/*` branches are 0 commits ahead of `main` (e.g. `m8-issues-do`, `m8-issues-ui`,
   `m9-nav`, `m12-pr-a`, `m12-pr-b`, `merge/m12-prb`) and can be deleted; the review/plan branches that are still ahead
