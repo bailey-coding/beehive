@@ -202,6 +202,10 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    The first maintainer grants the role to itself (allowed only while none exists); after
    that, only a maintainer can grant or revoke:
    `POST /api/admin/actors/<actorId>/role {"role":"maintainer"}` (or `{"role":null}`).
+   **Actor ids are UUIDs.** `X-Actor-ID` takes the id, not the name: `bailey-coding` is a name, so using it as the header answers 403. Read ids from
+   `GET /api/actors`. A dedicated `beehive-system` actor (type `agent`, role `maintainer`, created 2026-10-26 by the maintainer) exists for ledger operations such
+   as purges, so they need not run under a person's identity; it works only on the master-token path, since user tokens are for human actors with a GitHub identity.
+   Actors cannot be tombstoned or purged.
 2. **Tombstone** (soft delete, any actor, reversible only by hand in SQL):
    `DELETE /api/{organizations|repositories|specs|candidates}/<id>` with optional
    `{"reason":"..."}`. Cascades down in one transaction (org -> repos, specs, their

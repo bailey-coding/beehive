@@ -12,13 +12,22 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Where we are
 
-- **Newest (2026-10-26):** production runs `main` at `f21024d` (all ten workers except the unchanged `beehive-sandbox-runner` redeployed 2026-10-25 20:55Z,
+- **Newest (2026-10-26, later):** production runs `main` at `1d79ec8` (nine workers redeployed 09:32Z, `beehive-sandbox-runner` unchanged; `scripts/prod-health.sh` green;
+  CI green). New since `f21024d`: N1 origin check on every non-GET/HEAD issue request; the purge fails closed (a 501, 404, 5xx, a missing `PREVIEW_MANAGER` binding, an
+  older Spec DO or an odd 2xx body aborts a purge that has candidates, nothing deleted; `docs/OPS.md` "Ledger cleanup"); M12 PR-C (CLI user tokens, `docs/M12-PRC-PLAN.md`);
+  the legacy-ledger migration matrix (`workers/spec-do/tests/migration-matrix.test.ts`, plan `docs/MIGRATION-LEGACY-TEST-PLAN.md`). The first real purge ran
+  2026-10-26 ~09:34Z as the `beehive-system` actor: 3 orgs, 4 candidates, 13 rows; the 4 candidate Workers were all `absent`; `test-org-e2e-sbx-1792932243` and
+  `-1792932315` were still under the 24 h age rule and remain to purge (same prefix, `confirm` = the dry-run total). Actors cannot be tombstoned or purged by any route,
+  so `e2e-sbx-probe-actor` and `prodcheck-1792366949` stay. Open: two migration gaps (`docs/OPEN-QUESTIONS.md` 2026-10-26: a fresh ledger lacks the
+  `candidates.preview_*` columns; ledgers stamped m9/m10 on the `d34db95`/`469389b` line never get `user_tokens`; production is probably unaffected, unconfirmed) and the
+  unique index on `actors.github_user_id` (must REFUSE on duplicates, decided 2026-10-26; the production check found none among 3 actors, re-run before that deploy).
+- Earlier (2026-10-26): production ran `main` at `f21024d` (all ten workers except the unchanged `beehive-sandbox-runner` redeployed 2026-10-25 20:55Z,
   `scripts/prod-health.sh` green; GitHub CI green). Since `ebb5c75` that added: namespace per request for sandbox builds (SF-8; fork-created candidates can be
   built) with a 400 on new org names that are not valid Artifacts namespaces; the Spec DO validating canary candidate ids and urls (`beehive-` ids refused,
   https `*.bz23711.workers.dev` only, `WORKERS_SUBDOMAIN` pin; unset = any `*.workers.dev`); a real ledger purge deleting candidate Workers first
   (`PREVIEW_MANAGER` binding on `beehive`); one CI workflow (`ci.yml`, formerly CI Enhanced; `ci-skip.yml` removed) incl. a root-worker dry-run; the flaky
   shadow-router timer test fixed. Plans: `docs/SF-8-NAMESPACE-PLAN.md`, `docs/CLEANUP-PLAN-2026-10-25.md`.
-- **Not exercised in production yet (verify next):** the purge cleanup (first real run = the `test-org-e2e-sbx-*` purge below), the 400 for a bad org name
+- **Not exercised in production yet (verify next):** a purge that actually deletes a candidate Worker (the first real run found all four `absent`), the 400 for a bad org name
   and for a bad canary id/url/subdomain, a canary build of a fork-created candidate (needs approval: AGENTS.md forbids e2e against production without it).
 - Earlier (2026-10-25): the canary pipeline is live in production, including real candidate builds in a sandbox container and automatic rollback by the SLO loop (see "Canary pipeline" under Open work).
 - The agent stack is merged and on `origin/main`: spine items 1 and 3 (promotion ledger routes,
