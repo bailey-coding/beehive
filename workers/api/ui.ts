@@ -587,8 +587,9 @@ async function handleRepoIssues(
   const isPostKind = POST_KINDS.has(route.kind);
   const method = request.method;
 
-  // One origin check, before any DO read, for every state-changing issue route.
-  if (method === 'POST' && isPostKind && !sameOrigin(request)) return FORBIDDEN_ORIGIN(chrome);
+  // One origin check, before any DO read, for every non-GET/HEAD request on an issue route, so a
+  // cross-origin POST to a read-only route is 403 rather than a 405 that read the ledger first.
+  if (method !== 'GET' && method !== 'HEAD' && !sameOrigin(request)) return FORBIDDEN_ORIGIN(chrome);
 
   let ref: RepoRef | null;
   try {
