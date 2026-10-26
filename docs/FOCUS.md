@@ -123,9 +123,8 @@ cleanups. Confirm, in this order:
   `test-nits-m11-pointer` fb6fa0a. Nine older plan/review branches were deleted the same way (all content on `main`; `feature-parity-audit`, `ui-issues-plan`
   and `ui-issues-review` held superseded earlier drafts): `agent/cli-actor-review` 3fbcb1a, `feature-parity-audit` 95c5f25, `m8-do-recheck` fa58fb9,
   `m8-do-review` e850246, `m8-ui-review` 9b95582, `ocap-answers` 6d1ab8f, `ui-issues-plan` cc1ef7e, `ui-issues-plan-v2` cfcc296, `ui-issues-review` 6b88cbe.
-  Local branches now: `main` and `fix/recorder-flush`. On `origin`, `agent/m3-event-driven`,
-  `agent/versions-spike` and `claude/pr1-review-lmgqik` are 0 ahead and can go (`git push origin --delete <name>`; the auto-mode classifier blocked it, so the
-  maintainer runs it).
+  Local branches now: `main` and `fix/recorder-flush`. The maintainer deleted the last three remote branches (`origin/agent/m3-event-driven`,
+  `agent/versions-spike`, `claude/pr1-review-lmgqik`) on 2026-10-26; the auto-mode classifier blocks agents from `git push origin --delete`.
 - Merged `agent/*` branches: **15 merged agent/* remote branches deleted earlier** (2026-10-19, `2dc02e`, `a78017c`),
   plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). As of 2026-10-23 another 15 `agent/*`/`merge/*` branches are 0 commits ahead of `main` (e.g. `m8-issues-do`, `m8-issues-ui`,
   `m9-nav`, `m12-pr-a`, `m12-pr-b`, `merge/m12-prb`) and can be deleted; the review/plan branches that are still ahead
