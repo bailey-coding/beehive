@@ -227,16 +227,39 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    is deleted; a candidate that gains an active promotion between the plan and the purge can still lose its Worker (small window).
    `workersNotDeleted` for candidates tombstoned between the plan and the purge whose Worker could not be deleted.
 
-### CLI actor attribution (stopgap until M12)
+### CLI actor attribution
 
-The CLI authenticates with the master token, whose actor is whatever `X-Actor-ID` the client sends. Set
-`defaultActor` in the CLI config file or `BEEHIVE_ACTOR` in the environment to a real actor id in the ledger
-(usually a maintainer); it is sent on every request, and `--actor <id>` on a create command overrides it
-(precedence: flag, then env, then config; nothing is sent if none is set). This is attribution for admin
-use, not authentication: any master-token holder can name any actor. With no actor set the edge records `'unknown'`, and
-Spec DO issue writes by an unknown actor get 403 once the issue changes deploy; set one before using
-`issue create`. `--actor` is on `gate run`, `org create` and `actor create/trust/grant-promotion` too. M12
-(verified identity and user tokens) replaces it.
+**User token (supported path).** Mint a `bh_usr_` token at `/app/settings/tokens` (see "User tokens" below) and give it
+to the CLI with `printf %s "$TOKEN" | beehive auth login --token-stdin`. `login` calls `GET /api/whoami` with that token
+**before** writing anything: a 401 or an unreachable edge exits 1 and leaves the config file (and any previously saved
+good token) untouched; only a verified token is saved. `--token <t>` still works but puts the token in argv (visible to
+other local users and shell history), so the CLI says so on stderr. `beehive auth whoami` shows kind, actor, scope
+(`read`, `read_write`, `maintainer`), the 12-character token prefix at most, the API URL and where the token came from
+(flag, env or config). With a user token the edge overwrites `X-Actor-ID` with the token's actor, so the CLI sends none;
+`--actor`, `BEEHIVE_ACTOR` and `defaultActor` are ignored with one stderr warning per run (not an error, so scripts that
+export `BEEHIVE_ACTOR` for master use keep working). Routes that are master-only for user tokens answer 403, and the CLI
+adds a hint; a 401 hint covers a revoked or expired token or an edge that predates user tokens; a 503 means the auth
+backend is unavailable (mid-deploy); the CLI does not retry.
+
+**Master token (admin/bootstrap).** The master token's actor is whatever `X-Actor-ID` the client sends. Set
+`defaultActor` in the CLI config file or `BEEHIVE_ACTOR` in the environment to a real actor id in the ledger (usually a
+maintainer); it is sent on every request, and `--actor <id>` on a create command overrides it (precedence: flag, then
+env, then config; nothing is sent if none is set). This is attribution for admin use, not authentication: any
+master-token holder can name any actor. With no actor set the edge records `'unknown'`, and Spec DO issue writes by an
+unknown actor get 403 once the issue changes deploy; set one before using `issue create`. `--actor` is on `gate run`, `org create` and
+`actor create/trust/grant-promotion` too. Stopping the master token from acting as a human is M12 stage 2, a separate
+decision.
+
+**Token precedence:** `--token` > `BEEHIVE_API_TOKEN` > config `apiToken`. A stale `BEEHIVE_API_TOKEN` therefore beats the
+saved token; `auth whoami` names the source, and `login`/`logout` say when the variable is set.
+
+**Secret handling.** The config file is written 0600 from creation (temp file in the same directory, then rename, so an
+older 0644 file is replaced, never chmodded after the fact) in a directory created 0700 (an existing directory keeps its
+mode). `login` and `logout` change only `apiToken` in the file; values from `BEEHIVE_*` or flags are never persisted and
+unknown keys are kept. The CLI never prints a token: `show-token` and `whoami` show at most the first 12 characters,
+and errors, verbose output and config-parse warnings never include a token or file contents. Windows ignores POSIX
+modes; no protection is claimed there. `BEEHIVE_API_TOKEN` in a shell profile is the weakest place for a token; prefer
+`--token-stdin` plus the config file, or a secret manager. Tests: `tests/cli-token.test.ts`.
 
 ### Service tokens: mint, rotate, revoke
 

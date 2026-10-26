@@ -89,11 +89,11 @@ independent review agent. Line numbers are on `main` at e06cf48. No code here; m
   `ui-layout` tests.
 - Docs (T6, listed in section 2): `docs/OPS.md`, `docs/FOCUS.md`, `docs/OPEN-QUESTIONS.md`, `docs/MILESTONES.md`.
 
-**PR-C (CLI)**: `cli/src/utils/config.ts` (`:120`: write a temp file in the config directory, opened with mode `0o600`,
+**PR-C (CLI)**: `cli/src/utils/config.ts` (`saveConfig`, `:103-124` on `main` at 9d5dca9: write a temp file in the config directory, opened with mode `0o600`,
 then `renameSync` over the config. A `chmodSync` after the write would leave a 0644 window);
 `cli/src/commands/auth.ts` (`auth whoami`; `login` verifies with `/api/whoami`, not `/health`, and prints kind and actor);
-`cli/src/utils/api-client.ts` (`:139-145`: with a `bh_usr_` token, warn once and send no `X-Actor-ID`); `cli/README` and
-`docs/OPS.md` "CLI actor attribution" (`:201-210`) rewritten; new `cli/tests/*.test.ts`.
+`cli/src/utils/api-client.ts` (`:139-152` on `main` at 9d5dca9: with a `bh_usr_` token, warn once and send no `X-Actor-ID`); `cli/README` and
+`docs/OPS.md` "CLI actor attribution" (`:230-239` on `main` at 9d5dca9) rewritten; new `tests/cli-token.test.ts` (the CLI tests live in root `tests/`, not `cli/tests/`; see `docs/M12-PRC-PLAN.md`).
 
 **PR-D1 / PR-D2 (session key)**: `workers/api/ui.ts` (`UiEnv`, the gate at `:104`, `signSession` `:822`, `readSession`
 `:828-847`); `scripts/start-e2e-workers.sh` (generate and pass `SESSION_SIGNING_KEY`); `tests/e2e/ui-issues.test.ts` and
@@ -113,7 +113,7 @@ Tiers per `docs/AGENT-ROUTING.md`. Every task ends with a push of its own `agent
 | T5 | UI settings page, `iat`, nav link | default | T4 | `ui-tokens.test` (S5, S13, S14 rows), `ui-layout.test` link | review | PR-B |
 | T6 | Local e2e | default | T5 | `tests/e2e/user-tokens.test.ts` (local only): admin mint; issue created with a spoofed `X-Actor-ID` is attributed to the token's actor; a `read_write` maintainer token cannot close another actor's issue; revoke, then 401 | review | PR-B |
 | T6d | Docs (F8): OPS "User tokens: mint, rotate, revoke" (allowlist removal = `revoke-all`; re-check after a B re-deploy; freshness bounds a stolen Beehive cookie only, since GitHub re-auth is often silent), the rollback floor and its invariant, the stage-1 query (Workers Logs and AE), the A4 assumption line; FOCUS: rate limiting deferred, `authGate` `===` follow-up, service 404→401 vs user 404→503, the unique index on `actors.github_user_id` in `m10` only after a clean check, lifecycle-to-`maintainer`-tokens as a prerequisite of master stage 2, the A4 verification task; OPEN-QUESTIONS: the A4 assumption (unverified); MILESTONES: M12 status and exit criteria | light | T6 | review only (doc links resolve; no code) | review; deploy push B after A is live (section 3) | PR-B |
-| T7 | CLI token support and docs | default | T4 merged | `cli/tests`: config mode 0600 from creation (temp file + rename; never 0644 on disk), also over an existing 0644 file; `--actor`/`BEEHIVE_ACTOR` ignored with a warning for `bh_usr_`; `auth whoami` output; login fails on 401 | review; release the CLI | PR-C |
+| T7 | CLI token support and docs | default | T4 merged | `tests/cli-token.test.ts` (shared harness `tests/helpers/cli-harness.ts`): config mode 0600 from creation (temp file + rename; never 0644 on disk), also over an existing 0644 file; `--actor`/`BEEHIVE_ACTOR` ignored with a warning for `bh_usr_`; `auth whoami` output; login fails on 401 | review (releasing the CLI is out of scope, `docs/FOCUS.md` Open work) | PR-C |
 | T8 | Session key, phase 1: sign with new, accept both | default | T5 merged | `ui.test`: a new-key cookie is accepted; an old-key cookie is accepted; the key unset gives 503; `iat` survives | put `SESSION_SIGNING_KEY` **before** the push | PR-D1 |
 | T9 | Session key, phase 2: drop the old key | light | 12 h + margin after pre-D1 code last served (F7) | `ui.test`: an `API_AUTH_TOKEN`-signed cookie is refused (re-login) | push after the wait | PR-D2 |
 
@@ -155,7 +155,7 @@ workers compile `shared/*` but call no new route, so their behaviour is unchange
    actor>, name, scope:"read_write", expiresInDays: 30}`. `GET /api/whoami` with the token shows `kind:"user"`. Then
    revoke that token or keep it. No production e2e without the maintainer's explicit approval.
 
-**PR-C (CLI).** No worker change. If it rides in a push, CI is the only check; then release the CLI as usual.
+**PR-C (CLI).** No worker change. If it rides in a push, CI is the only check. Releasing the CLI is out of scope (no publish pipeline; `docs/FOCUS.md` Open work).
 
 **PR-D1.** 0. `openssl rand -hex 32 | wrangler secret put SESSION_SIGNING_KEY --name beehive` **before** pushing (the
 key is used by `beehive` alone). If forgotten, `/app` answers 503 "not configured" until it is put; the API is unaffected.
