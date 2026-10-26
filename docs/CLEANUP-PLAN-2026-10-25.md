@@ -50,8 +50,10 @@ Design (cleanup before the irreversible delete, so a failure can be retried):
 2. `workers/api/lifecycle.ts` purge branch, for a real run (`dryRun:false`) only: take the candidate ids from a dry-run of the same request (the
    request is already two-step: dry run, then `confirm`), keep UUID ids, call `PREVIEW_MANAGER` `DELETE /api/preview/canary/<id>` for each
    (new service binding `PREVIEW_MANAGER` on the `beehive` worker), then call the real purge.
-   - 404 / "did not exist" = fine. 409 (a live canary) or any other non-OK: **stop before purging** and answer 502/409 with the failing ids; nothing
-     was purged, the call can be repeated.
+   - Only a 200 `{deleted:false}` ("did not exist") is fine. A 404 (an older preview manager without the route), 409 (a live canary), 501 or any other
+     non-OK: **stop before purging** and answer 502/409 with the failing ids; nothing was purged, the call can be repeated. A 501 is not "no Worker
+     was ever uploaded": the preview manager also answers it when `WORKER_VERSIONS_MODE=api` lacks a secret/var. With no candidates the preview
+     manager is not called at all.
    - Bounded: more than 40 candidate Workers in one purge (subrequest limit) answers 409 asking for a narrower prefix; deletes run in small
      parallel groups.
    - Old Spec DO (no `candidateIds` field): purge proceeds as today and the response says cleanup was skipped (fail-open only for this additive

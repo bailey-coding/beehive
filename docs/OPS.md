@@ -52,8 +52,8 @@ retries), so a bad deploy is loud rather than half-migrated.
    workflow did): `canary-rollback-triggers`, `promotion-events`,
    `preview-scientist-comparisons`, `beehive-scientist-comparisons`. Create any missing one
    by hand (`wrangler queues create <name>`).
-3. Confirm `API_AUTH_TOKEN` is identical on every worker. Keep `WORKER_VERSIONS_MODE` (and
-   `BEEHIVE_LOCAL_DEV`) unset in production.
+3. Confirm `API_AUTH_TOKEN` is identical on every worker. `workers/preview-manager/wrangler.toml` sets
+   `WORKER_VERSIONS_MODE = "api"` (enabled 2026-10-25); keep `BEEHIVE_LOCAL_DEV` and any `stub` mode unset in production.
 4. Push: `git pull origin main && git push cf main` deploys all ten workers at once. The Spec DO
    migrates on its first init after `beehive` deploys, not at deploy time, so make one authenticated
    request that reaches the DO: `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh` (its last check is
@@ -362,10 +362,12 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
   `{"candidateId","specId","reason":"manual","timestamp","metrics":{}}`. Automatic triggers
   (`latency`, `error_rate`, `slo_violation`) are refused (409) for a canary whose switch is off:
   `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
-- **Production canary deploys answer 501** until a real Workers Versions client exists:
-  `WORKER_VERSIONS_MODE` is unset on `beehive-preview-manager`, and the stub (`stub`) is for
-  local dev only: it also needs `BEEHIVE_LOCAL_DEV=1`, which only `scripts/start-e2e-workers.sh` sets,
-  so a stray `WORKER_VERSIONS_MODE=stub` in production still answers 501. Keep both unset.
+- **Canary deploys and candidate-Worker deletes answer 501** when the preview manager has no Versions client.
+  The repo's `workers/preview-manager/wrangler.toml` sets `WORKER_VERSIONS_MODE = "api"` (deleting that line and pushing turns it off).
+  What is live in production cannot be determined from the repo (deploys are human-only); check the deployed vars. `api` mode still
+  answers 501 if `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `WORKERS_SUBDOMAIN` or the bundle source is missing, so a 501 does not
+  prove no Worker exists: a purge with candidates aborts on a 501. `stub` is local dev only (it also needs `BEEHIVE_LOCAL_DEV=1`, which
+  only `scripts/start-e2e-workers.sh` sets), so a stray `stub` in production also answers 501.
 - **Deploy dependency:** `beehive-shadow-router` now binds `SpecDO` from `beehive` (`script_name`),
   like canary-worker and preview-manager. All ten deploy at once, so until `beehive` has deployed its
   DO reads fail and the router uses its static config.
