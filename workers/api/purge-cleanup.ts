@@ -27,6 +27,24 @@ export interface CandidateWorkerCleanup {
   deleteWorkers(candidateIds: string[]): Promise<WorkerCleanupResult>;
 }
 
+/**
+ * Cleanup for a `beehive` worker without the PREVIEW_MANAGER binding: fails closed (503) if any candidate has a Worker to delete,
+ * so the purge aborts instead of orphaning them. No UUID candidates: no call, as with the real client.
+ */
+export function createUnavailableWorkerCleanup(): CandidateWorkerCleanup {
+  return {
+    async deleteWorkers(candidateIds) {
+      if (!candidateIds.some((id) => UUID_RE.test(id))) return { ok: true, report: { status: 'done', deleted: [], absent: [] } };
+      return {
+        ok: false,
+        status: 503,
+        error: 'candidate Workers cannot be deleted: the PREVIEW_MANAGER (or API_AUTH_TOKEN) binding is not configured on this worker, so a purge with candidates is refused; nothing was purged',
+        failed: [],
+      };
+    },
+  };
+}
+
 export function createCandidateWorkerCleanup(preview: PreviewManagerFetcher, apiToken: string): CandidateWorkerCleanup {
   return {
     async deleteWorkers(candidateIds) {
@@ -60,12 +78,18 @@ export function createCandidateWorkerCleanup(preview: PreviewManagerFetcher, api
               failed.push({ candidateId, status: 501, error: 'preview manager answered 501 (Workers Versions client not available; check WORKER_VERSIONS_MODE, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, WORKERS_SUBDOMAIN)' });
               return;
             }
-            const body = (await res.json().catch(() => null)) as { deleted?: unknown; error?: unknown } | null;
+            const body = (await res.json().catch(() => null)) as { success?: unknown; deleted?: unknown; error?: unknown } | null;
             if (!res.ok) {
               failed.push({ candidateId, status: res.status, error: typeof body?.error === 'string' ? body.error : `HTTP ${res.status}` });
               return;
             }
-            (body?.deleted === true ? deleted : absent).push(candidateId);
+            // A 2xx only counts when it is the preview manager's own answer; an unparseable body or a missing/odd `deleted` is
+            // not evidence that the Worker is gone (a proxy or an unexpected peer may answer 2xx), so it aborts the purge
+            if (body?.success !== true || typeof body.deleted !== 'boolean') {
+              failed.push({ candidateId, status: 502, error: `unexpected ${res.status} answer from the preview manager (want {success:true,deleted:boolean}; got ${JSON.stringify(body)?.slice(0, 120)})` });
+              return;
+            }
+            (body.deleted ? deleted : absent).push(candidateId);
           } catch (error) {
             failed.push({ candidateId, status: 502, error: error instanceof Error ? error.message : String(error) });
           }

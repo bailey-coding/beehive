@@ -221,11 +221,14 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    candidate in the plan through the `PREVIEW_MANAGER` service binding (`DELETE /api/preview/canary/:id`, `workers/api/purge-cleanup.ts`), and
    only then purges. A failed delete (a live canary: 409, or any error: 502) aborts the call with nothing purged; repeat it after fixing the cause
    (roll the canary back first). More than 40 candidate Workers in one purge is refused (409): narrow the selector. The response carries
-   `workerCleanup` (`done` with `deleted`/`absent`, or `skipped` with the reason: no Versions client, no binding, or an older Spec DO) and
-   Deploy note: the `PREVIEW_MANAGER` binding needs `beehive-preview-manager` to exist (it does in production); a preview manager older than
-   the DELETE route answers 404, which aborts a real purge with 502 until it is deployed. `confirm` is checked against the plan before any Worker
-   is deleted; a candidate that gains an active promotion between the plan and the purge can still lose its Worker (small window).
-   `workersNotDeleted` for candidates tombstoned between the plan and the purge whose Worker could not be deleted.
+   `workerCleanup` (`done` with `deleted`/`absent`) and `workersNotDeleted` for candidates tombstoned between the plan and the purge whose Worker
+   could not be deleted. Deploy note: the `PREVIEW_MANAGER` binding needs `beehive-preview-manager` to exist (it does in production); a preview
+   manager older than the DELETE route answers 404, which aborts a real purge with 502 until it is deployed. `confirm` is checked against the
+   plan before any Worker is deleted; a candidate that gains an active promotion between the plan and the purge can still lose its Worker (small window).
+   **No bypass:** a purge that has candidates is refused (503 without the `PREVIEW_MANAGER` or `API_AUTH_TOKEN` binding; 502 when the preview
+   manager answers 501 because the Versions client is unavailable, or answers anything but `{success:true,deleted:boolean}` with a 2xx) and
+   nothing is purged; fix the cause and repeat. A purge with no candidates needs neither. An older Spec DO that rejects `withCandidateIds`
+   (reachable only in the mixed-version deploy window) is refused too, with 503: repeat after the deploy has settled.
 
 ### CLI actor attribution (stopgap until M12)
 

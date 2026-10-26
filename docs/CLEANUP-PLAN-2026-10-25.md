@@ -50,14 +50,14 @@ Design (cleanup before the irreversible delete, so a failure can be retried):
 2. `workers/api/lifecycle.ts` purge branch, for a real run (`dryRun:false`) only: take the candidate ids from a dry-run of the same request (the
    request is already two-step: dry run, then `confirm`), keep UUID ids, call `PREVIEW_MANAGER` `DELETE /api/preview/canary/<id>` for each
    (new service binding `PREVIEW_MANAGER` on the `beehive` worker), then call the real purge.
-   - Only a 200 `{deleted:false}` ("did not exist") is fine. A 404 (an older preview manager without the route), 409 (a live canary), 501 or any other
+   - Only a 200 `{success:true,deleted:false}` ("did not exist") or `{success:true,deleted:true}` is fine; a 2xx with an unparseable body or any other shape is a failure, not "absent". A 404 (an older preview manager without the route), 409 (a live canary), 501 or any other
      non-OK: **stop before purging** and answer 502/409 with the failing ids; nothing was purged, the call can be repeated. A 501 is not "no Worker
      was ever uploaded": the preview manager also answers it when `WORKER_VERSIONS_MODE=api` lacks a secret/var. With no candidates the preview
      manager is not called at all.
    - Bounded: more than 40 candidate Workers in one purge (subrequest limit) answers 409 asking for a narrower prefix; deletes run in small
      parallel groups.
-   - Old Spec DO (no `candidateIds` field): purge proceeds as today and the response says cleanup was skipped (fail-open only for this additive
-     step; the purge itself is unchanged).
+   - Old Spec DO (rejects `withCandidateIds`, deploy window only): the purge is refused with 503 and nothing is purged; repeat after the deploy
+     settles (changed from fail-open after review: the edge cannot name the Workers, so purging could orphan them).
 3. Service binding cycle check: `beehive` -> `beehive-preview-manager` (service), while preview-manager and the others bind the Spec DO via
    `script_name = "beehive"`. DO bindings are not service-binding edges; I will confirm with a `wrangler deploy --dry-run` and note it in
    `docs/OPEN-QUESTIONS.md` (first deploy to an empty account stays unverified, as documented).
