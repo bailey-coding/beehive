@@ -3,7 +3,7 @@
  * Loads and manages CLI configuration from multiple sources
  */
 
-import { existsSync, readFileSync, mkdirSync, openSync, writeSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, openSync, writeSync, fsyncSync, closeSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import Configstore from 'configstore';
@@ -108,9 +108,13 @@ export const SERVICE_TOKEN_PREFIX = 'bh_svc_';
 
 export type TokenKind = 'user' | 'service' | 'master-or-other';
 
-/** Leading characters that are safe to show: at most 12, and never more than half of a short token. */
+/**
+ * Leading characters that are safe to show: 12 for user and service tokens (the length of their public listing prefix), 8 for
+ * anything else (a master token has no public prefix), and never more than half of a short token.
+ */
 export function tokenPrefix(token: string): string {
-  return token.slice(0, Math.min(12, Math.floor(token.length / 2)));
+  const shown = tokenKind(token) === 'master-or-other' ? 8 : 12;
+  return token.slice(0, Math.min(shown, Math.floor(token.length / 2)));
 }
 
 /** Classify a token by prefix only; the edge decides whether it is valid. */
@@ -127,7 +131,14 @@ export function tokenKind(token: string | undefined): TokenKind {
  * when it replaces an older 0644 file. Errors never echo the file contents.
  */
 export function saveConfig(config: BeehiveConfig, configPath?: string): void {
-  const path = configPath || DEFAULT_CONFIG_PATH;
+  const requested = configPath || DEFAULT_CONFIG_PATH;
+  // A config path that is a symlink (dotfiles or secrets store): replace the file it points to, not the link itself
+  let path = requested;
+  try {
+    path = realpathSync(requested);
+  } catch {
+    /* does not exist yet: write at the requested path */
+  }
   const dir = dirname(path);
   const tmp = join(dir, `.config.json.${process.pid}.tmp`);
 

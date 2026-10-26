@@ -96,8 +96,10 @@ async function actionLogin(state: CliState, ..._args: unknown[]): Promise<void> 
       if (tokenKind(token) === 'user') {
         console.error('The token may be revoked or expired, or this edge may predate user tokens.');
       }
-    } else {
+    } else if (status === 0 || status >= 500) {
       console.error(formatError('Could not verify the token (API unavailable or unreachable). Nothing was saved; retry.'));
+    } else {
+      console.error(formatError(`Could not verify the token: the edge answered ${status} to /api/whoami. Nothing was saved.`));
     }
     process.exit(1);
   }

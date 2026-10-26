@@ -7,10 +7,10 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync, symlinkSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { startCliHarness, type CliHarness, type Recorded } from './helpers/cli-harness';
-import { saveConfig, USER_TOKEN_PREFIX as CLI_USER_PREFIX, SERVICE_TOKEN_PREFIX as CLI_SERVICE_PREFIX } from '../cli/src/utils/config';
+import { saveConfig, tokenPrefix, USER_TOKEN_PREFIX as CLI_USER_PREFIX, SERVICE_TOKEN_PREFIX as CLI_SERVICE_PREFIX } from '../cli/src/utils/config';
 import { USER_TOKEN_PREFIX, SERVICE_TOKEN_PREFIX } from '../workers/shared/service-tokens';
 
 const USER_TOKEN = 'bh_usr_' + 'A'.repeat(43);
@@ -101,6 +101,18 @@ describe('config file permissions', () => {
       expect(String(e)).not.toContain(USER_TOKEN);
     }
     expect(readdirSync(join(dirTarget, '..')).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('a symlinked config path stays a symlink: the file it points to is replaced, not the link', () => {
+    const real = freshConfig();
+    const link = freshConfig();
+    writeConfig(real, { apiToken: OLD_TOKEN, keep: 'me' }, 0o600);
+    mkdirSync(join(link, '..'), { recursive: true });
+    symlinkSync(real, link);
+    saveConfig({ apiToken: USER_TOKEN }, link);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, 'utf-8')).apiToken).toBe(USER_TOKEN);
+    expect(mode(real)).toBe(0o600);
   });
 
   it('the temp file is opened exclusively with 0o600 (stat after the fact cannot see the window)', () => {
@@ -351,6 +363,14 @@ describe('secret hygiene', () => {
 });
 
 describe('token prefixes', () => {
+  it('shows 12 characters of a user or service token and only 8 of anything else, never more than half of a short token', () => {
+    expect(tokenPrefix(`${CLI_USER_PREFIX}abcdefghijklmnopqrstuvwxyz`)).toHaveLength(12);
+    expect(tokenPrefix(`${CLI_SERVICE_PREFIX}abcdefghijklmnopqrstuvwxyz`)).toHaveLength(12);
+    expect(tokenPrefix('a'.repeat(64))).toHaveLength(8);
+    expect(tokenPrefix('abcd')).toBe('ab');
+  });
+
+
   it("the CLI's bh_usr_/bh_svc_ constants equal the worker's", () => {
     expect(CLI_USER_PREFIX).toBe(USER_TOKEN_PREFIX);
     expect(CLI_SERVICE_PREFIX).toBe(SERVICE_TOKEN_PREFIX);
