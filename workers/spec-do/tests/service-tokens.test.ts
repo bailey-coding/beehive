@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { SCHEMA_SQL, SERVICE_TOKENS_SQL, DEPLOY_REFS_SQL, LEDGER_CAS_SQL, USER_TOKENS_SQL, IDEMPOTENCY_KEYS_SQL, CANARY_METRICS_SQL } from '../schema-inline';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 
 let store: SqliteState;
@@ -380,7 +381,7 @@ describe('m5 -> m6 migration', () => {
     spec = makeSpecDo(restarted);
     store = restarted;
     await spec.init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(columns(restarted, 'service_accounts')).toContain('actor_id');
     expect(columns(restarted, 'service_tokens').length).toBeGreaterThan(0);
     expect(raw.prepare("SELECT actor_id, token_hash FROM service_accounts WHERE id = 'legacy'").get()).toEqual({
@@ -392,7 +393,7 @@ describe('m5 -> m6 migration', () => {
     expect((await verify(hash)).status).toBe(200);
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(count("SELECT COUNT(*) AS n FROM service_accounts WHERE name = 'after-migration'")).toBe(1);
   });
 

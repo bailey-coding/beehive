@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 import {
   LATENCY_BUCKET_COUNT,
   latencyBucketIndex,
@@ -172,7 +173,7 @@ describe('m10 -> m11 migration', () => {
       spec = makeSpecDo(makeSqliteState(store.raw, store.kv));
       await spec.init();
     }
-    expect(store.raw.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get()).toEqual({ value: 'm11' });
+    expect(store.raw.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get()).toEqual({ value: LATEST_VERSION });
     expect(store.raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'canary_metrics'").get()).toEqual({ n: 1 });
     expect(store.raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'").get()).toEqual({ n: 1 });
     const id = await deployCanary();

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 import { RECORD_NOT_FOUND } from '../../shared/promotion-ledger';
 import type { PromotionState, TournamentRecord, MergeTrainRecord } from '../../shared/promotion-ledger';
 
@@ -101,7 +102,7 @@ describe('m3 -> m4 migration', () => {
 
     expect(tableNames(restarted)).toEqual(expect.arrayContaining(['promotion_states', 'tournaments', 'merge_trains']));
     // m4 -> m5 up to m10 -> m11 (canary metrics) run in the same pass
-    expect(schemaVersion(restarted)).toBe('m11');
+    expect(schemaVersion(restarted)).toBe(LATEST_VERSION);
     expect(store.raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'").get()).toEqual({ n: 1 });
   });
 
@@ -109,7 +110,7 @@ describe('m3 -> m4 migration', () => {
     store.raw.exec("UPDATE metadata SET value = 'm3' WHERE key = 'schema_version'");
     await makeSpecDo(makeSqliteState(store.raw, store.kv)).init();
     await makeSpecDo(makeSqliteState(store.raw, store.kv)).init();
-    expect(schemaVersion(store)).toBe('m11');
+    expect(schemaVersion(store)).toBe(LATEST_VERSION);
   });
 });
 
