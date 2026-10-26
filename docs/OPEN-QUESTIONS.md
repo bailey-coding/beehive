@@ -1007,3 +1007,29 @@ Found by running `SpecDO.init()` over the schema.sql of all 11 historical commit
 2. **Ledgers from `d34db95` and `469389b` (m9 = `idempotency_keys`, no `user_tokens`) never get `user_tokens`.** On that line the code's `m9` created `idempotency_keys` and neither `schema.sql` nor the code had `user_tokens`; `98d43df` made `m9` = `user_tokens` and `m10` = `idempotency_keys`. A ledger stamped `m9` or `m10` by those commits skips the current `m9` step, so `user_tokens` is never created and every user-token route would fail `no such table`. Whether any deploy ever ran those commits is unknown to agents; the maintainer can answer with the T2 read-only query (`SELECT name FROM sqlite_master WHERE name = 'user_tokens'`, `docs/MIGRATION-LEGACY-TEST-PLAN.md` section 3) or from deploy history. Test: the A3/A4 cases for `m9-d34db95` and `m10-469389b` are `it.fails`.
 
 Everything else passed for every start version (m1 with and without a `schema_version` row through m11): init reaches the latest version, no object or original column value is lost, a second init and a re-run of every step from every earlier version change nothing, and tables, columns and indexes equal a fresh ledger's (apart from finding 1).
+
+## 2026-10-26: Artifacts fork and merge semantics for the MR flow (`docs/MR-FLOW-PLAN.md` §2, §8)
+
+**Status:** Open. These are planning findings from the docs; nothing has been probed and no code depends on them yet.
+
+- **The native fork API exists, and our client does not use it.** REST `POST /artifacts/namespaces/:ns/repos/:name/fork` and
+  binding `repo.fork(name, {description, readOnly, defaultBranchOnly})` (developers.cloudflare.com/artifacts/api/rest-api,
+  `/workers-binding`). `createFork` creates an empty repo, and its comment saying there is no "fork from"
+  (`workers/shared/artifacts.ts:125`) is stale. `docs/ARTIFACTS-SETUP.md` has no fork section.
+- **Forks stay in the source namespace.** The fork route takes only a name, no target namespace, so a fork lives in the org of its
+  upstream.
+- **A forking repo is not usable yet.** Listed repos carry `status` `ready | importing | forking`, and `get()` throws while the
+  repo "is not ready yet". Callers must poll for `ready` (or retry `get()`) before handing out the remote or a token.
+- **Doc mismatch:** the docs page marks the fork body's `name` as required, but the OpenAPI request body does not list it. Probe
+  before relying on either.
+- **No documented server-side merge, compare or ref-update API.** Refs change only over git, so a merge is a sandbox
+  clone/merge/push.
+- **Undocumented, to probe before MR slice 2:**
+  - Is a non-fast-forward push accepted, and is `--force-with-lease` honoured?
+  - Does any branch protection exist?
+  - Are objects shared between a fork and its upstream, and what does a cross-repo fetch cost?
+  - Can a fork be forked again?
+  - Does a push to a fork emit the event shape the queue consumer parses?
+- **Related:** the pre-merge gate is simulated (`workers/gate-workflow/index.ts:615-622`, `:725`, `:789`;
+  `workers/sandbox-runner/index.ts:371-374`), and its verdict POST ignores `Response.ok` (`:865-875`). Every `gate_verdicts`
+  row so far is synthetic, and a second run for a candidate violates UNIQUE(candidate_id, gate) unseen (`schema-inline.ts:144`).
