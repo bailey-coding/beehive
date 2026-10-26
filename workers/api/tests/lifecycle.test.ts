@@ -182,11 +182,12 @@ describe('real purge deletes candidate Workers first (docs/CLEANUP-PLAN-2026-10-
     expect(log).toEqual(['do:plan+ids']);
   });
 
-  it('purges as before, reporting the cleanup as skipped, when the preview manager has no Versions client (501), has no binding, or the Spec DO is older', async () => {
+  it('aborts without purging when the preview manager answers 501; purges as before, reporting the cleanup as skipped, with no binding or an older Spec DO', async () => {
     const l1: string[] = [];
     const r1 = await runReal(doReply(l1), cleanupWith(l1, () => new Response('{}', { status: 501 })));
-    expect(((await r1!.json()) as { data: { workerCleanup: { status: string } } }).data.workerCleanup.status).toBe('skipped');
-    expect(l1).toContain('do:purge+ids');
+    expect(r1?.status).toBe(502);
+    expect(((await r1!.json()) as { error: string }).error).toContain('501');
+    expect(l1).not.toContain('do:purge+ids');
     const l2: string[] = [];
     const r2 = await runReal(doReply(l2), null);
     expect(((await r2!.json()) as { data: { workerCleanup: { status: string } } }).data.workerCleanup.status).toBe('skipped');

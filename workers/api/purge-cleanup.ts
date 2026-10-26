@@ -21,7 +21,7 @@ export type WorkerCleanupReport =
 
 export type WorkerCleanupResult =
   | { ok: true; report: WorkerCleanupReport }
-  | { ok: false; status: number; error: string; failed: Array<{ candidateId: string; status: number; error: string }> };
+  | { ok: false; status: number; error: string; failed: Array<{ candidateId: string; status: number; error: string }>; deleted?: string[] };
 
 export interface CandidateWorkerCleanup {
   deleteWorkers(candidateIds: string[]): Promise<WorkerCleanupResult>;
@@ -40,10 +40,12 @@ export function createCandidateWorkerCleanup(preview: PreviewManagerFetcher, api
           failed: [],
         };
       }
+      // No candidates: nothing was ever uploaded, so the preview manager is not called (and its 501 cannot matter)
+      if (!ids.length) return { ok: true, report: { status: 'done', deleted: [], absent: [] } };
       const deleted: string[] = [];
       const absent: string[] = [];
       const failed: Array<{ candidateId: string; status: number; error: string }> = [];
-      let unavailable = false;
+      let unavailable = false; // a 501 stops further groups; the ones in flight finish and are reported
       for (let i = 0; i < ids.length && !unavailable; i += PARALLEL) {
         await Promise.all(ids.slice(i, i + PARALLEL).map(async (candidateId) => {
           try {
@@ -51,8 +53,13 @@ export function createCandidateWorkerCleanup(preview: PreviewManagerFetcher, api
               method: 'DELETE',
               headers: { Authorization: `Bearer ${apiToken}` },
             });
-            // 501: the preview manager has no Versions client, so no candidate Worker was ever uploaded
-            if (res.status === 501) { unavailable = true; return; }
+            // 501 is NOT "nothing was uploaded": the preview manager also answers it when WORKER_VERSIONS_MODE=api but a secret or
+            // var is missing (workers/preview-manager/versions.ts), and purging then would drop the only record of uploaded Workers
+            if (res.status === 501) {
+              unavailable = true;
+              failed.push({ candidateId, status: 501, error: 'preview manager answered 501 (Workers Versions client not available; check WORKER_VERSIONS_MODE, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, WORKERS_SUBDOMAIN)' });
+              return;
+            }
             const body = (await res.json().catch(() => null)) as { deleted?: unknown; error?: unknown } | null;
             if (!res.ok) {
               failed.push({ candidateId, status: res.status, error: typeof body?.error === 'string' ? body.error : `HTTP ${res.status}` });
@@ -66,14 +73,15 @@ export function createCandidateWorkerCleanup(preview: PreviewManagerFetcher, api
       }
       if (failed.length) {
         const status = failed.some((f) => f.status === 409) ? 409 : 502;
+        const already = deleted.length ? `Workers already deleted in this call: ${deleted.join(', ')}; ` : '';
         return {
           ok: false,
           status,
-          error: `could not delete the Worker of ${failed.length} candidate(s); no ledger rows were purged (Workers of other candidates in this call may already be deleted; a repeat is safe), repeat after fixing: ${failed.map((f) => `${f.candidateId}: ${f.error}`).join('; ')}`,
+          error: `could not delete the Worker of ${failed.length} candidate(s); no ledger rows were purged (${already}a repeat is safe), repeat after fixing: ${failed.map((f) => `${f.candidateId}: ${f.error}`).join('; ')}`,
           failed,
+          deleted,
         };
       }
-      if (unavailable) return { ok: true, report: { status: 'skipped', reason: 'the preview manager has no Versions client, so no candidate Workers exist' } };
       return { ok: true, report: { status: 'done', deleted, absent } };
     },
   };

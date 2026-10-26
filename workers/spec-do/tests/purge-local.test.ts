@@ -149,17 +149,61 @@ describe('purge with candidate Worker cleanup (real Spec DO + edge route)', () =
     expect(count('organizations')).toBe(1);
   });
 
-  // FINDING (documented, not fixed): workers/api/purge-cleanup.ts:47 treats ANY 501 as "no candidate Worker was ever uploaded" and
-  // lets the purge proceed. The preview manager also answers 501 when WORKER_VERSIONS_MODE=api but CLOUDFLARE_API_TOKEN /
-  // CLOUDFLARE_ACCOUNT_ID / WORKERS_SUBDOMAIN / the bundle source is missing (workers/preview-manager/versions.ts:264-266), i.e. a
-  // misconfigured prod that did upload Workers earlier. The purge then removes the only record of them. Pinned here so a change is deliberate.
-  it('PINNED: a 501 from the preview manager skips the cleanup and still purges the ledger (orphans any real Workers)', async () => {
+  // The preview manager also answers 501 when WORKER_VERSIONS_MODE=api but CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / WORKERS_SUBDOMAIN /
+  // the bundle source is missing (workers/preview-manager/versions.ts), i.e. a prod that did upload Workers earlier. So a 501 with
+  // candidates aborts the purge: the ledger rows are the only record of those Workers.
+  it('a 501 from the preview manager with candidates aborts the purge: nothing deleted, every ledger row intact, error names the 501', async () => {
     await seedTombstoned('org-a');
     const total = (await purge({ orgNamePrefix: 'org-' })).json.data!.total as number;
+    const before = { c: count('candidates'), o: count('organizations'), v: count('gate_verdicts'), r: count('repositories'), s: count('specs') };
     const pm = previewManager(() => fail(501, 'Workers Versions client not enabled'));
     const res = await purge(real(total), pm.binding);
+    expect(res.status).toBe(502);
+    expect(res.json.error).toContain('501');
+    expect(res.json.data).toBeUndefined();
+    expect({ c: count('candidates'), o: count('organizations'), v: count('gate_verdicts'), r: count('repositories'), s: count('specs') }).toEqual(before);
+  });
+
+  it('no candidates: the preview manager is not called at all (even one that would answer 501), and the purge proceeds', async () => {
+    const org = spec.createOrganization('org-empty', 'artifacts');
+    await spec.fetch(new Request('https://spec-do.internal/internal/tombstone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Actor-ID': maintainerId },
+      body: JSON.stringify({ entityType: 'organization', id: org.id }),
+    }));
+    age(25);
+    const pm = previewManager(() => fail(501));
+    const total = (await purge({ orgNamePrefix: 'org-' }, pm.binding)).json.data!.total as number;
+    expect(total).toBeGreaterThan(0);
+    const res = await purge(real(total), pm.binding);
     expect(res.status).toBe(200);
-    expect(res.json.data!.workerCleanup).toMatchObject({ status: 'skipped' });
+    expect(pm.calls).toEqual([]);
+    expect(res.json.data!.workerCleanup).toEqual({ status: 'done', deleted: [], absent: [] });
+    expect(count('organizations')).toBe(0);
+  });
+
+  it('a 501 partway through a parallel group reports the Workers already deleted, not "skipped"; nothing is purged', async () => {
+    const a = await seedTombstoned('org-a');
+    const total = (await purge({ orgNamePrefix: 'org-' })).json.data!.total as number;
+    const pm = previewManager((id) => (id === a.c2.id ? fail(501) : ok(true)));
+    const res = await purge(real(total), pm.binding);
+    expect(res.status).toBe(502);
+    expect(res.json.error).toContain(`Workers already deleted in this call: ${a.c1.id}`);
+    expect(res.json.error).toContain(`${a.c2.id}: preview manager answered 501`);
+    expect(res.json.data).toBeUndefined();
+    expect(count('candidates')).toBe(2);
+  });
+
+  it('re-run after the 501 is fixed succeeds: the already-deleted Worker is absent, the other deletes, the ledger is purged', async () => {
+    const a = await seedTombstoned('org-a');
+    const total = (await purge({ orgNamePrefix: 'org-' })).json.data!.total as number;
+    const broken = previewManager((id) => (id === a.c2.id ? fail(501) : ok(true)));
+    expect((await purge(real(total), broken.binding)).status).toBe(502);
+    const fixed = previewManager((id) => ok(id === a.c2.id));
+    const res = await purge(real(total), fixed.binding);
+    expect(res.status).toBe(200);
+    expect(res.json.data!.workerCleanup).toEqual({ status: 'done', deleted: [a.c2.id], absent: [a.c1.id] });
+    expect(count('candidates')).toBe(0);
     expect(count('organizations')).toBe(0);
   });
 
