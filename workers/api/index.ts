@@ -29,7 +29,7 @@ import type { ActorRequest } from '../shared/principal';
 import { handleServiceAccountRoutes } from './service-accounts';
 import { handleUserTokenRoutes } from './user-tokens';
 import { handleLifecycleRoutes } from './lifecycle';
-import { createCandidateWorkerCleanup } from './purge-cleanup';
+import { createCandidateWorkerCleanup, createUnavailableWorkerCleanup } from './purge-cleanup';
 import { handleUi } from './ui';
 
 
@@ -134,7 +134,7 @@ export default {
     // Ledger lifecycle: tombstones, purge, maintainer role, ?include_deleted=1 reads
     const lifecycleResponse = await handleLifecycleRoutes(
       request, url, principal, specDoStub,
-      env.PREVIEW_MANAGER && env.API_AUTH_TOKEN ? createCandidateWorkerCleanup(env.PREVIEW_MANAGER, env.API_AUTH_TOKEN) : null
+      env.PREVIEW_MANAGER && env.API_AUTH_TOKEN ? createCandidateWorkerCleanup(env.PREVIEW_MANAGER, env.API_AUTH_TOKEN) : createUnavailableWorkerCleanup()
     );
     if (lifecycleResponse) return lifecycleResponse;
 

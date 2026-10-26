@@ -124,7 +124,8 @@ export async function handleLifecycleRoutes(
       const { confirm: _confirm, ...selector } = body.data;
       let plan = await client.purge({ ...selector, dryRun: true, withCandidateIds: true }, actorId);
       if (!plan.ok && plan.status === 400) {
-        // An older Spec DO does not know withCandidateIds: purge as before, without Worker cleanup
+        // An older Spec DO does not know withCandidateIds: purge as before, without Worker cleanup. Only reachable in the mixed-version
+        // deploy window (one push deploys all ten workers); it can orphan candidate Workers then, so purge only after the deploy settles
         plan = await client.purge({ ...selector, dryRun: true }, actorId);
         if (plan.ok) cleanup = { status: 'skipped', reason: 'the Spec DO does not report candidate ids yet' };
       }

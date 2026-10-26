@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { handleLifecycleRoutes } from '../lifecycle';
-import { createCandidateWorkerCleanup } from '../purge-cleanup';
+import { createCandidateWorkerCleanup, createUnavailableWorkerCleanup } from '../purge-cleanup';
 import type { Principal } from '../../shared/principal';
 
 const master: Principal = { kind: 'master', actorId: 'maint-1', scopes: ['read', 'write'], promotionAuthority: true, organizationId: null };
@@ -182,16 +182,12 @@ describe('real purge deletes candidate Workers first (docs/CLEANUP-PLAN-2026-10-
     expect(log).toEqual(['do:plan+ids']);
   });
 
-  it('aborts without purging when the preview manager answers 501; purges as before, reporting the cleanup as skipped, with no binding or an older Spec DO', async () => {
+  it('aborts without purging when the preview manager answers 501; purges as before, reporting the cleanup as skipped, with an older Spec DO (the no-binding case fails closed, below)', async () => {
     const l1: string[] = [];
     const r1 = await runReal(doReply(l1), cleanupWith(l1, () => new Response('{}', { status: 501 })));
     expect(r1?.status).toBe(502);
     expect(((await r1!.json()) as { error: string }).error).toContain('501');
     expect(l1).not.toContain('do:purge+ids');
-    const l2: string[] = [];
-    const r2 = await runReal(doReply(l2), null);
-    expect(((await r2!.json()) as { data: { workerCleanup: { status: string } } }).data.workerCleanup.status).toBe('skipped');
-    expect(l2).toEqual(['do:purge']);
     // an older Spec DO rejects withCandidateIds with a 400: the plan is retried without it, and the purge does not send it
     const l3: string[] = [];
     const older = (req: Request) => req.clone().json().then((b: { dryRun?: boolean; withCandidateIds?: boolean }) => {
@@ -202,5 +198,32 @@ describe('real purge deletes candidate Workers first (docs/CLEANUP-PLAN-2026-10-
     const r3 = await runReal(older, cleanupWith(l3, () => ok(true)));
     expect(r3?.status).toBe(200);
     expect(l3).toEqual(['do:plan+ids', 'do:plan', 'do:purge']);
+  });
+
+  it('without the PREVIEW_MANAGER binding a purge with UUID candidates aborts with 503 and purges nothing; no UUID candidates: no abort', async () => {
+    const l1: string[] = [];
+    const r1 = await runReal(doReply(l1), createUnavailableWorkerCleanup());
+    expect(r1?.status).toBe(503);
+    expect(((await r1!.json()) as { error: string }).error).toContain('PREVIEW_MANAGER');
+    expect(l1).toEqual(['do:plan+ids']);
+    const l2: string[] = [];
+    const r2 = await runReal(doReply(l2, { plan: new Response(JSON.stringify(planBody({ candidateIds: ['not-a-uuid'] }))) }), createUnavailableWorkerCleanup());
+    expect(r2?.status).toBe(200);
+    expect(l2).toEqual(['do:plan+ids', 'do:purge+ids']);
+  });
+
+  it('treats a 2xx without {success:true, deleted:boolean} (unparseable, missing or non-boolean deleted, success false) as a failure that aborts the purge', async () => {
+    for (const reply of [
+      () => new Response('<html>ok</html>'),
+      () => new Response(JSON.stringify({ success: true })),
+      () => new Response(JSON.stringify({ success: true, deleted: 'yes' })),
+      () => new Response(JSON.stringify({ success: false, deleted: true })),
+      () => new Response(JSON.stringify({ deleted: true })),
+    ]) {
+      const log: string[] = [];
+      const res = await runReal(doReply(log), cleanupWith(log, reply));
+      expect(res?.status).toBe(502);
+      expect(log).not.toContain('do:purge+ids');
+    }
   });
 });
