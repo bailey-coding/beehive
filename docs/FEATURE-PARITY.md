@@ -144,8 +144,8 @@ Per-worker health routes exist on all ten workers; none is reachable through the
 - UI: separate GitHub session; calls the DO directly with `session.actorId`, so UI writes bypass
   `authorize()` and the service-token rewrite. Intended, but note UI users get create rights that a
   service token never has.
-- CLI: sends `X-Actor-ID` on every request from `--actor`, `BEEHIVE_ACTOR` or `config.defaultActor` (stopgap until M12); with the master token the edge
-  trusts it (`service-accounts.ts:15`). The UI cannot choose an actor.
+- CLI: sends `X-Actor-ID` on every request from `--actor`, `BEEHIVE_ACTOR` or `config.defaultActor` with the master token (the edge
+  trusts it, `service-accounts.ts:15`); with a `bh_usr_` user token (M12 PR-C) it sends none and the edge sets the actor. The UI cannot choose an actor.
 - Edge `/health` is public-looking but 401s without the bearer (`index.ts:115` sits after the auth
   block at `:88`); the workers' own `/health` behaviour differs (`shared/auth.ts`, not read in full).
 

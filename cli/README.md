@@ -53,9 +53,20 @@ Set your API token via environment variable:
 ```bash
 export BEEHIVE_API_TOKEN=your-api-token-here
 
-# Or use the auth command
-beehive auth login --token your-api-token-here
+# Or use the auth command; the token is verified against /api/whoami before it is saved
+printf %s "$BEEHIVE_TOKEN" | beehive auth login --token-stdin
 ```
+
+`beehive auth login --token <t>` also works, but argv is visible to other local users and shell history; prefer
+`--token-stdin`. A bad token never overwrites a saved good one.
+
+#### User tokens
+
+A `bh_usr_` token (minted at `/app/settings/tokens`) makes the CLI act as its owner without the master token. The edge
+sets the actor from the token, so `--actor`, `BEEHIVE_ACTOR` and `defaultActor` are ignored (one warning on stderr).
+Some routes stay master-only and answer 403. `beehive auth whoami` shows the identity, scope and where the token came
+from; `show-token` prints only the first 12 characters. Token precedence: `--token`, then `BEEHIVE_API_TOKEN`, then the
+config file. The config file is written `0600` (directory `0700` when created); on Windows POSIX modes do not apply.
 
 ### Basic Commands
 
@@ -453,7 +464,8 @@ The CLI uses a configuration file at `~/.beehive/config.json`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BEEHIVE_API_TOKEN` | API authentication token | - |
+| `BEEHIVE_API_TOKEN` | API authentication token (master, service or `bh_usr_` user token); beats the config file | - |
+| `BEEHIVE_ACTOR` | Actor id sent as `X-Actor-ID` with a master token; ignored with a user token | - |
 | `BEEHIVE_API_URL` | API base URL | `https://beehive.bz23711.workers.dev` |
 | `BEEHIVE_CONFIG` | Path to config file | `~/.beehive/config.json` |
 | `BEEHIVE_VERBOSE` | Enable verbose output | `false` |

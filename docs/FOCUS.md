@@ -90,8 +90,11 @@ cleanups. Confirm, in this order:
 - PR-0 and push A are live (rollback floor `8de5485`, `docs/OPS.md`). PR-B (T2-T6d: user tokens, the
   settings page, the master stage-1 log) is **merged to `main`** (`99fc4e2`; `agent/m12-pr-b` is 0 commits ahead, checked 2026-10-23) and deployed
   2026-10-24 (above). Its user-token table landed as schema `m9` (the idempotency keys moved to `m10`, see above). Deploy steps: `docs/OPS.md` "User tokens" (push B deploy checks) and the plan, section 3.
-- Next: PR-C (T7, CLI token support and the "CLI actor attribution" rewrite), then PR-D1/PR-D2 (T8/T9,
-  `SESSION_SIGNING_KEY`).
+- PR-C (T7, CLI token support, `--token-stdin`, verify-before-save login, 0600 atomic config, "CLI actor attribution" rewrite)
+  is implemented on `agent/m12-prc-impl` (plan `docs/M12-PRC-PLAN.md`; CLI/tests/docs only, no worker change); needs review and merge.
+  Next: PR-D1/PR-D2 (T8/T9, `SESSION_SIGNING_KEY`).
+- Deferred from PR-C (edge = spine, maintainer decision 2026-10-26): token expiry in `/api/whoami` and a machine-readable
+  reason on 403 for user tokens; no GET retry on 503 in the CLI.
 - **Verify assumption A4** (task): open one `beehive` invocation log for an authenticated `/api/*` request and one
   `/app` visit, and the same request's Honeycomb trace including the edge-to-DO subrequest span. Check that
   `Authorization`, `Cookie`, `X-API-Token`, `X-Beehive-Internal` and `X-Beehive-Admin` are redacted; never copy a value
@@ -131,6 +134,8 @@ cleanups. Confirm, in this order:
 
 ## Open work
 
+- **Release the CLI (open, out of scope for PR-C).** There is no publish pipeline: `bin/beehive` runs `dist` or falls back to
+  `src` via tsx, `cli/package.json` is 0.1.0. Decide what a release means (version bump and tag, or nothing) before PR-C ships to users.
 - **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci.yml` (formerly ci-enhanced.yml) now builds
   from a `git archive` copy with no root `node_modules` and installs only in each worker folder (`d3b42ff`, 2026-10-19).
   This prevents the root-level dependency resolution that allowed the zod failure to reach production.
