@@ -56,8 +56,8 @@ Design (cleanup before the irreversible delete, so a failure can be retried):
      manager is not called at all.
    - Bounded: more than 40 candidate Workers in one purge (subrequest limit) answers 409 asking for a narrower prefix; deletes run in small
      parallel groups.
-   - Old Spec DO (no `candidateIds` field): purge proceeds as today and the response says cleanup was skipped (fail-open only for this additive
-     step; the purge itself is unchanged).
+   - Old Spec DO (rejects `withCandidateIds`, deploy window only): the purge is refused with 503 and nothing is purged; repeat after the deploy
+     settles (changed from fail-open after review: the edge cannot name the Workers, so purging could orphan them).
 3. Service binding cycle check: `beehive` -> `beehive-preview-manager` (service), while preview-manager and the others bind the Spec DO via
    `script_name = "beehive"`. DO bindings are not service-binding edges; I will confirm with a `wrangler deploy --dry-run` and note it in
    `docs/OPEN-QUESTIONS.md` (first deploy to an empty account stays unverified, as documented).

@@ -86,7 +86,7 @@ export function createCandidateWorkerCleanup(preview: PreviewManagerFetcher, api
             // A 2xx only counts when it is the preview manager's own answer; an unparseable body or a missing/odd `deleted` is
             // not evidence that the Worker is gone (a proxy or an unexpected peer may answer 2xx), so it aborts the purge
             if (body?.success !== true || typeof body.deleted !== 'boolean') {
-              failed.push({ candidateId, status: 502, error: `unexpected ${res.status} answer from the preview manager (want {success:true,deleted:boolean})` });
+              failed.push({ candidateId, status: 502, error: `unexpected ${res.status} answer from the preview manager (want {success:true,deleted:boolean}; got ${JSON.stringify(body)?.slice(0, 120)})` });
               return;
             }
             (body.deleted ? deleted : absent).push(candidateId);

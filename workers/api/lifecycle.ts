@@ -63,7 +63,7 @@ export async function handleLifecycleRoutes(
   url: URL,
   principal: Principal,
   stub: SpecDoStub,
-  workerCleanup: CandidateWorkerCleanup | null = null
+  workerCleanup: CandidateWorkerCleanup
 ): Promise<Response | null> {
   const path = url.pathname;
   const method = request.method;
@@ -117,17 +117,20 @@ export async function handleLifecycleRoutes(
     // A real purge first deletes the Workers of the candidates it is about to hard-delete (the ledger cannot name them afterwards).
     // The plan comes from a dry run of the same selector: it also gives every refusal (not a maintainer, active promotion, ...) before
     // any Worker is touched. Failure of a Worker delete aborts the purge; nothing has been purged and the call can be repeated.
-    let cleanup: WorkerCleanupReport = { status: 'skipped', reason: 'no preview manager binding' };
+    let cleanup: WorkerCleanupReport = { status: 'done', deleted: [], absent: [] };
     const cleaned = new Set<string>();
     let reportsIds = false;
     if (workerCleanup) {
       const { confirm: _confirm, ...selector } = body.data;
       let plan = await client.purge({ ...selector, dryRun: true, withCandidateIds: true }, actorId);
       if (!plan.ok && plan.status === 400) {
-        // An older Spec DO does not know withCandidateIds: purge as before, without Worker cleanup. Only reachable in the mixed-version
-        // deploy window (one push deploys all ten workers); it can orphan candidate Workers then, so purge only after the deploy settles
+        // An older Spec DO does not know withCandidateIds, so the edge cannot name the candidate Workers. Only reachable in the
+        // mixed-version deploy window (one push deploys all ten workers). Purging anyway could orphan them, so refuse and let the
+        // caller repeat after the deploy settles. A 400 that the retry reproduces is a real validation error: relayed below.
         plan = await client.purge({ ...selector, dryRun: true }, actorId);
-        if (plan.ok) cleanup = { status: 'skipped', reason: 'the Spec DO does not report candidate ids yet' };
+        if (plan.ok) {
+          return err('the Spec DO does not report candidate ids yet (deploy in progress?); nothing was purged, repeat after the deploy settles', 503);
+        }
       }
       if (!plan.ok) return relay(plan);
       // The confirm gate must hold before any Worker is touched (the DO only checks it in the real purge, after the deletes)

@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { handleLifecycleRoutes } from '../lifecycle';
 import { createCandidateWorkerCleanup, createUnavailableWorkerCleanup } from '../purge-cleanup';
 import type { Principal } from '../../shared/principal';
+import worker from '../index';
 
 const master: Principal = { kind: 'master', actorId: 'maint-1', scopes: ['read', 'write'], promotionAuthority: true, organizationId: null };
 const service: Principal = { kind: 'service', actorId: 'svc-actor', scopes: ['read'], promotionAuthority: false, organizationId: null, serviceAccountId: 'sa-1' };
@@ -28,7 +29,7 @@ function run(principal: Principal, method: string, path: string, body?: unknown,
   const { stub, seen } = fakeStub(stubReply);
   const url = new URL(`https://beehive.test${path}`);
   const request = new Request(url, { method, body: body === undefined ? undefined : JSON.stringify(body) });
-  return handleLifecycleRoutes(request, url, principal, stub).then((res) => ({ res, seen }));
+  return handleLifecycleRoutes(request, url, principal, stub, createUnavailableWorkerCleanup()).then((res) => ({ res, seen }));
 }
 
 describe('handleLifecycleRoutes', () => {
@@ -182,7 +183,7 @@ describe('real purge deletes candidate Workers first (docs/CLEANUP-PLAN-2026-10-
     expect(log).toEqual(['do:plan+ids']);
   });
 
-  it('aborts without purging when the preview manager answers 501; purges as before, reporting the cleanup as skipped, with an older Spec DO (the no-binding case fails closed, below)', async () => {
+  it('aborts without purging when the preview manager answers 501, and when an older Spec DO cannot name the candidates (503, deploy window)', async () => {
     const l1: string[] = [];
     const r1 = await runReal(doReply(l1), cleanupWith(l1, () => new Response('{}', { status: 501 })));
     expect(r1?.status).toBe(502);
@@ -196,8 +197,36 @@ describe('real purge deletes candidate Workers first (docs/CLEANUP-PLAN-2026-10-
       return new Response(JSON.stringify({ success: true, data: { ...planBody().data, candidateIds: undefined, dryRun: !!b.dryRun } }));
     }) as unknown as Response;
     const r3 = await runReal(older, cleanupWith(l3, () => ok(true)));
-    expect(r3?.status).toBe(200);
-    expect(l3).toEqual(['do:plan+ids', 'do:plan', 'do:purge']);
+    expect(r3?.status).toBe(503);
+    expect(((await r3!.json()) as { error: string }).error).toContain('candidate ids');
+    expect(l3).toEqual(['do:plan+ids', 'do:plan']);
+    // a 400 the retry reproduces is a real validation error, relayed as is (not turned into the deploy-window 503)
+    const l4: string[] = [];
+    const bad = (req: Request) => req.clone().json().then((b: { dryRun?: boolean; withCandidateIds?: boolean }) => {
+      l4.push(`do:${b.dryRun ? 'plan' : 'purge'}${b.withCandidateIds ? '+ids' : ''}`);
+      return new Response(JSON.stringify({ success: false, error: 'orgNamePrefix is invalid' }), { status: 400 });
+    }) as unknown as Response;
+    const r4 = await runReal(bad, cleanupWith(l4, () => ok(true)));
+    expect(r4?.status).toBe(400);
+    expect(l4).toEqual(['do:plan+ids', 'do:plan']);
+  });
+
+  it('the worker entry point wires the unavailable cleanup when PREVIEW_MANAGER is absent: a purge with UUID candidates answers 503 and the DO never purges', async () => {
+    const log: string[] = [];
+    const stub = { fetch: async (req: Request) => doReply(log)(req) };
+    const env = { SPEC_DO: { idFromName: () => 'id', get: () => stub }, API_AUTH_TOKEN: 'master-token' };
+    const res = await worker.fetch(
+      new Request('http://localhost/api/admin/purge', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer master-token', 'X-Actor-ID': 'maint-1', 'Content-Type': 'application/json' },
+        body: JSON.stringify(real),
+      }),
+      env as never,
+      {} as never
+    );
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: string }).error).toContain('PREVIEW_MANAGER');
+    expect(log).toEqual(['do:plan+ids']);
   });
 
   it('without the PREVIEW_MANAGER binding a purge with UUID candidates aborts with 503 and purges nothing; no UUID candidates: no abort', async () => {
