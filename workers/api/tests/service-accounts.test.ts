@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import worker from '../index';
 import { SpecDO } from '../../spec-do/index';
 import { TEST_DO_TOKENS } from '../../spec-do/tests/do-tokens';
+import { LATEST_VERSION } from '../../spec-do/tests/legacy-ledger';
 import { createSqlStorage } from '../../spec-do/sql-storage';
 import { generateServiceToken, hashToken, SERVICE_TOKEN_PREFIX } from '../../shared/service-tokens';
 
@@ -284,7 +285,7 @@ describe('SQL adapter statement reuse', () => {
     const keys = (db.prepare('SELECT key, value FROM metadata').all() as any[]).map((r) => r.key).sort();
     expect(keys).toEqual(['initialized_at', 'schema_version']);
     const v = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as any;
-    expect(v.value).toBe('m11');
+    expect(v.value).toBe(LATEST_VERSION);
   });
 });
 

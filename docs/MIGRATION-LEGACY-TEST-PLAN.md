@@ -1,6 +1,6 @@
 # Plan: Spec DO migrations over legacy table shapes
 
-Status: **plan only, nothing implemented.** Item: `docs/FOCUS.md` "Migration tests only see this repo's own SQL".
+Status: **first slice implemented** (section 10, 2026-10-26: snapshot script, T1 fixtures, `legacy-ledger.ts`, `migration-matrix.test.ts`, `LATEST_VERSION` in place of `'m11'`; findings in `docs/OPEN-QUESTIONS.md` 2026-10-26). Not yet: T2, the section 3 shape cases, the m12 tests (a `todo` stub exists). Item: `docs/FOCUS.md` "Migration tests only see this repo's own SQL".
 Sources: `docs/rfos/2026-10-14-migration-failures.md`, `docs/OPEN-QUESTIONS.md` "Live ledger had a `service_accounts` table of
 another design (2026-10-16)", `workers/spec-do/index.ts:1035` (`runMigrations`), `:1125` (`applyServiceTokens`).
 
@@ -86,7 +86,7 @@ Seed cases: legacy `service_accounts` with rows (refusal keeps rows); stray tabl
 Lands **with the m12 PR, not before**; a test cannot pin a migration that does not exist. Fixture `actors-dup-github-id`: two
 humans with one `github_user_id`, several NULLs (SQLite UNIQUE allows many NULLs), and two `''` values (these collide).
 - Clean ledger incl. many NULLs: m12 creates the index, rows kept, rerun is a no-op.
-- Duplicates present: the pinned behaviour is a **preflight inside the step** (`GROUP BY github_user_id HAVING COUNT(*) > 1`) that
+- Duplicates present (**decided: refuse, not skip**): the pinned behaviour is a **preflight inside the step** (`GROUP BY github_user_id HAVING COUNT(*) > 1`) that
   throws a named error listing values and actor ids, never deletes or merges; version stays `m11`; rows intact; after a human
   resolves the duplicate, a retry reaches m12. Without it, `CREATE UNIQUE INDEX` throws a bare constraint error and, because
   `init()` rethrows, every request fails.
@@ -118,7 +118,7 @@ dominates that job, not the tests.
 
 - **Any edit to `workers/spec-do/index.ts` migrations or `schema*.sql`/`schema-inline.ts`** is spine. This plan adds none. If a
   case fails, write the finding to `docs/OPEN-QUESTIONS.md` and mark the case `it.fails` or `it.todo`; do not patch the migration.
-- The m12 preflight and its fail-loud versus skip-and-warn choice (availability against a clear refusal) is the maintainer's.
+- The m12 preflight is the maintainer's. **Decision (2026-10-26): on duplicates the step REFUSES with a named error** (lists the values and actor ids; never skips the index, never deletes or merges). Stub: `workers/spec-do/tests/migration-actors-unique.test.ts` (`it.todo`, not implemented).
 - T2 and any other production read need the maintainer's approval; agents do not run them, and never deploy.
 
 ## 10. Recommended first slice (one PR, default tier, no production access)
@@ -130,5 +130,5 @@ real convergence bug; report it, do not fix it in the same PR. T2 and the m12 ca
 ## Open questions
 
 1. Maintainer: approve the T2 read-only query (and optional row counts)? Which access path should OPS.md record?
-2. M12: refuse with a named error, or skip the index with a warning?
+2. ~~M12: refuse or skip?~~ **Decided 2026-10-26: refuse with a named error** (section 6, section 9).
 3. Is a one-off workerd fidelity check wanted, or is `node:sqlite` enough?

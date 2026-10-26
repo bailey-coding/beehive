@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import type { CanaryDeployment, CanaryMoveResult, DeployRef, LiveRef } from '../../shared/deploy-refs';
 
@@ -272,7 +273,7 @@ describe('m6 -> m7 migration', () => {
       await spec.init();
     }
     const version = store.raw.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get() as { value: string };
-    expect(version.value).toBe('m11');
+    expect(version.value).toBe(LATEST_VERSION);
     expect(count("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('deploy_refs', 'canary_deployments')")).toBe(2);
     expect(count("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'")).toBe(1);
     await deploy('cand-a');

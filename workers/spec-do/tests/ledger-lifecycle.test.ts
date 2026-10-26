@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 import type { PurgeResult, TombstoneResult } from '../../shared/ledger-lifecycle';
@@ -110,13 +111,13 @@ describe('m4 -> m5 migration', () => {
     const restarted = makeSqliteState(raw, fresh.kv);
     await makeSpecDo(restarted).init();
     // m5 -> m6 (service tokens) up to m10 -> m11 (canary metrics) run in the same pass
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(columns(restarted, 'organizations')).toEqual(expect.arrayContaining(['deleted_at', 'deleted_by', 'delete_reason']));
     expect(columns(restarted, 'actors')).toContain('role');
     expect(raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org' AND deleted_at IS NULL").get()).toEqual({ n: 1 });
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
   });
 
   it('does not touch the entity_history CHECK', () => {

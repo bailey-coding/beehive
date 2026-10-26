@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 
 const version = (s: SqliteState) =>
   (s.raw.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get() as { value: string }).value;
@@ -56,7 +57,7 @@ describe('fresh ledger', () => {
   it('starts at m11 on the first init, not m3, with user_tokens', async () => {
     const s = makeSqliteState();
     await makeSpecDo(s).init();
-    expect(version(s)).toBe('m11');
+    expect(version(s)).toBe(LATEST_VERSION);
     expect(tables(s)).toContain('user_tokens');
   });
 });
@@ -78,7 +79,7 @@ describe('m8 -> m9 (user_tokens)', () => {
 
     const restarted = makeSqliteState(first.raw, first.kv);
     await makeSpecDo(restarted).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('user_tokens');
     const indexes = (first.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'user_tokens'").all() as { name: string }[])
       .map((r) => r.name)
@@ -92,7 +93,7 @@ describe('m8 -> m9 (user_tokens)', () => {
     const snapshot = () => JSON.stringify(first.raw.prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name').all());
     const schemaBefore = snapshot();
     await makeSpecDo(makeSqliteState(first.raw, first.kv)).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(snapshot()).toBe(schemaBefore);
   });
 
@@ -131,7 +132,7 @@ describe('service_accounts of another design (seen on the live ledger, 2026-10-1
 
     restarted.raw.exec('DROP TABLE service_accounts');
     await spec.init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('service_tokens');
   });
 });
@@ -161,7 +162,7 @@ describe('failing migration step', () => {
     broken = false;
     await spec.init();
     expect(spec.db).not.toBeNull();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('deploy_refs');
   });
 });
@@ -177,7 +178,7 @@ describe('m3 -> m11 on a populated ledger', () => {
 
     const restarted = makeSqliteState(old.raw, old.kv);
     await makeSpecDo(restarted).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('user_tokens');
     for (const [t, n] of Object.entries(before)) expect(count(restarted, t)).toBe(n);
     expect(old.raw.prepare("SELECT actor_id, token_hash FROM service_accounts WHERE id = 'legacy'").get()).toEqual({
@@ -191,7 +192,7 @@ describe('m3 -> m11 on a populated ledger', () => {
     const updatedAt = () => old.raw.prepare("SELECT updated_at FROM metadata WHERE key = 'schema_version'").get();
     const [schemaBefore, stampBefore] = [snapshot(), updatedAt()];
     await makeSpecDo(makeSqliteState(old.raw, old.kv)).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(snapshot()).toBe(schemaBefore);
     expect(updatedAt()).toEqual(stampBefore);
     for (const [t, n] of Object.entries(before)) expect(count(restarted, t)).toBe(n);
@@ -294,7 +295,7 @@ describe('a ledger newer than this code (m<N> above m11)', () => {
     const s = makeSqliteState();
     await makeSpecDo(s).init();
     await makeSpecDo(makeSqliteState(s.raw, s.kv)).init();
-    expect(version(s)).toBe('m11');
+    expect(version(s)).toBe(LATEST_VERSION);
     expect(warn).not.toHaveBeenCalled();
   });
 
