@@ -115,13 +115,15 @@ cleanups. Confirm, in this order:
 
 ## Cleanup
 
-- 2026-10-26: all local branches 0 commits ahead of `main` are deleted, and so are the eleven clean sibling worktrees that held them (no uncommitted work;
-  four held only a `node_modules` symlink). Left on purpose: worktrees of branches still ahead of `main` (plan/review branches `m12-plan`, `m12-*review`,
-  `m9-codereview`, `m9-plan`, `m9-review`, `test-nits-m11-pointer`; their docs are on `main`, remove with `git worktree remove` once nothing needs them) and
-  `../beehive-recorder-flush` (branch `agent/recorder-flush`), which has **uncommitted** edits to `workers/shadow-router/{canary-recorder,index}.ts`: an earlier,
-  unshipped draft of the recorder tail flush (`armDelayedFlush` with a `waitUntil` timer) that differs from the deployed `c0cfa86`; keep or discard. On `origin`,
-  `agent/m3-event-driven`, `agent/versions-spike` and `claude/pr1-review-lmgqik` are 0 ahead and can go (`git push origin --delete <name>`; the auto-mode
-  classifier blocked it, so the maintainer runs it).
+- 2026-10-26: every sibling worktree is removed (none had uncommitted work except `beehive-recorder-flush`, an unshipped early draft of the recorder tail
+  flush, dropped on purpose), and the local plan/review branches with them. Their final content is on `main`; what they held were earlier drafts of
+  `docs/M12-IMPL-PLAN.md` / `docs/M9-NAV-PLAN.md`, review copies already on `main`, and two stale `test-nits-m11-pointer` commits that point the M11 index at
+  `m11` (taken by `canary_metrics`; it is `m12` or later). Recovery within the reflog window: `git branch <name> <tip>` with tips `agent/m12-plan` f1135ae,
+  `m12-pra-review` 0545425, `m12-prb-review` d1a0146, `m12-review` ccb7e57, `m9-codereview` 4bbd33e, `m9-plan` c973334, `m9-review` eb6b8dc,
+  `test-nits-m11-pointer` fb6fa0a. Still local and ahead of `main` (not yet looked at): `agent/cli-actor-review`, `feature-parity-audit`, `m8-do-recheck`,
+  `m8-do-review`, `m8-ui-review`, `ocap-answers`, `ui-issues-plan`, `ui-issues-plan-v2`, `ui-issues-review`. On `origin`, `agent/m3-event-driven`,
+  `agent/versions-spike` and `claude/pr1-review-lmgqik` are 0 ahead and can go (`git push origin --delete <name>`; the auto-mode classifier blocked it, so the
+  maintainer runs it).
 - Merged `agent/*` branches: **15 merged agent/* remote branches deleted earlier** (2026-10-19, `2dc02e`, `a78017c`),
   plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). As of 2026-10-23 another 15 `agent/*`/`merge/*` branches are 0 commits ahead of `main` (e.g. `m8-issues-do`, `m8-issues-ui`,
   `m9-nav`, `m12-pr-a`, `m12-pr-b`, `merge/m12-prb`) and can be deleted; the review/plan branches that are still ahead
