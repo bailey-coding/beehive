@@ -120,8 +120,10 @@ cleanups. Confirm, in this order:
   `docs/M12-IMPL-PLAN.md` / `docs/M9-NAV-PLAN.md`, review copies already on `main`, and two stale `test-nits-m11-pointer` commits that point the M11 index at
   `m11` (taken by `canary_metrics`; it is `m12` or later). Recovery within the reflog window: `git branch <name> <tip>` with tips `agent/m12-plan` f1135ae,
   `m12-pra-review` 0545425, `m12-prb-review` d1a0146, `m12-review` ccb7e57, `m9-codereview` 4bbd33e, `m9-plan` c973334, `m9-review` eb6b8dc,
-  `test-nits-m11-pointer` fb6fa0a. Still local and ahead of `main` (not yet looked at): `agent/cli-actor-review`, `feature-parity-audit`, `m8-do-recheck`,
-  `m8-do-review`, `m8-ui-review`, `ocap-answers`, `ui-issues-plan`, `ui-issues-plan-v2`, `ui-issues-review`. On `origin`, `agent/m3-event-driven`,
+  `test-nits-m11-pointer` fb6fa0a. Nine older plan/review branches were deleted the same way (all content on `main`; `feature-parity-audit`, `ui-issues-plan`
+  and `ui-issues-review` held superseded earlier drafts): `agent/cli-actor-review` 3fbcb1a, `feature-parity-audit` 95c5f25, `m8-do-recheck` fa58fb9,
+  `m8-do-review` e850246, `m8-ui-review` 9b95582, `ocap-answers` 6d1ab8f, `ui-issues-plan` cc1ef7e, `ui-issues-plan-v2` cfcc296, `ui-issues-review` 6b88cbe.
+  Local branches now: `main` and `fix/recorder-flush`. On `origin`, `agent/m3-event-driven`,
   `agent/versions-spike` and `claude/pr1-review-lmgqik` are 0 ahead and can go (`git push origin --delete <name>`; the auto-mode classifier blocked it, so the
   maintainer runs it).
 - Merged `agent/*` branches: **15 merged agent/* remote branches deleted earlier** (2026-10-19, `2dc02e`, `a78017c`),
