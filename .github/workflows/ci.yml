@@ -227,6 +227,10 @@ jobs:
             fi
           done
 
+      - name: Install CLI dependencies (tests/cli-token.test.ts imports cli/src, which needs configstore)
+        working-directory: cli
+        run: npm install
+
       - name: Run migration tests
         run: npm test -- --testNamePattern="migration|schema"
 
