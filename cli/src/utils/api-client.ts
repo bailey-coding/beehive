@@ -5,6 +5,7 @@
 
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, AxiosError } from 'axios';
 import { BeehiveConfig } from '../types/config';
+import { tokenKind } from './config';
 import {
   ApiResponse,
   PaginatedResponse,
@@ -37,6 +38,14 @@ import {
   EntityType,
 } from '../types/api';
 
+export interface WhoamiResponse {
+  kind: string;
+  actorId: string;
+  scopes?: string[];
+  serviceAccountId?: string | null;
+  userTokenId?: string | null;
+}
+
 // Custom error class for API errors
 export class BeehiveApiError extends Error {
   constructor(
@@ -48,6 +57,32 @@ export class BeehiveApiError extends Error {
     super(message);
     this.name = 'BeehiveApiError';
   }
+}
+
+let actorIgnoredWarned = false;
+
+/** One stderr warning per process; names the source, never a secret. */
+function warnActorIgnored(source: string): void {
+  if (actorIgnoredWarned) return;
+  actorIgnoredWarned = true;
+  console.error(
+    `Warning: ${source} is ignored because the token is a user token (bh_usr_...): the edge sets the actor from the token.`
+  );
+}
+
+/** Append a short, secret-free hint to an edge error. */
+function withHint(message: string, status: number, token: string | undefined): string {
+  const kind = tokenKind(token);
+  if (status === 401 && kind === 'user') {
+    return `${message} (token rejected: revoked, expired, or not issued by this edge, or the edge predates user tokens; mint a new one at /app/settings/tokens)`;
+  }
+  if (status === 403 && kind === 'user') {
+    return `${message} (this route is master-only for user tokens, or needs a wider scope; see docs/OPS.md "User tokens")`;
+  }
+  if (status === 503) {
+    return `${message} (auth backend unavailable, possibly mid-deploy; retry)`;
+  }
+  return message;
 }
 
 // Request options interface
@@ -100,7 +135,8 @@ export class BeehiveClient {
       (error: AxiosError) => {
         if (error.response) {
           const data = error.response.data as { error?: string; message?: string };
-          const message = data.error || data.message || 'Unknown API error';
+          const status = error.response.status;
+          const message = withHint(data?.error || data?.message || 'Unknown API error', status, this.config.apiToken);
           throw new BeehiveApiError(
             message,
             error.response.status,
@@ -137,8 +173,12 @@ export class BeehiveClient {
     }
 
     // Per-call actor (--actor) wins; BEEHIVE_ACTOR is folded into defaultActor by loadConfig.
+    // With a user token the edge overwrites X-Actor-ID, so none is sent and a configured one is ignored with a warning.
+    const userToken = tokenKind(this.config.apiToken) === 'user';
     const actorId = options?.actorId || this.config.defaultActor;
-    if (actorId) {
+    if (userToken) {
+      if (actorId) warnActorIgnored(options?.actorId ? '--actor' : 'BEEHIVE_ACTOR/defaultActor');
+    } else if (actorId) {
       // Mirror of ActorIdSchema (workers/shared/principal.ts): the edge answers 400 otherwise.
       if (!/^[\x21-\x7e]{1,128}$/.test(actorId)) {
         throw new Error(
@@ -180,6 +220,11 @@ export class BeehiveClient {
 
   async getHealth(): Promise<HealthResponse> {
     return this.request<HealthResponse>('GET', '/health');
+  }
+
+  /** Who the edge thinks this token is. Fields other than kind/actorId/scopes may be absent on older edges. */
+  async getWhoami(): Promise<WhoamiResponse> {
+    return this.request<WhoamiResponse>('GET', '/whoami');
   }
 
   async getHealthExtended(): Promise<HealthResponse> {
