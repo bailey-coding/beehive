@@ -360,6 +360,32 @@ describe('CSRF: one sameOrigin check on every new POST', () => {
     const paths = calls.map((c) => new URL(c.url).pathname);
     expect(paths).toEqual([`/api/actors/${userId}`]);
   });
+
+  it('cross-origin or missing-Origin non-write requests are 403 with no read beyond the session check', async () => {
+    const id = newIssue('widgets');
+    const base = '/app/repos/acme/widgets/issues';
+    const cases: Array<[string, string]> = [
+      [`${base}/${id}`, 'POST'],
+      [`${base}/new`, 'POST'],
+      [base, 'POST'],
+      [`${base}/${id}`, 'PUT'],
+      [`${base}/${id}`, 'DELETE'],
+    ];
+    for (const [path, method] of cases) {
+      for (const origin of ['http://evil.example', null]) {
+        calls = [];
+        const res = await ui(path, { method, form: { x: 'y' }, origin });
+        expect(res.status, `${method} ${path} origin=${origin}`).toBe(403);
+        expect(calls.map((c) => new URL(c.url).pathname)).toEqual([`/api/actors/${userId}`]);
+      }
+    }
+  });
+
+  it('same-origin non-write requests are still 405, and GET needs no Origin', async () => {
+    const id = newIssue('widgets');
+    expect((await ui(`/app/repos/acme/widgets/issues/${id}`, { form: { x: 'y' } })).status).toBe(405);
+    expect((await ui(`/app/repos/acme/widgets/issues/${id}`)).status).toBe(200);
+  });
 });
 
 // ============================================================================

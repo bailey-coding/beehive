@@ -41,7 +41,7 @@ Completed items are removed, not struck through; history lives in git.*
   maintainer deploy of `main` at `831d9db` (not yet verified by an agent). The independent code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
   `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`. **Note:** schema m9 is now used by M5a idempotency
   (the idempotency keys table), so M12 references have been updated from m9 to m10.
-- Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
+- Fixed on `agent/n1-origin-check` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
   `.../issues/:id`) reads organizations and repositories before answering 405, because the origin check covers only the
   write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
 - Local checks on `main` (2026-10-23): typecheck clean, unit tests pass (excluding e2e); `tests/cli-behavior.test.ts` needs
