@@ -1,0 +1,37 @@
+# THROWAWAY spike worker for docs/REAL-GATE-IMPL-PLAN.md S1-S5. Not one of the ten workers; deploy by hand, then delete (README.md).
+name = "beehive-gate-spike"
+main = "index.ts"
+compatibility_date = "2026-10-09"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
+ARTIFACTS_NAMESPACE = "default"
+
+# Same policy as workers/sandbox-runner/wrangler.toml: only name, class_name, scheduling_policy, images, observability, ssh,
+# authorized_keys and unsafe are allowed here. No instance_type, no max_instances: the size is passed to ctx.container.start().
+[[containers]]
+class_name = "SpikeSandbox"
+scheduling_policy = "durable_object"
+
+# A registry image: no local Docker needed (docs/OPEN-QUESTIONS.md 2026-10-24). node, npm and git are in it; the entrypoint is replaced by `sleep` in code.
+[containers.images.spike]
+image = "docker.io/cloudflare/sandbox:0.12.14"
+
+[[durable_objects.bindings]]
+name = "SPIKE"
+class_name = "SpikeSandbox"
+
+[exports.SpikeSandbox]
+type = "durable-object"
+storage = "sqlite"
+
+# S5: a 590 s run inside a queue consumer. Create the queue first: npx wrangler@4.151.1 queues create beehive-gate-spike-q
+[[queues.producers]]
+queue = "beehive-gate-spike-q"
+binding = "SPIKE_Q"
+
+[[queues.consumers]]
+queue = "beehive-gate-spike-q"
+max_batch_size = 1
+max_retries = 0
