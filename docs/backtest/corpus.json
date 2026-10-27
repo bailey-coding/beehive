@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "plan": "docs/SPEC-BACKTEST-PLAN.md",
+  "frozenAt": "2026-10-27T03:25:31.320Z",
+  "rows": [
+    {
+      "id": "A1",
+      "sha": "b024272",
+      "base": "601732a1864ad20b700d671b77bffcfcd4774bdb",
+      "tier": "A",
+      "obs": "E",
+      "component": "api router",
+      "change": "fix: add /roadmap to public endpoints check",
+      "issueSource": {
+        "kind": "body",
+        "note": "commit body (bug report); fix-listing bullets cut",
+        "docs": [],
+        "thin": false,
+        "subject": "fix: add /roadmap to public endpoints check",
+        "body": "The /roadmap route was broken because it wasn't included in the public\nendpoints check. Requests to /roadmap would fall through to the auth check\nand return 401 Unauthorized instead of serving the roadmap page."
+      },
+      "keyTerms": [
+        "roadmap"
+      ],
+      "acknowledgedDocHits": [
+        "docs/README.md"
+      ],
+      "scrubDocs": [],
+      "files": {
+        "source": [
+          "workers/api/index.ts"
+        ],
+        "tests": [
+          "workers/api/tests/api.test.ts"
+        ],
+        "docs": []
+      },
+      "corpusNote": "The base's vitest include covers only tests/** (6 tests), so the full-run oracle is nearly empty here: pre-merge rests on the acceptance tests and tsc; the held-out test file runs through a derived config.",
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:25:36.593Z",
+        "tests": 6,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
+      }
+    },
+    {
+      "id": "A2",
+      "sha": "57d91c7",
+      "base": "463f904be0ee3907895e9dc43abf6e0efac36989",
+      "tier": "A",
+      "obs": "E",
+      "component": "spec-do, shadow-router",
+      "change": "Spec DO validates canary candidate ids and urls (no static-target ids, https workers.dev only); one shared url check",
+      "issueSource": {
+        "kind": "body+doc",
+        "note": "base finding SF-3 in docs/OPEN-QUESTIONS.md, problem clause only (the router-side mechanism sentence is not quoted)",
+        "docs": [
+          {
+            "path": "docs/OPEN-QUESTIONS.md",
+            "quote": "The Spec DO accepts any `candidateId` and `url`, and the router trusted the id string"
+          },
+          {
+            "path": "docs/OPEN-QUESTIONS.md",
+            "quote": "**Open:** the Spec DO route itself still accepts anything (the trust boundary); validate there too."
+          }
+        ],
+        "thin": true,
+        "subject": "Spec DO validates canary candidate ids and urls (no static-target ids, https workers.dev only); one shared url check",
+        "body": ""
+      },
+      "keyTerms": [
+        "applyCanaryRefs"
+      ],
+      "acknowledgedDocHits": [
+        "docs/OPEN-QUESTIONS.md",
+        "docs/M3-CANARY-SLO-PLAN.md",
+        "docs/rfcs/0005-shadow-router-cache.md"
+      ],
+      "scrubDocs": [],
+      "files": {
+        "source": [
+          "workers/shadow-router/config.ts",
+          "workers/shared/deploy-refs.ts"
+        ],
+        "tests": [
+          "workers/canary-worker/tests/canary.test.ts",
+          "workers/spec-do/tests/deploy-refs.test.ts"
+        ],
+        "docs": [
+          "docs/OPEN-QUESTIONS.md"
+        ]
+      },
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:25:56.266Z",
+        "tests": 1255,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
+      },
+      "corpusNote": "Base flaky: workers/shadow-router/tests/mirror-safety.test.ts has a fake-timer flake (reviewer-observed; did not fire in the 3-run base check). Kept; flaky tests are retried and never counted as red or as regressions."
+    },
+    {
+      "id": "A11",
+      "sha": "de8817c",
+      "base": "9db54df770b55a1b0356532095ef0e9ba7c934dd",
+      "tier": "A",
+      "obs": "N",
+      "component": "CLI",
+      "change": "CLI rejects actor ids the edge would 400; update M12 plan and FOCUS",
+      "issueSource": {
+        "kind": "subject",
+        "note": "commit subject only (thin text); the `spec: review S4` it cites is unrelated and unresolvable, ignored; trailers stripped",
+        "docs": [],
+        "thin": true,
+        "subject": "CLI rejects actor ids the edge would 400; update M12 plan and FOCUS",
+        "body": ""
+      },
+      "keyTerms": [
+        "ActorIdSchema"
+      ],
+      "acknowledgedDocHits": [],
+      "scrubDocs": [],
+      "files": {
+        "source": [
+          "cli/src/utils/api-client.ts"
+        ],
+        "tests": [
+          "tests/cli-behavior.test.ts"
+        ],
+        "docs": [
+          "docs/FOCUS.md",
+          "docs/M12-IMPL-PLAN.md"
+        ]
+      },
+      "corpusNote": "Control row (N: not HTTP-visible): no probe replay, so conformance and shadow rungs do not run; oracles are the repo tests and the held-out CLI test. cli/ dependencies must be installed at the base.",
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:26:19.422Z",
+        "tests": 1052,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
+      }
+    },
+    {
+      "id": "A4",
+      "sha": "831d9db",
+      "base": "e9ce6fa48ee69493460777047707207cd9640e8a",
+      "tier": "A",
+      "obs": "W",
+      "component": "canary-worker",
+      "change": "SLO thresholds never NaN - defaults when unset, throw (no verdict) when invalid",
+      "issueSource": {
+        "kind": "body",
+        "note": "commit body. FINDING: base docs/M3-CANARY-SLO-PLAN.md:46-48 states the fix (defaults when unset, invalid config yields no verdict), so it is scrubbed from every agent checkout of this row",
+        "docs": [],
+        "thin": false,
+        "subject": "SLO thresholds never NaN - defaults when unset, throw (no verdict) when invalid",
+        "body": "parseInt/parseFloat on a missing CANARY_SLO_* gave NaN, and x > NaN is false, so the monitor read healthy."
+      },
+      "keyTerms": [
+        "NaN"
+      ],
+      "acknowledgedDocHits": [
+        "docs/M8-PR1-RECHECK.md",
+        "docs/plans/do-bind-order-review.md"
+      ],
+      "scrubDocs": [
+        "docs/M3-CANARY-SLO-PLAN.md"
+      ],
+      "files": {
+        "source": [
+          "workers/canary-worker/slo.ts"
+        ],
+        "tests": [
+          "workers/canary-worker/tests/slo-thresholds.test.ts"
+        ],
+        "docs": []
+      },
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:26:41.388Z",
+        "tests": 1077,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
+      }
+    },
+    {
+      "id": "A5",
+      "sha": "e326b8c",
+      "base": "46c9667328cac8a9a79a3376dbe6cc5cc451e956",
+      "tier": "A",
+      "obs": "E",
+      "component": "preview-manager",
+      "change": "Workers Versions stub requires BEEHIVE_LOCAL_DEV=1 as well as WORKER_VERSIONS_MODE=stub (production answers 501 even if stub is set by mistake); start script, SETUP/OPS docs, test",
+      "issueSource": {
+        "kind": "body+doc",
+        "note": "commit subject plus base OPS.md/SETUP.md problem statements (production answers 501, stub is local-only)",
+        "docs": [
+          {
+            "path": "docs/OPS.md",
+            "quote": "Do not set it in production; it would record versions that were never built."
+          }
+        ],
+        "thin": true,
+        "subject": "Workers Versions stub requires BEEHIVE_LOCAL_DEV=1 as well as WORKER_VERSIONS_MODE=stub (production answers 501 even if stub is set by mistake); start script, SETUP/OPS docs, test",
+        "body": ""
+      },
+      "keyTerms": [
+        "BEEHIVE_LOCAL_DEV"
+      ],
+      "acknowledgedDocHits": [],
+      "scrubDocs": [],
+      "files": {
+        "source": [
+          "scripts/start-e2e-workers.sh",
+          "workers/preview-manager/index.ts",
+          "workers/preview-manager/types.ts",
+          "workers/preview-manager/versions.ts"
+        ],
+        "tests": [
+          "tests/e2e/m3-features.test.ts",
+          "workers/preview-manager/tests/preview.test.ts"
+        ],
+        "docs": [
+          "docs/OPEN-QUESTIONS.md",
+          "docs/OPS.md",
+          "docs/SETUP.md"
+        ]
+      },
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:27:03.485Z",
+        "tests": 490,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
+      }
+    }
+  ]
+}

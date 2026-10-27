@@ -61,7 +61,7 @@ Columns: files = incl. docs; code/test = source and test files touched.
 |---|---|---|---|---|---|---|---|---|
 | A1 | `b024272` | 10-15 | 2 / +44 −1 | 1/1 | E | api router | `/roadmap` added to public endpoints | body (bug report) |
 | A2 | `57d91c7` | 10-25 | 5 / +56 −16 | 2/2 | E | spec-do, shadow-router | Spec DO validates canary candidate ids/urls | base finding SF-3 (problem clause) |
-| A3 | `c2d4906` | 10-23 | 4 / +46 −7 | 3/1 | E | auth/principal | master without X-Actor-ID reaches `/health` | body |
+| A3 | `c2d4906` | 10-23 | 4 / +46 −7 | 3/1 | E | auth/principal | master without X-Actor-ID reaches `/health` | body. **DROPPED 2026-10-27: base red (see Pilot)** |
 | A4 | `831d9db` | 10-24 | 2 / +52 −2 | 1/1 | W | canary-worker | SLO thresholds never NaN | body |
 | A5 | `e326b8c` | 10-16 | 9 / +42 −18 | 3/2 | E | preview-manager | Workers Versions stub is local-only (prod answers 501) | subject+body, base OPS/SETUP |
 | A6 | `6d1771a` | 10-26 | 3 / +30 −3 | 1/1 | E | issue UI | cross-origin non-GET issue request refused (403) | subject only; ignore `spec: code-review N1` |
@@ -209,11 +209,23 @@ Leakage tests 2-5 are deterministic (no calls). Tokens: about 15 candidate sessi
 and 30-50k output each; convert at the maintainer's rates (not assumed here). **Stop rule (slack applied once):**
 hard stop at 850 pilot calls (1.5 × 565), or if two specs in a row fail validators twice.
 
-**Pilot (5 changes, five components, none an issue or lifecycle route):** A1 `b024272` (api router; thin bug-report
-text), A2 `57d91c7` (spec-do + shadow-router; ambiguous rules, room to diverge), A3 `c2d4906` (auth/principal),
-A4 `831d9db` (canary-worker), A5 `e326b8c` (preview-manager). Checked pairwise: no parent link, no shared source
-file. Goals: harness works end to end, leakage tests 1-5 pass, spec validity and cost readable. It does not decide
-A1-A3. Go/no-go for the other 24 rows follows.
+**Pilot (5 changes, five components, none an issue or lifecycle route), revised 2026-10-27: A1, A2, A4, A5, A11.**
+A1 `b024272` (api router; thin bug-report text; its base vitest include covers only `tests/**`, so the full-run oracle is
+nearly empty), A2 `57d91c7` (spec-do + shadow-router; ambiguous rules; base has a known fake-timer flake in
+`shadow-router/tests/mirror-safety.test.ts`, retried), A4 `831d9db` (canary-worker), A5 `e326b8c` (preview-manager),
+A11 `de8817c` (CLI; obs N control; thin subject-only text). Checked pairwise: no parent link, no shared source file.
+**Swap:** the original A3 `c2d4906` is dropped because its base is genuinely red (49 failing tests answer 503 until
+`c2d4906` is applied; 77 when the CLI dependencies are also missing): a red base makes the full-run oracle meaningless, and
+the plan drops red-base rows. A11, a tier-A row that is green at its base, replaces it; the corpus (`docs/backtest/corpus.json`)
+records the base-green result per row.
+**What this pilot can and cannot say:** with A3 dropped there are only **10 usable strict rows** (A1-A11 minus A3), so the
+decision rule in section 5, which is written for 11, is **inconclusive by construction**. The 5-row pilot yields cost,
+feasibility and qualitative signal (does the harness work end to end, are specs valid, how much does a run cost, what do
+candidates look like), **not a verdict** on A1-A3. Go/no-go for the other rows follows.
+
+**Harness isolation (2026-10-27):** pilot candidates and the spec generator run with file tools only (no Bash; no OS
+sandbox on this host), so they cannot run tests; this handicaps them and understates pass rates and divergence. Details:
+`tools/backtest/README.md`. Pilot row A3 (`c2d4906`) was dropped (base red) and replaced by A11 (`de8817c`).
 
 **Step order:** (1) base-green and key-term grep for all rows, no model cost; (2) freeze corpus and pre-registration;
 (3) build the harness; (4) pilot; (5) maintainer review; (6) full run; (7) confirmation run with a different-family
@@ -243,6 +255,6 @@ issues, issue text used verbatim, and some real traffic; the harness and pre-reg
 ## 8. Decisions still needed
 
 1. Release of the pilot spend: about 565 expected calls, hard stop 850 (approved in principle; needs a go).
-2. Confirm the 5-row pilot list (A1-A5); it freezes after this.
+2. Confirm the 5-row pilot list (A1, A2, A4, A5, A11; A3 swapped out, see Pilot); it freezes after this.
 3. Whether to add a second model to the pilot for candidate diversity (+525 calls); default is no.
 4. Which different-family grader runs the confirmation run, and when.

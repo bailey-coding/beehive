@@ -63,3 +63,4 @@ workers/*/node_modules/
 
 # Vitest cache
 .vitest-cache/
+tools/backtest/.ledger.json
