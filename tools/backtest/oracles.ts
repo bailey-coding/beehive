@@ -1,0 +1,251 @@
+// Local oracles: the repo's own tests, tsc, spec acceptance, held-out tests from the real change, probe replay.
+// No platform gate is used (it is simulated, docs/SPEC-BACKTEST-PLAN.md section 0).
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { exec } from './exec.ts';
+import { existsAt, git, isTestFile, showAt } from './git.ts';
+import { installProbe, PROBE_ENV, readProbe } from './probe.ts';
+import { ACCEPTANCE_DIR, removeAcceptance, writeAcceptance, type SpecFile, type TestOutcome } from './spec.ts';
+import { checkContract, checkDelta, type DeltaSurface, type ResponseRecord } from './delta.ts';
+
+export interface OracleConfig {
+  /** Command prefix; files are appended. */
+  testCommand: string[];
+  /** Null disables the tsc rung (fixtures). */
+  tscCommand: string[] | null;
+  testTimeoutMs: number;
+  tscTimeoutMs: number;
+}
+
+export const DEFAULT_ORACLE_CONFIG: OracleConfig = {
+  testCommand: ['node', 'node_modules/vitest/vitest.mjs', 'run', '--exclude', 'tests/e2e/**'],
+  tscCommand: ['node', 'node_modules/typescript/bin/tsc', '--noEmit'],
+  testTimeoutMs: 15 * 60_000,
+  tscTimeoutMs: 10 * 60_000,
+};
+
+/** Minimal env for test subprocesses: no tokens, no CI flag (the root vitest config retries under CI). */
+export function testEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { NO_COLOR: '1' };
+  for (const k of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) if (process.env[k]) out[k] = process.env[k];
+  return { ...out, ...extra };
+}
+
+export interface VitestRun {
+  outcomes: TestOutcome[];
+  loadErrors: string[];
+  timedOut: boolean;
+  /** Process exited without producing a JSON report. */
+  crashed: boolean;
+}
+
+export async function runVitest(cwd: string, cfg: OracleConfig, files: string[] = [], env: Record<string, string> = {}): Promise<VitestRun> {
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-vt-')), 'report.json');
+  const [cmd, ...pre] = cfg.testCommand;
+  // The base commit's own vitest `include` may not cover the files we need (A1's base only includes tests/**).
+  // For explicit files, run through a derived config that adds them to the base config's include.
+  const derived = path.join(cwd, 'vitest.backtest.config.ts');
+  const extra: string[] = [];
+  if (files.length) {
+    fs.writeFileSync(derived, `import { mergeConfig } from 'vitest/config';\nimport base from './vitest.config';\nexport default mergeConfig(base, { test: { include: ${JSON.stringify(files)} } });\n`);
+    extra.push('--config', 'vitest.backtest.config.ts');
+  }
+  const r = await exec(cmd, [...pre, ...extra, '--reporter=json', `--outputFile.json=${out}`, ...files], { cwd, env: testEnv(env), timeoutMs: cfg.testTimeoutMs });
+  fs.rmSync(derived, { force: true });
+  const run: VitestRun = { outcomes: [], loadErrors: [], timedOut: r.timedOut, crashed: false };
+  if (!fs.existsSync(out)) {
+    run.crashed = true;
+    run.loadErrors.push(`no report (exit ${r.code}): ${r.stderr.trim().slice(-300)}`);
+    return run;
+  }
+  const rep = JSON.parse(fs.readFileSync(out, 'utf8'));
+  fs.rmSync(path.dirname(out), { recursive: true, force: true });
+  for (const f of rep.testResults ?? []) {
+    const file = path.relative(cwd, f.name).split(path.sep).join('/');
+    const results = f.assertionResults ?? [];
+    if (results.length === 0 && f.status === 'failed') run.loadErrors.push(`${file}: ${String(f.message ?? '').slice(0, 200)}`);
+    for (const a of results) {
+      run.outcomes.push({ file, name: a.fullName ?? a.title, status: a.status === 'passed' ? 'passed' : a.status === 'failed' ? 'failed' : 'skipped' });
+    }
+  }
+  return run;
+}
+
+export async function runTsc(cwd: string, cfg: OracleConfig): Promise<{ errors: number; sample: string[] } | null> {
+  if (!cfg.tscCommand) return null;
+  const [cmd, ...args] = cfg.tscCommand;
+  const r = await exec(cmd, args, { cwd, env: testEnv(), timeoutMs: cfg.tscTimeoutMs });
+  const lines = r.stdout.split('\n').filter((l) => /error TS\d+/.test(l));
+  return { errors: r.timedOut ? Number.MAX_SAFE_INTEGER : lines.length, sample: lines.slice(0, 5) };
+}
+
+const key = (o: TestOutcome) => `${o.file}::${o.name}`;
+
+export interface HeldOut {
+  /** Test files of the real change at the change commit: path -> content. Harness-only, never inside a mountable path. */
+  files: Record<string, string>;
+  /** Those of them that already exist at the base (run there once to find tests that are red before the change). */
+  existingAtBase: string[];
+}
+
+export async function loadHeldOut(repo: string, sha: string, base: string, testFiles: string[]): Promise<HeldOut> {
+  const files: Record<string, string> = {};
+  for (const f of testFiles.filter(isTestFile)) {
+    // *.test-d.ts is type-level (covered by tsc); tests/e2e needs live workers and is never run by the harness.
+    if (!/\.test\.ts$/.test(f) || f.startsWith('tests/e2e/')) continue;
+    files[f] = await showAt(repo, sha, f);
+  }
+  const existingAtBase: string[] = [];
+  for (const f of Object.keys(files)) if (await existsAt(repo, base, f)) existingAtBase.push(f);
+  return { files, existingAtBase };
+}
+
+export interface OracleReport {
+  /** Tests (all files except acceptance) failing here that are not already red at the base. */
+  failedRepoTests: string[];
+  /** Tests that passed on base and fail here. */
+  regressions: string[];
+  /** Tests that passed on base and are absent here. */
+  missingTests: string[];
+  acceptance: { total: number; passed: number; failed: string[] };
+  heldOut: { total: number; outcomes: Record<string, TestOutcome['status']> };
+  tsc: { errors: number; baseErrors: number } | null;
+  loadErrors: string[];
+  probe: ResponseRecord[];
+  rungs: { preMerge: boolean; conformance: boolean | null; shadow: boolean | null };
+  conformanceViolations: string[];
+  shadowViolations: string[];
+}
+
+export interface BaselineReport {
+  outcomes: TestOutcome[];
+  /** Held-out tests (base versions of the files) that already fail at the base: not the candidate's fault. */
+  heldOutRed: string[];
+  loadErrors: string[];
+  tscErrors: number | null;
+  probe: ResponseRecord[];
+}
+
+async function resetTree(dir: string): Promise<void> {
+  await git(dir, ['reset', '-q', '--hard']);
+  await git(dir, ['clean', '-fdq']);
+}
+
+/** Run acceptance + repo tests with probe capture in `dir` (must be a clean committed checkout). */
+async function fullRun(dir: string, cfg: OracleConfig, spec: SpecFile | null): Promise<{ run: VitestRun; probe: ResponseRecord[] }> {
+  installProbe(dir);
+  if (spec) writeAcceptance(dir, spec);
+  const probeOut = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-probe-')), 'probe.jsonl');
+  const run = await runVitest(dir, cfg, [], { [PROBE_ENV]: probeOut });
+  const probe = readProbe(probeOut);
+  fs.rmSync(path.dirname(probeOut), { recursive: true, force: true });
+  return { run, probe };
+}
+
+/** Baseline on the base checkout: which tests pass there, base tsc errors, base probe responses. */
+export async function baselineReport(baseDir: string, cfg: OracleConfig, spec: SpecFile, heldOut: HeldOut): Promise<BaselineReport> {
+  const { run, probe } = await fullRun(baseDir, cfg, spec);
+  const tsc = await runTsc(baseDir, cfg);
+  await resetTree(baseDir);
+  const held = heldOut.existingAtBase.length ? await runVitest(baseDir, cfg, heldOut.existingAtBase) : null;
+  await resetTree(baseDir);
+  return { outcomes: run.outcomes, loadErrors: run.loadErrors, heldOutRed: (held?.outcomes ?? []).filter((o) => o.status === 'failed').map(key), tscErrors: tsc?.errors ?? null, probe };
+}
+
+/**
+ * Evaluate a committed checkout (candidate or reference) against the ladder. Leaves the tree reset to HEAD.
+ * Order: pre-merge (repo tests + acceptance + tsc), conformance, shadow substitute; then held-out tests.
+ */
+export async function evaluateCheckout(opts: {
+  dir: string;
+  cfg: OracleConfig;
+  spec: SpecFile;
+  contract: { endpoints: { method: string; path: string; responses: { status: number }[] }[] };
+  surface: DeltaSurface;
+  baseline: BaselineReport;
+  heldOut: HeldOut;
+}): Promise<OracleReport> {
+  const { dir, cfg, spec, baseline } = opts;
+  const { run, probe } = await fullRun(dir, cfg, spec);
+  const tsc = await runTsc(dir, cfg);
+  await resetTree(dir);
+
+  const isAcceptance = (o: TestOutcome) => o.file.startsWith(`${ACCEPTANCE_DIR}/`);
+  const repoOut = run.outcomes.filter((o) => !isAcceptance(o));
+  const accOut = run.outcomes.filter(isAcceptance);
+  const basePassed = new Set(baseline.outcomes.filter((o) => !isAcceptance(o) && o.status === 'passed').map(key));
+  const nowByKey = new Map(repoOut.map((o) => [key(o), o]));
+  const regressions = [...basePassed].filter((k) => nowByKey.get(k)?.status === 'failed');
+  const missingTests = [...basePassed].filter((k) => !nowByKey.has(k));
+  const baseRed = new Set(baseline.outcomes.filter((o) => !isAcceptance(o) && o.status === 'failed').map(key));
+  const failedRepoTests = repoOut.filter((o) => o.status === 'failed' && !baseRed.has(key(o))).map(key);
+  const acceptance = {
+    total: accOut.length,
+    passed: accOut.filter((o) => o.status === 'passed').length,
+    failed: accOut.filter((o) => o.status !== 'passed').map(key),
+  };
+  const tscReport = tsc && baseline.tscErrors !== null ? { errors: tsc.errors, baseErrors: baseline.tscErrors } : null;
+  const newLoadErrors = run.loadErrors.filter((e) => !baseline.loadErrors.includes(e));
+  const loadErrors = [...newLoadErrors];
+
+  // Held-out tests overlay (after the main run; reset again afterwards).
+  const heldFiles = Object.keys(opts.heldOut.files);
+  const heldOutcomes: Record<string, TestOutcome['status']> = {};
+  if (heldFiles.length) {
+    for (const [f, content] of Object.entries(opts.heldOut.files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      fs.writeFileSync(path.join(dir, f), content);
+    }
+    const h = await runVitest(dir, cfg, heldFiles);
+    for (const o of h.outcomes) heldOutcomes[key(o)] = o.status;
+    for (const e of h.loadErrors) {
+      loadErrors.push(`held-out: ${e}`);
+      heldOutcomes[`${e.split(':')[0]}::<load>`] = 'failed';
+    }
+    await resetTree(dir);
+  }
+
+  const preMerge =
+    !run.crashed && !run.timedOut && failedRepoTests.length === 0 && newLoadErrors.length === 0 &&
+    acceptance.total > 0 && acceptance.passed === acceptance.total &&
+    (tscReport === null || tscReport.errors <= tscReport.baseErrors);
+
+  let conformance: boolean | null = null;
+  let conformanceViolations: string[] = [];
+  if (opts.contract.endpoints.length && probe.length) {
+    const c = checkContract(opts.contract.endpoints, probe);
+    conformanceViolations = c.violations;
+    conformance = c.checked > 0 ? c.violations.length === 0 : null;
+  }
+  let shadow: boolean | null = null;
+  let shadowViolations: string[] = [];
+  if (baseline.probe.length && probe.length) {
+    const d = checkDelta(baseline.probe, probe, opts.surface);
+    shadowViolations = d.violations.map((v) => `${v.label}: ${v.kind} ${v.detail}`);
+    shadow = d.ok;
+  }
+
+  return {
+    failedRepoTests,
+    regressions,
+    missingTests,
+    acceptance,
+    heldOut: { total: Object.keys(heldOutcomes).length, outcomes: heldOutcomes },
+    tsc: tscReport,
+    loadErrors,
+    probe,
+    rungs: { preMerge, conformance, shadow },
+    conformanceViolations,
+    shadowViolations,
+  };
+}
+
+/** Run only the given acceptance files on a clean checkout (spec validator: each case must fail on base). */
+export async function runAcceptanceOn(dir: string, cfg: OracleConfig, files: string[]): Promise<{ outcomes: TestOutcome[]; loadErrors: string[] }> {
+  installProbe(dir);
+  const r = await runVitest(dir, cfg, files);
+  return { outcomes: r.outcomes, loadErrors: r.loadErrors };
+}
+
+export { removeAcceptance };
