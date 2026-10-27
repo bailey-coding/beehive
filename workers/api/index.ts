@@ -677,11 +677,11 @@ function getRoadmapPage(): string {
     </nav>
     <header>
       <h1>Beehive Roadmap</h1>
-      <p class="subtitle">From submission to production and beyond</p>
+      <p class="subtitle">What is built, as of 2026-10-27, and what is next</p>
       <div class="badges">
-        <span class="badge">Competition entry submitted</span>
-        <span class="badge">Spike, M1, M2 Complete</span>
-        <span class="badge">M3 Partial</span>
+        <span class="badge">Submitted to the competition (October 2026)</span>
+        <span class="badge">Spike, M1, M8, M9 shipped</span>
+        <span class="badge">M2, M3, M12 Partial</span>
         <span class="badge">M6 UI Mocked</span>
       </div>
     </header>
@@ -711,14 +711,38 @@ function getRoadmapPage(): string {
           <tr>
             <td><strong>M2 — Empirical Oracle</strong></td>
             <td>Oct 12</td>
-            <td><span class="status complete">Complete</span></td>
-            <td>Workers Builds Previews, Shadow Router, Scientist Comparator, Analytics Engine, Queue infrastructure</td>
+            <td><span class="status partial">Partial</span></td>
+            <td>Shadow router (mirrors to live canary candidate Workers built from sandbox bundles, not Workers Builds previews), Scientist Comparator (its declared-delta-surface check does not work for stored specs), Analytics Engine, Queue infrastructure</td>
           </tr>
           <tr>
             <td><strong>M3 — Promotion Train</strong></td>
             <td>2-3 days</td>
             <td><span class="status partial">Partial</span></td>
-            <td>Built: promotion worker (tournament and merge-train modes), canary worker, local traffic-split config. Not built: speculative projection forks, wired canary auto-rollback, DO Facets, capability minting, ArtifactFS</td>
+            <td>Built: promotion worker (tournament and merge-train modes), canary pipeline with automatic SLO rollback (live since 2026-10-25; SLO data is from shadow traffic, only 5xx counts). Not built: speculative projection forks, DO Facets, capability minting, ArtifactFS</td>
+          </tr>
+          <tr>
+            <td><strong>Ledger lifecycle</strong></td>
+            <td>—</td>
+            <td><span class="status complete">Shipped</span></td>
+            <td>Tombstone and purge of orgs (purge deletes candidate Workers first; a first real purge ran 2026-10-26). Partial UNIQUE index on actors.github_user_id (schema m12, deployed 2026-10-27; refuses to migrate on duplicates)</td>
+          </tr>
+          <tr>
+            <td><strong>M8 — Issues</strong></td>
+            <td>—</td>
+            <td><span class="status complete">Shipped</span></td>
+            <td>Issue numbering, comments, close/reopen in the Spec DO; issue pages in the UI; CLI default actor. One known defect (a Spec DO catch-all 404 reads as "not found") stays open</td>
+          </tr>
+          <tr>
+            <td><strong>M9 — Site navigation</strong></td>
+            <td>—</td>
+            <td><span class="status complete">Shipped</span></td>
+            <td>Shared layout, navbar, organization switcher and breadcrumbs for <code>/app</code></td>
+          </tr>
+          <tr>
+            <td><strong>M12 — Verified identity</strong></td>
+            <td>—</td>
+            <td><span class="status partial">Partial</span></td>
+            <td>Built: user API tokens (<code>bh_usr_</code>) and the settings page, CLI token support. Not built: signed sessions (<code>SESSION_SIGNING_KEY</code>), master-token stage 2</td>
           </tr>
           <tr>
             <td><strong>M6 — Semantic Dashboard UI</strong></td>
@@ -731,13 +755,13 @@ function getRoadmapPage(): string {
     </section>
 
     <section class="section">
-      <h2>📍 Current Focus (Post-Submission)</h2>
+      <h2>📍 Current Focus</h2>
       <div class="timeline">
         <div class="timeline-item">
           <div class="timeline-date">Now</div>
-          <div class="timeline-title">M3 completion and M4 agent autonomy</div>
+          <div class="timeline-title">A real test gate, native forks, and M4 agent autonomy</div>
           <div class="timeline-desc">
-            Submission package is in (demo video, MIT license). Open work: wire canary auto-rollback, add speculative projection forks, and the agent-autonomy flow (agent-created issues and specs) for a live end-to-end demo.
+            Canary auto-rollback is done. Open work: replace the simulated pre-merge gate with a real test-running one (<code>docs/REAL-GATE-IMPL-PLAN.md</code>), adopt the Artifacts native fork, fix the delta-surface path in the comparator, add speculative projection forks, and the agent-autonomy flow (agent-created issues and specs) for a live end-to-end demo.
           </div>
           <div class="timeline-tags">
             <span class="badge">Priority: High</span>
@@ -833,7 +857,7 @@ function getRoadmapPage(): string {
           <tr>
             <td><strong>Canary</strong></td>
             <td>Small % live</td>
-            <td>SLOs via Statsig + Analytics Engine</td>
+            <td>SLOs via Analytics Engine</td>
             <td>Auto-rollback (ref op)</td>
           </tr>
           <tr>
@@ -886,7 +910,7 @@ function getRoadmapPage(): string {
       <p>
         <a href="/about">About Beehive</a> | 
         <a href="https://github.com/bailey-coding/beehive">Source Code</a> | 
-        Competition Submission: October 14, 2026
+        Submitted to the competition, October 2026
       </p>
     </footer>
   </div>
@@ -1144,7 +1168,7 @@ function getPublicPageHtml(path: string): string {
     <section class="section">
       <h2>⚙️ Under the Hood: How Each Step Is Built</h2>
       <p>
-        Every step maps to a Cloudflare primitive. Status is honest as of the submission:
+        Every step maps to a Cloudflare primitive. Status is honest as of 2026-10-27:
         <span class="status live">Live</span> is deployed and tested,
         <span class="status partial">Partial</span> works with gaps, and
         <span class="status planned">Planned</span> is designed but not built.
@@ -1172,23 +1196,27 @@ function getPublicPageHtml(path: string): string {
             <td>Agents fan out</td>
             <td>Agents claim the spec in the DO ledger, and each gets its own
               <strong>Cloudflare Artifacts</strong> repo ("fork, don't contend"). Today the claim
-              creates an empty repo rather than a true fork of the baseline. Switching to the
-              Artifacts binding's native fork is next.</td>
+              creates an empty repo rather than a true fork of the baseline. Artifacts now has a
+              native fork endpoint; adopting it is next.</td>
             <td><span class="status partial">Partial</span></td>
           </tr>
           <tr>
             <td>Quality gates</td>
-            <td><strong>Workflows</strong> (gate workflow) drive <strong>Sandboxes</strong>
-              (sandbox runner): clone, test, check conformance, score complexity. Verdicts are
-              written to the ledger. No external CI.</td>
-            <td><span class="status live">Live</span></td>
+            <td>The <strong>Workflows</strong> gate workflow runs on each push and writes verdicts
+              to the ledger, but the checks themselves are simulated: unit-test results are
+              hard-coded passes, the complexity score is derived from the candidate id, and the
+              sandbox clone is a logged stand-in. A real test-running gate is planned
+              (<code>docs/REAL-GATE-IMPL-PLAN.md</code>). No external CI.</td>
+            <td><span class="status partial">Partial (simulated checks)</span></td>
           </tr>
           <tr>
             <td>Shadow traffic</td>
-            <td>The shadow router mirrors requests to <strong>Workers Builds</strong> previews
-              of each candidate. The scientist comparator diffs status, headers, body and
-              latency against the declared delta surface.</td>
-            <td><span class="status live">Live</span></td>
+            <td>The shadow router mirrors requests to live canary candidate Workers, uploaded from
+              bundles built in a sandbox container; candidates receive no <code>Authorization</code>
+              header or cookies. The scientist comparator diffs status, headers, body and latency,
+              but its declared-delta-surface check cannot work for any stored spec today (the
+              stored and expected shapes differ).</td>
+            <td><span class="status partial">Partial</span></td>
           </tr>
           <tr>
             <td>Train / tournament</td>
@@ -1199,11 +1227,14 @@ function getPublicPageHtml(path: string): string {
           </tr>
           <tr>
             <td>Canary</td>
-            <td>The shadow router splits live traffic into canary, holdout and baseline groups
-              with <strong>Statsig</strong>. The canary worker ramps the traffic percentage,
-              tracks SLO metrics in <strong>Analytics Engine</strong>, and triggers auto-rollback
-              through <strong>Queues</strong>.</td>
-            <td><span class="status live">Live</span></td>
+            <td>The canary pipeline is live in production (verified 2026-10-25): a canary request
+              builds the candidate in a sandbox container and uploads it as a Worker, and an SLO
+              loop driven by <strong>Queues</strong> and the Spec DO rolls back violators
+              automatically (a failing test candidate was rolled back in about two minutes). Limits:
+              SLO data comes from shadow traffic, not live canary traffic; only 5xx responses count
+              as errors; the default 1% split yields few samples. Traffic groups use a local hash
+              split; there is no Statsig integration.</td>
+            <td><span class="status live">Live</span> (with limits)</td>
           </tr>
           <tr>
             <td>Promote + merge to main</td>
@@ -1252,7 +1283,7 @@ function getPublicPageHtml(path: string): string {
           <tr>
             <td><strong>Canary</strong></td>
             <td>Small % live</td>
-            <td>SLOs via Statsig + Analytics Engine</td>
+            <td>SLOs via Analytics Engine</td>
             <td>Auto-rollback (ref op)</td>
           </tr>
           <tr>
@@ -1285,7 +1316,9 @@ function getPublicPageHtml(path: string): string {
       </ul>
       <p>
         These features are being added progressively. Current UI provides create/list for
-        orgs, repos, and specs with GitHub OAuth login.
+        orgs, repos, and specs, issue pages (list, create, comment, close/reopen), shared
+        navigation with an organization switcher, and a settings page for user API tokens,
+        behind GitHub OAuth login.
       </p>
     </section>
 
@@ -1317,7 +1350,7 @@ $ ./scripts/demo-end-to-end.sh --local
         <li><a href="https://github.com/bailey-coding/beehive/blob/main/README.md">README - Project Overview</a></li>
         <li><a href="https://github.com/bailey-coding/beehive/blob/main/docs/ARCHITECTURE.md">Architecture Deep Dive</a></li>
         <li><a href="https://github.com/bailey-coding/beehive/blob/main/docs/MILESTONES.md">Project Milestones</a></li>
-        <li><a href="https://github.com/bailey-coding/beehive/blob/main/docs/STATSIG-INTEGRATION.md">Statsig Integration</a></li>
+        <li><a href="https://github.com/bailey-coding/beehive/blob/main/docs/STATSIG-INTEGRATION.md">Statsig Integration (design notes; not wired)</a></li>
         <li><a href="https://github.com/bailey-coding/beehive/blob/main/cli/README.md">CLI Reference</a></li>
         <li><a href="https://github.com/bailey-coding/beehive/blob/main/SUBMISSION.md">Competition Submission</a></li>
       </ul>
@@ -1347,8 +1380,8 @@ $ ./scripts/demo-end-to-end.sh --local
 
       <h3>Scientist Comparator</h3>
       <p>
-        Compares candidate responses against the baseline and declared delta surface.
-        Validates status codes, headers, body content, and performance.
+        Compares candidate responses against the baseline. Diffs status codes, headers, body
+        content, and performance; the declared-delta-surface check does not yet work for stored specs.
       </p>
     </section>
 
@@ -1359,7 +1392,7 @@ $ ./scripts/demo-end-to-end.sh --local
         <span class="badge" style="background: #28a745; color: #fff;">✅ M1 Complete</span>
         <span class="badge" style="background: #28a745; color: #fff;">✅ M2 Complete</span>
         <span class="badge" style="background: #d29922; color: #fff;">🚧 M3 Partial</span>
-        <span class="badge">📦 M4 Submission: Oct 14</span>
+        <span class="badge">📦 M8, M9 shipped; M12 in progress</span>
       </div>
       <p>
         All 10 workers are deployed on Cloudflare's global network and fail closed on
@@ -1368,7 +1401,8 @@ $ ./scripts/demo-end-to-end.sh --local
       <ul>
         <li>✅ Core: API + Spec DO, gate workflow, sandbox runner, queue consumer</li>
         <li>✅ Empirical oracle (M2): shadow router, scientist comparator, preview manager, candidate service</li>
-        <li>🚧 Promotion train (M3): promotion worker (tournament and merge-train modes) and canary worker with a local traffic-split config; canary rollback is a Spec DO ref move, but the SLO trigger is not wired and there is no Statsig SDK integration</li>
+        <li>🚧 Promotion train (M3): promotion worker (tournament and merge-train modes), and a live canary pipeline with automatic SLO rollback (limits above); speculative projection forks are not built and there is no Statsig integration</li>
+        <li>🚧 Pre-merge gate: the workflow runs, but its checks are simulated; a real test-running gate is planned</li>
         <li>✅ Spec DO with SQLite storage working</li>
         <li>✅ Artifacts integration validated</li>
         <li>✅ End-to-end demo flow working</li>
@@ -1378,8 +1412,7 @@ $ ./scripts/demo-end-to-end.sh --local
     <section class="section">
       <h2>🏆 Competition</h2>
       <p>
-        Beehive is entered in <strong>Cloudflare's "Build the Next-Gen Git Platform" competition</strong>.
-        Submission deadline: <strong>October 14, 2026</strong>.
+        Submitted to the <strong>Cloudflare Next-Gen Git Platform competition</strong> (October 2026).
       </p>
       <p>
         <a href="https://github.com/bailey-coding/beehive">View Source on GitHub</a>
