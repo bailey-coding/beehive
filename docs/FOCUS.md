@@ -12,7 +12,14 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Where we are
 
-- **Newest (2026-10-26, later):** production runs `main` at `1d79ec8` (nine workers redeployed 09:32Z, `beehive-sandbox-runner` unchanged; `scripts/prod-health.sh` green;
+- **Newest (2026-10-27):** production runs `main` at `88e40e1` (deployed 16:53-16:54Z by the maintainer's go-ahead; nine workers redeployed, `beehive-sandbox-runner` unchanged;
+  `scripts/prod-health.sh` green; CI green). It carries **m12**: a partial UNIQUE index on `actors.github_user_id` (NULL and `''` excluded) whose migration step refuses
+  with `DuplicateGithubIdentityError` on duplicates before any DDL. Verified before the push: production duplicate check clean (`scripts/check-actor-duplicates.sh`,
+  4 actors) and the migration run on workerd's SQLite (a local 26-actor ledger went m11 to m12); the first Spec DO call after the deploy returned 200. Not exercised in
+  production: the 409 for a duplicate actor insert. The last two `test-org-e2e-sbx-*` orgs were purged 2026-10-27 (all five test orgs are gone); the `beehive-system` agent
+  actor (id in `docs/OPS.md`) runs ledger operations. Next: MR flow slice 1 (real test gate, `docs/REAL-GATE-IMPL-PLAN.md`; the container spikes need the maintainer to deploy
+  `spikes/gate-spike/`), the backtest pilot re-run for A2, A4, A5, A11 (`tools/backtest`, harness fixes merged; about 250-300 calls), and the About/Roadmap page corrections.
+- Earlier (2026-10-26, later): production runs `main` at `1d79ec8` (nine workers redeployed 09:32Z, `beehive-sandbox-runner` unchanged; `scripts/prod-health.sh` green;
   CI green). New since `f21024d`: N1 origin check on every non-GET/HEAD issue request; the purge fails closed (a 501, 404, 5xx, a missing `PREVIEW_MANAGER` binding, an
   older Spec DO or an odd 2xx body aborts a purge that has candidates, nothing deleted; `docs/OPS.md` "Ledger cleanup"); M12 PR-C (CLI user tokens, `docs/M12-PRC-PLAN.md`);
   the legacy-ledger migration matrix (`workers/spec-do/tests/migration-matrix.test.ts`, plan `docs/MIGRATION-LEGACY-TEST-PLAN.md`). The first real purge ran
