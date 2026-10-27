@@ -6,24 +6,25 @@ audience: human,agent
 
 # Plan: real test gate, implementation (MR-FLOW-PLAN slice 1)
 
-**Status:** plan only, branch `agent/real-gate-plan`, 2026-10-26. No code. Implements `docs/MR-FLOW-PLAN.md` §7 and §11 slice 1 on top of
-`docs/SANDBOX-BUILD-PLAN.md` and the OPS "Sandbox build container" section. **[SPINE]** = needs the maintainer (AGENTS.md rule 2).
-Cites are `path:line` on `main` at `bd06419`. Riskiest assumption: §2 (a larger instance, the no-network test phase, and a 600 s hold all work on the DO path).
+**Status:** plan only, branch `agent/real-gate-plan`, rev 2 2026-10-27 (review "approve with changes" folded in; D1-D9 accepted, D10 = the maintainer deploys
+`spikes/gate-spike/`, written but never run or deployed by an agent). Implements `docs/MR-FLOW-PLAN.md` §7 and §11 slice 1 on `docs/SANDBOX-BUILD-PLAN.md`. **[SPINE]** =
+needs the maintainer (AGENTS.md rule 2). Cites are `path:line` on `main` at `bd06419`. Riskiest assumption: §2, that a larger DO-scheduled container, the no-network
+test phase and a 10-minute hold work, and that a DO-side counter is enough to cap cost (the policy has no `max_instances`).
 
 ## 0. What the grep found (differs from the docs)
 
-- The gate is **synchronous in the HTTP request**: `handleStartPreMergeGate` (`workers/gate-workflow/index.ts:196-287`) runs everything, keeps
-  state in an in-memory `workflows` Map (`:209`), and the queue consumer awaits it (`workers/queue-consumer/index.ts:321-345`). No Workflows
-  binding, no queue. 600 s inside that await is not viable (the consumer handles up to 100 messages per batch, `wrangler.toml:37`).
-- `runUnitTests` is not just a comment: it **returns three hard-coded passing tests** (`:617-646`), `runPropertyTests` two more (`:648-670`).
-  Complexity is `hashCode(candidateId)` (`:725`), conformance `Math.random() < 0.1` (`:789`), pass is `score >= 80` (`:834`). `generateId`
-  `:179-186` uses `Math.random`. The verdict POST ignores `Response.ok` (`:865-875`). The `…/tests`, `…/complexity`, `…/conformance` routes
-  (`:422`, `:493`, `:547`) expose the same simulations.
-- `gate-workflow/wrangler.toml` has **no `[[services]]` for `SANDBOX_RUNNER`**, though `Env` declares it (`index.ts:20`): any call would throw.
-- The edge route `POST /api/candidates/:id/gate/pre-merge` (`workers/api/index.ts:1970-1979`) forwards to a DO route that does not exist
-  (no match in `workers/spec-do/index.ts`): another instance of the 404 bug in AGENTS.md. The queue consumer sends `baseCommitSha =
-  commit.sha` when `base_ref` is set (`queue-consumer/index.ts:331`), so a diff-based metric would be wrong. Both stay out of scope (§4).
-- `candidates.stage` is never advanced by the gate, and no R2 bucket is bound anywhere (`r2_buckets`: no match), so logs go in the DO (D4). Both unchanged here.
+- The real defects of the current trigger path: `workers/queue-consumer/index.ts:247-378` loops serially over up to 100 messages (`wrangler.toml:37`), awaits the gate in-band
+  (`:321-345`), and **swallows every error with no ack or retry** (`:375-377`); the gate keeps state in an in-memory Map (`workers/gate-workflow/index.ts:84`, `:209`) and has no
+  Workflows binding. One queue message holding 600 s fits the documented 15-minute consumer wall limit (CPU time excludes waiting; S5 confirms), so the new design works because of
+  `max_batch_size = 1` and real queue retries, not because the wait moved.
+- `runUnitTests` **returns three hard-coded passing tests** (`:617-646`), `runPropertyTests` two (`:648-670`); complexity is `hashCode(candidateId)` (`:725`), conformance
+  `Math.random() < 0.1` (`:789`), pass is `score >= 80` (`:834`); `generateId` `:179-186` uses `Math.random`; the verdict POST ignores `Response.ok` (`:865-875`); the
+  `…/tests`, `…/complexity`, `…/conformance` routes (`:422`, `:493`, `:547`) expose the simulations.
+- `gate-workflow/wrangler.toml` has **no `[[services]]` for `SANDBOX_RUNNER`**, though `Env` declares it (`index.ts:20`).
+- **The gate call is unguarded by queue:** `isPreviewPush` gates only the preview deploy (`queue-consumer/index.ts:257`); `isProductionPush` (`:245`) is defined and unused, so a push on
+  any of the three queues triggers a gate (cost abuse, §3).
+- The edge route `POST /api/candidates/:id/gate/pre-merge` (`workers/api/index.ts:1970-1979`) forwards to a DO route that does not exist (no match in `spec-do/index.ts`). The consumer
+  sends `baseCommitSha = commit.sha` when `base_ref` is set (`:331`). `candidates.stage` is never advanced by the gate; no R2 bucket is bound anywhere. All unchanged here (§4, D4).
 
 ## 1. What the gate runs and returns
 
@@ -35,73 +36,60 @@ Pipeline in one container, one run per (candidate, head sha):
    `NPM_CONFIG_GLOBALCONFIG=/dev/null`, `--registry https://registry.npmjs.org/`; the repo's `.npmrc` is deleted first. The only egress is a
    **second gateway entrypoint** (`NpmRegistryGateway`) bound to host `registry.npmjs.org`: GET only, path allowlist, `redirect: 'manual'`,
    no `Authorization`, forwarded headers as `build-sandbox.ts:86`. A lockfile entry pointing at any other host gets 403 and fails the install.
-3. **Network off:** when install ends, re-register both intercepts (registering again replaces, `:283`) to a deny gateway (403 everything).
-   With `enableInternet: false` (`:342`) nothing else is reachable; spike S4 proves it.
-4. **Tests** (≤300 s): the command is a constant in the gate's config, default `['npm','test']`, argv only (never `sh -c` with repo text), env
-   cleared to `PATH`, `HOME=/workspace`, `CI=1`. Non-root (`node`, Dockerfile). Overall budget 600 s (alarm/deadline pattern of `:203-219`).
-5. **Output:** each phase writes to `/workspace/log/<phase>.log` inside the container (`> file 2>&1`), never through `exec().output()`
-   buffers; `ulimit -f` bounds the file. The runner reads `tail -c 32768` per phase, scrubs it (`scrub`, `:159`), and returns it with a
-   SHA-256 of the **full** capped file. Stored in `gate_runs` (§3), HTML-escaped on every render.
+3. **Network off:** one container, one `start()`. Intercepts can be **replaced, not removed** (Containers API; limit 128 entries; the repo uses raw `ctx.container`, `build-sandbox.ts:284`,
+   not `@cloudflare/sandbox`), so "deny" is a replacement handler: when install ends, both hosts are re-registered to a gateway that answers 403 to everything. With
+   `enableInternet: false` (`:342`) nothing else is reachable; spike S4 proves it, including the control row before the swap.
+4. **Tests** (≤300 s): the command is a constant in the gate's config, default `['npm','test']`, argv only (never `sh -c` with repo text), env cleared to `PATH`, `HOME=/workspace`, `CI=1`.
+   Non-root (`node`). Overall budget 600 s (alarm/deadline pattern of `:203-219`). Bounds beyond one file: `timeout --kill-after=5` on the process group, `ulimit -u 512`
+   (processes), `ulimit -t` (CPU seconds), `ulimit -f` (one file), memory and total disk bounded by the instance (12 GB on `standard-2`); the container is destroyed on every path.
+5. **Output:** each phase writes to `/workspace/log/<phase>.log` (`> file 2>&1`), never through `exec().output()` buffers. The runner reads `tail -c 32768`, scrubs it (`scrub`, `:159`),
+   returns it with the SHA-256 of the capped file. Stored in `gate_runs` (§3), HTML-escaped on every render.
 
-**Verdict.** The runner returns `{ status: 'pass'|'fail'|'error', failureClass, exitCode, phases:{install,test}:{ms,exit,timedOut}, logTail,
-logSha256, truncated, imageDigest, instance, counts|null }` (zod-validated by the gate, strict). `status` comes only from exit codes.
-- **conformance: dropped** from the pre-merge gate. `checks.conformance = 'not_run'` is recorded, never a pass; specs have no machine-checkable
-  conformance at this rung (Shadow's comparator is that oracle, AGENTS.md ladder).
-- **complexity: dropped.** `checks.complexity = 'not_run'`. The legacy summary row still has `complexity_delta REAL NOT NULL`
-  (`schema-inline.ts:122`): written as `0` with `notes` starting `complexity not measured`, and the UI shows `checks`, not the number.
-- **score** (legacy `INTEGER NOT NULL`): `100` on pass, `0` on fail, derived from the exit code. `counts` are best-effort from vitest/jest summary
-  lines and `null` otherwise (never guessed). The weighted aggregate (`:806-845`) is deleted.
-- Legacy summary `status`: `pass` → `pass`, `fail` → `fail`, `error` → `pending` (the CHECK allows only pass/fail/pending, `:118`); the true
-  value is in `gate_runs`.
+**Verdict.** The runner returns `{ status: 'pass'|'fail'|'error', failureClass, exitCode, phases:{install,test}:{ms,exit,timedOut}, logTail, logSha256, truncated, imageDigest, instance,
+counts|null }` (zod-validated by the gate, strict). `status` comes only from exit codes, and **the test command is repo-controlled**: `"test":"true"` passes, and a repo can print any summary line.
+So the gate proves only "the repo's own test command exited 0 in a clean, network-less container". Rules: `counts` parsed from vitest/jest summary lines are advisory;
+`counts.passed == 0` → `fail` (`no_tests`); `counts == null` → still `pass` but `checks.tests = 'unverified'` and the summary `notes` start `pass indistinguishable from no tests`.
+Slice 2's merge policy must decide whether `unverified` may merge (D11). Public wording says this.
+- **conformance: dropped** (`checks.conformance = 'not_run'`, never a pass; Shadow's comparator is that oracle). **complexity: dropped** (`checks.complexity = 'not_run'`); the legacy
+  `complexity_delta REAL NOT NULL` (`schema-inline.ts:122`) is written as `0` with `notes` starting `complexity not measured`, and the UI shows `checks`, not the number.
+- **score** (legacy `INTEGER NOT NULL`): `100` on pass, `0` on fail, from the exit code; the weighted aggregate (`:806-845`) is deleted. Legacy summary `status`: `error`/`not_run` → `pending`
+  (the CHECK allows only pass/fail/pending, `:118`); the true value is in `gate_runs`.
 
 ## 2. The container
 
-**Reuse or add a class?** Add a second class, `TestSandbox`, sharing helper code with `BuildSandbox` (extract `guarded`/`stop`/`run` into
-`workers/sandbox-runner/sandbox-base.ts`, no behavior change to `BuildSandbox`). Reasons: `max_instances` and `instance_type` are per container
-application, so a gate flood cannot starve canary builds and each has its own cost ceiling; the gate has a different image need (writable
-cache, npm) and different limits (`BUILD_DEADLINE_MS` 150 s, `:71`, vs 600 s). Cost: one more `[[containers]]` block, one `[exports.TestSandbox]`
-DO entry (additive), a second image build at deploy (~2 min), and an OPS paragraph. Same Dockerfile (esbuild stays; harmless), pinned as today.
+**Reuse or add a class?** Add `TestSandbox`, sharing helpers with `BuildSandbox` (extract `guarded`/`stop`/`run` into `workers/sandbox-runner/sandbox-base.ts`, no behavior change).
+Reasons: its own application means its own image build, observability and cost line, and a gate flood cannot occupy `BuildSandbox`'s DO instances; different limits (`BUILD_DEADLINE_MS`
+150 s, `:71`, vs 600 s). Cost: one `[[containers]]` block, one `[exports.TestSandbox]` entry (additive), a second image build at deploy (~2 min), an OPS paragraph. Same Dockerfile, pinned as today.
 
-**Instance size (maintainer's data, developers.cloudflare.com/containers/platform/limits, 2026-10-21):** lite 1/16 vCPU 256 MiB 2 GB; basic 1/4,
-1 GiB, 4 GB; standard-1 1/2, 4 GiB, 8 GB; standard-2 1, 6 GiB, 12 GB; standard-3 2, 8 GiB, 16 GB; standard-4 4, 12 GiB, 20 GB. **Start with
-`standard-2`** and measure `standard-1` vs `standard-2` in spike S2 on this repo (peak RSS, disk, wall time). Billing: memory and disk on
-provisioned amounts while running, CPU on active use, so a destroyed-after-every-run container bounds cost.
+**The policy decides what can be configured (correction to rev 1).** `workers/sandbox-runner/wrangler.toml:26` uses `scheduling_policy = "durable_object"`. For that policy wrangler
+allows only `name`, `class_name`, `scheduling_policy`, `images`, `observability`, `ssh`, `authorized_keys`, `unsafe` and **rejects every other key**
+(`wrangler-dist/cli.js:27788-27805`, 4.151.1), so **`instance_type` and `max_instances` cannot be set**. Rev 1 cited `cli.js:204341-204367`, which is the default-policy conversion, and its
+"set both to the same value" was impossible. The size comes **only** from `ctx.container.start({ instance })`, as at `build-sandbox.ts:338-343`. The new block is therefore the
+existing one with a new `class_name` and `images` entry: no size, no cap.
 
-**Point 1: is `basic` accepted at runtime?** Verified in this repo, not in production:
-- `@cloudflare/workers-types` 5.20261018.1 (`workers/sandbox-runner/node_modules`, `index.d.ts:4027-4040`) types `ContainerStartupOptions.instance`
-  as `"lite" | "basic" | "standard-1".."standard-4" | { vcpu, memoryMib, diskMb }`. Aliases `dev` and `standard` are **not** in it.
-- The embedded typings of the local **workerd 1.20261012.1** binary list `"lite" | "standard-1".."standard-4" | ContainerStartResources`: **no
-  `basic`** (two copies, one also has `hardTimeout`). So the earlier review is right for that runtime and the docs/newer types are right for
-  theirs: the production runtime version decides, and only `lite` has ever been started there (`build-sandbox.ts:340`).
-- Wrangler 4.151.1 accepts `basic` in config (`ALLOWED_INSTANCE_TYPES`, `wrangler-dist/cli.js:28923`) and renames `dev`/`standard` with a warning.
-- **Decision: never use `basic`, `dev` or `standard` at runtime.** Use `standard-2` (present in every list). The size is passed per start:
-  `ctx.container.start({ image, instance: 'standard-2', enableInternet: false })` (the `start()` signature, `index.d.ts:3986`), the same place
-  as `:338-343`. The object form uses **camelCase** at runtime (`memoryMib`, `diskMb`), but **snake_case** in wrangler (`memory_mib`, `disk_mb`).
+**Sizes (maintainer's data, containers platform limits 2026-10-21):** lite 1/16 vCPU 256 MiB 2 GB; basic 1/4, 1 GiB, 4 GB; standard-1 1/2, 4 GiB, 8 GB; standard-2 1, 6 GiB, 12 GB;
+standard-3 2, 8 GiB, 16 GB; standard-4 4, 12 GiB, 20 GB. **Start with `standard-2`**, measure `standard-1` vs `standard-2` (S2). Billing: provisioned memory and disk while running, CPU on use.
+- **`basic` at runtime:** `@cloudflare/workers-types` 5.20261018.1 (`index.d.ts:4027-4040`) types `instance` as `"lite" | "basic" | "standard-1".."standard-4" | { vcpu, memoryMib, diskMb }`
+  (no `dev`/`standard` aliases). The embedded typings of the local workerd 1.20261012.1 list the same without `basic`. Only `lite` has ever started in production. **Rule: never `basic`,
+  `dev` or `standard`; use `standard-2`.** The object form is camelCase at runtime, snake_case in wrangler; a custom object is untried (not needed, a named type suffices).
 
-**Point 2: custom instance type on the `durable_object` scheduling path.** Verified: wrangler's deploy normalisation
-(`cli.js:204341-204367`, 4.151.1) turns `instance_type` (string or `{vcpu, memory_mib, disk_mb}`) into the application config for **every**
-container, with no branch on `scheduling_policy`; unset means `lite`. Config validation (`:28127-28172`) accepts the object form
-(numbers only, those three keys). **Not verified:** that the platform honours a runtime `instance` that differs from the application's
-`instance_type` for a DO-scheduled container (production has only ever run `lite` against a `lite` application), and that a custom object
-works at runtime. Plan: set **both** to the same value (`instance_type = "standard-2"` in the new `[[containers]]` block and `instance: 'standard-2'`
-in code) so the design does not depend on override semantics, and let spike S2 test the override as an extra row. Custom types
-(≥1 vCPU, ≥3 GiB per vCPU, ≤ standard-4 maxima, e.g. `{ vcpu: 1, memory_mib: 4096, disk_mb: 8000 }`) only if S2 shows `standard-2` over-provisioned (S2b), never a slice-1 dependency.
+**Cap design (no `max_instances`).** Cost and concurrency are bounded by, in order: (a) the gate queue consumer: `max_batch_size = 1`, `max_concurrency = 2`; (b) a **DO-side counter**,
+the single serialization point (AGENTS.md): the start route (§3) counts non-stale `running` rows and refuses with `busy` at 3 globally or 1 per repository; (c) the per-org daily cap and
+same-sha dedupe (§3); (d) the alarm backstop and destroy-on-every-path from `BuildSandbox`. The counter counts ledger rows, not containers: a crashed run holds its slot until the 15-minute
+staleness. **Alternative, unverified:** the default scheduling policy takes `instance_type` and `max_instances` in wrangler but needs a different start path (a `Container`-class
+binding, not `ctx.container`); evaluate it only if S3 shows DO containers are uncapped and (a)-(c) prove insufficient.
 
-**Cap design.** `max_instances = 3` on the `TestSandbox` application (defaults to 20, enforced **only in production**, so local tests cannot
-see it). Real limiter, in order: (a) gate queue consumer `max_concurrency = 2` (leaves one slot for a retry); (b) DO per-repository rule: the
-start route (§3) refuses with 409 `busy` while a non-stale `running` run exists for the repository, and the gate calls `message.retry({
-delaySeconds: 60 })`; (c) `max_instances` as the backstop. Instance name `gate-<ns>/<repo>-<sha8>` (as `index.ts:134`). What happens at the cap
-(start error vs queueing) is spike S3.
+**Spikes** (findings go to `docs/OPEN-QUESTIONS.md`). All of S1-S5 need the account (workerd cannot run containers; this host has no Docker), so they run in the maintainer-deployed throwaway
+worker `spikes/gate-spike/` (D10: contents and deploy/run/delete commands in its `README.md`; a registry image, so no local Docker; never touches the ten workers). Locally testable without it:
+the zod schemas, the DO migration matrix, and all fakes (§7). The spike was typechecked, never run.
 
-**Spikes before building** (findings go to `docs/OPEN-QUESTIONS.md`; local first, anything on the account needs maintainer approval):
-
-| # | Question | How, safely |
+| # | Question | Run |
 |---|---|---|
-| S1 | Does `npm ci` of this repo's own lockfile (v3, esbuild/workerd optional binaries, `--ignore-scripts`) trust the CA via `NODE_EXTRA_CA_CERTS`, and does `interceptOutboundHttps('registry.npmjs.org', gw)` take a bare host and carry npm's tarball GETs? | **Local first:** `wrangler dev` with Docker is not available on this host (OPEN-QUESTIONS 2026-10-24), so a unit test with a fake container proves only the commands. The real answer needs the account: a throwaway worker `beehive-gate-spike` (maintainer deploys it, as Phase 0 did; then deletes it and its container app). Never the ten workers. |
-| S2 | Peak memory/disk/time of `npm ci` + `npm test` for this repo on `standard-1` vs `standard-2`; does a runtime `instance` that differs from the app's `instance_type` apply; does a custom object work | Same spike worker, one container class per size, `max_instances = 1`, the repo's own commit as input. S2b (custom object) only if needed. |
-| S3 | What `max_instances` does when exceeded on the DO path (error vs wait) | Spike worker with `max_instances = 1`, start two sandboxes. |
-| S4 | After the deny re-registration, no egress from the test phase (HTTPS to registry, plain HTTP, raw IP `1.1.1.1`, DNS) | A probe script run as the "test command" inside the spike container. Must pass before any untrusted code runs on the real account. |
-| S5 | Does a 600 s call hold over a service binding, DO RPC and a queue consumer invocation; do `exec` calls survive that long | Spike worker with a `sleep 590` run, called from a queue consumer. Fallback if it fails: start returns at once and the gate polls `GET /sandbox/test/:id` (short calls). |
+| S1 | Does `npm ci --ignore-scripts` of this repo's lockfile succeed through the registry intercept, trusting `NODE_EXTRA_CA_CERTS`; does `interceptOutboundHttps('registry.npmjs.org', …)` take a bare host | `POST /run {action:'measure'}` (also S2) |
+| S2 | Peak memory (`memory.peak`), disk and wall time of `npm ci` + `npm test` on `standard-1` vs `standard-2` | `measure` twice, same commit, one size each |
+| S3 | What happens when many DO containers start at once (start error, queueing, or nothing; the policy has no cap) | `POST /flood {n:25}` (lite, 30 s each); read the per-index results |
+| S4 | After the deny replacement, no egress in the test phase (HTTPS to registry, plain HTTP, HTTPS by IP, DNS, raw TCP), with a control before the swap | `POST /run {action:'egress'}`; must pass before any untrusted code runs on the account |
+| S5 | Does a 590 s call hold over HTTP and over a queue consumer, with `exec` surviving; fallback: start returns at once and the gate polls `GET /sandbox/test/:id` | `hold` over HTTP, then `/enqueue` and `/status` |
 
 ## 3. Spec DO changes [SPINE, needs human]
 
@@ -110,53 +98,56 @@ m13 skips any lower step (`index.ts:1084`), so shipping m13 first would burn m12
 later number; a placeholder `m12` no-op would falsely stamp it done. So: m12 first, own push (D1); if it slips, this step takes m12 and MR-FLOW's m13/m14
 shift down, as MR-FLOW §3 already says. Never leave a gap.
 
-**m13 step** (`runMigrations`, one entry, then `LATEST_SCHEMA_VERSION = 'm13'` at `:31`): `CREATE TABLE IF NOT EXISTS gate_runs` + indexes
-(also in `schema.sql` and `schema-inline.ts`), and `addColumnsIfMissing('candidates', ['preview_url TEXT','preview_worker_name TEXT','preview_created_at INTEGER'])`
-(`:1112`). `gate_runs` = MR-FLOW §3 row, with these changes: `log_tail TEXT`, `log_sha256`, `log_truncated` replace `log_key` (no R2 in slice 1,
-decision D4); plus `failure_class TEXT`, `exit_code`, `checks TEXT` (JSON), `timings TEXT` (JSON), `instance`. `status` CHECK(running, pass, fail,
-error, not_run). UNIQUE(candidate_id, gate, commit_sha, attempt). `commit_sha` is NOT NULL; legacy verdicts get no `gate_runs` row.
+**m13 step** (one entry in `runMigrations`, `LATEST_SCHEMA_VERSION = 'm13'` at `:31`): `CREATE TABLE IF NOT EXISTS gate_runs` + indexes, and
+`addColumnsIfMissing('candidates', ['preview_url TEXT','preview_worker_name TEXT','preview_created_at INTEGER'])` (`:1112`). `gate_runs` = MR-FLOW §3 row, with: `log_tail TEXT`,
+`log_sha256`, `log_truncated` replacing `log_key` (no R2, D4); plus `failure_class`, `exit_code`, `checks` (JSON), `timings` (JSON), `instance`. `status` CHECK(running, pass, fail, error,
+not_run). UNIQUE(candidate_id, gate, commit_sha, attempt). Legacy verdicts get no `gate_runs` row.
 
-**Routes** (new, zod-validated with `.strict()`, in a new `workers/shared/gate-run-schema.ts` used by DO and gate; the pattern of
-`parse()` at `index.ts:2650`; reached only through the tier-1 DO stub, not the edge):
-- `POST /api/gate-runs` (start) `{ candidateId, gate:'pre-merge', commitSha, decidedBy }`. The DO checks the candidate exists, `commitSha` is 40-hex,
-  resolves repository name and namespace (must pass `isValidNamespace`, `workers/shared/namespace.ts:8`), applies the per-repo `busy` rule, assigns `attempt`
-  (new sha → 1, same sha → MAX+1), inserts `running`. Returns `{ runId, attempt, repo, namespace }`. **Idempotent:** add `'POST /api/gate-runs'` to
-  `IDEMPOTENT_ROUTES` (`:39-43`; the header is ignored on routes not listed) with `Idempotency-Key: gate-run:<eventId|queueMessageId>`, so a queue
-  retry replays the same run instead of making attempt+1. TTL is 24 h (`:35`).
-- `POST /api/gate-runs/:id/result` (finish) `{ status, failureClass?, exitCode?, checks, timings, counts?, logTail?, logSha256?, instance, imageDigest? }`.
-  One `transactionSync`: (1) `UPDATE gate_runs … WHERE id = ? AND status = 'running'` (CAS; a second identical body replays 200, a different body is 409);
-  (2) `INSERT INTO gate_verdicts … ON CONFLICT(candidate_id, gate) DO UPDATE` as the latest summary (a code change to `createGateVerdict`, `:1594`, no
-  schema change), **only if** no run of that candidate/gate has a later `started_at` (a late older sha must not overwrite a newer summary); (3) `recordHistory`.
-- `GET /api/gate-runs?candidateId=` and `GET /api/candidates/:id/gate-runs` for the edge/UI/CLI. A `running` run older than 15 min is *reported* as
-  `error`/`abandoned` on read (no write, no alarm); merge checks (slice 2) count only terminal `pass`.
-- `ORG_PURGE_ORDER` (`:116`): add `gate_runs` before `gate_verdicts` (`:120`), scoped by `ORG_CANDIDATES`. This is slice 1's share of the purge order in MR-FLOW §3.
-- `POST /api/gate-verdicts` (`:4009-4023`) stays unchanged for old callers and the other gates. The busy check runs before the idempotency wrapper
-  (a 409 must never be stored as the key's response).
+**Exactly which files change for the preview columns.** m2 already adds them to migrated ledgers (`index.ts:1040`), and a *fresh* ledger starts at LATEST without running any step (`:623`),
+while `workers/spec-do/schema.sql` and `schema-inline.ts` have no `preview_*` columns (no match). So: (1) add the three columns to the `candidates` table in **both** `schema.sql` and
+`schema-inline.ts` (`schema-sync.test.ts` keeps them equal): this is what flips the `it.fails` pin (`migration-matrix.test.ts:53`) to `it`; (2) the m13 `addColumnsIfMissing` repairs
+existing ledgers that were created fresh at ≤m11 and never ran m2 (a no-op elsewhere); (3) `legacy-ledger.ts:43` derives `LATEST_VERSION` itself; the floor at `:61` rises to 13.
 
-**Migration tests:** see §7. **Contract:** the `it.fails` pin (`migration-matrix.test.ts:53`) flips to `it`; the floor (`:61`) rises to 13; fixtures need no new
-shape (m13 is additive over m11) but each legacy shape gets a `gate_runs`/preview-column assertion; `legacy-ledger.ts:43` derives `LATEST_VERSION` itself.
+**Routes** (new, zod `.strict()`, schemas in `workers/shared/gate-run-schema.ts` shared by DO and gate; parse pattern `index.ts:2650`; tier-1 DO stub only, not the edge):
+- `POST /api/gate-runs` (start) `{ candidateId, gate:'pre-merge', commitSha, decidedBy, terminal?: { status:'error'|'not_run', failureClass } }`. Under `IDEMPOTENT_ROUTES` (`:39-43`) with
+  `Idempotency-Key: gate-run:<queueMessageId>` (24 h, `:35`), so a retried message replays its own run. Decision order inside one mutation: (1) **dedupe**: a non-stale `running`, or terminal
+  `pass`/`fail`, run for (candidate, gate, sha) → `{ deduped:true, runId }`, no new row (a redelivered push is not a new billed run); `error`/`not_run` rows may be re-run;
+  (2) **quota**: runs started for the candidate's **organization** in the last 24 h ≥ 50 → write a `not_run`/`quota` row, return `{ quota:true }`; (3) **caps**: 3 non-stale `running` globally or 1
+  in the repository → throw `busy`, mapped to 409 (a throwing mutation leaves no idempotency key, `idempotent()` doc comment); (4) insert `running`, `attempt` = MAX+1 for that sha.
+  A `terminal` body skips (2)-(3) and inserts the finished row (final `error` from the handler on the last attempt). Returns `{ runId, attempt, repo, namespace }`, resolved from the ledger
+  (`isValidNamespace`, `workers/shared/namespace.ts:8`), never from the caller.
+- `POST /api/gate-runs/:id/result` (finish) `{ status, failureClass?, exitCode?, checks, timings, counts?, logTail?, logSha256?, instance, imageDigest? }`. One `transactionSync`:
+  (1) `UPDATE gate_runs … WHERE id = ? AND status = 'running'` (CAS; an identical replay is 200, a different body 409); (2) `INSERT INTO gate_verdicts … ON CONFLICT(candidate_id, gate) DO UPDATE`
+  as the latest summary (code change to `createGateVerdict` `:1594`, no schema change), **only if** no later-started run exists for that candidate/gate; (3) `recordHistory`.
+- `GET /api/gate-runs?candidateId=` and `GET /api/candidates/:id/gate-runs` for edge/UI/CLI. A `running` run older than 15 min is *reported* `error`/`abandoned` on read (no write); merge checks
+  (slice 2) count only terminal `pass`.
+- `ORG_PURGE_ORDER` (`:116`): `gate_runs` before `gate_verdicts` (`:120`), scoped by `ORG_CANDIDATES`. `POST /api/gate-verdicts` (`:4009-4023`) is unchanged for old callers and other gates.
 
 ## 4. gate-workflow changes
 
 - Delete: `runUnitTests`, `runPropertyTests`, `calculateComplexityDelta`, `hashCode`, `calculateRawComplexity`, `validateSpecConformance`,
   `aggregateResults`, the in-memory `workflows` Map and the `…/tests`, `…/complexity`, `…/conformance`, status/result GET routes that serve them.
   Replace `generateId` with `crypto.randomUUID()`.
-- **Shape:** `POST /gates/pre-merge` keeps its path and request schema (extra optional `eventId`; non-strict `z.object` strips unknown keys),
-  validates, and **enqueues** `{ candidateId, commitSha, eventId?, actorId }` on a new queue `beehive-gate-runs`, answering `202 { success, queued }`.
-  The worker adds `[[queues.producers]]` and `[[queues.consumers]]` (`max_batch_size = 1`, `max_concurrency = 2`, `max_retries = 3`, a DLQ
-  `beehive-gate-runs-dlq`) plus `[[services]] binding = "SANDBOX_RUNNER"`. The queue consumer worker is **unchanged** (it already treats any 2xx as success, `:341`).
-  Queues and DLQ are created by the maintainer first (as `queue-consumer/wrangler.toml:6-7` already documents for its queue).
-- **`queue()` handler per message:** start (`POST /api/gate-runs`, `Response.ok` checked, 409 busy → `retry({delaySeconds:60})`) → `SANDBOX_RUNNER`
-  `POST /sandbox/test { repo, namespace, commitSha, command }` (checked, zod-parsed, 600 s `AbortSignal`) → finish (`POST …/result`, checked). **Every fetch
-  checks `Response.ok`**, including the verdict write the old code dropped; a non-2xx throws to the queue retry. No `Math.random`, no Paseo spawning.
-- **Error classes** (`failureClass`) and handling:
+- **Shape (two stages, §8):** the gate worker adds a queue `beehive-gate-runs` it also consumes: `[[queues.consumers]]` with `max_batch_size = 1`, `max_concurrency = 2`,
+  `max_retries = 3`, **no DLQ** (nothing would consume it), plus `[[queues.producers]]` and `[[services]] binding = "SANDBOX_RUNNER"`. The maintainer creates the queue before the push
+  (as `queue-consumer/wrangler.toml:6-7` documents for its own). Stage 7a adds the consumer and a new bearer-protected `POST /gates/runs` that enqueues, while `POST /gates/pre-merge` keeps
+  its old simulated behavior; stage 7b makes `/gates/pre-merge` validate (extra optional `eventId`; the non-strict schema strips unknowns) and enqueue, answering `202`, and deletes the simulation.
+  The queue-consumer worker only gains the `isProductionPush` guard (the gate trigger runs on the `beehive-artifacts-push` queue only); it needs no other change (any 2xx is success, `:341`).
+- **`queue()` per message** (`message.attempts` is 1-based): `POST /api/gate-runs` (`Response.ok` checked) → `deduped`/`quota`: ack. 409 `busy`: **not a retry** (it would burn the 3
+  retries in about three minutes behind a run that can hold the repository 600 s): re-send the same body with `waits+1` via `queue.send(…, { delaySeconds: 120 })` and ack the original; a
+  separate wait budget of 20 (~40 min); when exhausted, start with `terminal: { status:'error', failureClass:'busy_timeout' }` and ack. Otherwise → `SANDBOX_RUNNER` `POST /sandbox/test`
+  (checked, zod-parsed, 600 s `AbortSignal`) → finish (checked). **Every fetch checks `Response.ok`**, including the write the old code dropped. On an infrastructure failure: if
+  `attempts < 4`, `retry({ delaySeconds: 30 × attempts })`; on the last attempt **the handler writes the final `error` row** (finish if a run exists, else `terminal`) and acks. If the
+  ledger itself is unreachable then, the message is dropped by Queues; the `running` row (if any) is reported `abandoned` after 15 min. No `Math.random`, no Paseo spawning.
+- **Error classes** (`failureClass`):
 
-| Class | Result | Retry |
+| Class | Run result | Handling |
 |---|---|---|
-| `tests_failed`, `install_failed`, `no_lockfile`, `timeout_install`, `timeout_test` | `fail` | none; a re-push or a manual re-run (attempt+1) retries |
-| `timeout_overall`, `sandbox_unavailable` (start failed, runner 502/503/404, capacity), `clone_failed` | `error` | `message.retry` with backoff, max 3, then DLQ and a final `error` row |
-| `ledger_unavailable` (DO non-2xx or fetch throws) | none written | queue retry; DLQ after 3 |
-| `bad_request` (zod fails) | none | ack and log, never retried |
+| `tests_failed`, `no_tests`, `install_failed`, `no_lockfile`, `timeout_install`, `timeout_test` | `fail` | none; a re-push (new sha) or a later manual re-run retries |
+| `timeout_overall`, `sandbox_unavailable` (start failed, runner 502/503/404), `clone_failed` | `error` | retry with backoff to 4 attempts, then the final `error` row |
+| `busy_timeout`, `quota` | `error`, `not_run` | written by `terminal`; no retry |
+| `ledger_unavailable` (DO non-2xx or throw) | none | queue retry; nothing recorded as pass |
+| `bad_request` (zod fails) | none | ack and log |
 
 - The dead edge route `POST /api/candidates/:id/gate/pre-merge` (`workers/api/index.ts:1970`; used by CLI `gate run`, `cli/src/utils/api-client.ts:496`, pinned in
   `tests/cli-behavior.test.ts:211` and `workers/api/tests/user-tokens.test.ts:452`) is **left alone** and logged in OPEN-QUESTIONS; `beehive` has no gate binding, so a
@@ -183,27 +174,27 @@ All changes are additive; no worker may require another's new version to *start*
 
 | Pair | New caller, old callee | Old caller, new callee |
 |---|---|---|
-| gate → `beehive` (DO) | `POST /api/gate-runs` 404 → `ledger_unavailable`, queue retry (3×, DLQ); nothing recorded, never a pass. The old `/api/gate-verdicts` is **not** a fallback. | Old gate (simulated) still posts to `/api/gate-verdicts`: lands in the summary table, no `gate_runs` row, never satisfies a merge. |
+| gate → `beehive` (DO) | `POST /api/gate-runs` 404 → `ledger_unavailable`, queue retry to 4 attempts, then the message is dropped; nothing recorded, never a pass. The old `/api/gate-verdicts` is **not** a fallback. | Old gate (simulated) still posts to `/api/gate-verdicts`: lands in the summary table, no `gate_runs` row, never satisfies a merge. |
 | gate → `sandbox-runner` | `/sandbox/test` 404 → `sandbox_unavailable` → retry, then `error`. | The runner's new class/route are unused by an old gate. |
-| `queue-consumer` → gate | Unchanged code. New gate answers 202 instead of 201 + result; the old consumer only checks `ok` and logs the body. | A new consumer (later) adding `eventId`: the old gate's non-strict schema strips it. |
+| `queue-consumer` → gate | Stage 7a: no change, the old route still simulates. Stage 7b: 202 instead of 201 + result; the old consumer only checks `ok` and logs. | The `isProductionPush` guard only removes calls; an old gate ignores the difference. A later `eventId` is stripped by the old non-strict schema. |
 | edge ↔ DO | One worker (`beehive`), no skew. New GET routes only. | n/a |
 
-Also: the queue and DLQ must exist before the push (human); the new container class is an additive `[exports]` entry (never rename/delete a live class, OPS error 10086); a stored `m13` read by rolled-back code is tolerated (`index.ts:1075`).
+Also: the queue must exist before the push that adds the consumer (human); the new container class is an additive `[exports]` entry (never rename/delete a live class, OPS error 10086); a stored `m13` read by rolled-back code is tolerated (`index.ts:1075`).
 
 ## 7. Tests
 
 - **Unit, fakes:** `workers/gate-workflow/tests/gate.test.ts` is rewritten (it imports the simulated handler): fake DO stub and fake runner assert start → test → finish order,
-  every non-2xx surfaces (retry, nothing recorded as pass), 409 busy retries with a delay, each failure class maps as §4, `checks` carry `not_run`, no `Math.random`
+  every non-2xx surfaces (retry, nothing recorded as pass), `busy` re-sends with `waits+1` and does not consume `attempts`, the exhausted wait budget and the last infrastructure attempt each write a `terminal` `error` row, `deduped` and `quota` ack without running, each failure class maps as §4, `checks` carry `not_run`, no `Math.random`
   call and no `hashCode`/`aggregateResults` export remain (grep-style assertion on the module source). `workers/sandbox-runner/tests`: a `TestSandbox` fake container
-  (pattern `build-sandbox.test.ts:28-60`) for pass, test fail, install fail, missing lockfile, per-phase timeout, log cap/truncation and scrub, `standard-2` passed to `start`,
-  re-registration to deny after install, token never in any command or env, destroy on every path. `NpmRegistryGateway`: GET on the host only, other hosts/methods/redirects denied.
+  (pattern `build-sandbox.test.ts:28-60`) for pass, test fail, install fail, missing lockfile, per-phase timeout, log cap/truncation and scrub, `standard-2` passed to `start`, `ulimit`/`timeout` wrapping, `no_tests` and `unverified` verdicts,
+  replacement of both intercepts with the deny handler after install, token never in any command or env, destroy on every path. `NpmRegistryGateway`: GET on the host only, other hosts/methods/redirects denied.
   Fake-timer tests alternate advances with a real macrotask turn (AGENTS.md).
 - **DO / migration:** matrix to m13 (A1-A4 over all shapes, incl. a shape that already has the preview columns), flipped preview pin, floor 13, `schema-sync.test.ts`, a replayed
-  step, and: re-run of the same sha → attempt 2 and summary updated; new sha → new row; a late older-sha result does not overwrite; finish CAS and replay/409; start idempotency replay;
+  step, and: same sha after `pass`/`fail` or while `running` → deduped, no row; after `error` → attempt 2 and summary updated; new sha → new row; the 51st org run in 24 h → `not_run`/`quota`; busy at 3 global / 1 per repo leaves no idempotency key; `terminal` inserts a finished row; a late older-sha result does not overwrite; finish CAS and replay/409; start idempotency replay;
   purge over an org with runs; the old verdict route intact; a `running` run past 15 min read as `error`. The `ledger-lifecycle`/`deploy-refs` version assertions use `LATEST_VERSION`.
 - **Local integration:** `npm run test:e2e:local` with the stub runner (`SANDBOX_MODE=stub`, `BEEHIVE_LOCAL_DEV=1`) covers push → queue → gate → DO → verdict. This host has no Docker, so
   the **real** container path (install, tests, network phases) is verified only by the spike and the production run; a Docker script for machines that have it is optional.
-- **Production only** (needs maintainer approval per step, AGENTS.md; never e2e against production unprompted): (1) the spike S1-S6 results; (2) a fixture repo in a dedicated
+- **Production only** (needs maintainer approval per step, AGENTS.md; never e2e against production unprompted): (1) the spike S1-S5 results (read-only for the ten workers); (2) a fixture repo in a dedicated
   org `gate-trial` (namespace-valid) with one passing and one failing commit; push each, observe `gate_runs` pass, then fail; (3) a commit with a `postinstall` script (must not run) and
   a test that tries `fetch('https://example.com')` (must fail); (4) one forced `sandbox_unavailable` is **not** induced in production. **Cleanup:** tombstone then purge the `gate-trial` org
   and its repo as `beehive-system` (`docs/OPS.md:206`), then confirm `gate_runs` rows are gone; destroy leaves no container running (check `wrangler containers` list, 0 instances).
@@ -212,23 +203,29 @@ Also: the queue and DLQ must exist before the push (human); the new container cl
 
 1. docs: correct About/README/ARCHITECTURE to "Simulated" (MR-FLOW §12), separate and first. Not spine.
 2. m12 actors unique index (slice 0), own push [SPINE].
-3. spike worker and findings S1-S6 (maintainer deploys; not merged code). Gates 6-9.
-4. `sandbox-base.ts` extraction + `TestSandbox` + `NpmRegistryGateway` + `/sandbox/test` + stub mode + tests (no wrangler changes yet; unreachable until step 5).
-5. sandbox-runner `wrangler.toml`: `[[containers]]` for `TestSandbox` (`instance_type`, `max_instances = 3`), binding, `[exports.TestSandbox]`; OPS paragraph. Human push, own deploy.
-6. `workers/shared/gate-run-schema.ts` + DO m13 (`gate_runs`, preview columns, routes, summary upsert, purge order) + migration tests [SPINE]. Own push.
-7. gate-workflow rewrite (queue, real run, `Response.ok`, error classes), wrangler queue + service bindings, test rewrite; then the dead edge route and CLI removal.
+3. Spike: the maintainer deploys `spikes/gate-spike/` per its README, runs S1-S5, deletes it; findings to OPEN-QUESTIONS. Gates 6 and later.
+4. Code only, unreachable: `sandbox-base.ts` extraction, `TestSandbox`, `NpmRegistryGateway` and the deny handler, `/sandbox/test`, `SANDBOX_MODE=stub`, tests.
+5. `workers/shared/gate-run-schema.ts` + DO m13 (`gate_runs`, `candidates` columns in `schema.sql`/`schema-inline.ts`/m13, routes, dedupe/quota/caps, summary upsert, purge order) + migration
+   tests [SPINE]. Own push; before 7a, so the gate's first call finds its routes.
+6. sandbox-runner `wrangler.toml` **after the B1 fix**: a second `[[containers]]` block with only `class_name`, `scheduling_policy`, `images` (no `instance_type`, no `max_instances`),
+   the binding, `[exports.TestSandbox]`; OPS paragraph. Human push, own deploy.
+7a. Gate consumer **behind the old path**: queue + `SANDBOX_RUNNER` binding + `queue()` handler + `POST /gates/runs`; `/gates/pre-merge` still simulates. Maintainer creates the queue first.
+   Then the **approved production run** (§7) through `POST /gates/runs`.
+7b. Switch: `/gates/pre-merge` enqueues; delete the simulation, the Map, the simulated routes, rewrite `gate.test.ts`; the `isProductionPush` guard in `queue-consumer`.
 8. Edge GET routes, UI table, CLI `candidate gate-runs`.
-9. Production run (§7), then the public-claims commit (§5), `FOCUS.md`/`MILESTONES.md`.
+9. Public-claims commit (§5, wording includes the "repo's own test command exited 0" limit), `FOCUS.md`/`MILESTONES.md`.
 
 ## 9. Decisions for the maintainer (recommendation first)
 
 - **D1 numbering:** build m12 first as its own push, then this as m13. *Recommend yes.* If m12 slips, renumber this to m12; never stamp a placeholder.
 - **D2 second container class `TestSandbox`** (own cap, size, cost) rather than growing `BuildSandbox`. *Recommend yes.*
-- **D3 instance and cap:** `standard-2`, `max_instances = 3`, queue `max_concurrency = 2`, app-level and runtime instance equal; never `basic`/`dev`/`standard`. *Recommend yes, revisit after S2.*
+- **D3 size and cap (revised):** `standard-2` via `start({ instance })` only; no `instance_type`/`max_instances` (rejected for the DO policy); cap = queue `max_concurrency = 2` + DO counter (3 global, 1 per repo) + 50 runs/org/day + same-sha dedupe. *Recommend yes; numbers tuned after S2/S3.*
 - **D4 log storage:** 32 KiB tail in `gate_runs` (no R2 in slice 1) instead of R2 `log_key`. *Recommend the DO column; R2 when logs matter.*
 - **D5 conformance and complexity dropped** with `not_run`, no placeholders; the weighted score disappears. *Recommend yes.* Alternative (a real `git diff --numstat` LOC delta) is a later kernel.
 - **D6 public wording:** fix to "Simulated" now; change to "real test gate" only after the first approved production run. *Recommend yes.*
 - **D7 execution model:** the gate gets its own queue and is its consumer (no Workflows binding, decision 7). *Recommend yes; S5 may force a polling variant.*
 - **D8 counts:** best-effort vitest/jest summary parse else `null`. *Recommend yes.*
 - **D9 retries:** install and test failures are `fail` with no auto-retry; only infrastructure classes retry. *Recommend yes.*
-- **D10 spike worker and its deploy** (S1-S6) approved by the maintainer, deleted afterwards. *Required before steps 4-9 are trusted.*
+- **D10 spike worker (accepted):** `spikes/gate-spike/`, deployed and deleted by the maintainer (README has the commands). Needs `SPIKE_TOKEN` and the Artifacts-scoped `CLOUDFLARE_API_TOKEN` as secrets and one queue.
+- **D11 `unverified` passes** (exit 0, no parsable counts): display-only in slice 1; slice 2's policy decides whether a repo may require verified counts. *Recommend: allow, but show it, and let the policy tighten.*
+- **D12 abuse limits:** 50 runs per organization per 24 h, 1 running per repository, 3 globally, gate trigger from the production push queue only. *Recommend these starting numbers.*
