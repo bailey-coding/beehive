@@ -39,12 +39,14 @@ export function buildReport(meta: RunMeta, corpus: Corpus, rows: RowResult[], m:
   L.push('');
 
   L.push('## Metrics (tier A, complete rows)', '');
-  L.push(`n = ${m.tierA.completeRows} complete of ${m.tierA.n} tier-A rows (${m.tierA.nE} observable-E).`, '');
+  L.push(`n = ${m.tierA.completeRows} complete (+${m.tierA.specFailedRows} spec-failed) of ${m.tierA.n} tier-A rows (${m.tierA.nE} observable-E).`, '');
   L.push(`- Rescue rate R: ${m.R} rows (${m.rescuesConfirmed} confirmed by deterministic oracles).`);
   L.push(`- Spec-permitted spread S: ${m.S} rows (${m.sConfirmed} confirmed deterministically).`);
   L.push(`- Specs passing validators within 1 retry: ${m.specsPassedWithinOneRetry}. Reference passes acceptance: ${m.referenceAcceptancePass}.`);
   L.push(`- Spec edit distance (median): ${f(m.medianEditDistance)}; human minutes (median): ${f(m.medianHumanMinutes, 1)}; spec share of per-change cost: ${f(m.specCostShare)}.`);
-  L.push(`- Ladder: catches ${m.catches} (of which held-out tests that the candidate's own tests missed: ${m.rows.reduce((n, x) => n + x.heldOutCatches, 0)}), false positives ${m.falsePositives}, escapes on E rows ${m.escapesE}, reference false-rejects ${m.referenceFalseRejects}. Conformance/shadow rungs ran: ${m.rungsRan ? 'yes' : 'no (no probe records)'}.`);
+  L.push(`- Ladder: catches ${m.catches} false positives ${m.falsePositives}, escapes on E rows ${m.escapesE}, reference false-rejects ${m.referenceFalseRejects}. Conformance/shadow rungs ran: ${m.rungsRan ? 'yes' : 'no (no probe records)'}.`);
+  L.push(`- Escapes found by held-out tests (candidate passed its own tests and the acceptance, fails a held-out test the reference passes; not counted as catches): ${m.rows.reduce((n, x) => n + x.heldOutEscapes, 0)}.`);
+  L.push(`- Spec-failed rows (count against A2 as evidence): ${m.tierA.specFailedRows}.`);
   L.push(`- Cost per accepted change: ${usd(m.costPerAcceptedChange)}; same spec with K=1: ${usd(m.costPerAcceptedChangeK1)}.`);
   L.push(`- Model-judged labels (${GRADER_LABEL}): ${m.graderLabelled.count}${Object.keys(m.graderLabelled.byLabel).length ? ` (${Object.entries(m.graderLabelled.byLabel).map(([k, v]) => `${k}: ${v}`).join(', ')})` : ''}. A human samples 20% of these.`, '');
 
@@ -52,6 +54,7 @@ export function buildReport(meta: RunMeta, corpus: Corpus, rows: RowResult[], m:
   L.push(`| A1 value of N | A2 specs reliable, cheap | A3 oracles replace review (shadow rung) |`, '|---|---|---|', `| ${m.decision.A1} | ${m.decision.A2} | ${m.decision.A3} |`, '');
   if (!m.decision.decisive) L.push(`Raw cells if the thresholds were applied to this pilot anyway (not a verdict): A1 ${m.decision.computed.A1}, A2 ${m.decision.computed.A2}, A3 ${m.decision.computed.A3}.`, '');
   L.push(`${m.decision.note}. Evidence that rests on the ${GRADER_LABEL} alone cannot validate a cell.`, '');
+  L.push('A2 clause "spec defects explain most candidate failures" is deliberately NOT implemented: attributing a divergence to a missing or wrong spec clause needs a human trace, so A2 invalidating test here uses only the reference-acceptance and rewrite clauses. Spec-failed rows already count against A2 (they lower the passing counts).', '');
   L.push('Not run: train, canary, full rungs; fuzz replay (about 200 requests per route); human review of issue texts beyond the approval gate; human sample of graded cases.', '');
   return L.join('\n');
 }

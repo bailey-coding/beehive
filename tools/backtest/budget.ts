@@ -80,7 +80,8 @@ export class BudgetTracker {
 
 /** Wraps a client: refuses to start past the hard stop, clamps each run's call limit to what remains, records everything. */
 export class BudgetedClient implements ModelClient {
-  constructor(private readonly inner: ModelClient, readonly tracker: BudgetTracker) {}
+  /** throwOnError: a failed call (auth, bad model, crash) aborts the run instead of becoming silent empty text. */
+  constructor(private readonly inner: ModelClient, readonly tracker: BudgetTracker, private readonly throwOnError = true) {}
   get name(): string {
     return this.inner.name;
   }
@@ -91,6 +92,9 @@ export class BudgetedClient implements ModelClient {
     const res = await this.inner.run({ ...req, maxCalls: Math.min(req.maxCalls, t.remaining) });
     t.ledger.push({ role: req.role, rowId: req.rowId, calls: res.calls, usage: res.usage, costUsd: res.costUsd, durationMs: res.durationMs, stopReason: res.stopReason });
     t.persist();
+    if (this.throwOnError && res.stopReason === 'error') {
+      throw new BudgetExceeded(`model call failed (${req.role}${req.rowId ? ` ${req.rowId}` : ''}): ${res.error ?? `exit code ${res.exitCode}`}`);
+    }
     if (clamped && res.stopReason === 'call-limit') {
       // The run was cut by the global limit, not its own: surface it so the caller aborts cleanly.
       throw new BudgetExceeded(`hard stop reached mid-run: ${t.used}/${t.hardStop} calls used`);

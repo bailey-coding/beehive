@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { PrivateConfig } from './claudeconfig.ts';
 import { exec } from './exec.ts';
 
 export type Role = 'issue' | 'spec' | 'candidate' | 'grade' | 'leakage' | 'smoke';
@@ -32,6 +33,12 @@ export interface ModelResponse {
   costUsd: number | null;
   durationMs: number;
   stopReason: 'done' | 'call-limit' | 'timeout' | 'error';
+  /** CLI exit code (null: killed or never started). Fakes report 0. */
+  exitCode: number | null;
+  /** Set when stopReason is 'error': exit code, the CLI's own error text and trimmed stderr, token patterns redacted. */
+  error?: string;
+  /** Tools announced by the CLI's init event (used by the canary to prove Bash is absent). */
+  initTools?: string[];
 }
 
 export interface ModelClient {
@@ -49,6 +56,8 @@ export interface FakeReply {
   usage?: Partial<Usage>;
   costUsd?: number;
   stopReason?: ModelResponse['stopReason'];
+  initTools?: string[];
+  error?: string;
 }
 
 /** Deterministic client: a handler maps a request to a reply. It may write files into req.cwd to act as an agent. */
@@ -68,6 +77,9 @@ export class FakeClient implements ModelClient {
       costUsd: r.costUsd ?? 0,
       durationMs: 1,
       stopReason: r.stopReason ?? 'done',
+      exitCode: r.stopReason === 'error' ? 1 : 0,
+      error: r.error,
+      initTools: r.initTools,
     };
   }
 }
@@ -78,17 +90,32 @@ export const MODEL = 'claude-sonnet-5-5';
 export const EFFORT = 'medium';
 
 /**
- * Env the CLI child may see: an explicit allow-list. HOME is needed for the CLI's own login; CLAUDE_CONFIG_DIR is a
- * config path (not a secret) and only passes if the user set it. No API key or token variable is passed through: the
- * CLI authenticates from its login under HOME. If a host can only authenticate through an env token, the real client
- * fails at the first call and that must be fixed deliberately, not by widening this list.
+ * Env the CLI child may see: PATH, LANG, TERM, and a private HOME and CLAUDE_CONFIG_DIR (see claudeconfig.ts) that hold
+ * only a copy of the login. No API key or token variable is passed through, and nothing of the user's own Claude config
+ * (CLAUDE.md, settings, memory, plugins) is reachable, so no user-level instruction can reach any arm.
  */
-const ENV_ALLOW = ['PATH', 'HOME', 'LANG', 'TERM', 'CLAUDE_CONFIG_DIR'];
-
-export function childEnv(src: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = { CI: '1', NO_COLOR: '1' };
-  for (const k of ENV_ALLOW) if (src[k] !== undefined) out[k] = src[k];
+export function childEnv(priv: Pick<PrivateConfig, 'dir' | 'home'>, src: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { CI: '1', NO_COLOR: '1', HOME: priv.home, CLAUDE_CONFIG_DIR: priv.dir };
+  for (const k of ['PATH', 'LANG', 'TERM']) if (src[k] !== undefined) out[k] = src[k];
   return out;
+}
+
+const TOKEN_PATTERNS: RegExp[] = [
+  /sk-ant-[A-Za-z0-9_-]+/g,
+  /\bsk-[A-Za-z0-9_-]{16,}/g,
+  /\b(?:ghp|gho|ghs|github_pat)_[A-Za-z0-9_]{16,}/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g,
+  /(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi,
+  /((?:token|key|secret|password|authorization)["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{12,}/gi,
+  /\b[A-Fa-f0-9]{40,}\b/g,
+];
+
+/** Redact anything token-shaped and trim to the tail. */
+export function redact(text: string, max = 500): string {
+  let t = text;
+  for (const p of TOKEN_PATTERNS) t = t.replace(p, (_m, pre) => `${typeof pre === 'string' ? pre : ''}[redacted]`);
+  t = t.trim();
+  return t.length > max ? `...${t.slice(-max)}` : t;
 }
 
 const FILE_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
@@ -99,12 +126,13 @@ const DENY = ['WebFetch', 'WebSearch', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(git
 
 export interface ArgOptions {
   allowBash?: boolean;
+  model?: string;
 }
 
 export function buildClaudeArgs(req: Pick<ModelRequest, 'tools'>, opts: ArgOptions = {}): string[] {
   const args = [
     '-p',
-    '--model', MODEL,
+    '--model', opts.model ?? MODEL,
     '--effort', EFFORT,
     '--output-format', 'stream-json',
     '--verbose',
@@ -144,6 +172,7 @@ export interface StreamState {
   lastText: string;
   /** The latest assistant message asked for a tool, so another API call will follow unless the run is stopped. */
   pendingTool?: boolean;
+  initTools?: string[];
   result: Record<string, any> | null;
 }
 
@@ -161,19 +190,26 @@ export function parseStreamLine(line: string, st: StreamState): void {
     const t = blocks.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('');
     if (t) st.lastText = t;
     st.pendingTool = blocks.some((b: any) => b?.type === 'tool_use');
+  } else if (ev?.type === 'system' && ev.subtype === 'init' && Array.isArray(ev.tools)) {
+    st.initTools = ev.tools.map((t: unknown) => (typeof t === 'string' ? t : String((t as { name?: unknown })?.name ?? '')));
   } else if (ev?.type === 'result') {
     st.result = ev;
   }
 }
 
-export function responseFromStream(st: StreamState, durationMs: number, stopReason: ModelResponse['stopReason']): ModelResponse {
+export function responseFromStream(st: StreamState, durationMs: number, stopReason: ModelResponse['stopReason'], exit: { code: number | null; stderr: string } = { code: 0, stderr: '' }): ModelResponse {
   const r = st.result;
   const u = r?.usage ?? {};
   const turns = typeof r?.num_turns === 'number' ? r.num_turns : 0;
   const calls = st.assistantIds.size || turns;
   const isErr = r ? r.is_error === true : false;
+  const failed = stopReason === 'done' && (isErr || !r || (exit.code !== 0 && exit.code !== null));
+  const finalReason = stopReason !== 'done' ? stopReason : failed ? 'error' : 'done';
+  // An error result's text is the CLI's error message, not model output: never return it as the reply.
+  const text = isErr ? '' : typeof r?.result === 'string' && r.result ? r.result : st.lastText;
+  const parts = failed ? [`exit code ${exit.code}`, isErr && typeof r?.result === 'string' ? `cli: ${r.result}` : '', exit.stderr ? `stderr: ${exit.stderr}` : '', !r ? 'no result event' : ''].filter(Boolean) : [];
   return {
-    text: typeof r?.result === 'string' && r.result ? r.result : st.lastText,
+    text,
     calls,
     usage: {
       inputTokens: u.input_tokens ?? 0,
@@ -183,12 +219,19 @@ export function responseFromStream(st: StreamState, durationMs: number, stopReas
     },
     costUsd: typeof r?.total_cost_usd === 'number' ? r.total_cost_usd : null,
     durationMs,
-    stopReason: stopReason !== 'done' ? stopReason : isErr || !r ? 'error' : 'done',
+    stopReason: finalReason,
+    exitCode: exit.code,
+    error: failed ? redact(parts.join('; ')) : undefined,
+    initTools: st.initTools,
   };
 }
 
 export interface ClaudeCliOptions {
   bin?: string;
+  /** Private config (credentials copy only). Required: the client never runs against the user's own config. */
+  config: PrivateConfig;
+  /** Model override (the canary uses a deliberately bad id). */
+  model?: string;
   /** Keep the Bash tool for candidates. Refuses to construct unless an OS sandbox (bubblewrap) is on PATH. */
   allowBash?: boolean;
   which?: (name: string) => string | null;
@@ -206,7 +249,12 @@ export class ClaudeCliClient implements ModelClient {
   private readonly bin: string;
   private readonly allowBash: boolean;
 
-  constructor(opts: ClaudeCliOptions = {}) {
+  private readonly config: PrivateConfig;
+  private readonly model: string;
+
+  constructor(opts: ClaudeCliOptions) {
+    this.config = opts.config;
+    this.model = opts.model ?? MODEL;
     this.bin = opts.bin ?? 'claude';
     this.allowBash = opts.allowBash === true;
     this.sandbox = null;
@@ -224,9 +272,9 @@ export class ClaudeCliClient implements ModelClient {
     const st: StreamState = { assistantIds: new Set(), lastText: '', result: null };
     let limited = false;
     const t0 = Date.now();
-    const r = await exec(this.bin, buildClaudeArgs(req, { allowBash: this.allowBash }), {
+    const r = await exec(this.bin, buildClaudeArgs(req, { allowBash: this.allowBash, model: this.model }), {
       cwd,
-      env: childEnv(),
+      env: childEnv(this.config),
       timeoutMs: req.timeoutMs,
       input: req.prompt,
       onStdoutLine: (line) => {
@@ -238,6 +286,6 @@ export class ClaudeCliClient implements ModelClient {
       },
     });
     if (ownTmp) fs.rmSync(ownTmp, { recursive: true, force: true });
-    return responseFromStream(st, Date.now() - t0, r.timedOut ? 'timeout' : limited ? 'call-limit' : 'done');
+    return responseFromStream(st, Date.now() - t0, r.timedOut ? 'timeout' : limited ? 'call-limit' : 'done', { code: r.code, stderr: redact(r.stderr) });
   }
 }

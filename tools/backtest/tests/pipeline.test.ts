@@ -25,6 +25,7 @@ const cfg: OracleConfig = {
   installDeps: async (dir: string) => fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(dir, 'node_modules'), 'dir'),
   baseAttempts: 2,
   evalAttempts: 2,
+  sandbox: 'unshare', // agent-written code (acceptance, candidates) runs in the real OS sandbox even in tests
 };
 
 const APP_BASE = `export default {
@@ -132,6 +133,7 @@ const baseOpts = (name: string) => ({
   outDir: path.join(os.tmpdir(), `bt-out-${name}-${Date.now()}`),
   workRoot: path.join(os.tmpdir(), `bt-work-${name}-${Date.now()}`),
   runId: name, k: 3, issueApproval: 'auto' as const,
+  ledgerFile: path.join(os.tmpdir(), `bt-ledger-${name}-${Date.now()}.json`),
 });
 
 describe('corpus', () => {
@@ -291,7 +293,8 @@ describe('isolation of agent checkouts (no model involved)', () => {
       expect(names).not.toContain('reference.patch');
       expect(names.filter((n) => n.startsWith('eval-') || n === 'deps' || n === 'reference')).toEqual([]);
       const marker = (rows[0].reference as unknown as { report: unknown }) && changeSha;
-      expect(reachabilityTest({ agentRoot: root, cwd: r.cwd!, forbiddenRoots: [workRoot, source, harnessRoot], markers: [marker, changeSha.slice(0, 7), 'reference.patch'] }).passed).toBe(true);
+      const rt = reachabilityTest({ agentRoot: root, cwd: r.cwd!, forbiddenRoots: [workRoot, source, harnessRoot], markers: [marker, changeSha.slice(0, 7), 'reference.patch'] });
+      expect(rt.detail).toEqual([]);
     }
   });
   it('the reachability test catches reference content, escaping symlinks and harness paths inside the agent root', () => {
@@ -310,19 +313,105 @@ describe('isolation of agent checkouts (no model involved)', () => {
     fs.rmSync(path.join(root, 'notes.txt'));
     expect(reachabilityTest({ ...base, forbiddenRoots: [os.tmpdir()] }).detail.join()).toMatch(/ancestor of the agent root/);
     expect(reachabilityTest({ ...base, forbiddenRoots: [cwd] }).detail.join()).toMatch(/lies inside the agent root/);
+    // the REAL alternates path: .git/objects/info/alternates (the objects dir is not content-scanned, but this is checked)
     fs.mkdirSync(path.join(cwd, '.git', 'objects', 'info'), { recursive: true });
     fs.writeFileSync(path.join(cwd, '.git', 'objects', 'info', 'alternates'), '/real/repo/.git/objects');
-    // objects/ is skipped for content, so alternates lives under info/ beside it
-    fs.mkdirSync(path.join(cwd, '.git', 'info'), { recursive: true });
-    fs.writeFileSync(path.join(cwd, '.git', 'info', 'alternates'), '/real/repo/.git/objects');
     expect(reachabilityTest(base).detail.join()).toMatch(/alternates/);
+    fs.rmSync(path.join(cwd, '.git'), { recursive: true, force: true });
+    expect(reachabilityTest(base).passed).toBe(true);
+  });
+
+  it('flags hardlinks, worktree/commondir pointers and remotes leading outside the root, and markers in files over 4 MB', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-agent-neg2-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-outside-neg2-'));
+    const cwd = path.join(root, 'wt');
+    fs.mkdirSync(cwd);
+    const base = { agentRoot: root, cwd, forbiddenRoots: [], markers: ['BIG-FILE-MARKER-XYZ'] };
+    expect(reachabilityTest(base).passed).toBe(true);
+    // hardlink to a file outside
+    fs.writeFileSync(path.join(outside, 'real.txt'), 'data');
+    fs.linkSync(path.join(outside, 'real.txt'), path.join(cwd, 'linked.txt'));
+    expect(reachabilityTest(base).detail.join()).toMatch(/hardlink: wt\/linked.txt has 1 link\(s\) outside/);
+    fs.rmSync(path.join(cwd, 'linked.txt'));
+    // worktree pointer + commondir outside
+    fs.writeFileSync(path.join(cwd, '.git'), `gitdir: ${path.join(outside, 'wtgit')}\n`);
+    fs.mkdirSync(path.join(outside, 'wtgit'));
+    expect(reachabilityTest(base).detail.join()).toMatch(/worktree \.git pointer .* outside/);
+    fs.writeFileSync(path.join(cwd, '.git'), `gitdir: ${path.join(root, 'repo', '.git', 'worktrees', 'wt')}\n`);
+    fs.mkdirSync(path.join(root, 'repo', '.git', 'worktrees', 'wt'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'repo', '.git', 'worktrees', 'wt', 'commondir'), `${path.join(outside, 'common')}\n`);
+    expect(reachabilityTest(base).detail.join()).toMatch(/commondir of .* outside/);
+    fs.writeFileSync(path.join(root, 'repo', '.git', 'worktrees', 'wt', 'commondir'), '../..\n');
+    expect(reachabilityTest(base).passed).toBe(true); // a pointer that stays inside the root is fine
+    // remote pointing at the real repo, a path outside, and a URL
+    fs.writeFileSync(path.join(root, 'repo', '.git', 'config'), `[remote "origin"]\n\turl = ${outside}\n`);
+    expect(reachabilityTest(base).detail.join()).toMatch(/remote .* outside/);
+    fs.writeFileSync(path.join(root, 'repo', '.git', 'config'), '[remote "origin"]\n\turl = https://example.invalid/x.git\n');
+    expect(reachabilityTest(base).detail.join()).toMatch(/remote .* outside/);
+    fs.writeFileSync(path.join(root, 'repo', '.git', 'config'), `[remote "origin"]\n\turl = ${path.join(root, 'origin.git')}\n`);
+    expect(reachabilityTest(base).passed).toBe(true);
+    // a marker past the 4 MB mark of a big file (and across a chunk boundary)
+    const big = Buffer.alloc(5 * 1024 * 1024 + 3, 'a');
+    big.write('BIG-FILE-MARKER-XYZ', 1024 * 1024 - 7); // straddles the first 1 MB chunk boundary
+    fs.writeFileSync(path.join(cwd, 'big.bin'), big);
+    expect(reachabilityTest(base).detail.join()).toMatch(/reference marker found in wt\/big.bin/);
   });
   it('the exact child env and argument list of the real client expose no Bash tool and no secrets', () => {
     const args = buildClaudeArgs({ tools: 'agent' });
     expect(args[args.indexOf('--tools') + 1].split(',')).not.toContain('Bash');
     expect(args.join(' ').split('--allowedTools')[1].split('--disallowedTools')[0]).not.toContain('Bash');
-    const env = childEnv({ ...process.env, ANTHROPIC_API_KEY: 'sk-test', CLOUDFLARE_API_TOKEN: 't', GITHUB_TOKEN: 'g' } as NodeJS.ProcessEnv);
+    const env = childEnv({ dir: '/priv/c', home: '/priv/h' }, { ...process.env, ANTHROPIC_API_KEY: 'sk-test', CLOUDFLARE_API_TOKEN: 't', GITHUB_TOKEN: 'g' } as NodeJS.ProcessEnv);
     expect(Object.keys(env).filter((k) => /KEY|TOKEN|SECRET|PASSWORD/i.test(k))).toEqual([]);
+  });
+});
+
+describe('oracle sandbox (unshare), no model involved', () => {
+  it('the probe works on this host and a failure would be reported, not hidden', async () => {
+    const { probeSandbox } = await import('../sandbox.ts');
+    const p = await probeSandbox();
+    expect(p.detail).toBeTruthy();
+    expect(p.ok, p.detail).toBe(true);
+  });
+
+  const mkEval = (listenerPort: number, canary: string) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-evalbox-'));
+    fs.writeFileSync(path.join(d, 'package.json'), '{"type":"module"}\n');
+    fs.writeFileSync(path.join(d, 'vitest.config.ts'), "import { defineConfig } from 'vitest/config';\nexport default defineConfig({ test: { include: ['tests/**/*.test.ts'] } });\n");
+    fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(d, 'node_modules'), 'dir');
+    fs.mkdirSync(path.join(d, 'tests'));
+    fs.writeFileSync(path.join(d, 'probe.json'), JSON.stringify({ port: listenerPort, canary }));
+    fs.writeFileSync(path.join(d, 'tests', 'escape.test.ts'), `import fs from 'node:fs';
+import net from 'node:net';
+import { expect, it } from 'vitest';
+const cfg = JSON.parse(fs.readFileSync('probe.json', 'utf8'));
+it('cannot read a canary file outside the root', () => { expect(() => fs.readFileSync(cfg.canary, 'utf8')).toThrow(); });
+it('cannot connect to a live local listener', async () => {
+  await expect(new Promise((resolve, reject) => { const s = net.connect(cfg.port, '127.0.0.1'); s.on('connect', () => resolve('connected')); s.on('error', reject); })).rejects.toBeTruthy();
+});
+it('does not see the real HOME', () => { expect(process.env.HOME).toBe('/home/bt'); });
+`);
+    return d;
+  };
+
+  it('candidate test code that connects to a local listener or reads a canary outside the root sees nothing', async () => {
+    const net = await import('node:net');
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-canary-out-'));
+    const canary = path.join(outside, 'canary.txt');
+    fs.writeFileSync(canary, 'TOP-SECRET');
+    const server = net.createServer((s) => s.destroy());
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    try {
+      const d = mkEval(port, canary);
+      const boxed = await stableRun(d, { ...cfg, sandbox: 'unshare' }, 1);
+      expect(boxed.crashed, boxed.loadErrors.join()).toBe(false);
+      expect(boxed.outcomes.map((o) => `${o.name}:${o.status}`)).toEqual(['cannot read a canary file outside the root:passed', 'cannot connect to a live local listener:passed', 'does not see the real HOME:passed']);
+      // control: the same tests unsandboxed DO reach both, so the sandboxed pass above is meaningful
+      const open = await stableRun(d, { ...cfg, sandbox: 'off' }, 1);
+      expect(open.outcomes.filter((o) => o.status === 'failed').map((o) => o.name).sort()).toEqual(['cannot connect to a live local listener', 'cannot read a canary file outside the root', 'does not see the real HOME']);
+    } finally {
+      server.close();
+    }
   });
 });
 
@@ -344,7 +433,7 @@ describe('human issue approval gate', () => {
     expect(fake2.requests.some((r) => r.role === 'issue')).toBe(false);
     // one ledger across both invocations: the issue-pass call is still counted in the second tracker and on disk
     const t2 = r2.meta.budget;
-    const disk = JSON.parse(fs.readFileSync(path.join(o.outDir, 'gate', 'ledger.json'), 'utf8'));
+    const disk = JSON.parse(fs.readFileSync(o.ledgerFile, 'utf8'));
     expect(disk.ledger.filter((e: { role: string }) => e.role === 'issue')).toHaveLength(1);
     expect(disk.used).toBe(t2.used);
     expect(t2.byRole.issue.calls).toBe(1);
@@ -365,6 +454,28 @@ describe('budget abort', () => {
     expect(fs.readFileSync(path.join(out, 'report.md'), 'utf8')).toMatch(/ABORTED \(partial results\)/);
     expect(JSON.parse(fs.readFileSync(path.join(out, 'run.json'), 'utf8')).meta.budget.used).toBe(3);
   }, 200_000);
+});
+
+describe('model failures and the global ledger', () => {
+  it('a failing model call (auth, bad model) aborts the run with the reason instead of becoming empty text', async () => {
+    const o = baseOpts('authfail');
+    const fake = new FakeClient(() => ({ text: '', stopReason: 'error', error: 'exit code 1; cli: Invalid API key; stderr: login required' }));
+    const res = await runPilot({ ...o, client: fake, tracker: new BudgetTracker() });
+    expect(res.meta.aborted).toMatch(/model call failed \(issue A1\).*Invalid API key.*login required/);
+    expect(res.rows[0].status).toBe('aborted');
+    expect(res.rows[0].issueCost).toBeNull(); // no empty issue text was stored
+    expect(fs.existsSync(path.join(o.outDir, 'authfail', 'rows', 'A1', 'issue.json'))).toBe(false);
+    expect(fs.readFileSync(res.reportPath, 'utf8')).toMatch(/ABORTED \(partial results\).*Invalid API key/);
+  }, 60_000);
+
+  it('a new --run name shares the same global ledger and cannot reset the cap', async () => {
+    const o = baseOpts('ledger-a');
+    await runPilot({ ...o, issueApproval: 'required', client: client(), tracker: new BudgetTracker() });
+    const t2 = new BudgetTracker();
+    const r2 = await runPilot({ ...o, runId: 'ledger-b', issueApproval: 'required', client: client(), tracker: t2 });
+    expect(t2.used).toBe(2); // run A's issue call is still counted in run B
+    expect(r2.meta.budget.used).toBe(2);
+  }, 120_000);
 });
 
 describe('abort and stop-rule statuses', () => {

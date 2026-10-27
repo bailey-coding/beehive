@@ -22,7 +22,8 @@ export async function baseGreen(repo: string, row: CorpusRow, cfg: OracleConfig,
   try {
     const s = await createScratchRepo(repo, row.base, dir, row.scrubDocs);
     if (cfg.installDeps) await cfg.installDeps(s.repo);
-    const run = await stableRun(s.repo, cfg, cfg.baseAttempts);
+    // The base commit's own tests are the repo's trusted code (no agent output involved): no sandbox needed here.
+    const run = await stableRun(s.repo, { ...cfg, sandbox: 'off' }, cfg.baseAttempts);
     const red = run.outcomes.filter((o) => o.status === 'failed').map((o) => `${o.file}::${o.name}`);
     const bad = red.length > 0 || run.crashed || run.timedOut || run.loadErrors.length > 0;
     return { checkedAt: now.toISOString(), tests: run.outcomes.length, red, flaky: run.flaky, loadErrors: run.loadErrors, verdict: bad ? 'drop' : 'keep' };

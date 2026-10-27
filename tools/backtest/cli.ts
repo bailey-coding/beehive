@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { BudgetTracker, BudgetedClient, EXPECTED_CALLS, HARD_STOP_CALLS } from './budget.ts';
 import { baseGreen } from './basegreen.ts';
 import { ClaudeCliClient } from './client.ts';
+import { createPrivateConfig } from './claudeconfig.ts';
+import { runCanary } from './canary.ts';
 import { checkIndependence, freezeCorpus, loadCorpus } from './corpus.ts';
 import { docAtBaseTest } from './leakage.ts';
 import { DEFAULT_ORACLE_CONFIG } from './oracles.ts';
@@ -16,6 +18,8 @@ import { git } from './git.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const harnessRoot = path.resolve(here, '..', '..');
+/** Single global ledger: no flag to relocate it, so a new --run name cannot reset the 850 cap. */
+export const LEDGER_FILE = path.join(here, '.ledger.json');
 
 function flags(argv: string[]): { cmd: string; f: Record<string, string | true> } {
   const [cmd = 'help', ...rest] = argv;
@@ -35,7 +39,8 @@ function flags(argv: string[]): { cmd: string; f: Record<string, string | true> 
 const ALLOWED: Record<string, string[]> = {
   freeze: ['force', 'corpus'],
   check: ['base-green', 'write', 'corpus'],
-  smoke: ['release-pilot', 'out'],
+  smoke: ['release-pilot'],
+  canary: ['release-pilot'],
   pilot: ['release-pilot', 'run', 'k', 'rows', 'out', 'work', 'keep-work', 'allow-bash', 'expected', 'hard-stop', 'corpus'],
   help: [],
 };
@@ -85,40 +90,64 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (cmd === 'smoke') {
-    if (!f['release-pilot']) throw new Error('refusing to make a real call without --release-pilot');
-    // Exactly one real call, counted in its own ledger: a trivial prompt in an empty temp dir. Prints shape and cost only.
+  if (cmd === 'smoke' || cmd === 'canary') {
+    if (!f['release-pilot']) throw new Error(`refusing to make real calls without --release-pilot (${cmd})`);
+    // Ledgered in the same global ledger as the pilot. Private config: credentials copy only, deleted at the end.
     const tracker = new BudgetTracker();
-    tracker.attach(path.join(String(f.out ?? path.join(repo, 'docs/backtest/runs')), 'smoke', 'ledger.json'));
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-smoke-'));
-    const r = await new BudgetedClient(new ClaudeCliClient(), tracker).run({ role: 'smoke', prompt: 'Create a file named hello.txt containing exactly the word ok, then reply with the single word done.', tools: 'agent', cwd: dir, maxCalls: 6, timeoutMs: 3 * 60_000 });
-    const wrote = fs.existsSync(path.join(dir, 'hello.txt')) ? fs.readFileSync(path.join(dir, 'hello.txt'), 'utf8').trim() : null;
-    fs.rmSync(dir, { recursive: true, force: true });
-    log(JSON.stringify({ stopReason: r.stopReason, calls: r.calls, usage: r.usage, costUsd: r.costUsd, durationMs: r.durationMs, reply: r.text.slice(0, 80), fileWritten: wrote }, null, 2));
+    tracker.attach(LEDGER_FILE);
+    const config = createPrivateConfig();
+    try {
+      if (cmd === 'smoke') {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-smoke-'));
+        const r = await new BudgetedClient(new ClaudeCliClient({ config }), tracker).run({ role: 'smoke', prompt: 'Create a file named hello.txt containing exactly the word ok, then reply with the single word done.', tools: 'agent', cwd: dir, maxCalls: 6, timeoutMs: 3 * 60_000 });
+        const wrote = fs.existsSync(path.join(dir, 'hello.txt')) ? fs.readFileSync(path.join(dir, 'hello.txt'), 'utf8').trim() : null;
+        fs.rmSync(dir, { recursive: true, force: true });
+        log(JSON.stringify({ stopReason: r.stopReason, calls: r.calls, usage: r.usage, costUsd: r.costUsd, durationMs: r.durationMs, reply: r.text.slice(0, 80), fileWritten: wrote }, null, 2));
+      } else {
+        // throwOnError=false: the canary inspects failures itself (including the deliberate bad-model call).
+        const good = new BudgetedClient(new ClaudeCliClient({ config }), tracker, false);
+        const bad = new BudgetedClient(new ClaudeCliClient({ config, model: 'claude-bogus-model-0' }), tracker, false);
+        const { checks } = await runCanary({ client: good, badClient: bad, configDir: config.dir });
+        for (const k of checks) log(`${k.pass ? 'PASS' : 'FAIL'}  ${k.name}\n      ${k.detail}`);
+        log(`global ledger: ${tracker.used}/${tracker.hardStop} calls`);
+        if (checks.some((k) => !k.pass)) process.exitCode = 1;
+      }
+    } finally {
+      config.dispose();
+    }
     return;
   }
 
   if (cmd === 'pilot') {
     if (!f['release-pilot']) throw new Error('refusing to run the pilot without --release-pilot (the maintainer releases the spend)');
     // Fails before any spend if --allow-bash is given without an OS sandbox.
-    const client = new ClaudeCliClient({ allowBash: !!f['allow-bash'], log });
+    const config = createPrivateConfig();
+    let client: ClaudeCliClient;
+    try {
+      client = new ClaudeCliClient({ config, allowBash: !!f['allow-bash'], log });
+    } catch (e) {
+      config.dispose();
+      throw e;
+    }
     const rows = typeof f.rows === 'string' ? f.rows.split(',') : PILOT_ROWS.map((r) => r.id);
     const corpus = await loadCorpus(corpusFile, repo, rows);
     const runId = String(f.run ?? `pilot-${new Date().toISOString().slice(0, 10)}`);
     const tracker = new BudgetTracker(Number(f.expected ?? EXPECTED_CALLS), Number(f['hard-stop'] ?? HARD_STOP_CALLS));
     const out = await runPilot({
       corpus, repo, harnessRoot, runId,
+      ledgerFile: LEDGER_FILE,
       outDir: String(f.out ?? path.join(repo, 'docs/backtest/runs')),
       workRoot: String(f.work ?? path.join(os.tmpdir(), 'beehive-backtest')),
       client, tracker, k: Number(f.k ?? 3), cfg: DEFAULT_ORACLE_CONFIG,
       issueApproval: 'required', // the maintainer reads every issue text; there is no auto-approve flag
       keepWork: !!f['keep-work'], log,
     });
+    config.dispose();
     log(`report: ${out.reportPath}\ncalls used: ${out.meta.budget.used}/${out.meta.budget.hardStop}${out.meta.aborted ? `\nABORTED: ${out.meta.aborted}` : ''}`);
     return;
   }
 
-  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | smoke --release-pilot | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
+  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | smoke --release-pilot | canary --release-pilot | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main().catch((e) => {

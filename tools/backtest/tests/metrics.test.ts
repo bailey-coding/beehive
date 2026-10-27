@@ -65,17 +65,17 @@ describe('spec metrics', () => {
 });
 
 describe('ladder accounting (A3)', () => {
-  it('a held-out failure the candidate\'s own tests missed is a confirmed catch, and also an escape if every rung cleared', () => {
+  it('a held-out failure the candidate\'s own tests missed is NOT a catch (plan: conformance or shadow failure); it is reported as an escape found by held-out tests', () => {
     const failing = cand(1, { deterministicRegression: true, label: null, labelSource: null, rep: { held: { 'a::t': 'failed' } } });
     const m = computeMetrics([row('A1', [failing])], meta);
-    expect(m.rows[0].catches).toBe(1);
-    expect(m.rows[0].heldOutCatches).toBe(1);
+    expect(m.rows[0].catches).toBe(0);
+    expect(m.rows[0].heldOutEscapes).toBe(1);
     expect(m.rows[0].escapes).toBe(1);
-    expect(m.catches).toBe(1);
+    expect(m.catches).toBe(0);
   });
   it('a candidate that fails its own pre-merge rung is not a held-out catch', () => {
     const c = cand(1, { clearsAllRungs: false, rep: { held: { 'a::t': 'failed' }, rungs: { preMerge: false, conformance: true, shadow: true } } });
-    expect(computeMetrics([row('A1', [c])], meta).rows[0].heldOutCatches).toBe(0);
+    expect(computeMetrics([row('A1', [c])], meta).rows[0].heldOutEscapes).toBe(0);
   });
   it('a rung-only failure confirmed by held-out tests is a catch, without them a false positive', () => {
     const rep = { rungs: { preMerge: true, conformance: true, shadow: false } };
@@ -83,5 +83,31 @@ describe('ladder accounting (A3)', () => {
     const unconfirmed = cand(2, { clearsAllRungs: false, rep });
     const m = computeMetrics([row('A1', [confirmed, unconfirmed])], meta);
     expect(m.rows[0]).toMatchObject({ catches: 1, falsePositives: 1 });
+  });
+});
+
+describe('spec-failed rows count against A2', () => {
+  const ok = (id: string) => row(id, [cand(1)]);
+  const failedSpec = (id: string): RowResult => row(id, [], { status: 'spec-failed', spec: { attempts: [], passedValidators: false, retries: 1, cost: cc(2), editDistance: 0, humanMinutes: 1 }, reference: null });
+
+  it('they count as attempted rows (toward the 11) and as non-passes: 7 of 11 failing specs invalidates A2', () => {
+    const rows = [...Array.from({ length: 4 }, (_, i) => ok(`G${i}`)), ...Array.from({ length: 7 }, (_, i) => failedSpec(`F${i}`))];
+    const m = computeMetrics(rows, meta);
+    expect(m.tierA).toMatchObject({ completeRows: 4, specFailedRows: 7, attemptedRows: 11 });
+    expect(m.decision.decisive).toBe(true);
+    expect(m.referenceAcceptancePass).toBe(4);
+    expect(m.decision.A2).toBe('invalidating');
+  });
+  it('fewer than 11 attempted rows stay inconclusive however many specs failed', () => {
+    const m = computeMetrics([failedSpec('F1'), failedSpec('F2'), ok('G1')], meta);
+    expect(m.decision.decisive).toBe(false);
+    expect(m.decision.A2).toBe('inconclusive');
+    expect(m.decision.computed.A2).toBe('invalidating');
+  });
+  it('a failing spec among 11 cannot be rescued into validating', () => {
+    const rows = [...Array.from({ length: 7 }, (_, i) => ok(`G${i}`)), ...Array.from({ length: 4 }, (_, i) => failedSpec(`F${i}`))];
+    const m = computeMetrics(rows, meta);
+    expect(m.specsPassedWithinOneRetry).toBe(7);
+    expect(m.decision.A2).not.toBe('validating');
   });
 });

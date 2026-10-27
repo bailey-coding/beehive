@@ -26,8 +26,8 @@ export interface RowMetrics {
   spreadS: boolean;
   spreadConfirmedDeterministically: boolean;
   catches: number;
-  /** Part of `catches`: candidate passed its own tests and the spec's acceptance but fails a held-out test the reference passes. */
-  heldOutCatches: number;
+  /** Not a catch (the plan defines a catch as a conformance or shadow failure): candidate passed its own tests and the spec's acceptance but fails a held-out test the reference passes. */
+  heldOutEscapes: number;
   falsePositives: number;
   escapes: number;
   escapesModelJudged: number;
@@ -38,7 +38,7 @@ export interface RowMetrics {
 
 export interface Metrics {
   rows: RowMetrics[];
-  tierA: { n: number; nE: number; completeRows: number };
+  tierA: { n: number; nE: number; completeRows: number; specFailedRows: number; attemptedRows: number };
   /** Everything below is computed over tier A complete rows. */
   R: number;
   rescuesConfirmed: number;
@@ -57,6 +57,7 @@ export interface Metrics {
   graderLabelled: { count: number; byLabel: Record<string, number>; label: 'same-family grader' };
   costPerAcceptedChange: number | null;
   costPerAcceptedChangeK1: number | null;
+  /** Spec-failed rows already lower A2's counts (specs passing, reference acceptance); the plan's 'spec defects explain most candidate failures' clause is deliberately not implemented. */
   decision: { A1: Verdict; A2: Verdict; A3: Verdict; decisive: boolean; note: string; computed: { A1: Verdict; A2: Verdict; A3: Verdict } };
 }
 
@@ -93,7 +94,7 @@ function rowMetrics(r: RowResult): RowMetrics {
   const differing = clears.length >= 2 && (new Set(clears.map((c) => c.label)).size > 1 || clears.some((c) => (c.probeAgreement?.permitted ?? 0) > 0));
   const detRank = clears.length >= 2 && new Set(clears.map(heldPass)).size > 1 && clears.every((c) => c.labelSource === 'deterministic');
   let catches = 0;
-  let heldOutCatches = 0;
+  let heldOutEscapes = 0;
   let falsePositives = 0;
   let escapes = 0;
   let escapesModelJudged = 0;
@@ -103,10 +104,7 @@ function rowMetrics(r: RowResult): RowMetrics {
     if (preMergeOnly) c.deterministicRegression ? catches++ : falsePositives++;
     const refHeld = r.reference?.report.heldOut.outcomes ?? {};
     const heldFailed = Object.entries(refHeld).some(([k, st]) => st === 'passed' && rep.heldOut.outcomes[k] !== 'passed');
-    if (rep.rungs.preMerge && heldFailed) {
-      catches++;
-      heldOutCatches++;
-    }
+    if (rep.rungs.preMerge && heldFailed) heldOutEscapes++;
     if (c.clearsAllRungs) {
       if (c.deterministicRegression || c.label === 'regression' && c.labelSource === 'deterministic') escapes++;
       else if (c.label === 'regression' && c.labelSource === 'same-family grader') escapesModelJudged++;
@@ -140,7 +138,7 @@ function rowMetrics(r: RowResult): RowMetrics {
     spreadS: differing,
     spreadConfirmedDeterministically: differing && detRank,
     catches,
-    heldOutCatches,
+    heldOutEscapes,
     falsePositives,
     escapes,
     escapesModelJudged,
@@ -155,6 +153,7 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta): Metrics {
   const tierA = rows.filter((r) => r.tier === 'A');
   const done = all.filter((m) => rows.find((r) => r.id === m.id)!.tier === 'A' && m.complete);
   const doneRows = rows.filter((r) => r.tier === 'A' && r.status === 'complete');
+  const specFailedRows = tierA.filter((r) => r.status === 'spec-failed').length;
   const R = done.filter((m) => m.rescue).length;
   const rescuesConfirmed = done.filter((m) => m.rescueConfirmedDeterministically).length;
   const S = done.filter((m) => m.spreadS).length;
@@ -193,11 +192,12 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta): Metrics {
   const A3: Verdict = !rungsRan ? 'inconclusive'
     : (catches === 0 && fps === 0) || escapesE >= 3 || falseRejects >= 3 ? 'invalidating'
     : catches >= 1 && escapesE <= 1 && falseRejects <= 1 ? 'validating' : 'inconclusive';
-  const decisive = n >= TIER_A_ROWS;
+  // A spec-failed row is evidence for A2 (no spec, no acceptance, nothing to grade), so it counts as an attempted row.
+  const decisive = n + specFailedRows >= TIER_A_ROWS;
   const gate = (v: Verdict): Verdict => (decisive ? v : 'inconclusive');
   return {
     rows: all,
-    tierA: { n: tierA.length, nE: tierA.filter((r) => r.obs === 'E').length, completeRows: n },
+    tierA: { n: tierA.length, nE: tierA.filter((r) => r.obs === 'E').length, completeRows: n, specFailedRows, attemptedRows: n + specFailedRows },
     R, rescuesConfirmed, S, sConfirmed,
     specsPassedWithinOneRetry: specPassed1,
     referenceAcceptancePass: refAcc,
@@ -210,7 +210,7 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta): Metrics {
     costPerAcceptedChangeK1: perAcceptedK1,
     decision: {
       A1: gate(A1), A2: gate(A2), A3: gate(A3), decisive, computed: { A1, A2, A3 },
-      note: decisive ? 'tier A has >= 11 complete rows' : `pilot: n=${n} complete tier-A row(s) of ${TIER_A_ROWS} required, so every cell is inconclusive by rule (plan section 6); the thresholds are the plan's absolute counts over ${TIER_A_ROWS} rows`,
+      note: decisive ? 'tier A has >= 11 complete rows' : `pilot: ${n + specFailedRows} attempted tier-A row(s) (${n} complete, ${specFailedRows} spec-failed) of ${TIER_A_ROWS} required, so every cell is inconclusive by rule (plan section 6); the thresholds are the plan's absolute counts over ${TIER_A_ROWS} rows`,
     },
   };
 }

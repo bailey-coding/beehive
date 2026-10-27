@@ -3,7 +3,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { exec } from './exec.ts';
+import { exec, type ExecResult } from './exec.ts';
+import { boxExec, requireSandbox } from './sandbox.ts';
 import { existsAt, git, isTestFile, showAt } from './git.ts';
 import { installProbe, PROBE_ENV, readProbe } from './probe.ts';
 import { ACCEPTANCE_DIR, removeAcceptance, writeAcceptance, type SpecFile, type TestOutcome } from './spec.ts';
@@ -21,6 +22,12 @@ export interface OracleConfig {
   /** Runs per suite when something fails (flake detection): red = failed in every run, flaky = in some. */
   baseAttempts: number;
   evalAttempts: number;
+  /**
+   * 'unshare': every oracle subprocess runs in the OS sandbox (no network, no view of the real filesystem, scrubbed env,
+   * private HOME) and the harness refuses to run if the sandbox is unavailable. 'off' is only for trusted code (the base
+   * commit's own tests in `check --base-green`) and for tests that explicitly opt out.
+   */
+  sandbox: 'unshare' | 'off';
 }
 
 /** `npm ci` where a lockfile exists, `npm install` where not, in the root and in cli/. Never HEAD's node_modules. */
@@ -55,6 +62,7 @@ export const DEFAULT_ORACLE_CONFIG: OracleConfig = {
   installDeps: npmInstall,
   baseAttempts: 3,
   evalAttempts: 2,
+  sandbox: 'unshare',
 };
 
 /** Minimal env for test subprocesses: no tokens, no CI flag (the root vitest config retries under CI). */
@@ -62,6 +70,34 @@ export function testEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { NO_COLOR: '1' };
   for (const k of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL']) if (process.env[k]) out[k] = process.env[k];
   return { ...out, ...extra };
+}
+
+/** Read-only binds for dependency trees reached through symlinks (node_modules is installed outside the evaluation root). */
+function depsRo(cwd: string): string[] {
+  const out: string[] = [];
+  for (const rel of ['node_modules', 'cli/node_modules']) {
+    const p = path.join(cwd, rel);
+    try {
+      if (fs.lstatSync(p).isSymbolicLink()) {
+        // The symlink's first-hop target must exist inside the box (it may itself be a symlink), backed by the final real dir.
+        const hop = path.resolve(path.dirname(p), fs.readlinkSync(p));
+        out.push(`${hop}=${fs.realpathSync(p)}`);
+      }
+    } catch {
+      /* absent */
+    }
+  }
+  return out;
+}
+
+/** Run a command in cwd: sandboxed when cfg.sandbox is 'unshare' (refusing if unavailable), else directly. */
+async function runIn(cwd: string, cfg: OracleConfig, cmd: string, args: string[], opts: { env: Record<string, string>; timeoutMs: number; extraRw?: string[] }): Promise<ExecResult> {
+  if (cfg.sandbox === 'unshare') {
+    await requireSandbox();
+    const rw = [cwd, ...(opts.extraRw ?? []), ...Object.values(opts.env).filter((v) => path.isAbsolute(v)).map((v) => path.dirname(v))];
+    return boxExec(cmd, args, { cwd, rw: [...new Set(rw)], ro: depsRo(cwd) }, { timeoutMs: opts.timeoutMs, env: opts.env });
+  }
+  return exec(cmd, args, { cwd, env: testEnv(opts.env), timeoutMs: opts.timeoutMs });
 }
 
 export interface VitestRun {
@@ -73,7 +109,8 @@ export interface VitestRun {
 }
 
 export async function runVitest(cwd: string, cfg: OracleConfig, files: string[] = [], env: Record<string, string> = {}): Promise<VitestRun> {
-  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-vt-')), 'report.json');
+  const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-vt-'));
+  const out = path.join(reportDir, 'report.json');
   const [cmd, ...pre] = cfg.testCommand;
   // The base commit's own vitest `include` may not cover the files we need (A1's base only includes tests/**).
   // For explicit files, run through a derived config that adds them to the base config's include.
@@ -83,7 +120,7 @@ export async function runVitest(cwd: string, cfg: OracleConfig, files: string[] 
     fs.writeFileSync(derived, `import { mergeConfig } from 'vitest/config';\nimport base from './vitest.config';\nexport default mergeConfig(base, { test: { include: ${JSON.stringify(files)} } });\n`);
     extra.push('--config', 'vitest.backtest.config.ts');
   }
-  const r = await exec(cmd, [...pre, ...extra, '--reporter=json', `--outputFile.json=${out}`, ...files], { cwd, env: testEnv(env), timeoutMs: cfg.testTimeoutMs });
+  const r = await runIn(cwd, cfg, cmd, [...pre, ...extra, '--reporter=json', `--outputFile.json=${out}`, ...files], { env, timeoutMs: cfg.testTimeoutMs, extraRw: [reportDir] });
   fs.rmSync(derived, { force: true });
   const run: VitestRun = { outcomes: [], loadErrors: [], timedOut: r.timedOut, crashed: false };
   if (!fs.existsSync(out)) {
@@ -132,7 +169,7 @@ export async function stableRun(cwd: string, cfg: OracleConfig, attempts: number
 export async function runTsc(cwd: string, cfg: OracleConfig): Promise<{ errors: number; sample: string[] } | null> {
   if (!cfg.tscCommand) return null;
   const [cmd, ...args] = cfg.tscCommand;
-  const r = await exec(cmd, args, { cwd, env: testEnv(), timeoutMs: cfg.tscTimeoutMs });
+  const r = await runIn(cwd, cfg, cmd, args, { env: {}, timeoutMs: cfg.tscTimeoutMs });
   const lines = r.stdout.split('\n').filter((l) => /error TS\d+/.test(l));
   return { errors: r.timedOut ? Number.MAX_SAFE_INTEGER : lines.length, sample: lines.slice(0, 5) };
 }

@@ -4,13 +4,14 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BudgetExceeded, BudgetTracker, BudgetedClient, EXPECTED_CALLS, HARD_STOP_CALLS } from '../budget.ts';
 import { validateFlags } from '../cli.ts';
-import { ClaudeCliClient, FakeClient, buildClaudeArgs, childEnv, parseStreamLine, responseFromStream, shouldStop, type StreamState } from '../client.ts';
+import { ClaudeCliClient, FakeClient, buildClaudeArgs, childEnv, parseStreamLine, redact, responseFromStream, shouldStop, type StreamState } from '../client.ts';
 import { checkContract, checkDelta, compareRecords, parseDeltaSurface, pathMatches, shapeOf, type ResponseRecord } from '../delta.ts';
 import { extractIssueSource, extractJson, normalizedTokenLevenshtein, overlapFlags } from '../text.ts';
 import { toCreateSpecRequest, validateSpec } from '../spec.ts';
 import { wrongIssueVerdict } from '../leakage.ts';
 import { parseSpec } from '../spec.ts';
 
+const PRIV = { dir: '/priv/config', home: '/priv/home', dispose: () => {} };
 const rec = (label: string, path: string, status: number, body: unknown, method = 'GET'): ResponseRecord => ({ label, method, path, status, body });
 
 describe('delta check (own implementation)', () => {
@@ -136,23 +137,58 @@ describe('real client plumbing (no process spawned)', () => {
     expect(buildClaudeArgs({ tools: 'read' }, { allowBash: true }).join(' ').split('--allowedTools')[1].split('--disallowedTools')[0]).not.toContain('Bash');
   });
   it('--allow-bash refuses to construct without an OS sandbox and logs the sandbox when present', () => {
-    expect(() => new ClaudeCliClient({ allowBash: true, which: () => null })).toThrow(/no OS sandbox/);
+    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true, which: () => null })).toThrow(/no OS sandbox/);
     const logs: string[] = [];
-    const c = new ClaudeCliClient({ allowBash: true, which: () => '/usr/bin/bwrap', log: (s) => logs.push(s) });
+    const c = new ClaudeCliClient({ config: PRIV, allowBash: true, which: () => '/usr/bin/bwrap', log: (s) => logs.push(s) });
     expect(c.sandbox).toMatch(/bubblewrap/);
     expect(logs[0]).toMatch(/active sandbox: bubblewrap/);
-    expect(new ClaudeCliClient().sandbox).toBeNull();
+    expect(new ClaudeCliClient({ config: PRIV }).sandbox).toBeNull();
   });
   it('text and read modes expose fewer tools', () => {
     const none = buildClaudeArgs({ tools: 'none' });
     expect(none[none.indexOf('--tools') + 1]).toBe('');
     expect(buildClaudeArgs({ tools: 'read' }).join(' ')).toContain('--tools Read,Glob,Grep');
   });
-  it('child env is an explicit allow-list: no API key or token variable passes, whatever the host sets', () => {
-    const host = { PATH: '/bin', HOME: '/h', LANG: 'C', TERM: 'xterm', CLAUDE_CONFIG_DIR: '/c', CLOUDFLARE_API_TOKEN: 'x', GITHUB_TOKEN: 'y', BEEHIVE_API_TOKEN: 'z', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 't', WRANGLER_API_TOKEN: 'w', SSH_AUTH_SOCK: '/s' };
-    const env = childEnv(host);
-    expect(Object.keys(env).sort()).toEqual(['CI', 'CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'NO_COLOR', 'PATH', 'TERM']);
-    expect(JSON.stringify(env)).not.toMatch(/"(x|y|z|k|t|w)"/);
+  it('child env: private HOME and CLAUDE_CONFIG_DIR, PATH/LANG/TERM only; no API key, token or the user\'s own config', () => {
+    const host = { PATH: '/bin', HOME: '/home/real', LANG: 'C', TERM: 'xterm', CLAUDE_CONFIG_DIR: '/home/real/.claude', CLOUDFLARE_API_TOKEN: 'x', GITHUB_TOKEN: 'y', BEEHIVE_API_TOKEN: 'z', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 't', WRANGLER_API_TOKEN: 'w', SSH_AUTH_SOCK: '/s' };
+    const env = childEnv(PRIV, host);
+    expect(env).toEqual({ CI: '1', NO_COLOR: '1', HOME: '/priv/home', CLAUDE_CONFIG_DIR: '/priv/config', PATH: '/bin', LANG: 'C', TERM: 'xterm' });
+    expect(JSON.stringify(env)).not.toContain('/home/real');
+  });
+  it('redacts token-shaped text and trims', () => {
+    const t = redact('auth failed: Bearer abcdefghijklmnop1234 key=sk-ant-api03-AAAAAAAAAAAAAAAAAAAA token: ghp_abcdefghijklmnopqrstuv cfg eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.abc');
+    expect(t).not.toMatch(/abcdefghijklmnop1234|sk-ant|ghp_abc|eyJhbGci/);
+    expect(t).toContain('[redacted]');
+    expect(redact('x'.repeat(2000)).length).toBeLessThan(510);
+  });
+  it('CLI failures are surfaced, not silent empty text: exit code, stderr, CLI error result, missing result', () => {
+    const mk = (): StreamState => ({ assistantIds: new Set<string>(), lastText: '', result: null });
+    const err = mk();
+    parseStreamLine(JSON.stringify({ type: 'result', is_error: true, result: 'Invalid API key. Bearer abcdefghijklmnop1234', num_turns: 0 }), err);
+    const r1 = responseFromStream(err, 1, 'done', { code: 1, stderr: 'login required' });
+    expect(r1).toMatchObject({ stopReason: 'error', exitCode: 1, text: '' });
+    expect(r1.error).toMatch(/exit code 1.*cli: Invalid API key.*stderr: login required/);
+    expect(r1.error).not.toContain('abcdefghijklmnop1234');
+    const none = responseFromStream(mk(), 1, 'done', { code: 2, stderr: 'boom' });
+    expect(none).toMatchObject({ stopReason: 'error', exitCode: 2 });
+    expect(none.error).toMatch(/no result event/);
+    const ok = mk();
+    parseStreamLine(JSON.stringify({ type: 'result', is_error: false, result: 'fine' }), ok);
+    expect(responseFromStream(ok, 1, 'done', { code: 0, stderr: '' })).toMatchObject({ stopReason: 'done', text: 'fine', exitCode: 0 });
+    // a nonzero exit with an otherwise fine result is still an error
+    expect(responseFromStream(ok, 1, 'done', { code: 3, stderr: '' }).stopReason).toBe('error');
+  });
+  it('the budgeted client turns a failed call into an abort with the reason; the canary can opt out', async () => {
+    const failing = new FakeClient(() => ({ text: '', stopReason: 'error', error: 'exit code 1; stderr: login required' }));
+    const t = new BudgetTracker();
+    await expect(new BudgetedClient(failing, t).run({ role: 'issue', rowId: 'A1', prompt: '', tools: 'none', maxCalls: 1, timeoutMs: 1 })).rejects.toThrow(/model call failed \(issue A1\): exit code 1; stderr: login required/);
+    const r = await new BudgetedClient(failing, t, false).run({ role: 'smoke', prompt: '', tools: 'none', maxCalls: 1, timeoutMs: 1 });
+    expect(r.stopReason).toBe('error');
+  });
+  it('init event tools are captured', () => {
+    const st: StreamState = { assistantIds: new Set<string>(), lastText: '', result: null };
+    parseStreamLine(JSON.stringify({ type: 'system', subtype: 'init', tools: ['Read', 'Glob'] }), st);
+    expect(st.initTools).toEqual(['Read', 'Glob']);
   });
   it('clamped runs stop at the limit, not one call past it', () => {
     const mk = (): StreamState => ({ assistantIds: new Set<string>(), lastText: '', result: null });
@@ -231,6 +267,16 @@ describe('budget persistence and flag gating', () => {
     expect(b.used).toBe(4);
     expect(b.remaining).toBe(6);
     expect(() => b.recordSpecOutcome(false)).toThrow(/two specs in a row/); // stop-rule state survives too
+  });
+  it('one global ledger: a different run name sharing the file cannot reset the cap', () => {
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gledger-')), '.ledger.json');
+    const a = new BudgetTracker(10, 10);
+    a.attach(f);
+    a.ledger.push({ role: 'candidate', calls: 9, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, costUsd: 0, durationMs: 1, stopReason: 'done' });
+    a.persist();
+    const b = new BudgetTracker(10, 10);
+    b.attach(f);
+    expect(b.remaining).toBe(1);
   });
   it('the hard stop can never exceed the plan\'s 850', () => {
     expect(new BudgetTracker(565, 5000).hardStop).toBe(850);

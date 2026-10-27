@@ -10,6 +10,7 @@ import { compareRecords } from './delta.ts';
 import { candidatePrompt, cost, docExcerpt, generateSpec, gradePrompt, issuePrompt, parseGrade, sumCost } from './generate.ts';
 import { addedLinesOf, addWorktree, commitAndPush, createScratchRepo, diffOf, git, showAt } from './git.ts';
 import { baseTokenSet, docAtBaseTest, historyTest, reachabilityTest, referenceMarkers, wrongIssueVerdict } from './leakage.ts';
+import { requireSandbox } from './sandbox.ts';
 import { baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
 import { installProbe } from './probe.ts';
 import { GRADER_LABEL, type CandidateResult, type LeakageResult, type RowResult, type RunMeta } from './results.ts';
@@ -26,6 +27,8 @@ export interface RunOptions {
   harnessRoot: string;
   outDir: string;
   runId: string;
+  /** Global call ledger shared by every run, pilot pass and smoke/canary call (default tools/backtest/.ledger.json, gitignored). */
+  ledgerFile: string;
   client: ModelClient;
   tracker: BudgetTracker;
   k: number;
@@ -57,7 +60,9 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   const log = o.log ?? (() => {});
   const runDir = path.join(o.outDir, o.runId);
   assertDisjoint(o.workRoot);
-  o.tracker.attach(path.join(runDir, 'ledger.json'));
+  if (o.cfg.sandbox === 'unshare') log(`sandbox for agent-written code: ${await requireSandbox()}`); // refuses before any spend if unavailable
+  // One global ledger across --run names: a new run name cannot reset the plan's cap.
+  o.tracker.attach(o.ledgerFile);
   const client = new BudgetedClient(o.client, o.tracker);
   const startedAt = new Date().toISOString();
   const rows: RowResult[] = o.corpus.rows.map((r) => ({ id: r.id, sha: r.sha, tier: r.tier, obs: r.obs, status: 'aborted', issueCost: null, spec: null, reference: null, candidates: [], graderCalls: 0, leakage: null }));
@@ -306,7 +311,7 @@ async function runRow(o: RunOptions, client: BudgetedClient, row: CorpusRow, iss
       fs.writeFileSync(path.join(dir, 'candidates', `c${k}.patch`), patch);
       // Evaluate a clone of the pushed scratch branch under the harness root, with the base's own installed deps.
       const evalDir = path.join(work, `eval-${k}`);
-      await git(work, ['clone', '-q', '-b', `scratch/${row.id}-c${k}`, scratch.origin, evalDir]);
+      await git(work, ['clone', '-q', '--no-hardlinks', '-b', `scratch/${row.id}-c${k}`, scratch.origin, evalDir]);
       fs.appendFileSync(path.join(evalDir, '.git', 'info', 'exclude'), 'node_modules\n.vitest-cache\ntest-results\n');
       linkDeps(deps.repo, evalDir);
       cr.report = await evaluateCheckout({ dir: evalDir, ...evalArgs });

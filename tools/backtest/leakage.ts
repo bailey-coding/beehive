@@ -69,15 +69,39 @@ const inside = (child: string, parent: string) => {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 };
 
+/** Stream-scan a file for any marker (1 MB chunks with overlap), so large files are scanned, not skipped. */
+function fileHasMarker(file: string, markers: string[]): string | null {
+  if (markers.length === 0) return null;
+  const latin = markers.map((m) => ({ m, l: Buffer.from(m).toString('latin1') }));
+  const overlap = Math.max(...latin.map((x) => x.l.length));
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(1024 * 1024);
+    let tail = '';
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) return null;
+      const s = tail + buf.toString('latin1', 0, n);
+      for (const x of latin) if (s.includes(x.l)) return x.m;
+      tail = s.slice(-overlap);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * Test 3, whole reachable tree: everything an agent's file tools could touch from `cwd` (its whole private root,
- * symlink targets, the ancestor chain) holds no reference content, no escaping symlink, and no path of the harness
- * (reference/eval/dependency roots, the real repo) is an ancestor or descendant of it.
+ * symlink targets, git pointers, the ancestor chain) holds no reference content (files of any size are scanned), no
+ * escaping symlink, no hardlink to a file elsewhere, no git alternates, no worktree or commondir pointer or remote URL
+ * leading outside the root, and no harness path (reference/eval/dependency roots, the real repo) is an ancestor or
+ * descendant of it.
  */
 export function reachabilityTest(opts: { agentRoot: string; cwd: string; forbiddenRoots: string[]; markers: string[] }): { passed: boolean; detail: string[] } {
   const detail: string[] = [];
   const root = fs.realpathSync(opts.agentRoot);
   const cwd = fs.realpathSync(opts.cwd);
+  const rel = (p: string) => path.relative(root, p);
   if (!inside(cwd, root)) detail.push('cwd is outside the agent root');
   for (const f of opts.forbiddenRoots) {
     const fr = fs.existsSync(f) ? fs.realpathSync(f) : path.resolve(f);
@@ -85,6 +109,17 @@ export function reachabilityTest(opts: { agentRoot: string; cwd: string; forbidd
     if (inside(fr, root)) detail.push(`a harness path (${path.basename(fr)}) lies inside the agent root`);
   }
   const markers = opts.markers.filter((m) => m.length >= 7);
+  const outsideRoot = (p: string) => !inside(path.resolve(p), root);
+  // Hardlinks between files inside the root are harmless (git push to the local scratch origin makes some). A file
+  // with more links than we find inside the root has a link elsewhere (a way to reach or alter outside content).
+  const inodes = new Map<string, { seen: number; nlink: number; path: string }>();
+  const lstatChecks = (p: string, st: fs.Stats) => {
+    if (!st.isFile() || st.nlink <= 1) return;
+    const k = `${st.dev}:${st.ino}`;
+    const e = inodes.get(k) ?? { seen: 0, nlink: st.nlink, path: p };
+    e.seen++;
+    inodes.set(k, e);
+  };
   const stack = [root];
   while (stack.length) {
     const d = stack.pop()!;
@@ -95,24 +130,53 @@ export function reachabilityTest(opts: { agentRoot: string; cwd: string; forbidd
         try {
           target = fs.realpathSync(p);
         } catch {
-          detail.push(`dangling symlink ${path.relative(root, p)}`);
+          detail.push(`dangling symlink ${rel(p)}`);
           continue;
         }
-        if (!inside(target, root)) detail.push(`symlink ${path.relative(root, p)} escapes the agent root`);
+        if (!inside(target, root)) detail.push(`symlink ${rel(p)} escapes the agent root`);
         continue;
       }
       if (e.isDirectory()) {
-        if (e.name === 'objects' && path.basename(d) === '.git') continue; // compressed; markers cannot match
+        if (e.name === 'objects' && path.basename(d) === '.git') {
+          // Packed/loose objects are compressed (markers cannot match); still check the shared-store file and hardlinks.
+          if (fs.existsSync(path.join(p, 'info', 'alternates'))) detail.push('git alternates file present (shared object store)');
+          const objs = [p];
+          while (objs.length) {
+            const od = objs.pop()!;
+            for (const oe of fs.readdirSync(od, { withFileTypes: true })) {
+              const op = path.join(od, oe.name);
+              if (oe.isDirectory()) objs.push(op);
+              else if (!oe.isSymbolicLink()) lstatChecks(op, fs.lstatSync(op));
+              else detail.push(`symlink ${rel(op)} inside git objects`);
+            }
+          }
+          continue;
+        }
         stack.push(p);
         continue;
       }
-      if (e.name === 'alternates' && path.basename(d) === 'info') detail.push('git alternates file present (shared object store)');
-      const st = fs.statSync(p);
-      if (st.size > 4 * 1024 * 1024) continue;
-      const text = fs.readFileSync(p, 'utf8');
-      for (const m of markers) if (text.includes(m)) detail.push(`reference marker found in ${path.relative(root, p)}`);
+      lstatChecks(p, fs.lstatSync(p));
+      if (e.name === '.git') {
+        // worktree pointer file: "gitdir: <path>"
+        const m = fs.readFileSync(p, 'utf8').match(/^gitdir:\s*(.+)$/m);
+        if (m) {
+          const gitdir = path.resolve(d, m[1].trim());
+          if (outsideRoot(gitdir)) detail.push(`worktree .git pointer in ${rel(d) || '.'} leads outside the agent root`);
+          const cd = path.join(gitdir, 'commondir');
+          if (fs.existsSync(cd) && outsideRoot(path.resolve(gitdir, fs.readFileSync(cd, 'utf8').trim()))) detail.push(`commondir of ${rel(gitdir)} leads outside the agent root`);
+        }
+      }
+      if (e.name === 'config' && /(^|[\\/])\.git$/.test(d)) {
+        for (const m of fs.readFileSync(p, 'utf8').matchAll(/^\s*url\s*=\s*(.+)$/gm)) {
+          const url = m[1].trim();
+          if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) || /^[^/]+@[^/]+:/.test(url) || outsideRoot(url)) detail.push(`a git remote in ${rel(d)} points outside the agent root`);
+        }
+      }
+      const hit = fileHasMarker(p, markers);
+      if (hit) detail.push(`reference marker found in ${rel(p)}`);
     }
   }
+  for (const e of inodes.values()) if (e.nlink > e.seen) detail.push(`hardlink: ${rel(e.path)} has ${e.nlink - e.seen} link(s) outside the agent root`);
   return { passed: detail.length === 0, detail: [...new Set(detail)] };
 }
 
