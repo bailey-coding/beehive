@@ -30,6 +30,12 @@ export const CorpusRowSchema = z.object({
   /** Base docs that state the solution: removed from every agent checkout of this row (scratch repos). */
   scrubDocs: z.array(z.string()).default([]),
   files: z.object({ source: z.array(z.string()), tests: z.array(z.string()), docs: z.array(z.string()) }),
+  /** Result of `check --base-green --write`: red tests (drop), flaky tests (kept, noted). */
+  baseGreen: z
+    .object({ checkedAt: z.string(), tests: z.number(), red: z.array(z.string()), flaky: z.array(z.string()), loadErrors: z.array(z.string()), verdict: z.enum(['keep', 'drop']) })
+    .optional(),
+  /** Free-text caveats about the row's oracles (for example a base test include that covers little). */
+  corpusNote: z.string().optional(),
 });
 
 export const CorpusSchema = z.object({
@@ -54,6 +60,7 @@ export interface FreezeInput {
   keyTerms: string[];
   acknowledgedDocHits?: string[];
   scrubDocs?: string[];
+  corpusNote?: string;
 }
 
 export async function buildRow(repo: string, f: FreezeInput): Promise<CorpusRow> {
@@ -80,6 +87,7 @@ export async function buildRow(repo: string, f: FreezeInput): Promise<CorpusRow>
     keyTerms: f.keyTerms,
     acknowledgedDocHits: f.acknowledgedDocHits ?? [],
     scrubDocs: f.scrubDocs ?? [],
+    corpusNote: f.corpusNote,
     files: {
       source: files.filter((x) => !isTestFile(x) && !isDocFile(x)),
       tests: files.filter(isTestFile),

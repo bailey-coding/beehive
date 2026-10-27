@@ -215,6 +215,10 @@ A4 `831d9db` (canary-worker), A5 `e326b8c` (preview-manager). Checked pairwise: 
 file. Goals: harness works end to end, leakage tests 1-5 pass, spec validity and cost readable. It does not decide
 A1-A3. Go/no-go for the other 24 rows follows.
 
+**Harness isolation (2026-10-27):** pilot candidates and the spec generator run with file tools only (no Bash; no OS
+sandbox on this host), so they cannot run tests; this handicaps them and understates pass rates and divergence. Details:
+`tools/backtest/README.md`. Pilot row A3 (`c2d4906`) was dropped (base red) and replaced by A11 (`de8817c`).
+
 **Step order:** (1) base-green and key-term grep for all rows, no model cost; (2) freeze corpus and pre-registration;
 (3) build the harness; (4) pilot; (5) maintainer review; (6) full run; (7) confirmation run with a different-family
 grader before any claim.

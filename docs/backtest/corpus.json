@@ -1,7 +1,7 @@
 {
   "version": 1,
   "plan": "docs/SPEC-BACKTEST-PLAN.md",
-  "frozenAt": "2026-10-26T20:49:55.322Z",
+  "frozenAt": "2026-10-27T03:25:31.320Z",
   "rows": [
     {
       "id": "A1",
@@ -34,6 +34,15 @@
           "workers/api/tests/api.test.ts"
         ],
         "docs": []
+      },
+      "corpusNote": "The base's vitest include covers only tests/** (6 tests), so the full-run oracle is nearly empty here: pre-merge rests on the acceptance tests and tsc; the held-out test file runs through a derived config.",
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:25:36.593Z",
+        "tests": 6,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
       }
     },
     {
@@ -82,43 +91,58 @@
         "docs": [
           "docs/OPEN-QUESTIONS.md"
         ]
-      }
+      },
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:25:56.266Z",
+        "tests": 1255,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
+      },
+      "corpusNote": "Base flaky: workers/shadow-router/tests/mirror-safety.test.ts has a fake-timer flake (reviewer-observed; did not fire in the 3-run base check). Kept; flaky tests are retried and never counted as red or as regressions."
     },
     {
-      "id": "A3",
-      "sha": "c2d4906",
-      "base": "bd304eebbf618498dabcc70ba546f3ac7d6ae929",
+      "id": "A11",
+      "sha": "de8817c",
+      "base": "9db54df770b55a1b0356532095ef0e9ba7c934dd",
       "tier": "A",
-      "obs": "E",
-      "component": "auth/principal",
-      "change": "let master without X-Actor-ID reach /health and bootstrap routes; make test-d negative checks real",
+      "obs": "N",
+      "component": "CLI",
+      "change": "CLI rejects actor ids the edge would 400; update M12 plan and FOCUS",
       "issueSource": {
-        "kind": "body",
-        "note": "commit body; trailers stripped",
+        "kind": "subject",
+        "note": "commit subject only (thin text); the `spec: review S4` it cites is unrelated and unresolvable, ignored; trailers stripped",
         "docs": [],
-        "thin": false,
-        "subject": "let master without X-Actor-ID reach /health and bootstrap routes; make test-d negative checks real",
-        "body": "withActor no longer 503s on actorId 'unknown' (master without header); master keeps its\noriginal header semantics (no rewrite). Add runtime test and @ts-expect-error on the\nintentional negative type checks so tsc passes."
+        "thin": true,
+        "subject": "CLI rejects actor ids the edge would 400; update M12 plan and FOCUS",
+        "body": ""
       },
       "keyTerms": [
-        "withActor"
+        "ActorIdSchema"
       ],
-      "acknowledgedDocHits": [
-        "docs/CUSTOM-REQUEST-TYPES-IMPLEMENTATION.md",
-        "docs/CUSTOM-REQUEST-TYPES-PLAN.md",
-        "docs/MILESTONES.md"
-      ],
+      "acknowledgedDocHits": [],
       "scrubDocs": [],
       "files": {
         "source": [
-          "workers/api/index.ts",
-          "workers/shared/principal.ts"
+          "cli/src/utils/api-client.ts"
         ],
         "tests": [
-          "tests/unit/shared-principal-withactor.test.ts",
-          "workers/shared/principal.test-d.ts"
+          "tests/cli-behavior.test.ts"
         ],
-        "docs": []
+        "docs": [
+          "docs/FOCUS.md",
+          "docs/M12-IMPL-PLAN.md"
+        ]
+      },
+      "corpusNote": "Control row (N: not HTTP-visible): no probe replay, so conformance and shadow rungs do not run; oracles are the repo tests and the held-out CLI test. cli/ dependencies must be installed at the base.",
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:26:19.422Z",
+        "tests": 1052,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
       }
     },
     {
@@ -155,6 +179,14 @@
           "workers/canary-worker/tests/slo-thresholds.test.ts"
         ],
         "docs": []
+      },
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:26:41.388Z",
+        "tests": 1077,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
       }
     },
     {
@@ -199,6 +231,14 @@
           "docs/OPS.md",
           "docs/SETUP.md"
         ]
+      },
+      "baseGreen": {
+        "checkedAt": "2026-10-27T03:27:03.485Z",
+        "tests": 490,
+        "red": [],
+        "flaky": [],
+        "loadErrors": [],
+        "verdict": "keep"
       }
     }
   ]

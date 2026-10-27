@@ -2,19 +2,30 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BudgetTracker } from '../budget.ts';
-import { FakeClient, type FakeReply, type ModelRequest } from '../client.ts';
+import { FakeClient, buildClaudeArgs, childEnv, type FakeReply, type ModelRequest } from '../client.ts';
 import { checkIndependence, freezeCorpus, loadCorpus, type Corpus } from '../corpus.ts';
 import { exec } from '../exec.ts';
 import { git } from '../git.ts';
-import { docAtBaseTest, historyTest } from '../leakage.ts';
+import { docAtBaseTest, historyTest, reachabilityTest } from '../leakage.ts';
+import { baseGreen } from '../basegreen.ts';
+import { stableRun } from '../oracles.ts';
 import type { OracleConfig } from '../oracles.ts';
 import { runPilot } from '../run.ts';
 import type { RowResult } from '../results.ts';
 
 const harnessRoot = path.resolve(__dirname, '..', '..', '..');
-const cfg: OracleConfig = { testCommand: ['node', 'node_modules/vitest/vitest.mjs', 'run'], tscCommand: null, testTimeoutMs: 120_000, tscTimeoutMs: 1 };
+const cfg: OracleConfig = {
+  testCommand: ['node', 'node_modules/vitest/vitest.mjs', 'run'],
+  tscCommand: null,
+  testTimeoutMs: 120_000,
+  tscTimeoutMs: 1,
+  // fixture has no dependencies of its own: provide the harness's node_modules (stands in for `npm ci`)
+  installDeps: async (dir: string) => fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(dir, 'node_modules'), 'dir'),
+  baseAttempts: 2,
+  evalAttempts: 2,
+};
 
 const APP_BASE = `export default {
   async fetch(req: Request): Promise<Response> {
@@ -165,18 +176,26 @@ describe('leakage tests 3 and 4', () => {
   });
 });
 
+let rows: RowResult[];
+let fake: FakeClient;
+let workRoot: string;
+
+afterAll(() => {
+  // the 'full' run keeps its agent roots for the isolation tests; remove them once the file is done
+  for (const r of fake?.requests ?? []) if (r.cwd) fs.rmSync(path.dirname(r.cwd), { recursive: true, force: true });
+});
+
 describe('pilot run with the fake client', () => {
-  let rows: RowResult[];
   let tracker: BudgetTracker;
   let outDir: string;
   let report: string;
-  let fake: FakeClient;
 
   beforeAll(async () => {
     const o = baseOpts('full');
     tracker = new BudgetTracker();
     fake = client({ vacuousFirst: true });
-    const res = await runPilot({ ...o, client: fake, tracker });
+    const res = await runPilot({ ...o, client: fake, tracker, keepWork: true });
+    workRoot = o.workRoot;
     rows = res.rows;
     outDir = path.join(o.outDir, o.runId);
     report = fs.readFileSync(res.reportPath, 'utf8');
@@ -230,7 +249,9 @@ describe('pilot run with the fake client', () => {
     expect(run.meta.budget.used).toBe(1 + 2 + 12 + 1);
     expect(report).toMatch(/Rescue rate R: 1 rows \(1 confirmed by deterministic oracles\)/);
     expect(report).toContain('same-family grader');
-    expect(report).toMatch(/informational, not a decision/);
+    expect(report).toMatch(/inconclusive by rule/);
+    expect(rows[0].spec).toMatchObject({ editDistance: 0 });
+    expect(typeof rows[0].spec!.humanMinutes).toBe('number');
   });
 
   it('writes per-run JSON for every candidate and one markdown report', () => {
@@ -243,6 +264,65 @@ describe('pilot run with the fake client', () => {
   it('leakage results are recorded (tests 2-4 here; test 1 needs two rows)', () => {
     expect(rows[0].leakage).toMatchObject({ docAtBase: { passed: true }, history: { passed: true } });
     expect(rows[0].leakage!.wrongIssue).toBeNull();
+  });
+});
+
+describe('isolation of agent checkouts (no model involved)', () => {
+  // These run against the directories the fake candidates were actually given (keepWork).
+  const runDir = () => fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('bt-agent-'));
+  it('candidate roots hold only the single-commit scratch repo: no node_modules, no reference artefacts, no escaping symlinks', () => {
+    expect(runDir().length).toBeGreaterThan(0);
+    const cands = fake.requests.filter((r) => r.role === 'candidate');
+    expect(cands).toHaveLength(3);
+    for (const r of cands) {
+      const root = path.dirname(r.cwd!);
+      expect(path.dirname(root)).toBe(os.tmpdir()); // private top-level root: no shared ancestor below the temp dir
+      expect(root.startsWith(workRoot)).toBe(false);
+      const names: string[] = [];
+      const walk = (d: string) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          names.push(e.name);
+          if (e.isSymbolicLink()) throw new Error(`symlink ${path.join(d, e.name)}`);
+          if (e.isDirectory() && e.name !== 'objects') walk(path.join(d, e.name));
+        }
+      };
+      walk(root);
+      expect(names).not.toContain('node_modules');
+      expect(names).not.toContain('reference.patch');
+      expect(names.filter((n) => n.startsWith('eval-') || n === 'deps' || n === 'reference')).toEqual([]);
+      const marker = (rows[0].reference as unknown as { report: unknown }) && changeSha;
+      expect(reachabilityTest({ agentRoot: root, cwd: r.cwd!, forbiddenRoots: [workRoot, source, harnessRoot], markers: [marker, changeSha.slice(0, 7), 'reference.patch'] }).passed).toBe(true);
+    }
+  });
+  it('the reachability test catches reference content, escaping symlinks and harness paths inside the agent root', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-agent-neg-'));
+    const cwd = path.join(root, 'wt');
+    fs.mkdirSync(cwd);
+    const forbidden = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-ref-neg-'));
+    fs.writeFileSync(path.join(forbidden, 'reference.patch'), 'x');
+    const base = { agentRoot: root, cwd, forbiddenRoots: [forbidden], markers: ['REFERENCE-MARKER-123'] };
+    expect(reachabilityTest(base).passed).toBe(true);
+    fs.symlinkSync(forbidden, path.join(cwd, 'node_modules'), 'dir');
+    expect(reachabilityTest(base).detail.join()).toMatch(/escapes the agent root/);
+    fs.rmSync(path.join(cwd, 'node_modules'));
+    fs.writeFileSync(path.join(root, 'notes.txt'), 'see REFERENCE-MARKER-123');
+    expect(reachabilityTest(base).detail.join()).toMatch(/reference marker found in notes.txt/);
+    fs.rmSync(path.join(root, 'notes.txt'));
+    expect(reachabilityTest({ ...base, forbiddenRoots: [os.tmpdir()] }).detail.join()).toMatch(/ancestor of the agent root/);
+    expect(reachabilityTest({ ...base, forbiddenRoots: [cwd] }).detail.join()).toMatch(/lies inside the agent root/);
+    fs.mkdirSync(path.join(cwd, '.git', 'objects', 'info'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.git', 'objects', 'info', 'alternates'), '/real/repo/.git/objects');
+    // objects/ is skipped for content, so alternates lives under info/ beside it
+    fs.mkdirSync(path.join(cwd, '.git', 'info'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.git', 'info', 'alternates'), '/real/repo/.git/objects');
+    expect(reachabilityTest(base).detail.join()).toMatch(/alternates/);
+  });
+  it('the exact child env and argument list of the real client expose no Bash tool and no secrets', () => {
+    const args = buildClaudeArgs({ tools: 'agent' });
+    expect(args[args.indexOf('--tools') + 1].split(',')).not.toContain('Bash');
+    expect(args.join(' ').split('--allowedTools')[1].split('--disallowedTools')[0]).not.toContain('Bash');
+    const env = childEnv({ ...process.env, ANTHROPIC_API_KEY: 'sk-test', CLOUDFLARE_API_TOKEN: 't', GITHUB_TOKEN: 'g' } as NodeJS.ProcessEnv);
+    expect(Object.keys(env).filter((k) => /KEY|TOKEN|SECRET|PASSWORD/i.test(k))).toEqual([]);
   });
 });
 
@@ -262,6 +342,12 @@ describe('human issue approval gate', () => {
     const r2 = await runPilot({ ...o, issueApproval: 'required', client: fake2, tracker: new BudgetTracker(), k: 1 });
     expect(r2.rows[0].status).toBe('complete');
     expect(fake2.requests.some((r) => r.role === 'issue')).toBe(false);
+    // one ledger across both invocations: the issue-pass call is still counted in the second tracker and on disk
+    const t2 = r2.meta.budget;
+    const disk = JSON.parse(fs.readFileSync(path.join(o.outDir, 'gate', 'ledger.json'), 'utf8'));
+    expect(disk.ledger.filter((e: { role: string }) => e.role === 'issue')).toHaveLength(1);
+    expect(disk.used).toBe(t2.used);
+    expect(t2.byRole.issue.calls).toBe(1);
   }, 200_000);
 });
 
@@ -281,10 +367,78 @@ describe('budget abort', () => {
   }, 200_000);
 });
 
+describe('abort and stop-rule statuses', () => {
+  it('keeps spec-failed rows spec-failed when the two-spec-fail stop rule aborts the run', async () => {
+    const o = baseOpts('stoprule');
+    const three: Corpus = { ...corpus, rows: ['A1', 'A2', 'A3'].map((id) => ({ ...corpus.rows[0], id })) };
+    const fake = new FakeClient((req) => (req.role === 'issue' ? { text: 'Roadmap page returns 401\n\nIt should show the page.' } : { text: 'no json here' }));
+    const res = await runPilot({ ...o, corpus: three, client: fake, tracker: new BudgetTracker() });
+    expect(res.meta.aborted).toMatch(/two specs in a row/);
+    expect(res.rows.map((r) => r.status)).toEqual(['spec-failed', 'spec-failed', 'aborted']);
+    expect(res.rows[0].note).toMatch(/no JSON/);
+    const saved = JSON.parse(fs.readFileSync(path.join(o.outDir, 'stoprule', 'rows', 'A2', 'result.json'), 'utf8'));
+    expect(saved.status).toBe('spec-failed');
+    expect(fs.readFileSync(res.reportPath, 'utf8')).toMatch(/spec-failed/);
+  }, 120_000);
+});
+
+describe('flaky tests and base-green', () => {
+  const mkRepo = async (withRed: boolean) => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'flaky-src-'));
+    const w = (f: string, c: string) => {
+      fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true });
+      fs.writeFileSync(path.join(d, f), c);
+    };
+    await git(d, ['init', '-q', '-b', 'main']);
+    await git(d, ['config', 'user.email', 'f@x.invalid']);
+    await git(d, ['config', 'user.name', 'F']);
+    w('package.json', '{"type":"module"}\n');
+    w('vitest.config.ts', "import { defineConfig } from 'vitest/config';\nexport default defineConfig({ test: { include: ['tests/**/*.test.ts'] } });\n");
+    w('tests/t.test.ts', `import fs from 'node:fs';
+import { expect, it } from 'vitest';
+it('flaky once', () => { const f = '.flaky-marker'; if (!fs.existsSync(f)) { fs.writeFileSync(f, '1'); throw new Error('first run'); } });
+it('green', () => {});
+${withRed ? "it('red always', () => { expect(1).toBe(2); });" : ''}
+`);
+    await git(d, ['add', '-A']);
+    await git(d, ['commit', '-q', '-m', 'base']);
+    return { dir: d, sha: (await git(d, ['rev-parse', 'HEAD'])).trim() };
+  };
+
+  it('a test that fails once and then passes is flaky (kept, not red); one that always fails is red', async () => {
+    const { dir } = await mkRepo(true);
+    fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
+    const r = await stableRun(dir, cfg, 3);
+    expect(r.flaky).toEqual(['tests/t.test.ts::flaky once']);
+    expect(r.outcomes.filter((o) => o.status === 'failed').map((o) => o.name)).toEqual(['red always']);
+    expect(r.outcomes.find((o) => o.name === 'flaky once')!.status).toBe('skipped');
+  });
+
+  it('baseGreen drops a row with a real red test and keeps a flaky-only row', async () => {
+    const red = await mkRepo(true);
+    const flakyOnly = await mkRepo(false);
+    const row = (sha: string) => ({ base: sha, scrubDocs: [] }) as never;
+    const g1 = await baseGreen(red.dir, row(red.sha), cfg);
+    expect(g1.verdict).toBe('drop');
+    expect(g1.red).toEqual(['tests/t.test.ts::red always']);
+    const g2 = await baseGreen(flakyOnly.dir, row(flakyOnly.sha), cfg);
+    expect(g2).toMatchObject({ verdict: 'keep', red: [], flaky: ['tests/t.test.ts::flaky once'] });
+  });
+});
+
 describe('CLI refuses to spend without release', () => {
   it('pilot needs --release-pilot', async () => {
     const r = await exec('node', ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', 'tools/backtest/cli.ts', 'pilot'], { cwd: harnessRoot, env: { PATH: process.env.PATH } });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/--release-pilot/);
+  });
+  it('smoke needs --release-pilot too, and the removed --auto-approve-issues flag is rejected', async () => {
+    const run = (args: string[]) => exec('node', ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', 'tools/backtest/cli.ts', ...args], { cwd: harnessRoot, env: { PATH: process.env.PATH } });
+    const s = await run(['smoke']);
+    expect(s.code).toBe(1);
+    expect(s.stderr).toMatch(/--release-pilot/);
+    const a = await run(['pilot', '--release-pilot', '--auto-approve-issues']);
+    expect(a.code).toBe(1);
+    expect(a.stderr).toMatch(/unknown flag --auto-approve-issues/);
   });
 });

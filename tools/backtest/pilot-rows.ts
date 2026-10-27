@@ -7,6 +7,7 @@ export const PILOT_ROWS: FreezeInput[] = [
     id: 'A1', sha: 'b024272', tier: 'A', obs: 'E', component: 'api router', kind: 'body',
     note: 'commit body (bug report); fix-listing bullets cut',
     keyTerms: ['roadmap'],
+    corpusNote: "The base's vitest include covers only tests/** (6 tests), so the full-run oracle is nearly empty here: pre-merge rests on the acceptance tests and tsc; the held-out test file runs through a derived config.",
     acknowledgedDocHits: ['docs/README.md'], // lists "Roadmaps" as a doc category; says nothing about the route
   },
   {
@@ -20,16 +21,19 @@ export const PILOT_ROWS: FreezeInput[] = [
       quote: '**Open:** the Spec DO route itself still accepts anything (the trust boundary); validate there too.',
     }],
     keyTerms: ['applyCanaryRefs'],
+    corpusNote: 'Base flaky: workers/shadow-router/tests/mirror-safety.test.ts has a fake-timer flake (reviewer-observed; did not fire in the 3-run base check). Kept; flaky tests are retried and never counted as red or as regressions.',
     // The agents can read the whole SF-3 paragraph in the tree; it states the router fix, which already exists at base.
     // Other hits (M3 SLO plan, RFC 0005) only mention the function as a code pointer.
     acknowledgedDocHits: ['docs/OPEN-QUESTIONS.md', 'docs/M3-CANARY-SLO-PLAN.md', 'docs/rfcs/0005-shadow-router-cache.md'],
   },
   {
-    id: 'A3', sha: 'c2d4906', tier: 'A', obs: 'E', component: 'auth/principal', kind: 'body',
-    note: 'commit body; trailers stripped',
-    keyTerms: ['withActor'],
-    // Design docs describe the pre-change behaviour ("returns 503 if no actorId"); they do not state the fix.
-    acknowledgedDocHits: ['docs/CUSTOM-REQUEST-TYPES-IMPLEMENTATION.md', 'docs/CUSTOM-REQUEST-TYPES-PLAN.md', 'docs/MILESTONES.md'],
+    // A3 (c2d4906) was DROPPED: its base is genuinely red (49 failing tests answer 503 until c2d4906 is applied), so the
+    // full-run oracle cannot be trusted there. Replaced by A11 (plan tier A, obs N control, CLI component: new to the
+    // pilot, no parent link and no shared source file with A1/A2/A4/A5).
+    id: 'A11', sha: 'de8817c', tier: 'A', obs: 'N', component: 'CLI', kind: 'subject',
+    note: 'commit subject only (thin text); the `spec: review S4` it cites is unrelated and unresolvable, ignored; trailers stripped',
+    keyTerms: ['ActorIdSchema'],
+    corpusNote: 'Control row (N: not HTTP-visible): no probe replay, so conformance and shadow rungs do not run; oracles are the repo tests and the held-out CLI test. cli/ dependencies must be installed at the base.',
   },
   {
     id: 'A4', sha: '831d9db', tier: 'A', obs: 'W', component: 'canary-worker', kind: 'body',

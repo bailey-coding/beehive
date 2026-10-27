@@ -77,8 +77,13 @@ export class FakeClient implements ModelClient {
 export const MODEL = 'claude-sonnet-5-5';
 export const EFFORT = 'medium';
 
-/** Env names the CLI child may see. Credentials are passed through by name without being read or logged. */
-const ENV_ALLOW = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR', 'SHELL', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
+/**
+ * Env the CLI child may see: an explicit allow-list. HOME is needed for the CLI's own login; CLAUDE_CONFIG_DIR is a
+ * config path (not a secret) and only passes if the user set it. No API key or token variable is passed through: the
+ * CLI authenticates from its login under HOME. If a host can only authenticate through an env token, the real client
+ * fails at the first call and that must be fixed deliberately, not by widening this list.
+ */
+const ENV_ALLOW = ['PATH', 'HOME', 'LANG', 'TERM', 'CLAUDE_CONFIG_DIR'];
 
 export function childEnv(src: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { CI: '1', NO_COLOR: '1' };
@@ -86,11 +91,17 @@ export function childEnv(src: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   return out;
 }
 
-// Bash is limited to local test/typecheck/inspection commands: no network clients, no git push/remote/fetch.
-const AGENT_BASH_ALLOW = ['npx vitest:*', 'npx tsc:*', 'node:*', 'git status:*', 'git diff:*', 'git log:*', 'git add:*', 'git commit:*', 'git show:*', 'ls:*', 'cat:*', 'grep:*', 'head:*', 'tail:*', 'wc:*', 'mkdir:*', 'sed:*'];
-const DENY = ['WebFetch', 'WebSearch', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(git push:*)', 'Bash(git remote:*)', 'Bash(git fetch:*)', 'Bash(git pull:*)', 'Bash(git clone:*)', 'Bash(ssh:*)', 'Bash(npm:*)', 'Bash(wrangler:*)', 'Bash(npx wrangler:*)'];
+const FILE_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
 
-export function buildClaudeArgs(req: Pick<ModelRequest, 'tools'>): string[] {
+// Only reachable with --allow-bash AND an OS sandbox (bubblewrap): local test/typecheck/inspection commands.
+const BASH_ALLOW = ['npx vitest:*', 'npx tsc:*', 'git status:*', 'git diff:*', 'git log:*', 'git show:*', 'ls:*', 'grep:*', 'head:*', 'tail:*', 'wc:*'];
+const DENY = ['WebFetch', 'WebSearch', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(git push:*)', 'Bash(git remote:*)', 'Bash(git fetch:*)', 'Bash(git pull:*)', 'Bash(git clone:*)', 'Bash(ssh:*)', 'Bash(npm:*)', 'Bash(node:*)', 'Bash(wrangler:*)', 'Bash(npx wrangler:*)'];
+
+export interface ArgOptions {
+  allowBash?: boolean;
+}
+
+export function buildClaudeArgs(req: Pick<ModelRequest, 'tools'>, opts: ArgOptions = {}): string[] {
   const args = [
     '-p',
     '--model', MODEL,
@@ -104,19 +115,35 @@ export function buildClaudeArgs(req: Pick<ModelRequest, 'tools'>): string[] {
     '--permission-mode', 'dontAsk',
     '--permission-prompts', 'none',
   ];
-  if (req.tools === 'agent') {
-    args.push('--allowedTools', ...['Read', 'Edit', 'Write', 'Glob', 'Grep', ...AGENT_BASH_ALLOW.map((b) => `Bash(${b})`)]);
-  } else if (req.tools === 'read') {
-    args.push('--allowedTools', 'Read', 'Glob', 'Grep');
-  }
+  // Default: file tools only, never Bash (no OS sandbox on the default host; --restricted confines only the file tools).
+  const bash = req.tools === 'agent' && opts.allowBash === true;
+  const tools = req.tools === 'none' ? [] : req.tools === 'read' ? ['Read', 'Glob', 'Grep'] : [...FILE_TOOLS, ...(bash ? ['Bash'] : [])];
+  if (tools.length) args.push('--allowedTools', ...tools, ...(bash ? BASH_ALLOW.map((b) => `Bash(${b})`) : []));
   args.push('--disallowedTools', ...DENY);
-  args.push('--tools', req.tools === 'none' ? '' : req.tools === 'read' ? 'Read,Glob,Grep' : 'Read,Edit,Write,Glob,Grep,Bash');
+  if (bash) args.push('--settings', JSON.stringify({ sandbox: { enabled: true, failIfUnavailable: true } }));
+  args.push('--tools', tools.join(','));
   return args;
 }
 
-interface StreamState {
+/** First directory on PATH holding an executable `name`, else null. */
+export function findOnPath(name: string, pathVar = process.env.PATH ?? ''): string | null {
+  for (const d of pathVar.split(path.delimiter).filter(Boolean)) {
+    const p = path.join(d, name);
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return p;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+export interface StreamState {
   assistantIds: Set<string>;
   lastText: string;
+  /** The latest assistant message asked for a tool, so another API call will follow unless the run is stopped. */
+  pendingTool?: boolean;
   result: Record<string, any> | null;
 }
 
@@ -133,6 +160,7 @@ export function parseStreamLine(line: string, st: StreamState): void {
     const blocks = Array.isArray(ev.message.content) ? ev.message.content : [];
     const t = blocks.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('');
     if (t) st.lastText = t;
+    st.pendingTool = blocks.some((b: any) => b?.type === 'tool_use');
   } else if (ev?.type === 'result') {
     st.result = ev;
   }
@@ -159,9 +187,36 @@ export function responseFromStream(st: StreamState, durationMs: number, stopReas
   };
 }
 
+export interface ClaudeCliOptions {
+  bin?: string;
+  /** Keep the Bash tool for candidates. Refuses to construct unless an OS sandbox (bubblewrap) is on PATH. */
+  allowBash?: boolean;
+  which?: (name: string) => string | null;
+  log?: (s: string) => void;
+}
+
+/** True once the limit is reached and the agent has asked for another turn: stop before that call is made. */
+export function shouldStop(st: StreamState, maxCalls: number): boolean {
+  return !st.result && st.assistantIds.size >= maxCalls && st.pendingTool === true;
+}
+
 export class ClaudeCliClient implements ModelClient {
   readonly name = 'claude-cli';
-  constructor(private readonly bin = 'claude') {}
+  readonly sandbox: string | null;
+  private readonly bin: string;
+  private readonly allowBash: boolean;
+
+  constructor(opts: ClaudeCliOptions = {}) {
+    this.bin = opts.bin ?? 'claude';
+    this.allowBash = opts.allowBash === true;
+    this.sandbox = null;
+    if (this.allowBash) {
+      const bwrap = (opts.which ?? ((n: string) => findOnPath(n)))('bwrap');
+      if (!bwrap) throw new Error('--allow-bash refused: no OS sandbox found (bubblewrap `bwrap` is not on PATH). Candidates stay file-tools-only.');
+      this.sandbox = `bubblewrap (${bwrap}) via Claude Code sandbox settings`;
+      (opts.log ?? (() => {}))(`Bash enabled for candidates; active sandbox: ${this.sandbox}`);
+    }
+  }
 
   async run(req: ModelRequest): Promise<ModelResponse> {
     const ownTmp = req.cwd ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-text-'));
@@ -169,14 +224,14 @@ export class ClaudeCliClient implements ModelClient {
     const st: StreamState = { assistantIds: new Set(), lastText: '', result: null };
     let limited = false;
     const t0 = Date.now();
-    const r = await exec(this.bin, buildClaudeArgs(req), {
+    const r = await exec(this.bin, buildClaudeArgs(req, { allowBash: this.allowBash }), {
       cwd,
       env: childEnv(),
       timeoutMs: req.timeoutMs,
       input: req.prompt,
       onStdoutLine: (line) => {
         parseStreamLine(line, st);
-        if (st.assistantIds.size > req.maxCalls && !st.result) {
+        if (shouldStop(st, req.maxCalls)) {
           limited = true;
           return true;
         }

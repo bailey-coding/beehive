@@ -16,6 +16,35 @@ export interface OracleConfig {
   tscCommand: string[] | null;
   testTimeoutMs: number;
   tscTimeoutMs: number;
+  /** Installs the dependencies of a base checkout (root and cli/). Null = nothing to install (fixtures). */
+  installDeps: ((dir: string) => Promise<void>) | null;
+  /** Runs per suite when something fails (flake detection): red = failed in every run, flaky = in some. */
+  baseAttempts: number;
+  evalAttempts: number;
+}
+
+/** `npm ci` where a lockfile exists, `npm install` where not, in the root and in cli/. Never HEAD's node_modules. */
+export async function npmInstall(dir: string): Promise<void> {
+  const env: NodeJS.ProcessEnv = {};
+  for (const k of ['PATH', 'HOME', 'LANG', 'TMPDIR']) if (process.env[k]) env[k] = process.env[k];
+  for (const d of [dir, path.join(dir, 'cli')]) {
+    if (!fs.existsSync(path.join(d, 'package.json'))) continue;
+    const verb = fs.existsSync(path.join(d, 'package-lock.json')) ? 'ci' : 'install';
+    const r = await exec('npm', [verb, '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: d, env, timeoutMs: 10 * 60_000 });
+    if (r.code !== 0) throw new Error(`npm ${verb} failed in ${path.relative(dir, d) || '.'}: ${r.stderr.trim().slice(-300)}`);
+  }
+}
+
+/** Link the installed dependencies of one checkout into another (symlinks stay outside any candidate-visible tree). */
+export function linkDeps(from: string, to: string): void {
+  for (const rel of ['node_modules', 'cli/node_modules']) {
+    const src = path.join(from, rel);
+    const dest = path.join(to, rel);
+    if (fs.existsSync(src) && !fs.existsSync(dest)) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.symlinkSync(src, dest, 'dir');
+    }
+  }
 }
 
 export const DEFAULT_ORACLE_CONFIG: OracleConfig = {
@@ -23,6 +52,9 @@ export const DEFAULT_ORACLE_CONFIG: OracleConfig = {
   tscCommand: ['node', 'node_modules/typescript/bin/tsc', '--noEmit'],
   testTimeoutMs: 15 * 60_000,
   tscTimeoutMs: 10 * 60_000,
+  installDeps: npmInstall,
+  baseAttempts: 3,
+  evalAttempts: 2,
 };
 
 /** Minimal env for test subprocesses: no tokens, no CI flag (the root vitest config retries under CI). */
@@ -70,6 +102,31 @@ export async function runVitest(cwd: string, cfg: OracleConfig, files: string[] 
     }
   }
   return run;
+}
+
+export interface StableRun extends VitestRun {
+  /** Tests that failed in some runs and passed in others: reported, never counted as red or as a regression. */
+  flaky: string[];
+}
+
+/** Run, and when anything fails rerun the failing files up to `attempts` times. Red = failed in every run. */
+export async function stableRun(cwd: string, cfg: OracleConfig, attempts: number, files: string[] = [], env: Record<string, string> = {}): Promise<StableRun> {
+  const first = await runVitest(cwd, cfg, files, env);
+  const failedKeys = (r: VitestRun) => new Set(r.outcomes.filter((o) => o.status === 'failed').map((o) => `${o.file}::${o.name}`));
+  const stillFailing = failedKeys(first);
+  const everFailed = new Set(stillFailing);
+  let last = first;
+  for (let i = 1; i < attempts && stillFailing.size > 0; i++) {
+    const refiles = [...new Set([...stillFailing].map((k) => k.split('::')[0]))];
+    last = await runVitest(cwd, cfg, refiles, env);
+    const ran = new Set(last.outcomes.map((o) => `${o.file}::${o.name}`));
+    const nowFailed = failedKeys(last);
+    for (const k of [...stillFailing]) if (ran.has(k) && !nowFailed.has(k)) stillFailing.delete(k);
+  }
+  const flaky = [...everFailed].filter((k) => !stillFailing.has(k));
+  const flakySet = new Set(flaky);
+  const outcomes = first.outcomes.map((o) => (flakySet.has(`${o.file}::${o.name}`) ? { ...o, status: 'skipped' as const } : o));
+  return { ...first, outcomes, flaky, loadErrors: last === first ? first.loadErrors : [...new Set([...first.loadErrors, ...last.loadErrors])] };
 }
 
 export async function runTsc(cwd: string, cfg: OracleConfig): Promise<{ errors: number; sample: string[] } | null> {
@@ -133,11 +190,11 @@ async function resetTree(dir: string): Promise<void> {
 }
 
 /** Run acceptance + repo tests with probe capture in `dir` (must be a clean committed checkout). */
-async function fullRun(dir: string, cfg: OracleConfig, spec: SpecFile | null): Promise<{ run: VitestRun; probe: ResponseRecord[] }> {
+async function fullRun(dir: string, cfg: OracleConfig, spec: SpecFile | null, attempts: number): Promise<{ run: StableRun; probe: ResponseRecord[] }> {
   installProbe(dir);
   if (spec) writeAcceptance(dir, spec);
   const probeOut = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-probe-')), 'probe.jsonl');
-  const run = await runVitest(dir, cfg, [], { [PROBE_ENV]: probeOut });
+  const run = await stableRun(dir, cfg, attempts, [], { [PROBE_ENV]: probeOut });
   const probe = readProbe(probeOut);
   fs.rmSync(path.dirname(probeOut), { recursive: true, force: true });
   return { run, probe };
@@ -145,10 +202,10 @@ async function fullRun(dir: string, cfg: OracleConfig, spec: SpecFile | null): P
 
 /** Baseline on the base checkout: which tests pass there, base tsc errors, base probe responses. */
 export async function baselineReport(baseDir: string, cfg: OracleConfig, spec: SpecFile, heldOut: HeldOut): Promise<BaselineReport> {
-  const { run, probe } = await fullRun(baseDir, cfg, spec);
+  const { run, probe } = await fullRun(baseDir, cfg, spec, cfg.baseAttempts);
   const tsc = await runTsc(baseDir, cfg);
   await resetTree(baseDir);
-  const held = heldOut.existingAtBase.length ? await runVitest(baseDir, cfg, heldOut.existingAtBase) : null;
+  const held = heldOut.existingAtBase.length ? await stableRun(baseDir, cfg, cfg.baseAttempts, heldOut.existingAtBase) : null;
   await resetTree(baseDir);
   return { outcomes: run.outcomes, loadErrors: run.loadErrors, heldOutRed: (held?.outcomes ?? []).filter((o) => o.status === 'failed').map(key), tscErrors: tsc?.errors ?? null, probe };
 }
@@ -167,7 +224,7 @@ export async function evaluateCheckout(opts: {
   heldOut: HeldOut;
 }): Promise<OracleReport> {
   const { dir, cfg, spec, baseline } = opts;
-  const { run, probe } = await fullRun(dir, cfg, spec);
+  const { run, probe } = await fullRun(dir, cfg, spec, cfg.evalAttempts);
   const tsc = await runTsc(dir, cfg);
   await resetTree(dir);
 
@@ -197,7 +254,7 @@ export async function evaluateCheckout(opts: {
       fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
       fs.writeFileSync(path.join(dir, f), content);
     }
-    const h = await runVitest(dir, cfg, heldFiles);
+    const h = await stableRun(dir, cfg, cfg.evalAttempts, heldFiles);
     for (const o of h.outcomes) heldOutcomes[key(o)] = o.status;
     for (const e of h.loadErrors) {
       loadErrors.push(`held-out: ${e}`);

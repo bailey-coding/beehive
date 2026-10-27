@@ -1,5 +1,6 @@
 // Leakage tests 1-4 (docs/SPEC-BACKTEST-PLAN.md section 2). Test 5 (scrub docs added after the issue) holds by
 // construction: agents only ever see a single-commit checkout of the base tree.
+import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from './exec.ts';
 import type { CorpusRow } from './corpus.ts';
@@ -61,4 +62,73 @@ export function wrongIssueVerdict(truth: ParsedSpec, wrong: ParsedSpec): { simil
 export async function baseTokenSet(repo: string, base: string): Promise<Set<string>> {
   const r = await exec('git', ['grep', '-h', '-o', '-I', '-E', '[A-Za-z_$][A-Za-z0-9_$]{5,}', base], { cwd: repo });
   return new Set(r.stdout.split('\n').filter(Boolean));
+}
+
+const inside = (child: string, parent: string) => {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+/**
+ * Test 3, whole reachable tree: everything an agent's file tools could touch from `cwd` (its whole private root,
+ * symlink targets, the ancestor chain) holds no reference content, no escaping symlink, and no path of the harness
+ * (reference/eval/dependency roots, the real repo) is an ancestor or descendant of it.
+ */
+export function reachabilityTest(opts: { agentRoot: string; cwd: string; forbiddenRoots: string[]; markers: string[] }): { passed: boolean; detail: string[] } {
+  const detail: string[] = [];
+  const root = fs.realpathSync(opts.agentRoot);
+  const cwd = fs.realpathSync(opts.cwd);
+  if (!inside(cwd, root)) detail.push('cwd is outside the agent root');
+  for (const f of opts.forbiddenRoots) {
+    const fr = fs.existsSync(f) ? fs.realpathSync(f) : path.resolve(f);
+    if (inside(root, fr)) detail.push(`a harness path (${path.basename(fr)}) is an ancestor of the agent root`);
+    if (inside(fr, root)) detail.push(`a harness path (${path.basename(fr)}) lies inside the agent root`);
+  }
+  const markers = opts.markers.filter((m) => m.length >= 7);
+  const stack = [root];
+  while (stack.length) {
+    const d = stack.pop()!;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isSymbolicLink()) {
+        let target: string;
+        try {
+          target = fs.realpathSync(p);
+        } catch {
+          detail.push(`dangling symlink ${path.relative(root, p)}`);
+          continue;
+        }
+        if (!inside(target, root)) detail.push(`symlink ${path.relative(root, p)} escapes the agent root`);
+        continue;
+      }
+      if (e.isDirectory()) {
+        if (e.name === 'objects' && path.basename(d) === '.git') continue; // compressed; markers cannot match
+        stack.push(p);
+        continue;
+      }
+      if (e.name === 'alternates' && path.basename(d) === 'info') detail.push('git alternates file present (shared object store)');
+      const st = fs.statSync(p);
+      if (st.size > 4 * 1024 * 1024) continue;
+      const text = fs.readFileSync(p, 'utf8');
+      for (const m of markers) if (text.includes(m)) detail.push(`reference marker found in ${path.relative(root, p)}`);
+    }
+  }
+  return { passed: detail.length === 0, detail: [...new Set(detail)] };
+}
+
+/**
+ * Reference markers for the reachability test: the change commit's shas plus added lines of the real diff that are
+ * distinctive, i.e. not already in the base tree and not in `own` (the spec text the agent is legitimately given).
+ */
+export async function referenceMarkers(repo: string, sha: string, base: string, added: string, own = ''): Promise<string[]> {
+  const full = (await git(repo, ['rev-parse', sha])).trim();
+  const out = [full, full.slice(0, 7), 'reference.patch'];
+  for (const raw of added.split('\n')) {
+    const line = raw.trim();
+    if (line.length < 24 || own.includes(line)) continue;
+    const r = await exec('git', ['grep', '-q', '-F', '-e', line, base], { cwd: repo });
+    if (r.code === 1) out.push(line);
+    if (out.length >= 18) break;
+  }
+  return out;
 }

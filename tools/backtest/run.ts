@@ -1,5 +1,6 @@
 // Pilot orchestrator. Sequential, resumable by artifact, aborts cleanly on the budget stop and writes partial results.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { BudgetedClient, BudgetExceeded, type BudgetTracker } from './budget.ts';
 import type { ModelClient } from './client.ts';
@@ -7,9 +8,9 @@ import { labelDeterministically, testAgreement } from './compare.ts';
 import type { Corpus, CorpusRow } from './corpus.ts';
 import { compareRecords } from './delta.ts';
 import { candidatePrompt, cost, docExcerpt, generateSpec, gradePrompt, issuePrompt, parseGrade, sumCost } from './generate.ts';
-import { addedLinesOf, addWorktree, commitAndPush, createScratchRepo, diffOf, git, linkNodeModules, showAt } from './git.ts';
-import { baseTokenSet, docAtBaseTest, historyTest, wrongIssueVerdict } from './leakage.ts';
-import { baselineReport, evaluateCheckout, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
+import { addedLinesOf, addWorktree, commitAndPush, createScratchRepo, diffOf, git, showAt } from './git.ts';
+import { baseTokenSet, docAtBaseTest, historyTest, reachabilityTest, referenceMarkers, wrongIssueVerdict } from './leakage.ts';
+import { baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
 import { installProbe } from './probe.ts';
 import { GRADER_LABEL, type CandidateResult, type LeakageResult, type RowResult, type RunMeta } from './results.ts';
 import { ACCEPTANCE_DIR, parseSpec, validateSpec, writeAcceptance, type ParsedSpec } from './spec.ts';
@@ -54,8 +55,10 @@ interface IssueFile {
 
 export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta: RunMeta; reportPath: string }> {
   const log = o.log ?? (() => {});
-  const client = new BudgetedClient(o.client, o.tracker);
   const runDir = path.join(o.outDir, o.runId);
+  assertDisjoint(o.workRoot);
+  o.tracker.attach(path.join(runDir, 'ledger.json'));
+  const client = new BudgetedClient(o.client, o.tracker);
   const startedAt = new Date().toISOString();
   const rows: RowResult[] = o.corpus.rows.map((r) => ({ id: r.id, sha: r.sha, tier: r.tier, obs: r.obs, status: 'aborted', issueCost: null, spec: null, reference: null, candidates: [], graderCalls: 0, leakage: null }));
   let aborted: string | null = null;
@@ -127,8 +130,11 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
     log(`ABORT: ${aborted}`);
     for (const row of o.corpus.rows) {
       const res = rows.find((r) => r.id === row.id)!;
-      if (res.status !== 'complete' && res.status !== 'leak-blocked') res.status = 'aborted';
-      res.note ??= aborted ?? undefined;
+      // Only rows that never finished get 'aborted'; spec-failed, error, leak-blocked and complete keep their status.
+      if (res.status === 'aborted') {
+        res.status = 'aborted';
+        res.note ??= aborted ?? undefined;
+      }
       save(res);
     }
   }
@@ -148,151 +154,192 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   return { rows, meta, reportPath };
 }
 
+/** Private top-level temp root for one agent: nothing of the harness (references, deps, real repo) lives under or above it. */
+function agentRootDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'bt-agent-'));
+}
+
+export function assertDisjoint(workRoot: string): void {
+  const tmp = fs.realpathSync(os.tmpdir());
+  fs.mkdirSync(workRoot, { recursive: true });
+  const w = fs.realpathSync(workRoot);
+  if (tmp === w || tmp.startsWith(w + path.sep)) throw new Error(`workRoot ${workRoot} must not contain the temp directory that holds agent checkouts`);
+}
+
 async function runRow(o: RunOptions, client: BudgetedClient, row: CorpusRow, issues: Map<string, IssueFile>, res: RowResult, dir: string, log: (s: string) => void): Promise<void> {
   const work = path.join(o.workRoot, o.runId, row.id);
   const issueText = issues.get(row.id)!.text;
   const leak = res.leakage!;
+  const agentRoots: string[] = [];
+  const added = await addedLinesOf(o.repo, row.sha);
+  let markers = await referenceMarkers(o.repo, row.sha, row.base, added);
+  const forbidden = [o.workRoot, o.repo, o.harnessRoot];
+  try {
+    // ---- dependency provider (harness side only: installed from the base's own lockfile, never HEAD's node_modules)
+    const deps = await createScratchRepo(o.repo, row.base, path.join(work, 'deps'), row.scrubDocs);
+    if (o.cfg.installDeps && !fs.existsSync(path.join(deps.repo, 'node_modules'))) await o.cfg.installDeps(deps.repo);
+    installProbe(deps.repo);
+    const runOnBase = (files: string[]) => runAcceptanceOn(deps.repo, o.cfg, files);
 
-  // ---- spec arm
-  const specBase = await createScratchRepo(o.repo, row.base, path.join(work, 'spec-base'), row.scrubDocs);
-  linkNodeModules(o.harnessRoot, specBase.repo);
-  installProbe(specBase.repo);
-  const runOnBase = (files: string[]) => runAcceptanceOn(specBase.repo, o.cfg, files);
-  const specFile = path.join(dir, 'spec.json');
-  let parsed: ParsedSpec | null = null;
-  if (fs.existsSync(specFile)) {
-    parsed = parseSpec(readJson(specFile));
-  } else {
-    const g = await generateSpec({ client, row, issueText, baseDir: specBase.repo, validate: true, runOnBase });
-    if (g.raw) writeJson(path.join(dir, 'spec.generated.json'), g.raw);
-    const passed = g.attempts[g.attempts.length - 1].ok;
-    res.spec = { attempts: g.attempts, passedValidators: passed, retries: g.attempts.length - 1, cost: g.cost, editDistance: null, humanMinutes: null };
-    writeJson(path.join(dir, 'spec.meta.json'), res.spec);
-    o.tracker.recordSpecOutcome(passed);
-    if (!passed || !g.parsed) {
-      res.status = 'spec-failed';
-      res.note = g.attempts[g.attempts.length - 1].errors.join('; ');
-      return;
-    }
-    parsed = g.parsed;
-    // A human may fix S: keep both versions and the edit distance.
-    const fixed = path.join(dir, 'spec.fixed.json');
-    if (fs.existsSync(fixed)) {
-      const v = await validateSpec(readJson(fixed), specBase.repo, runOnBase);
-      if (!v.result.ok || !v.parsed) throw new Error(`spec.fixed.json fails validators: ${v.result.errors.join('; ')}`);
-      res.spec.editDistance = normalizedTokenLevenshtein(JSON.stringify(g.raw), JSON.stringify(readJson(fixed)));
-      const mins = path.join(dir, 'spec.fixed.meta.json');
-      res.spec.humanMinutes = fs.existsSync(mins) ? readJson<{ minutes?: number }>(mins).minutes ?? null : null;
-      parsed = v.parsed;
-      writeJson(specFile, readJson(fixed));
-    } else writeJson(specFile, g.raw);
-  }
-  if (!res.spec && fs.existsSync(path.join(dir, 'spec.meta.json'))) res.spec = readJson(path.join(dir, 'spec.meta.json'));
-  const specJson = JSON.stringify(readJson(specFile), null, 2);
-
-  // ---- leakage tests 1 (wrong issue) and 2 (overlap)
-  const all = o.corpus.rows;
-  const wrongRow = all.length > 1 ? all[(all.findIndex((r) => r.id === row.id) + 1) % all.length] : null;
-  if (wrongRow && issues.has(wrongRow.id)) {
-    const w = await generateSpec({ client, row, issueText: issues.get(wrongRow.id)!.text, baseDir: specBase.repo, validate: false, runOnBase, role: 'leakage' });
-    if (w.parsed) {
-      const v = wrongIssueVerdict(parsed, w.parsed);
-      leak.wrongIssue = { ran: true, similarity: v.similarity, passed: v.passed, detail: v.detail };
-    } else leak.wrongIssue = { ran: true, similarity: null, passed: null, detail: 'wrong-issue spec did not parse' };
-  }
-  leak.overlap.specFlags = overlapFlags({ text: specJson, issueText, diffAdded: await addedLinesOf(o.repo, row.sha), baseTokens: await baseTokenSet(o.repo, row.base) });
-  leak.overlap.passed = leak.overlap.specFlags.length === 0 && leak.overlap.issueFlags.length === 0;
-
-  // ---- baseline + reference arm
-  const heldOut = await loadHeldOut(o.repo, row.sha, row.base, row.files.tests);
-  const baseline: BaselineReport = await baselineReport(specBase.repo, o.cfg, parsed.spec, heldOut);
-  const refScratch = await createScratchRepo(o.repo, row.base, path.join(work, 'reference'), row.scrubDocs);
-  linkNodeModules(o.harnessRoot, refScratch.repo);
-  const patchFile = path.join(work, 'reference.patch');
-  fs.writeFileSync(patchFile, await diffOf(o.repo, row.sha));
-  await git(refScratch.repo, ['apply', '--exclude=docs/*', patchFile]);
-  await git(refScratch.repo, ['add', '-A']);
-  await git(refScratch.repo, ['commit', '-q', '-m', 'reference']);
-  const evalArgs = { cfg: o.cfg, spec: parsed.spec, contract: parsed.contract, surface: parsed.surface, baseline, heldOut };
-  const refReport = await evaluateCheckout({ dir: refScratch.repo, ...evalArgs });
-  const refAccepted = refReport.acceptance.total > 0 && refReport.acceptance.passed === refReport.acceptance.total;
-  const heldBad = Object.entries(refReport.heldOut.outcomes).some(([k, s]) => s !== 'passed' && !baseline.heldOutRed.includes(k));
-  const falseRejected = !refReport.rungs.preMerge || refReport.rungs.conformance === false || refReport.rungs.shadow === false || heldBad;
-  res.reference = { report: refReport, acceptancePassed: refAccepted, falseRejected };
-  writeJson(path.join(dir, 'reference.json'), res.reference);
-  log(`${row.id}: reference acceptance ${refReport.acceptance.passed}/${refReport.acceptance.total}${falseRejected ? ' (FALSE-REJECTED by a rung)' : ''}`);
-
-  // ---- candidate arm
-  const refDiff = fs.readFileSync(patchFile, 'utf8');
-  const residue: { c: CandidateResult; facts: string[]; patch: string }[] = [];
-  for (let k = 1; k <= o.k; k++) {
-    const cfile = path.join(dir, 'candidates', `c${k}.json`);
-    if (fs.existsSync(cfile)) {
-      res.candidates.push(readJson<CandidateResult>(cfile));
-      continue;
-    }
-    const cdir = path.join(work, `cand-${k}`);
-    const scratch = await createScratchRepo(o.repo, row.base, cdir, row.scrubDocs);
-    const h = await historyTest(scratch.repo, o.workRoot, o.repo, row);
-    leak.history = { passed: (leak.history?.passed ?? true) && h.passed, detail: [...(leak.history?.detail ?? []), ...h.detail] };
-    if (!h.passed) {
+    // ---- spec arm: the read-only generator runs in its own private root (single-commit tree, no deps)
+    const specRoot = agentRootDir();
+    agentRoots.push(specRoot);
+    const specAgent = await createScratchRepo(o.repo, row.base, specRoot, row.scrubDocs);
+    const sr = reachabilityTest({ agentRoot: specRoot, cwd: specAgent.repo, forbiddenRoots: forbidden, markers });
+    if (!sr.passed) {
       res.status = 'leak-blocked';
-      res.note = `history test failed: ${h.detail.join(' | ')}`;
+      res.note = `reachability test failed (spec generator): ${sr.detail.join(' | ')}`;
       return;
     }
-    const wt = path.join(cdir, 'wt');
-    const branch = `work/${row.id}-c${k}`;
-    await addWorktree(scratch.repo, wt, branch);
-    linkNodeModules(o.harnessRoot, wt);
-    installProbe(wt);
-    const accFiles = writeAcceptance(wt, parsed.spec);
-    const cr: CandidateResult = { k, stopReason: 'error', cost: { calls: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, costUsd: 0, durationMs: 0 }, commit: null, changedFiles: [], report: null, clearsAllRungs: false, testAgreement: { total: 0, agree: 0 }, probeAgreement: null, label: null, labelSource: null, deterministicRegression: false };
-    try {
-      const run = await client.run({ role: 'candidate', rowId: row.id, prompt: candidatePrompt(issueText, specJson, accFiles), tools: 'agent', cwd: wt, maxCalls: o.candidateMaxCalls ?? 40, timeoutMs: o.candidateTimeoutMs ?? 30 * 60_000 });
-      cr.cost = cost(run);
-      cr.stopReason = run.stopReason;
-    } catch (e) {
-      if (e instanceof BudgetExceeded) {
-        // Always-pushed invariant: whatever the agent left is committed and pushed to scratch before aborting.
-        await commitAndPush(wt, branch, `scratch: ${row.id} c${k} (aborted)`).catch(() => {});
-        throw e;
+    const specFile = path.join(dir, 'spec.json');
+    let parsed: ParsedSpec | null = null;
+    if (fs.existsSync(specFile)) {
+      parsed = parseSpec(readJson(specFile));
+    } else {
+      const g = await generateSpec({ client, row, issueText, baseDir: deps.repo, agentCwd: specAgent.repo, validate: true, runOnBase });
+      if (g.raw) writeJson(path.join(dir, 'spec.generated.json'), g.raw);
+      const passed = g.attempts[g.attempts.length - 1].ok;
+      // Unedited spec: edit distance 0 and minutes = measured generation time. A human fix overwrites both below.
+      res.spec = { attempts: g.attempts, passedValidators: passed, retries: g.attempts.length - 1, cost: g.cost, editDistance: 0, humanMinutes: g.cost.durationMs / 60000 };
+      writeJson(path.join(dir, 'spec.meta.json'), res.spec);
+      if (!passed || !g.parsed) {
+        res.status = 'spec-failed';
+        res.note = g.attempts[g.attempts.length - 1].errors.join('; ');
+        writeJson(path.join(dir, 'result.json'), res); // the stop rule below may abort the run: keep this status
+        o.tracker.recordSpecOutcome(false);
+        return;
       }
-      cr.error = e instanceof Error ? e.message : String(e);
+      o.tracker.recordSpecOutcome(true);
+      parsed = g.parsed;
+      // A human may fix S: keep both versions and the edit distance.
+      const fixed = path.join(dir, 'spec.fixed.json');
+      if (fs.existsSync(fixed)) {
+        const v = await validateSpec(readJson(fixed), deps.repo, runOnBase);
+        if (!v.result.ok || !v.parsed) throw new Error(`spec.fixed.json fails validators: ${v.result.errors.join('; ')}`);
+        res.spec.editDistance = normalizedTokenLevenshtein(JSON.stringify(g.raw), JSON.stringify(readJson(fixed)));
+        const mins = path.join(dir, 'spec.fixed.meta.json');
+        res.spec.humanMinutes = fs.existsSync(mins) ? readJson<{ minutes?: number }>(mins).minutes ?? null : null;
+        parsed = v.parsed;
+        writeJson(specFile, readJson(fixed));
+        writeJson(path.join(dir, 'spec.meta.json'), res.spec);
+      } else writeJson(specFile, g.raw);
     }
-    cr.commit = await commitAndPush(wt, branch, `candidate ${row.id} c${k}`);
-    cr.changedFiles = (await git(wt, ['diff', '--name-only', 'main', 'HEAD'])).split('\n').filter((f) => f && !f.startsWith(ACCEPTANCE_DIR));
-    const patch = await git(wt, ['diff', 'main', 'HEAD', '--', '.', `:!${ACCEPTANCE_DIR}`]);
-    fs.mkdirSync(path.join(dir, 'candidates'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'candidates', `c${k}.patch`), patch);
-    cr.report = await evaluateCheckout({ dir: wt, ...evalArgs });
-    cr.testAgreement = testAgreement(cr.report, refReport);
-    cr.probeAgreement = cr.report.probe.length && refReport.probe.length ? compareRecords(cr.report.probe, refReport.probe, parsed.surface) : null;
-    const det = labelDeterministically(cr.report, refReport, parsed.surface, cr.report.probe, refReport.probe);
-    cr.clearsAllRungs = det.clearsAllRungs;
-    cr.deterministicRegression = det.deterministicRegression;
-    cr.label = det.label;
-    cr.labelSource = det.label ? 'deterministic' : null;
-    cr.rationale = det.why;
-    if (!det.label) residue.push({ c: cr, patch, facts: [det.why, `held-out failures: ${Object.entries(refReport.heldOut.outcomes).filter(([key, s]) => s === 'passed' && cr.report!.heldOut.outcomes[key] !== 'passed').map(([key]) => key).join('; ') || 'none'}`] });
-    res.candidates.push(cr);
-    writeJson(cfile, cr);
-    log(`${row.id} c${k}: ${cr.label ?? 'residue'} (${cr.cost.calls} calls, rungs ${cr.clearsAllRungs ? 'cleared' : 'not cleared'})`);
-  }
+    if (!res.spec && fs.existsSync(path.join(dir, 'spec.meta.json'))) res.spec = readJson(path.join(dir, 'spec.meta.json'));
+    const specJson = JSON.stringify(readJson(specFile), null, 2);
+    markers = await referenceMarkers(o.repo, row.sha, row.base, added, `${specJson}\n${issueText}`);
 
-  // ---- model-judged residue (at most 3 grader calls per row; every such number is labelled 'same-family grader')
-  for (const r of residue.slice(0, 3)) {
-    const g = await client.run({ role: 'grade', rowId: row.id, prompt: gradePrompt({ issueText, specJson, candidateDiff: r.patch, referenceDiff: refDiff, facts: r.facts }), tools: 'none', maxCalls: 2, timeoutMs: 5 * 60_000 });
-    res.graderCalls += g.calls;
-    try {
-      const v = parseGrade(g.text);
-      r.c.label = v.label;
-      r.c.labelSource = GRADER_LABEL;
-      r.c.rationale = `${GRADER_LABEL}: ${v.rationale}`;
-    } catch (e) {
-      r.c.rationale = `${r.c.rationale}; grader reply unusable: ${e instanceof Error ? e.message : e}`;
+    // ---- leakage tests 1 (wrong issue) and 2 (overlap)
+    const all = o.corpus.rows;
+    const wrongRow = all.length > 1 ? all[(all.findIndex((r) => r.id === row.id) + 1) % all.length] : null;
+    if (wrongRow && issues.has(wrongRow.id)) {
+      const w = await generateSpec({ client, row, issueText: issues.get(wrongRow.id)!.text, baseDir: deps.repo, agentCwd: specAgent.repo, validate: false, runOnBase, role: 'leakage' });
+      if (w.parsed) {
+        const v = wrongIssueVerdict(parsed, w.parsed);
+        leak.wrongIssue = { ran: true, similarity: v.similarity, passed: v.passed, detail: v.detail };
+      } else leak.wrongIssue = { ran: true, similarity: null, passed: null, detail: 'wrong-issue spec did not parse' };
     }
-    writeJson(path.join(dir, 'candidates', `c${r.c.k}.json`), r.c);
+    leak.overlap.specFlags = overlapFlags({ text: specJson, issueText, diffAdded: await addedLinesOf(o.repo, row.sha), baseTokens: await baseTokenSet(o.repo, row.base) });
+    leak.overlap.passed = leak.overlap.specFlags.length === 0 && leak.overlap.issueFlags.length === 0;
+
+    // ---- baseline + reference arm (harness-owned roots, outside every agent root)
+    const heldOut = await loadHeldOut(o.repo, row.sha, row.base, row.files.tests);
+    const baseline: BaselineReport = await baselineReport(deps.repo, o.cfg, parsed.spec, heldOut);
+    const refScratch = await createScratchRepo(o.repo, row.base, path.join(work, 'reference'), row.scrubDocs);
+    linkDeps(deps.repo, refScratch.repo);
+    const patchFile = path.join(work, 'reference.patch');
+    fs.writeFileSync(patchFile, await diffOf(o.repo, row.sha));
+    await git(refScratch.repo, ['apply', '--exclude=docs/*', patchFile]);
+    await git(refScratch.repo, ['add', '-A']);
+    await git(refScratch.repo, ['commit', '-q', '-m', 'reference']);
+    const evalArgs = { cfg: o.cfg, spec: parsed.spec, contract: parsed.contract, surface: parsed.surface, baseline, heldOut };
+    const refReport = await evaluateCheckout({ dir: refScratch.repo, ...evalArgs });
+    const refAccepted = refReport.acceptance.total > 0 && refReport.acceptance.passed === refReport.acceptance.total;
+    const heldBad = Object.entries(refReport.heldOut.outcomes).some(([k, s]) => s !== 'passed' && !baseline.heldOutRed.includes(k));
+    const falseRejected = !refReport.rungs.preMerge || refReport.rungs.conformance === false || refReport.rungs.shadow === false || heldBad;
+    res.reference = { report: refReport, acceptancePassed: refAccepted, falseRejected };
+    writeJson(path.join(dir, 'reference.json'), res.reference);
+    log(`${row.id}: reference acceptance ${refReport.acceptance.passed}/${refReport.acceptance.total}${falseRejected ? ' (FALSE-REJECTED by a rung)' : ''}`);
+
+    // ---- candidate arm
+    const refDiff = fs.readFileSync(patchFile, 'utf8');
+    const residue: { c: CandidateResult; facts: string[]; patch: string }[] = [];
+    for (let k = 1; k <= o.k; k++) {
+      const cfile = path.join(dir, 'candidates', `c${k}.json`);
+      if (fs.existsSync(cfile)) {
+        res.candidates.push(readJson<CandidateResult>(cfile));
+        continue;
+      }
+      // Private root: only the single-commit scratch repo, its worktree and its scratch origin. No deps, no references.
+      const croot = agentRootDir();
+      agentRoots.push(croot);
+      const scratch = await createScratchRepo(o.repo, row.base, croot, row.scrubDocs);
+      const wt = path.join(croot, 'wt');
+      const branch = `work/${row.id}-c${k}`;
+      await addWorktree(scratch.repo, wt, branch);
+      installProbe(wt);
+      const accFiles = writeAcceptance(wt, parsed.spec);
+      const h = await historyTest(scratch.repo, croot, o.repo, row);
+      const reach = reachabilityTest({ agentRoot: croot, cwd: wt, forbiddenRoots: forbidden, markers });
+      leak.history = { passed: (leak.history?.passed ?? true) && h.passed && reach.passed, detail: [...(leak.history?.detail ?? []), ...h.detail, ...reach.detail] };
+      if (!h.passed || !reach.passed) {
+        res.status = 'leak-blocked';
+        res.note = `leakage test 3 failed: ${[...h.detail, ...reach.detail].join(' | ')}`;
+        return;
+      }
+      const cr: CandidateResult = { k, stopReason: 'error', cost: { calls: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, costUsd: 0, durationMs: 0 }, commit: null, changedFiles: [], report: null, clearsAllRungs: false, testAgreement: { total: 0, agree: 0 }, probeAgreement: null, label: null, labelSource: null, deterministicRegression: false };
+      try {
+        const run = await client.run({ role: 'candidate', rowId: row.id, prompt: candidatePrompt(issueText, specJson, accFiles), tools: 'agent', cwd: wt, maxCalls: o.candidateMaxCalls ?? 40, timeoutMs: o.candidateTimeoutMs ?? 30 * 60_000 });
+        cr.cost = cost(run);
+        cr.stopReason = run.stopReason;
+      } catch (e) {
+        if (e instanceof BudgetExceeded) {
+          // Always-pushed invariant: whatever the agent left is committed and pushed to scratch before aborting.
+          await commitAndPush(wt, branch, `scratch: ${row.id} c${k} (aborted)`).catch(() => {});
+          throw e;
+        }
+        cr.error = e instanceof Error ? e.message : String(e);
+      }
+      cr.commit = await commitAndPush(wt, branch, `candidate ${row.id} c${k}`);
+      cr.changedFiles = (await git(wt, ['diff', '--name-only', 'main', 'HEAD'])).split('\n').filter((f) => f && !f.startsWith(ACCEPTANCE_DIR));
+      const patch = await git(wt, ['diff', 'main', 'HEAD', '--', '.', `:!${ACCEPTANCE_DIR}`]);
+      fs.mkdirSync(path.join(dir, 'candidates'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'candidates', `c${k}.patch`), patch);
+      // Evaluate a clone of the pushed scratch branch under the harness root, with the base's own installed deps.
+      const evalDir = path.join(work, `eval-${k}`);
+      await git(work, ['clone', '-q', '-b', `scratch/${row.id}-c${k}`, scratch.origin, evalDir]);
+      fs.appendFileSync(path.join(evalDir, '.git', 'info', 'exclude'), 'node_modules\n.vitest-cache\ntest-results\n');
+      linkDeps(deps.repo, evalDir);
+      cr.report = await evaluateCheckout({ dir: evalDir, ...evalArgs });
+      cr.testAgreement = testAgreement(cr.report, refReport);
+      cr.probeAgreement = cr.report.probe.length && refReport.probe.length ? compareRecords(cr.report.probe, refReport.probe, parsed.surface) : null;
+      const det = labelDeterministically(cr.report, refReport, parsed.surface, cr.report.probe, refReport.probe);
+      cr.clearsAllRungs = det.clearsAllRungs;
+      cr.deterministicRegression = det.deterministicRegression;
+      cr.label = det.label;
+      cr.labelSource = det.label ? 'deterministic' : null;
+      cr.rationale = det.why;
+      if (!det.label) residue.push({ c: cr, patch, facts: [det.why, `held-out failures: ${Object.entries(refReport.heldOut.outcomes).filter(([key, s]) => s === 'passed' && cr.report!.heldOut.outcomes[key] !== 'passed').map(([key]) => key).join('; ') || 'none'}`] });
+      res.candidates.push(cr);
+      writeJson(cfile, cr);
+      log(`${row.id} c${k}: ${cr.label ?? 'residue'} (${cr.cost.calls} calls, rungs ${cr.clearsAllRungs ? 'cleared' : 'not cleared'})`);
+    }
+
+    // ---- model-judged residue (at most 3 grader calls per row; every such number is labelled 'same-family grader')
+    for (const r of residue.slice(0, 3)) {
+      const g = await client.run({ role: 'grade', rowId: row.id, prompt: gradePrompt({ issueText, specJson, candidateDiff: r.patch, referenceDiff: refDiff, facts: r.facts }), tools: 'none', maxCalls: 2, timeoutMs: 5 * 60_000 });
+      res.graderCalls += g.calls;
+      try {
+        const v = parseGrade(g.text);
+        r.c.label = v.label;
+        r.c.labelSource = GRADER_LABEL;
+        r.c.rationale = `${GRADER_LABEL}: ${v.rationale}`;
+      } catch (e) {
+        r.c.rationale = `${r.c.rationale}; grader reply unusable: ${e instanceof Error ? e.message : e}`;
+      }
+      writeJson(path.join(dir, 'candidates', `c${r.c.k}.json`), r.c);
+    }
+    res.status = 'complete';
+  } finally {
+    if (!o.keepWork) for (const r of agentRoots) fs.rmSync(r, { recursive: true, force: true });
   }
-  res.status = 'complete';
-  void sumCost;
 }

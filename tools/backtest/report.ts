@@ -44,12 +44,13 @@ export function buildReport(meta: RunMeta, corpus: Corpus, rows: RowResult[], m:
   L.push(`- Spec-permitted spread S: ${m.S} rows (${m.sConfirmed} confirmed deterministically).`);
   L.push(`- Specs passing validators within 1 retry: ${m.specsPassedWithinOneRetry}. Reference passes acceptance: ${m.referenceAcceptancePass}.`);
   L.push(`- Spec edit distance (median): ${f(m.medianEditDistance)}; human minutes (median): ${f(m.medianHumanMinutes, 1)}; spec share of per-change cost: ${f(m.specCostShare)}.`);
-  L.push(`- Ladder: catches ${m.catches}, false positives ${m.falsePositives}, escapes on E rows ${m.escapesE}, reference false-rejects ${m.referenceFalseRejects}. Conformance/shadow rungs ran: ${m.rungsRan ? 'yes' : 'no (no probe records)'}.`);
+  L.push(`- Ladder: catches ${m.catches} (of which held-out tests that the candidate's own tests missed: ${m.rows.reduce((n, x) => n + x.heldOutCatches, 0)}), false positives ${m.falsePositives}, escapes on E rows ${m.escapesE}, reference false-rejects ${m.referenceFalseRejects}. Conformance/shadow rungs ran: ${m.rungsRan ? 'yes' : 'no (no probe records)'}.`);
   L.push(`- Cost per accepted change: ${usd(m.costPerAcceptedChange)}; same spec with K=1: ${usd(m.costPerAcceptedChangeK1)}.`);
   L.push(`- Model-judged labels (${GRADER_LABEL}): ${m.graderLabelled.count}${Object.keys(m.graderLabelled.byLabel).length ? ` (${Object.entries(m.graderLabelled.byLabel).map(([k, v]) => `${k}: ${v}`).join(', ')})` : ''}. A human samples 20% of these.`, '');
 
   L.push('## Decision rule (pre-registered thresholds, tier A only)', '');
   L.push(`| A1 value of N | A2 specs reliable, cheap | A3 oracles replace review (shadow rung) |`, '|---|---|---|', `| ${m.decision.A1} | ${m.decision.A2} | ${m.decision.A3} |`, '');
+  if (!m.decision.decisive) L.push(`Raw cells if the thresholds were applied to this pilot anyway (not a verdict): A1 ${m.decision.computed.A1}, A2 ${m.decision.computed.A2}, A3 ${m.decision.computed.A3}.`, '');
   L.push(`${m.decision.note}. Evidence that rests on the ${GRADER_LABEL} alone cannot validate a cell.`, '');
   L.push('Not run: train, canary, full rungs; fuzz replay (about 200 requests per route); human review of issue texts beyond the approval gate; human sample of graded cases.', '');
   return L.join('\n');

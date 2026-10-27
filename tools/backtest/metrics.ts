@@ -1,6 +1,9 @@
 // Metrics and the decision rule (plan sections 4 and 5), computed on the strict tier (A) only.
 import type { RowResult, RunMeta, CandidateResult } from './results.ts';
 
+/** The plan's strict tier: the decision rule's denominators (3 of 11, 8 of 11, ...) assume all 11 rows. */
+export const TIER_A_ROWS = 11;
+
 export type Verdict = 'validating' | 'invalidating' | 'inconclusive';
 
 export interface RowMetrics {
@@ -23,6 +26,8 @@ export interface RowMetrics {
   spreadS: boolean;
   spreadConfirmedDeterministically: boolean;
   catches: number;
+  /** Part of `catches`: candidate passed its own tests and the spec's acceptance but fails a held-out test the reference passes. */
+  heldOutCatches: number;
   falsePositives: number;
   escapes: number;
   escapesModelJudged: number;
@@ -52,7 +57,7 @@ export interface Metrics {
   graderLabelled: { count: number; byLabel: Record<string, number>; label: 'same-family grader' };
   costPerAcceptedChange: number | null;
   costPerAcceptedChangeK1: number | null;
-  decision: { A1: Verdict; A2: Verdict; A3: Verdict; decisive: boolean; note: string };
+  decision: { A1: Verdict; A2: Verdict; A3: Verdict; decisive: boolean; note: string; computed: { A1: Verdict; A2: Verdict; A3: Verdict } };
 }
 
 const median = (xs: number[]): number | null => {
@@ -88,6 +93,7 @@ function rowMetrics(r: RowResult): RowMetrics {
   const differing = clears.length >= 2 && (new Set(clears.map((c) => c.label)).size > 1 || clears.some((c) => (c.probeAgreement?.permitted ?? 0) > 0));
   const detRank = clears.length >= 2 && new Set(clears.map(heldPass)).size > 1 && clears.every((c) => c.labelSource === 'deterministic');
   let catches = 0;
+  let heldOutCatches = 0;
   let falsePositives = 0;
   let escapes = 0;
   let escapesModelJudged = 0;
@@ -95,6 +101,12 @@ function rowMetrics(r: RowResult): RowMetrics {
     const rep = c.report!;
     const preMergeOnly = rep.rungs.preMerge && (rep.rungs.conformance === false || rep.rungs.shadow === false);
     if (preMergeOnly) c.deterministicRegression ? catches++ : falsePositives++;
+    const refHeld = r.reference?.report.heldOut.outcomes ?? {};
+    const heldFailed = Object.entries(refHeld).some(([k, st]) => st === 'passed' && rep.heldOut.outcomes[k] !== 'passed');
+    if (rep.rungs.preMerge && heldFailed) {
+      catches++;
+      heldOutCatches++;
+    }
     if (c.clearsAllRungs) {
       if (c.deterministicRegression || c.label === 'regression' && c.labelSource === 'deterministic') escapes++;
       else if (c.label === 'regression' && c.labelSource === 'same-family grader') escapesModelJudged++;
@@ -128,6 +140,7 @@ function rowMetrics(r: RowResult): RowMetrics {
     spreadS: differing,
     spreadConfirmedDeterministically: differing && detRank,
     catches,
+    heldOutCatches,
     falsePositives,
     escapes,
     escapesModelJudged,
@@ -180,7 +193,8 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta): Metrics {
   const A3: Verdict = !rungsRan ? 'inconclusive'
     : (catches === 0 && fps === 0) || escapesE >= 3 || falseRejects >= 3 ? 'invalidating'
     : catches >= 1 && escapesE <= 1 && falseRejects <= 1 ? 'validating' : 'inconclusive';
-  const decisive = n >= 11;
+  const decisive = n >= TIER_A_ROWS;
+  const gate = (v: Verdict): Verdict => (decisive ? v : 'inconclusive');
   return {
     rows: all,
     tierA: { n: tierA.length, nE: tierA.filter((r) => r.obs === 'E').length, completeRows: n },
@@ -195,8 +209,8 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta): Metrics {
     costPerAcceptedChange: perAccepted,
     costPerAcceptedChangeK1: perAcceptedK1,
     decision: {
-      A1, A2, A3, decisive,
-      note: decisive ? 'tier A has >= 11 complete rows' : `pilot: n=${n} complete tier-A row(s) of 11 required; thresholds are the plan's absolute counts and these cells are informational, not a decision (plan section 6)`,
+      A1: gate(A1), A2: gate(A2), A3: gate(A3), decisive, computed: { A1, A2, A3 },
+      note: decisive ? 'tier A has >= 11 complete rows' : `pilot: n=${n} complete tier-A row(s) of ${TIER_A_ROWS} required, so every cell is inconclusive by rule (plan section 6); the thresholds are the plan's absolute counts over ${TIER_A_ROWS} rows`,
     },
   };
 }

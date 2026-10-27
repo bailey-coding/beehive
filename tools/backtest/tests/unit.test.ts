@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BudgetExceeded, BudgetTracker, BudgetedClient, EXPECTED_CALLS, HARD_STOP_CALLS } from '../budget.ts';
-import { FakeClient, buildClaudeArgs, childEnv, parseStreamLine, responseFromStream } from '../client.ts';
+import { validateFlags } from '../cli.ts';
+import { ClaudeCliClient, FakeClient, buildClaudeArgs, childEnv, parseStreamLine, responseFromStream, shouldStop, type StreamState } from '../client.ts';
 import { checkContract, checkDelta, compareRecords, parseDeltaSurface, pathMatches, shapeOf, type ResponseRecord } from '../delta.ts';
 import { extractIssueSource, extractJson, normalizedTokenLevenshtein, overlapFlags } from '../text.ts';
 import { toCreateSpecRequest, validateSpec } from '../spec.ts';
@@ -110,25 +111,63 @@ describe('budget', () => {
 });
 
 describe('real client plumbing (no process spawned)', () => {
-  it('candidate args are sandboxed: restricted, dontAsk, no network or push, medium effort, pinned model', () => {
-    const a = buildClaudeArgs({ tools: 'agent' }).join(' ');
+  it('default candidate args: file tools only, no Bash anywhere, restricted, no network or push, medium effort, pinned model', () => {
+    const args = buildClaudeArgs({ tools: 'agent' });
+    const a = args.join(' ');
     expect(a).toContain('--model claude-sonnet-5-5');
     expect(a).toContain('--effort medium');
     expect(a).toContain('--restricted');
     expect(a).toContain('--permission-mode dontAsk');
-    for (const denied of ['WebFetch', 'Bash(curl:*)', 'Bash(git push:*)', 'Bash(git remote:*)', 'Bash(wrangler:*)']) expect(a).toContain(denied);
-    expect(a).not.toMatch(/Bash\(git push[^)]*\)\s.*--allowedTools/);
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Edit,Write,Glob,Grep');
     const allowed = a.split('--allowedTools')[1].split('--disallowedTools')[0];
-    expect(allowed).not.toMatch(/push|curl|wget|npm/);
+    expect(allowed.trim().split(/\s+/)).toEqual(['Read', 'Edit', 'Write', 'Glob', 'Grep']);
+    expect(allowed).not.toContain('Bash');
+    expect(a).not.toContain('--settings');
+    for (const denied of ['WebFetch', 'WebSearch', 'Bash(node:*)', 'Bash(git push:*)', 'Bash(curl:*)']) expect(a).toContain(denied);
+  });
+  it('--allow-bash args add Bash only with the sandbox settings, and never node, npm, push or network commands', () => {
+    const args = buildClaudeArgs({ tools: 'agent' }, { allowBash: true });
+    const a = args.join(' ');
+    expect(args[args.indexOf('--tools') + 1]).toBe('Read,Edit,Write,Glob,Grep,Bash');
+    expect(a).toContain('"sandbox":{"enabled":true,"failIfUnavailable":true}');
+    const allowed = a.split('--allowedTools')[1].split('--disallowedTools')[0];
+    expect(allowed).not.toMatch(/Bash\((node|npm|curl|wget|git push|git remote|sed|cat|mkdir)/);
+    // read-only spec generation never gets Bash, even with the flag
+    expect(buildClaudeArgs({ tools: 'read' }, { allowBash: true }).join(' ').split('--allowedTools')[1].split('--disallowedTools')[0]).not.toContain('Bash');
+  });
+  it('--allow-bash refuses to construct without an OS sandbox and logs the sandbox when present', () => {
+    expect(() => new ClaudeCliClient({ allowBash: true, which: () => null })).toThrow(/no OS sandbox/);
+    const logs: string[] = [];
+    const c = new ClaudeCliClient({ allowBash: true, which: () => '/usr/bin/bwrap', log: (s) => logs.push(s) });
+    expect(c.sandbox).toMatch(/bubblewrap/);
+    expect(logs[0]).toMatch(/active sandbox: bubblewrap/);
+    expect(new ClaudeCliClient().sandbox).toBeNull();
   });
   it('text and read modes expose fewer tools', () => {
     const none = buildClaudeArgs({ tools: 'none' });
     expect(none[none.indexOf('--tools') + 1]).toBe('');
     expect(buildClaudeArgs({ tools: 'read' }).join(' ')).toContain('--tools Read,Glob,Grep');
   });
-  it('child env is an allowlist: tokens for other services never pass', () => {
-    const env = childEnv({ PATH: '/bin', HOME: '/h', CLOUDFLARE_API_TOKEN: 'x', GITHUB_TOKEN: 'y', BEEHIVE_API_TOKEN: 'z', ANTHROPIC_API_KEY: 'k' });
-    expect(Object.keys(env).sort()).toEqual(['ANTHROPIC_API_KEY', 'CI', 'HOME', 'NO_COLOR', 'PATH']);
+  it('child env is an explicit allow-list: no API key or token variable passes, whatever the host sets', () => {
+    const host = { PATH: '/bin', HOME: '/h', LANG: 'C', TERM: 'xterm', CLAUDE_CONFIG_DIR: '/c', CLOUDFLARE_API_TOKEN: 'x', GITHUB_TOKEN: 'y', BEEHIVE_API_TOKEN: 'z', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 't', WRANGLER_API_TOKEN: 'w', SSH_AUTH_SOCK: '/s' };
+    const env = childEnv(host);
+    expect(Object.keys(env).sort()).toEqual(['CI', 'CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'NO_COLOR', 'PATH', 'TERM']);
+    expect(JSON.stringify(env)).not.toMatch(/"(x|y|z|k|t|w)"/);
+  });
+  it('clamped runs stop at the limit, not one call past it', () => {
+    const mk = (): StreamState => ({ assistantIds: new Set<string>(), lastText: '', result: null });
+    const st = mk();
+    const tool = (id: string) => JSON.stringify({ type: 'assistant', message: { id, content: [{ type: 'tool_use' }] } });
+    parseStreamLine(tool('m1'), st);
+    expect(shouldStop(st, 2)).toBe(false);
+    parseStreamLine(tool('m2'), st);
+    expect(shouldStop(st, 2)).toBe(true); // the 3rd call has not been made
+    expect(st.assistantIds.size).toBe(2);
+    // a final text message at the limit is not cut: its result event still arrives
+    const fin = mk();
+    parseStreamLine(JSON.stringify({ type: 'assistant', message: { id: 'a', content: [{ type: 'tool_use' }] } }), fin);
+    parseStreamLine(JSON.stringify({ type: 'assistant', message: { id: 'b', content: [{ type: 'text', text: 'done' }] } }), fin);
+    expect(shouldStop(fin, 2)).toBe(false);
   });
   it('parses a stream: distinct assistant ids are calls, result gives cost and usage', () => {
     const st = { assistantIds: new Set<string>(), lastText: '', result: null as Record<string, any> | null };
@@ -176,5 +215,32 @@ describe('spec validators', () => {
     const other = parseSpec(spec({ name: 'slo defaults', description: 'thresholds default', contract: JSON.stringify({ endpoints: [{ method: 'POST', path: '/slo', isNew: true, responses: [{ status: 200 }] }] }) }));
     expect(wrongIssueVerdict(a, same).passed).toBe(false);
     expect(wrongIssueVerdict(a, other).passed).toBe(true);
+  });
+});
+
+describe('budget persistence and flag gating', () => {
+  it('the ledger persists, so a second invocation shares the first one\'s cap', () => {
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-')), 'runs', 'ledger.json');
+    const a = new BudgetTracker(10, 10);
+    a.attach(f);
+    a.ledger.push({ role: 'issue', calls: 4, usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 }, costUsd: 0.1, durationMs: 1, stopReason: 'done' });
+    a.recordSpecOutcome(false);
+    a.persist();
+    const b = new BudgetTracker(10, 10);
+    b.attach(f);
+    expect(b.used).toBe(4);
+    expect(b.remaining).toBe(6);
+    expect(() => b.recordSpecOutcome(false)).toThrow(/two specs in a row/); // stop-rule state survives too
+  });
+  it('the hard stop can never exceed the plan\'s 850', () => {
+    expect(new BudgetTracker(565, 5000).hardStop).toBe(850);
+    expect(new BudgetTracker(900, 850).expected).toBe(850);
+  });
+  it('flags: unknown and removed flags are rejected, hard-stop is capped, --allow-bash is known', () => {
+    expect(() => validateFlags('pilot', { 'release-pilot': true, 'auto-approve-issues': true })).toThrow(/unknown flag --auto-approve-issues/);
+    expect(() => validateFlags('pilot', { 'hard-stop': '900' })).toThrow(/850/);
+    expect(() => validateFlags('pilot', { 'hard-stop': '850', 'allow-bash': true, 'release-pilot': true })).not.toThrow();
+    expect(() => validateFlags('smoke', { 'release-pilot': true })).not.toThrow();
+    expect(() => validateFlags('smoke', { k: '3' })).toThrow(/unknown flag/);
   });
 });

@@ -86,7 +86,10 @@ export async function generateSpec(opts: {
   client: ModelClient;
   row: CorpusRow;
   issueText: string;
+  /** Checkout used for validators (has dependencies). */
   baseDir: string;
+  /** Checkout the read-only agent runs in; no dependencies, nothing but the single-commit tree. Defaults to baseDir. */
+  agentCwd?: string;
   validate: boolean;
   runOnBase: (files: string[]) => Promise<{ outcomes: TestOutcome[]; loadErrors: string[] }>;
   maxCalls?: number;
@@ -99,7 +102,7 @@ export async function generateSpec(opts: {
   let validation: SpecValidation | null = null;
   let retry: { previous: string; errors: string[] } | undefined;
   for (let a = 0; a < 2; a++) {
-    const res = await opts.client.run({ role: opts.role ?? 'spec', rowId: opts.row.id, prompt: specPrompt(opts.issueText, retry), tools: 'read', cwd: opts.baseDir, maxCalls: opts.maxCalls ?? 12, timeoutMs: opts.timeoutMs ?? 15 * 60_000 });
+    const res = await opts.client.run({ role: opts.role ?? 'spec', rowId: opts.row.id, prompt: specPrompt(opts.issueText, retry), tools: 'read', cwd: opts.agentCwd ?? opts.baseDir, maxCalls: opts.maxCalls ?? 12, timeoutMs: opts.timeoutMs ?? 15 * 60_000 });
     let errors: string[] = [];
     try {
       raw = extractJson(res.text);
@@ -129,7 +132,7 @@ export function candidatePrompt(issueText: string, specJson: string, acceptanceF
     'Implement the change described below in this repository (your working directory). Read AGENTS.md first and follow its conventions.',
     `The spec's acceptance tests are already in the tree (${acceptanceFiles.join(', ')}) and currently fail. Make them pass without editing them or tests/backtest-acceptance/probe.ts.`,
     'Keep every route outside the spec\'s declaredDeltaSurface identical, and keep the existing tests green. Add or adjust unit tests as the repo conventions require.',
-    'Run tests with `npx vitest run <files>`; type-check with `npx tsc --noEmit`. You have no network access. Do NOT run git push or change git remotes. Do not leave the working directory. You do not need to commit.',
+    'You have file tools only (Read, Edit, Write, Glob, Grep): you cannot run tests or commands, so reason carefully about the existing tests and the acceptance tests. The harness runs everything after you stop. Do not leave the working directory. You do not need to commit.',
     'Stop when the change is complete and say briefly what you changed.',
     '',
     '--- issue ---',
