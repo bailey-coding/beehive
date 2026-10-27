@@ -10,7 +10,9 @@ import { exec } from '../exec.ts';
 import { git } from '../git.ts';
 import { docAtBaseTest, historyTest, reachabilityTest } from '../leakage.ts';
 import { baseGreen } from '../basegreen.ts';
-import { stableRun } from '../oracles.ts';
+import { acceptanceAgainstReference, stableName, stableRun } from '../oracles.ts';
+import { PROBE_ENV, PROBE_SOURCE, readMalformed, readProbe } from '../probe.ts';
+import { parseSpec } from '../spec.ts';
 import type { OracleConfig } from '../oracles.ts';
 import { runPilot } from '../run.ts';
 import type { RowResult } from '../results.ts';
@@ -55,7 +57,9 @@ import app from '../../workers/api/index';
 import { record } from './probe';
 it('roadmap is public', async () => {
   const about = new Request('https://x/about');
-  await record('about', about, await app.fetch(about));
+  const aboutRes = await app.fetch(about);
+  // the plain-object form that real generated specs used: must be accepted, not crash
+  await record('about', { method: 'GET', path: '/about' }, { status: aboutRes.status, body: await aboutRes.clone().text() });
   const req = new Request('https://x/roadmap');
   const res = await record('roadmap', req, await app.fetch(req));
   expect(res.status).toBe(200);
@@ -102,7 +106,17 @@ beforeAll(async () => {
   corpus = await freezeCorpus(source, [{ id: 'A1', sha: changeSha, tier: 'A', obs: 'E', component: 'api router', kind: 'body', note: 'body', keyTerms: ['roadmap'] }], out);
 });
 
-function client(opts: { vacuousFirst?: boolean } = {}) {
+// wrong layer: asserts a header the real fix never sets, so it fails on the reference as well as on base
+const WRONG_LAYER = { ...SPEC, acceptance: [{ name: 'roadmap header', file: 'wrong.test.ts', code: ACCEPTANCE.replace('expect(res.status).toBe(200);', "expect(res.status).toBe(200);\n  expect(res.headers.get('X-Roadmap')).toBe('yes');") }] };
+// no HTTP at all (like the CLI row): no endpoints, no record() calls
+const NO_PROBE = {
+  ...SPEC,
+  contract: JSON.stringify({ endpoints: [], rules: ['the roadmap page is public'] }),
+  acceptance: [{ name: 'roadmap is public', file: 'plain.test.ts', code: "import { expect, it } from 'vitest';\nimport app from '../../workers/api/index';\nit('roadmap is public', async () => { expect((await app.fetch(new Request('https://x/roadmap'))).status).toBe(200); });\n" }],
+  declaredDeltaSurface: [{ version: '1.0', routes: [] }],
+};
+
+function client(opts: { vacuousFirst?: boolean; wrongLayerFirst?: boolean; wrongLayerAlways?: boolean; noProbe?: boolean } = {}) {
   let cand = 0;
   const fake: FakeClient = new FakeClient((req: ModelRequest): FakeReply => {
     switch (req.role) {
@@ -110,7 +124,8 @@ function client(opts: { vacuousFirst?: boolean } = {}) {
         return { text: 'Roadmap page returns 401\n\nOpening the roadmap page without credentials answers 401. It should show the page.' };
       case 'spec': {
         const nth = fake.requests.filter((r: ModelRequest) => r.role === 'spec').length;
-        return { text: '```json\n' + JSON.stringify(opts.vacuousFirst && nth === 1 ? VACUOUS : SPEC) + '\n```' };
+        const pick = opts.noProbe ? NO_PROBE : opts.wrongLayerAlways || (opts.wrongLayerFirst && nth === 1) ? WRONG_LAYER : opts.vacuousFirst && nth === 1 ? VACUOUS : SPEC;
+        return { text: '```json\n' + JSON.stringify(pick) + '\n```' };
       }
       case 'candidate': {
         cand++;
@@ -453,6 +468,135 @@ describe('budget abort', () => {
     expect(fs.existsSync(path.join(out, 'report.md'))).toBe(true);
     expect(fs.readFileSync(path.join(out, 'report.md'), 'utf8')).toMatch(/ABORTED \(partial results\)/);
     expect(JSON.parse(fs.readFileSync(path.join(out, 'run.json'), 'utf8')).meta.budget.used).toBe(3);
+  }, 200_000);
+});
+
+describe('harness bugs found in pilot-1 (model-independent regressions)', () => {
+  it('stableName: random UUIDs in test titles do not make a test look missing', () => {
+    expect(stableName('master X-Actor-ID accepts 760c84c9-d1a2-45b4-bcc8-977b31447b3f')).toBe(stableName('master X-Actor-ID accepts 30b34c24-184b-4c3c-a164-967222637c79'));
+  });
+
+  it('probe: plain-object arguments are recorded, misuse is logged (never thrown), the response is returned untouched', async () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-fx-'));
+    fs.mkdirSync(path.join(d, 'tests'));
+    fs.writeFileSync(path.join(d, 'tests', 'probe.ts'), PROBE_SOURCE);
+    fs.writeFileSync(path.join(d, 'package.json'), '{"type":"module"}\n');
+    fs.writeFileSync(path.join(d, 'vitest.config.ts'), "import { defineConfig } from 'vitest/config';\nexport default defineConfig({ test: { include: ['tests/**/*.test.ts'] } });\n");
+    fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(d, 'node_modules'), 'dir');
+    fs.writeFileSync(path.join(d, 'tests', 'p.test.ts'), `import { expect, it } from 'vitest';
+import { record } from './probe';
+it('forms', async () => {
+  const res = new Response('{"a":1}', { status: 201, headers: { 'Content-Type': 'application/json' } });
+  expect(await record('real', new Request('https://x/roadmap', { method: 'POST' }), res)).toBe(res);
+  const plain = { status: 500, body: { error: 'x' } };
+  expect(await record('plain', { method: 'GET', path: '/slo-status' }, plain)).toBe(plain);
+  // misuse seen in pilot-1: a request BODY object (it even has a url field) and a non-response
+  await record('body-as-request', { candidateId: 'c', url: 'https://abcd.workers.dev' } as never, res.clone());
+  await record('not-a-response', { method: 'GET', path: '/x' }, { nope: 1 } as never);
+  await record('response-clone-missing', new Request('https://x/y'), 'text' as never);
+});
+`);
+    const out = path.join(d, 'out', 'probe.jsonl');
+    fs.mkdirSync(path.dirname(out));
+    const r = await stableRun(d, cfg, 1, [], { [PROBE_ENV]: out });
+    expect(r.outcomes.map((o) => o.status)).toEqual(['passed']);
+    const recs = readProbe(out);
+    expect(recs.map((x) => [x.label, x.method, x.path, x.status])).toEqual([['real', 'POST', '/roadmap', 201], ['plain', 'GET', '/slo-status', 500]]);
+    expect(recs[0].body).toEqual({ a: 1 });
+    expect(readMalformed(out).map((m) => m.split(':')[0]).sort()).toEqual(['body-as-request', 'not-a-response', 'response-clone-missing']);
+  });
+
+  it('a local server called over loopback works inside the sandbox (the CLI row spawns one), the host listener still does not', async () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-loop-'));
+    fs.writeFileSync(path.join(d, 'package.json'), '{"type":"module"}\n');
+    fs.writeFileSync(path.join(d, 'vitest.config.ts'), "import { defineConfig } from 'vitest/config';\nexport default defineConfig({ test: { include: ['tests/**/*.test.ts'] } });\n");
+    fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(d, 'node_modules'), 'dir');
+    fs.mkdirSync(path.join(d, 'tests'));
+    fs.writeFileSync(path.join(d, 'tests', 'loop.test.ts'), `import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { expect, it } from 'vitest';
+it('own server reachable via fetch and via a spawned child', async () => {
+  const s = http.createServer((_q, r) => r.end('pong'));
+  await new Promise<void>((ok) => s.listen(0, '127.0.0.1', ok));
+  const port = (s.address() as { port: number }).port;
+  expect(await (await fetch('http://127.0.0.1:' + port)).text()).toBe('pong');
+  const out = await new Promise<string>((ok) => { const c = spawn('node', ['-e', 'fetch("http://127.0.0.1:' + port + '").then(r => r.text()).then(t => console.log(t))']); let b = ''; c.stdout.on('data', (x) => (b += x)); c.on('close', () => ok(b.trim())); });
+  expect(out).toBe('pong');
+  s.close();
+});
+`);
+    const r = await stableRun(d, { ...cfg, sandbox: 'unshare' }, 1);
+    expect(r.outcomes.map((o) => `${o.status}`), r.loadErrors.join()).toEqual(['passed']);
+  });
+
+  it('acceptanceAgainstReference reports a wrong-layer case with its failing assertion message (for humans) and leaves the tree clean', async () => {
+    const ref = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-refcheck-'));
+    const { createScratchRepo } = await import('../git.ts');
+    const s = await createScratchRepo(source, corpus.rows[0].base, ref);
+    fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(s.repo, 'node_modules'), 'dir');
+    // apply the real change by checking its files out
+    for (const f of ['workers/api/index.ts', 'tests/app.test.ts']) fs.writeFileSync(path.join(s.repo, f), await git(source, ['show', `${changeSha}:${f}`]));
+    await git(s.repo, ['add', '-A']);
+    await git(s.repo, ['commit', '-q', '-m', 'reference']);
+    const baseScratch = await createScratchRepo(source, corpus.rows[0].base, path.join(ref, 'base'));
+    fs.symlinkSync(path.join(harnessRoot, 'node_modules'), path.join(baseScratch.repo, 'node_modules'), 'dir');
+    const bad = await acceptanceAgainstReference(s.repo, baseScratch.repo, cfg, parseSpec(WRONG_LAYER));
+    expect(bad.total).toBe(1);
+    expect(bad.failing).toHaveLength(1);
+    expect(bad.failing[0].message).toMatch(/expected null to be 'yes'/);
+    const good = await acceptanceAgainstReference(s.repo, baseScratch.repo, cfg, parseSpec(SPEC));
+    expect(good.failing).toEqual([]);
+    expect(good.contractViolations).toEqual([]);
+    expect(good.deltaViolations).toEqual([]);
+    // a surface that omits the change the reference makes (A4's pseudo-route shape) is a spec failure, with the label but not the values
+    const narrow = parseSpec({ ...SPEC, declaredDeltaSurface: [{ version: '1.0', routes: [{ method: 'GET', path: '/elsewhere', statuses: [200] }] }] });
+    const frozen = await acceptanceAgainstReference(s.repo, baseScratch.repo, cfg, narrow);
+    expect(frozen.deltaViolations.map((d) => `${d.label}:${d.kind}`)).toContain('roadmap:status');
+    const badContract = parseSpec({ ...SPEC, contract: JSON.stringify({ endpoints: [{ method: 'GET', path: '/roadmap', isNew: true, responses: [{ status: 404 }] }] }) });
+    expect((await acceptanceAgainstReference(s.repo, baseScratch.repo, cfg, badContract)).contractViolations.map((c) => c.label)).toEqual(['roadmap']);
+    expect((await git(s.repo, ['status', '--porcelain'])).trim()).toBe('');
+  });
+});
+
+describe('spec must pass on the reference before candidates are spent', () => {
+  it('one retry: a wrong-layer first spec is rejected with a prompt-safe error, the second passes; no assertion text reaches the model', async () => {
+    const o = baseOpts('refretry');
+    const fake = client({ wrongLayerFirst: true });
+    const res = await runPilot({ ...o, client: fake, tracker: new BudgetTracker(), k: 1 });
+    const row = res.rows[0];
+    expect(row.status).toBe('complete');
+    expect(row.spec).toMatchObject({ passedValidators: true, retries: 1 });
+    const a0 = row.spec!.attempts[0];
+    expect(a0.errors.join()).toMatch(/does not pass on a correct implementation of the issue/);
+    expect(a0.details!.join()).toMatch(/expected null to be 'yes'/); // human evidence, kept in the artifact
+    const retryPrompt = fake.requests.filter((r) => r.role === 'spec')[1].prompt;
+    expect(retryPrompt).toMatch(/does not pass on a correct implementation/);
+    expect(retryPrompt).not.toMatch(/expected null to be|X-Roadmap.*null/); // reference behaviour is never shown
+    expect(row.reference!.falseRejected).toBe(false);
+  }, 200_000);
+
+  it('a spec its own reference cannot pass twice is spec-failed and spends zero candidate calls', async () => {
+    const o = baseOpts('refreject');
+    const fake = client({ wrongLayerAlways: true });
+    const res = await runPilot({ ...o, client: fake, tracker: new BudgetTracker() });
+    expect(res.rows[0].status).toBe('spec-failed');
+    expect(res.rows[0].note).toMatch(/does not pass on a correct implementation/);
+    expect(fake.requests.filter((r) => r.role === 'candidate')).toHaveLength(0);
+    expect(res.rows[0].candidates).toHaveLength(0);
+  }, 200_000);
+
+  it('a row without HTTP probes (the CLI row shape) runs pre-merge only: conformance and shadow are null, not failures, and are not mislabelled', async () => {
+    const o = baseOpts('noprobe');
+    const res = await runPilot({ ...o, client: client({ noProbe: true }), tracker: new BudgetTracker(), k: 3 });
+    const row = res.rows[0];
+    expect(row.status).toBe('complete');
+    expect(row.reference!.report.rungs).toEqual({ preMerge: true, conformance: null, shadow: null });
+    expect(row.reference!.report.probe).toEqual([]);
+    const [c1, c2] = row.candidates;
+    expect(c1.report!.rungs).toEqual({ preMerge: false, conformance: null, shadow: null });
+    expect(c1.label).toBe('spec violation');
+    expect(c2.clearsAllRungs).toBe(true);
+    expect(res.meta.aborted).toBeNull();
   }, 200_000);
 });
 

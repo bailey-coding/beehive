@@ -18,7 +18,10 @@ export interface CallCost {
 
 export interface SpecAttempt extends CallCost {
   ok: boolean;
+  /** Validator errors, safe to show to the model on retry (no reference behaviour in them). */
   errors: string[];
+  /** Human-only evidence (for example the failing assertion messages against the reference); never sent to a model. */
+  details?: string[];
 }
 
 export interface CandidateResult {

@@ -6,8 +6,8 @@ import path from 'node:path';
 import { exec, type ExecResult } from './exec.ts';
 import { boxExec, requireSandbox } from './sandbox.ts';
 import { existsAt, git, isTestFile, showAt } from './git.ts';
-import { installProbe, PROBE_ENV, readProbe } from './probe.ts';
-import { ACCEPTANCE_DIR, removeAcceptance, writeAcceptance, type SpecFile, type TestOutcome } from './spec.ts';
+import { installProbe, PROBE_ENV, readMalformed, readProbe } from './probe.ts';
+import { ACCEPTANCE_DIR, removeAcceptance, writeAcceptance, type ParsedSpec, type SpecFile, type TestOutcome } from './spec.ts';
 import { checkContract, checkDelta, type DeltaSurface, type ResponseRecord } from './delta.ts';
 
 export interface OracleConfig {
@@ -73,7 +73,7 @@ export function testEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 }
 
 /** Read-only binds for dependency trees reached through symlinks (node_modules is installed outside the evaluation root). */
-function depsRo(cwd: string): string[] {
+export function depsRo(cwd: string): string[] {
   const out: string[] = [];
   for (const rel of ['node_modules', 'cli/node_modules']) {
     const p = path.join(cwd, rel);
@@ -91,7 +91,7 @@ function depsRo(cwd: string): string[] {
 }
 
 /** Run a command in cwd: sandboxed when cfg.sandbox is 'unshare' (refusing if unavailable), else directly. */
-async function runIn(cwd: string, cfg: OracleConfig, cmd: string, args: string[], opts: { env: Record<string, string>; timeoutMs: number; extraRw?: string[] }): Promise<ExecResult> {
+export async function runIn(cwd: string, cfg: OracleConfig, cmd: string, args: string[], opts: { env: Record<string, string>; timeoutMs: number; extraRw?: string[] }): Promise<ExecResult> {
   if (cfg.sandbox === 'unshare') {
     await requireSandbox();
     const rw = [cwd, ...(opts.extraRw ?? []), ...Object.values(opts.env).filter((v) => path.isAbsolute(v)).map((v) => path.dirname(v))];
@@ -135,7 +135,8 @@ export async function runVitest(cwd: string, cfg: OracleConfig, files: string[] 
     const results = f.assertionResults ?? [];
     if (results.length === 0 && f.status === 'failed') run.loadErrors.push(`${file}: ${String(f.message ?? '').slice(0, 200)}`);
     for (const a of results) {
-      run.outcomes.push({ file, name: a.fullName ?? a.title, status: a.status === 'passed' ? 'passed' : a.status === 'failed' ? 'failed' : 'skipped' });
+      const message = a.status === 'failed' ? String((a.failureMessages ?? [])[0] ?? '').replace(/\u001b\[[0-9;]*m/g, '').trim().slice(0, 400) : undefined;
+      run.outcomes.push({ file, name: stableName(a.fullName ?? a.title), status: a.status === 'passed' ? 'passed' : a.status === 'failed' ? 'failed' : 'skipped', ...(message ? { message } : {}) });
     }
   }
   return run;
@@ -174,7 +175,10 @@ export async function runTsc(cwd: string, cfg: OracleConfig): Promise<{ errors: 
   return { errors: r.timedOut ? Number.MAX_SAFE_INTEGER : lines.length, sample: lines.slice(0, 5) };
 }
 
-const key = (o: TestOutcome) => `${o.file}::${o.name}`;
+/** Test identity across runs: random ids in titles (it.each over randomUUID) are normalised, or the same test looks "missing". */
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+export const stableName = (name: string) => name.replace(UUID, '<uuid>');
+const key = (o: TestOutcome) => `${o.file}::${stableName(o.name)}`;
 
 export interface HeldOut {
   /** Test files of the real change at the change commit: path -> content. Harness-only, never inside a mountable path. */
@@ -206,6 +210,8 @@ export interface OracleReport {
   heldOut: { total: number; outcomes: Record<string, TestOutcome['status']> };
   tsc: { errors: number; baseErrors: number } | null;
   loadErrors: string[];
+  /** record() misuse in the acceptance tests (never silently ignored). */
+  probeProblems: string[];
   probe: ResponseRecord[];
   rungs: { preMerge: boolean; conformance: boolean | null; shadow: boolean | null };
   conformanceViolations: string[];
@@ -227,14 +233,15 @@ async function resetTree(dir: string): Promise<void> {
 }
 
 /** Run acceptance + repo tests with probe capture in `dir` (must be a clean committed checkout). */
-async function fullRun(dir: string, cfg: OracleConfig, spec: SpecFile | null, attempts: number): Promise<{ run: StableRun; probe: ResponseRecord[] }> {
+async function fullRun(dir: string, cfg: OracleConfig, spec: SpecFile | null, attempts: number): Promise<{ run: StableRun; probe: ResponseRecord[]; malformed: string[] }> {
   installProbe(dir);
   if (spec) writeAcceptance(dir, spec);
   const probeOut = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-probe-')), 'probe.jsonl');
   const run = await stableRun(dir, cfg, attempts, [], { [PROBE_ENV]: probeOut });
   const probe = readProbe(probeOut);
+  const malformed = readMalformed(probeOut);
   fs.rmSync(path.dirname(probeOut), { recursive: true, force: true });
-  return { run, probe };
+  return { run, probe, malformed };
 }
 
 /** Baseline on the base checkout: which tests pass there, base tsc errors, base probe responses. */
@@ -261,7 +268,7 @@ export async function evaluateCheckout(opts: {
   heldOut: HeldOut;
 }): Promise<OracleReport> {
   const { dir, cfg, spec, baseline } = opts;
-  const { run, probe } = await fullRun(dir, cfg, spec, cfg.evalAttempts);
+  const { run, probe, malformed } = await fullRun(dir, cfg, spec, cfg.evalAttempts);
   const tsc = await runTsc(dir, cfg);
   await resetTree(dir);
 
@@ -328,6 +335,7 @@ export async function evaluateCheckout(opts: {
     heldOut: { total: Object.keys(heldOutcomes).length, outcomes: heldOutcomes },
     tsc: tscReport,
     loadErrors,
+    probeProblems: malformed,
     probe,
     rungs: { preMerge, conformance, shadow },
     conformanceViolations,
@@ -335,11 +343,58 @@ export async function evaluateCheckout(opts: {
   };
 }
 
-/** Run only the given acceptance files on a clean checkout (spec validator: each case must fail on base). */
-export async function runAcceptanceOn(dir: string, cfg: OracleConfig, files: string[]): Promise<{ outcomes: TestOutcome[]; loadErrors: string[] }> {
+/** Run only the given acceptance files on a clean checkout (spec validator: each case must fail on base). The probe is
+ *  switched on so record() misuse surfaces now, before any candidate runs. */
+export async function runAcceptanceOn(dir: string, cfg: OracleConfig, files: string[]): Promise<{ outcomes: TestOutcome[]; loadErrors: string[]; malformed: string[]; probe: ResponseRecord[] }> {
   installProbe(dir);
-  const r = await runVitest(dir, cfg, files);
-  return { outcomes: r.outcomes, loadErrors: r.loadErrors };
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backtest-accprobe-'));
+  const probeOut = path.join(probeDir, 'probe.jsonl');
+  try {
+    const r = await runVitest(dir, cfg, files, { [PROBE_ENV]: probeOut });
+    return { outcomes: r.outcomes, loadErrors: r.loadErrors, malformed: readMalformed(probeOut), probe: readProbe(probeOut) };
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+}
+
+export interface ReferenceCheck {
+  total: number;
+  failing: { name: string; message?: string }[];
+  loadErrors: string[];
+  malformed: string[];
+  /** The spec's own contract disagrees with what the reference answered (label + detail; detail is human-only). */
+  contractViolations: { label: string; detail: string }[];
+  /** The spec's declared delta surface does not cover the change the reference makes (label, kind; detail is human-only). */
+  deltaViolations: { label: string; kind: string; detail: string }[];
+}
+
+/**
+ * Spec validator against the REFERENCE: every acceptance case must pass on the real merged change, and the reference's
+ * recorded responses must satisfy the spec's own contract and declared delta surface (compared with base), or the spec is
+ * wrong (wrong layer, over-specified, a pseudo-route, a surface that omits the real change). Run before any candidate call
+ * is spent. The oracle is not weakened: a failing reference is a spec failure.
+ */
+export async function acceptanceAgainstReference(refDir: string, baseDir: string, cfg: OracleConfig, parsed: ParsedSpec): Promise<ReferenceCheck> {
+  const files = writeAcceptance(refDir, parsed.spec);
+  installProbe(refDir);
+  try {
+    const r = await runAcceptanceOn(refDir, cfg, files);
+    const out: ReferenceCheck = { total: r.outcomes.length, failing: r.outcomes.filter((o) => o.status !== 'passed').map((o) => ({ name: `${o.file}::${o.name}`, message: o.message })), loadErrors: r.loadErrors, malformed: r.malformed, contractViolations: [], deltaViolations: [] };
+    if (out.failing.length === 0 && out.loadErrors.length === 0 && r.probe.length > 0) {
+      for (const v of checkContract(parsed.contract.endpoints, r.probe).violations) out.contractViolations.push({ label: v.split(':')[0], detail: v });
+      writeAcceptance(baseDir, parsed.spec);
+      installProbe(baseDir);
+      try {
+        const b = await runAcceptanceOn(baseDir, cfg, files);
+        if (b.probe.length) for (const v of checkDelta(b.probe, r.probe, parsed.surface).violations) out.deltaViolations.push({ label: v.label, kind: v.kind, detail: v.detail });
+      } finally {
+        await resetTree(baseDir);
+      }
+    }
+    return out;
+  } finally {
+    await resetTree(refDir);
+  }
 }
 
 export { removeAcceptance };

@@ -117,6 +117,8 @@ export interface TestOutcome {
   file: string;
   name: string;
   status: 'passed' | 'failed' | 'skipped';
+  /** First failure message (ANSI stripped, trimmed). For humans and artifacts; never fed back to a model. */
+  message?: string;
 }
 
 export interface SpecValidation {
@@ -133,7 +135,7 @@ export interface SpecValidation {
 export async function validateSpec(
   raw: unknown,
   baseDir: string,
-  runOnBase: (files: string[]) => Promise<{ outcomes: TestOutcome[]; loadErrors: string[] }>,
+  runOnBase: (files: string[]) => Promise<{ outcomes: TestOutcome[]; loadErrors: string[]; malformed?: string[] }>,
 ): Promise<{ parsed?: ParsedSpec; result: SpecValidation }> {
   const errors: string[] = [];
   let parsed: ParsedSpec;
@@ -150,7 +152,8 @@ export async function validateSpec(
   if (parsed.spec.acceptance.length > 0) {
     const files = writeAcceptance(baseDir, parsed.spec);
     try {
-      const { outcomes, loadErrors } = await runOnBase(files);
+      const { outcomes, loadErrors, malformed = [] } = await runOnBase(files);
+      for (const m of malformed) errors.push(`probe record() misused (${m}); pass a Request or { method, path } and a Response or { status, body }`);
       for (const e of loadErrors) errors.push(`acceptance file failed to load on base: ${e}`);
       for (const o of outcomes) if (o.status === 'passed') vacuous.push(`${o.file}: ${o.name}`);
       if (outcomes.length === 0 && loadErrors.length === 0) errors.push('acceptance ran no tests');

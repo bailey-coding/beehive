@@ -20,8 +20,13 @@ export interface Box {
   ro: string[];
 }
 
+// A fresh netns has a DOWN loopback, which breaks tests that start a local server and call it (the CLI row's tests do).
+// Bring lo up first (SIOCSIFFLAGS via python3: no `ip` on this host). The host's own loopback stays unreachable.
+const LO_UP = `import socket,fcntl,struct; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); fcntl.ioctl(s.fileno(),0x8914,struct.pack("16sH14s",b"lo",0x1|0x40,b"\\0"*14))`;
+
 const SCRIPT = `
 set -e
+python3 -c '${LO_UP}'
 R="$BT_NEWROOT"
 mount -t tmpfs tmpfs "$R"
 for d in /usr /bin /sbin /lib /lib32 /lib64 /etc; do
@@ -80,11 +85,20 @@ async function doProbe(): Promise<{ ok: boolean; detail: string }> {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as net.AddressInfo).port;
   try {
+    // Inside: loopback must work (own server reachable), the host's listener must not be, the canary must be invisible,
+    // and the rw root must be writable.
     const js = `const fs=require('fs'),net=require('net');let f=false;try{fs.readFileSync(process.argv[1]);f=true}catch{}
 let w=false;try{fs.writeFileSync(process.argv[3]+'/w.txt','x');w=true}catch{}
-const s=net.connect(+process.argv[2],'127.0.0.1');
-s.on('connect',()=>{console.log('LEAK-NET');process.exit(0)});
-s.on('error',()=>{console.log(f?'LEAK-FILE':!w?'NO-WRITE':'SANDBOXED');process.exit(0)});`;
+const own=net.createServer(c=>c.destroy());
+own.listen(0,'127.0.0.1',()=>{
+  const lo=net.connect(own.address().port,'127.0.0.1');
+  lo.on('error',()=>{console.log('NO-LOOPBACK');process.exit(0)});
+  lo.on('connect',()=>{
+    const s=net.connect(+process.argv[2],'127.0.0.1');
+    s.on('connect',()=>{console.log('LEAK-NET');process.exit(0)});
+    s.on('error',()=>{console.log(f?'LEAK-FILE':!w?'NO-WRITE':'SANDBOXED');process.exit(0)});
+  });
+});`;
     const r = await boxExec('node', ['-e', js, canary, String(port), root], { cwd: root, rw: [root], ro: [] }, { timeoutMs: 60_000 });
     const out = r.stdout.trim();
     if (r.code === 0 && out === 'SANDBOXED') return { ok: true, detail: 'unshare user+mount+pid+net namespaces with a chroot root' };

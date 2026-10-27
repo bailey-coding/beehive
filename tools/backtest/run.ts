@@ -11,7 +11,7 @@ import { candidatePrompt, cost, docExcerpt, generateSpec, gradePrompt, issueProm
 import { addedLinesOf, addWorktree, commitAndPush, createScratchRepo, diffOf, git, showAt } from './git.ts';
 import { baseTokenSet, docAtBaseTest, historyTest, reachabilityTest, referenceMarkers, wrongIssueVerdict } from './leakage.ts';
 import { requireSandbox } from './sandbox.ts';
-import { baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
+import { acceptanceAgainstReference, baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
 import { installProbe } from './probe.ts';
 import { GRADER_LABEL, type CandidateResult, type LeakageResult, type RowResult, type RunMeta } from './results.ts';
 import { ACCEPTANCE_DIR, parseSpec, validateSpec, writeAcceptance, type ParsedSpec } from './spec.ts';
@@ -196,12 +196,30 @@ async function runRow(o: RunOptions, client: BudgetedClient, row: CorpusRow, iss
       res.note = `reachability test failed (spec generator): ${sr.detail.join(' | ')}`;
       return;
     }
+    // Reference checkout up front: the spec must pass on the real change before any candidate call is spent.
+    const refScratch = await createScratchRepo(o.repo, row.base, path.join(work, 'reference'), row.scrubDocs);
+    linkDeps(deps.repo, refScratch.repo);
+    const patchFile = path.join(work, 'reference.patch');
+    fs.writeFileSync(patchFile, await diffOf(o.repo, row.sha));
+    await git(refScratch.repo, ['apply', '--exclude=docs/*', patchFile]);
+    await git(refScratch.repo, ['add', '-A']);
+    await git(refScratch.repo, ['commit', '-q', '-m', 'reference']);
     const specFile = path.join(dir, 'spec.json');
     let parsed: ParsedSpec | null = null;
     if (fs.existsSync(specFile)) {
       parsed = parseSpec(readJson(specFile));
     } else {
-      const g = await generateSpec({ client, row, issueText, baseDir: deps.repo, agentCwd: specAgent.repo, validate: true, runOnBase });
+      const onReference = async (p: ParsedSpec) => {
+        const a = await acceptanceAgainstReference(refScratch.repo, deps.repo, o.cfg, p);
+        const errors = a.malformed.map((m) => `probe record() misused (${m})`);
+        for (const e of a.loadErrors) errors.push(`acceptance failed to load against the reference implementation: ${e.slice(0, 160)}`);
+        for (const f of a.failing) errors.push(`acceptance case "${f.name}" does not pass on a correct implementation of the issue (checked against the real change, whose behaviour is not shown): it asserts something the issue does not require, or uses the wrong entrypoint or layer. Rewrite it to assert only what the issue states, through its public entrypoint.`);
+        for (const c of a.contractViolations) errors.push(`recorded probe "${c.label}" contradicts the spec's own contract on a correct implementation (details withheld): fix the contract's responses or the probe.`);
+        for (const d of a.deltaViolations) errors.push(`recorded probe "${d.label}": the declared delta surface does not allow the change a correct implementation makes there (${d.kind}; details withheld). List the route or fields that change, and record only real HTTP responses at real routes.`);
+        const details = [...a.failing.map((f) => `${f.name}: ${f.message ?? 'failed'}`), ...a.contractViolations.map((c) => c.detail), ...a.deltaViolations.map((d) => `${d.label}: ${d.kind} ${d.detail}`)];
+        return { errors, details };
+      };
+      const g = await generateSpec({ client, row, issueText, baseDir: deps.repo, agentCwd: specAgent.repo, validate: true, runOnBase, extraValidate: onReference });
       if (g.raw) writeJson(path.join(dir, 'spec.generated.json'), g.raw);
       const passed = g.attempts[g.attempts.length - 1].ok;
       // Unedited spec: edit distance 0 and minutes = measured generation time. A human fix overwrites both below.
@@ -249,13 +267,6 @@ async function runRow(o: RunOptions, client: BudgetedClient, row: CorpusRow, iss
     // ---- baseline + reference arm (harness-owned roots, outside every agent root)
     const heldOut = await loadHeldOut(o.repo, row.sha, row.base, row.files.tests);
     const baseline: BaselineReport = await baselineReport(deps.repo, o.cfg, parsed.spec, heldOut);
-    const refScratch = await createScratchRepo(o.repo, row.base, path.join(work, 'reference'), row.scrubDocs);
-    linkDeps(deps.repo, refScratch.repo);
-    const patchFile = path.join(work, 'reference.patch');
-    fs.writeFileSync(patchFile, await diffOf(o.repo, row.sha));
-    await git(refScratch.repo, ['apply', '--exclude=docs/*', patchFile]);
-    await git(refScratch.repo, ['add', '-A']);
-    await git(refScratch.repo, ['commit', '-q', '-m', 'reference']);
     const evalArgs = { cfg: o.cfg, spec: parsed.spec, contract: parsed.contract, surface: parsed.surface, baseline, heldOut };
     const refReport = await evaluateCheckout({ dir: refScratch.repo, ...evalArgs });
     const refAccepted = refReport.acceptance.total > 0 && refReport.acceptance.passed === refReport.acceptance.total;

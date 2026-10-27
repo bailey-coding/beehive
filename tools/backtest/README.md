@@ -44,3 +44,18 @@ sandbox settings and has not been exercised on this host.
 - One global ledger, `tools/backtest/.ledger.json` (gitignored, no flag to move it), shared by every `--run` name, `smoke`
   and `canary`: a new run name cannot reset the 850-call cap.
 - Failed model calls (auth, bad model, crash) abort the run with the exit code and redacted error text; they never become empty text.
+
+## Spec validators (before any candidate call is spent)
+
+1. Schema, delta-surface parse, every route exists or is `isNew`.
+2. Every acceptance case fails on the base, with the probe switched on: `record()` misuse (arguments that are not a
+   Request or `{ method, path }` and a Response or `{ status, body }`) is a spec error, not a silent skip.
+3. **Against the reference (the real merged change):** every acceptance case must pass, and the reference's recorded responses
+   must satisfy the spec's own contract and declared delta surface (compared with base). A failing reference is a spec failure,
+   with one retry (shared with the retries above: at most 2 spec generations). The retry prompt names the failing case or probe
+   and the kind of problem but never the reference's actual values or assertion messages; those are kept only in
+   `spec.meta.json` (`details`) for humans. The oracle is not weakened.
+
+Pilot-1 lessons now covered by tests: the probe helper crashed on plain-object arguments (every acceptance run on a probed row
+failed), the sandbox's loopback was down (tests that start a local server, like the CLI row's, failed), and random UUIDs in test
+titles made a base test look "missing".

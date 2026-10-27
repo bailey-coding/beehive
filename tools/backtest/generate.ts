@@ -63,6 +63,8 @@ export function specPrompt(issueText: string, retry?: { previous: string; errors
     '- contract: only behaviour stated in or implied by the issue. Mark routes that do not exist yet with isNew:true.',
     `- acceptance: executable vitest cases, each in a file named in "file" (it will be written to ${ACCEPTANCE_DIR}/<file>). Model them on the existing tests under workers/*/tests/ (same mocks and helpers).`,
     `  Import the probe helper as \`import { record } from './probe';\` and call \`await record(label, request, response)\` on every response BEFORE asserting, with a stable unique label.`,
+    '  record(label, request, response) takes a Request (or { method: string, path: string }) and a Response (or { status: number, body?: unknown }). Anything else (for example a request body object) is rejected as misuse. Record only real HTTP responses at real routes: never a pseudo-route or an internal/direct call. If the change is not visible over HTTP (a CLI, config, timing, internal logic), do not call record() at all and use "endpoints": [] with an empty delta surface routes list.',
+    '  Test through the public entrypoint the issue talks about (an HTTP route, the worker\'s fetch handler, the CLI), not through internal methods. Assert only what the issue states; every acceptance case must also PASS on a correct implementation of the issue, and this is checked before any candidate runs.',
     '  Every acceptance case MUST FAIL on the current code (they test the wanted behaviour), and must pass once the issue is fixed. A case that passes today is rejected as vacuous.',
     '- declaredDeltaSurface: the routes whose responses may change because of this issue, with the allowed statuses and body fields. Every route not listed must stay byte-for-byte identical.',
     '- out_of_scope: behaviours that must not change.',
@@ -95,6 +97,8 @@ export async function generateSpec(opts: {
   maxCalls?: number;
   timeoutMs?: number;
   role?: Role;
+  /** Runs after the base validators pass (for example: every acceptance case must pass on the reference). */
+  extraValidate?: (p: ParsedSpec) => Promise<{ errors: string[]; details?: string[] }>;
 }): Promise<SpecGenResult> {
   const attempts: SpecAttempt[] = [];
   let raw: unknown | null = null;
@@ -104,6 +108,7 @@ export async function generateSpec(opts: {
   for (let a = 0; a < 2; a++) {
     const res = await opts.client.run({ role: opts.role ?? 'spec', rowId: opts.row.id, prompt: specPrompt(opts.issueText, retry), tools: 'read', cwd: opts.agentCwd ?? opts.baseDir, maxCalls: opts.maxCalls ?? 12, timeoutMs: opts.timeoutMs ?? 15 * 60_000 });
     let errors: string[] = [];
+    let details: string[] | undefined;
     try {
       raw = extractJson(res.text);
       if (opts.validate) {
@@ -111,6 +116,12 @@ export async function generateSpec(opts: {
         validation = v.result;
         parsed = v.parsed ?? null;
         errors = v.result.errors;
+        if (errors.length === 0 && parsed && opts.extraValidate) {
+          const x = await opts.extraValidate(parsed);
+          errors = x.errors;
+          details = x.details;
+          validation = { ...v.result, ok: errors.length === 0, errors };
+        }
       } else {
         parsed = parseSpec(raw);
         validation = { ok: true, errors: [], vacuous: [] };
@@ -120,7 +131,7 @@ export async function generateSpec(opts: {
       parsed = null;
       validation = { ok: false, errors, vacuous: [] };
     }
-    attempts.push({ ...cost(res), ok: errors.length === 0, errors });
+    attempts.push({ ...cost(res), ok: errors.length === 0, errors, ...(details ? { details } : {}) });
     if (errors.length === 0) break;
     retry = { previous: res.text, errors };
   }

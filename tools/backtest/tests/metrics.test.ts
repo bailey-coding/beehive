@@ -9,7 +9,7 @@ const cc = (calls: number) => ({ calls, usage, costUsd: calls / 10, durationMs: 
 
 const report = (over: Partial<OracleReport> & { held?: Record<string, 'passed' | 'failed'> } = {}): OracleReport => ({
   failedRepoTests: [], regressions: [], missingTests: [], acceptance: { total: 1, passed: 1, failed: [] },
-  heldOut: { total: 1, outcomes: over.held ?? { 'a::t': 'passed' } }, tsc: null, loadErrors: [], probe: [],
+  heldOut: { total: 1, outcomes: over.held ?? { 'a::t': 'passed' } }, tsc: null, loadErrors: [], probeProblems: [], probe: [],
   rungs: { preMerge: true, conformance: true, shadow: true }, conformanceViolations: [], shadowViolations: [], ...over,
 });
 
