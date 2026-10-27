@@ -280,9 +280,17 @@ describe('actor lookup (M12 T0)', () => {
     const store = makeSqliteState();
     const spec = makeSpecDo(store);
     await spec.init();
-    const older = spec.createActor('human', 'testuser', '4242').id;
-    const newer = spec.createActor('human', 'testuser', '4242').id;
-    const other = spec.createActor('human', 'someone', '1').id;
+    // A ledger from before m12 can hold the same GitHub id twice; the m12 index and createActor now forbid it,
+    // so rebuild that state by hand. The edge still has to resolve it (an old Spec DO may answer for a while).
+    store.raw.exec('DROP INDEX idx_actors_github_user_id_unique');
+    const addRaw = (name: string, githubUserId: string) => {
+      const id = `raw-${name}-${githubUserId}-${Math.random().toString(36).slice(2, 8)}`;
+      store.raw.prepare("INSERT INTO actors (id, type, name, github_user_id, created_at) VALUES (?, 'human', ?, ?, 1)").run(id, name, githubUserId);
+      return id;
+    };
+    const older = addRaw('testuser', '4242');
+    const newer = addRaw('testuser', '4242');
+    const other = addRaw('someone', '1');
     store.raw.prepare('UPDATE actors SET created_at = 100 WHERE id = ?').run(older);
     store.raw.prepare('UPDATE actors SET created_at = 300 WHERE id = ?').run(newer);
     // Another user's row is the newest of all: only the client-side match keeps a login off it
@@ -338,6 +346,42 @@ describe('actor lookup (M12 T0)', () => {
     expect(stub.posts()).toHaveLength(1);
     expect(count()).toBe(4);
     expect([older, newer, other]).not.toContain(sessionActor(sessionIdOf(res)));
+  });
+
+  it('m12: a first login that loses the race to another login (POST answers 409) resolves to the row that won', async () => {
+    const store = makeSqliteState();
+    const spec = makeSpecDo(store);
+    await spec.init();
+    stubGithub(4242);
+    let winner = '';
+    // The lookup comes back empty (the other login has not committed yet); then it commits, and our POST hits the index
+    const stub = recording(spec, (req) => {
+      const url = new URL(req.url);
+      if (req.method === 'GET' && url.pathname === '/api/actors' && !winner) {
+        winner = spec.createActor('human', 'testuser', '4242').id;
+        return Response.json({ success: true, data: [] });
+      }
+      return undefined;
+    });
+    const res = await callback(stub);
+    expect(res.status).toBe(302);
+    expect(sessionActor(sessionIdOf(res))).toBe(winner);
+    expect(stub.posts()).toHaveLength(1);
+    expect((store.raw.prepare('SELECT COUNT(*) AS n FROM actors').get() as { n: number }).n).toBe(1);
+  });
+
+  it('m12: a 409 followed by a lookup that still finds nothing fails the login, it does not invent an actor', async () => {
+    const store = makeSqliteState();
+    const spec = makeSpecDo(store);
+    await spec.init();
+    stubGithub(4242);
+    const stub = recording(spec, (req) =>
+      req.method === 'POST' ? Response.json({ success: false, error: 'conflict' }, { status: 409 }) : undefined
+    );
+    const res = await callback(stub);
+    expect(res.status).toBe(500);
+    expect(await res.text()).toContain('Login failed');
+    expect(stub.posts()).toHaveLength(1);
   });
 
 });

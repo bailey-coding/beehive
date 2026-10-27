@@ -49,12 +49,12 @@ merge is a ledger ref move, and the Artifacts branch mirrors it.
 
 ## 3. Data model and migrations [SPINE]
 
-**Numbering.** The code is at `m11` (`workers/spec-do/index.ts:31`). **m12 does not exist yet.** It is the unique index on
-`actors.github_user_id`, which refuses on duplicates; `workers/spec-do/tests/migration-actors-unique.test.ts` is `it.todo` only.
-Plan: build m12 first, in its own push. The 2026-10-26 production check found no duplicates among 3 actors; re-run it just before
-that push. Then **m13** = slice 1 (gate runs, preview fix) and **m14** = slice 2 (MR tables), one push each. If m12 slips, m13
+**Numbering.** The code is at `m12` once `agent/m12-actors-unique` merges (`workers/spec-do/index.ts`, `LATEST_SCHEMA_VERSION`); before that it is `m11`.
+m12 is the unique index on `actors.github_user_id`, which refuses on duplicates (`workers/spec-do/tests/migration-actors-unique.test.ts`; `docs/OPS.md` step 1a).
+Plan: m12 goes first, in its own push. The 2026-10-26 production check found no duplicates among 3 actors; re-run it just before
+that push (`scripts/check-actor-duplicates.sh`). Then **m13** = slice 1 (gate runs, preview fix) and **m14** = slice 2 (MR tables), one push each. If m12 slips, m13
 and m14 renumber down. They do not depend on its content, only on order. A stored version newer than the code skips migrations
-(`index.ts:1075`), so rolling back degrades instead of failing.
+(the rollback floor in `runMigrations`), so rolling back degrades instead of failing.
 
 **Rules.** Every change is `ADD COLUMN` through `addColumnsIfMissing` (idempotent via `PRAGMA table_info`, `index.ts:1112-1117`)
 or `CREATE … IF NOT EXISTS`, and the same DDL goes into `SCHEMA_SQL`. The **preview gap** is not fixed by the fresh path:

@@ -8,7 +8,7 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-26
+**Last updated:** 2026-10-27
 
 ## Where we are
 
@@ -20,7 +20,7 @@ Completed items are removed, not struck through; history lives in git.*
   `-1792932315` were still under the 24 h age rule and remain to purge (same prefix, `confirm` = the dry-run total). Actors cannot be tombstoned or purged by any route,
   so `e2e-sbx-probe-actor` and `prodcheck-1792366949` stay. Open: two migration gaps (`docs/OPEN-QUESTIONS.md` 2026-10-26: a fresh ledger lacks the
   `candidates.preview_*` columns; ledgers stamped m9/m10 on the `d34db95`/`469389b` line never get `user_tokens`; production is probably unaffected, unconfirmed) and the
-  unique index on `actors.github_user_id` (must REFUSE on duplicates, decided 2026-10-26; the production check found none among 3 actors, re-run before that deploy).
+  unique index on `actors.github_user_id` (m12, implemented on `agent/m12-actors-unique`, not merged or deployed; see "M12 unique index" below).
 - Earlier (2026-10-26): production ran `main` at `f21024d` (all ten workers except the unchanged `beehive-sandbox-runner` redeployed 2026-10-25 20:55Z,
   `scripts/prod-health.sh` green; GitHub CI green). Since `ebb5c75` that added: namespace per request for sandbox builds (SF-8; fork-created candidates can be
   built) with a 400 on new org names that are not valid Artifacts namespaces; the Spec DO validating canary candidate ids and urls (`beehive-` ids refused,
@@ -113,10 +113,13 @@ cleanups. Confirm, in this order:
   `50728bc`, PR `e786f60`); independent review approved by `cc90f6a`. The full PR-B has since merged (above).
 - **Verify 404 differs by token type, on purpose:** a service-token verify 404 is "unknown token" (401); the user-token
   verify route always answers 200 for a well-formed hash, so its 404 means an older DO (503).
-- **M11 handoff:** the M3 canary metrics table took `m11` (2026-10-24), so M11 takes `m12` or later. A UNIQUE index on `actors.github_user_id` goes in its own migration only
-  after the duplicate check is re-run and comes back clean: on a ledger with duplicates it throws, `init()` rethrows,
-  and that is a full outage.
-  Update (2026-10-24): m10 is `idempotency_keys` (M5a) and m11 is `canary_metrics` (M3), so the index migration is m12 or later; older docs that say m10 or m11 are historical.
+- **M12 unique index on `actors.github_user_id` (decided 2026-10-26 and approved 2026-10-27; implemented on `agent/m12-actors-unique`, awaiting review, merge and the human push):**
+  migration `m12` (after m10 `idempotency_keys` and m11 `canary_metrics`) is a partial UNIQUE index
+  (`WHERE github_user_id IS NOT NULL AND github_user_id != ''`, the same predicate the user-token code uses). On a ledger with duplicates the step
+  **refuses** with `DuplicateGithubIdentityError` (names the values and actor ids; never skips, deletes or merges), `init()` rethrows, and that is a
+  **full outage** until a human resolves the duplicate. So `scripts/check-actor-duplicates.sh` (or the SQL in `docs/OPS.md` step 1a) must come back empty
+  immediately before the push; the 2026-10-26 production check found 0 duplicates among 3 actors, and anything older than the push can be stale (a login creates actors).
+  Application side: `createActor` answers 409 for an existing identity (the UI login retries the lookup on a 409 and resolves to the winner). `m13`/`m14` in `docs/MR-FLOW-PLAN.md` follow it.
 - **Prerequisite of master stage 2:** open the lifecycle routes (tombstone, purge, roles, `include_deleted`) to
   `maintainer` user tokens first; in M12 they stay master-only (plan A1). Stage 2 itself waits for the stage-1 evidence
   (`docs/OPS.md`, the AE query).
@@ -127,7 +130,7 @@ cleanups. Confirm, in this order:
 - 2026-10-26: every sibling worktree is removed (none had uncommitted work except `beehive-recorder-flush`, an unshipped early draft of the recorder tail
   flush, dropped on purpose), and the local plan/review branches with them. Their final content is on `main`; what they held were earlier drafts of
   `docs/M12-IMPL-PLAN.md` / `docs/M9-NAV-PLAN.md`, review copies already on `main`, and two stale `test-nits-m11-pointer` commits that point the M11 index at
-  `m11` (taken by `canary_metrics`; it is `m12` or later). Recovery within the reflog window: `git branch <name> <tip>` with tips `agent/m12-plan` f1135ae,
+  `m11` (taken by `canary_metrics`; the index is `m12`). Recovery within the reflog window: `git branch <name> <tip>` with tips `agent/m12-plan` f1135ae,
   `m12-pra-review` 0545425, `m12-prb-review` d1a0146, `m12-review` ccb7e57, `m9-codereview` 4bbd33e, `m9-plan` c973334, `m9-review` eb6b8dc,
   `test-nits-m11-pointer` fb6fa0a. Nine older plan/review branches were deleted the same way (all content on `main`; `feature-parity-audit`, `ui-issues-plan`
   and `ui-issues-review` held superseded earlier drafts): `agent/cli-actor-review` 3fbcb1a, `feature-parity-audit` 95c5f25, `m8-do-recheck` fa58fb9,

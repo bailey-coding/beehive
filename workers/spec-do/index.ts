@@ -25,10 +25,11 @@ import {
   USER_TOKENS_SQL,
   IDEMPOTENCY_KEYS_SQL,
   CANARY_METRICS_SQL,
+  ACTORS_GITHUB_UNIQUE_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm11';
+const LATEST_SCHEMA_VERSION = 'm12';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -81,6 +82,20 @@ function checkExpectedVersion(
 }
 class NotFoundError extends Error {}
 class ForbiddenError extends Error {}
+/**
+ * Thrown by the m12 migration step when actors share a github_user_id. The message lists those values and
+ * actor ids only; resolve them by hand (docs/OPS.md), nothing is deleted or merged on the way.
+ */
+export class DuplicateGithubIdentityError extends Error {
+  constructor(readonly duplicates: { githubUserId: string; actorIds: string[] }[]) {
+    super(
+      `DuplicateGithubIdentityError: m12 refused, ${duplicates.length} github_user_id value(s) belong to more than one actor: ` +
+        duplicates.map((d) => `${JSON.stringify(d.githubUserId)} -> ${d.actorIds.join(', ')}`).join('; ') +
+        '. Resolve them (docs/OPS.md "Deploy checklist"); the ledger is still at m11 and nothing was changed.'
+    );
+    this.name = 'DuplicateGithubIdentityError';
+  }
+}
 class BadRequestError extends Error {}
 
 const COMMENT_POLICIES = ['open', 'maintainers_only', 'locked'];
@@ -608,6 +623,9 @@ export class SpecDO {
       // canary_metrics: likewise
       this.db.exec(CANARY_METRICS_SQL);
 
+      // unique actors.github_user_id: likewise (the table is empty here, so no duplicate check)
+      this.db.exec(ACTORS_GITHUB_UNIQUE_SQL);
+
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
       // Fresh statement per write: the adapter does not re-execute a reused
@@ -1060,6 +1078,8 @@ export class SpecDO {
       ['m10', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
       // m10 -> m11: canary metrics (M3 SLO loop; shadow-sourced until real canary traffic exists)
       ['m11', () => this.db!.exec(CANARY_METRICS_SQL)],
+      // m11 -> m12: unique actors.github_user_id. Refuses (DuplicateGithubIdentityError) on duplicates, before the index
+      ['m12', () => this.applyActorsGithubUnique()],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -1107,6 +1127,28 @@ export class SpecDO {
 
   private writeSchemaVersion(version: string): void {
     this.run('INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)', 'schema_version', version, now());
+  }
+
+  /**
+   * m12. Looks for duplicate GitHub identities first and throws DuplicateGithubIdentityError, which lists the
+   * duplicated github_user_id values and actor ids and nothing else, before it creates anything: the ledger
+   * stays at m11 with every row intact, init() rethrows and the next request retries. It never deletes,
+   * merges or skips. A human resolves the duplicate (docs/OPS.md "Deploy checklist"), and the retry succeeds.
+   * The WHERE clause is the index's own (NULL and '' are "no identity").
+   */
+  private applyActorsGithubUnique(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    const dups = this.queryAll(
+      `SELECT github_user_id, GROUP_CONCAT(id) AS actor_ids FROM actors
+       WHERE github_user_id IS NOT NULL AND github_user_id != ''
+       GROUP BY github_user_id HAVING COUNT(*) > 1 ORDER BY github_user_id`
+    );
+    if (dups.length) {
+      throw new DuplicateGithubIdentityError(
+        dups.map((d) => ({ githubUserId: d.github_user_id as string, actorIds: (d.actor_ids as string).split(',').sort() }))
+      );
+    }
+    this.db.exec(ACTORS_GITHUB_UNIQUE_SQL);
   }
 
   private addColumnsIfMissing(table: string, columns: string[]): void {
@@ -1261,6 +1303,12 @@ export class SpecDO {
   ): ActorRow {
     if (!this.db) throw new Error('Database not initialized');
     
+    // One actor per GitHub identity (m12 unique index). The check and the insert are one synchronous step,
+    // so a concurrent login cannot slip between them; a duplicate is a 409, never a constraint 500.
+    if (githubUserId) {
+      const taken = this.queryAll(`SELECT id FROM actors WHERE github_user_id = ?`, githubUserId)[0];
+      if (taken) throw new ConflictError(`an actor with github_user_id ${JSON.stringify(githubUserId)} already exists (${taken.id})`);
+    }
     const id = generateId();
     const stmt = this.db.prepare(
       `INSERT INTO actors (id, type, name, github_user_id, trust_score, promotion_authority, created_at) 

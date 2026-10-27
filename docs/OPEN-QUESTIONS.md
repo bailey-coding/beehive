@@ -1042,3 +1042,16 @@ Three mismatches stack on the path Spec DO -> Scientist comparator:
 3. **Blast radius.** The throw is inside the `Promise.all` over a message's candidates, so one existing spec fails that whole comparison. The queue handler catches and logs it (`index.ts:129`; its comment says "will trigger retry", but as read the handler returns normally and never calls `retry()`), so no verdict is recorded for the message. `workers/scientist-comparator/tests/scientist.test.ts` has no case with a spec-backed delta surface, so nothing covers this. The gate workflow reads `declaredDeltaSurface` from the same snake_case response (`gate-workflow/index.ts:720`) and always gets `[]`; it only feeds a simulated complexity number.
 
 Not yet tried: a live comparison with a spec that has a surface (production has not been touched). **Consequence for the backtest:** the shadow rung's delta check cannot be used as is, and not even as a fixed reference to compare against. The backtest harness computes its own delta check (spec JSON object in, response diff out, optionally reusing `delta-surface/matcher.ts` once unit-checked in isolation). Fixing the path (spine-adjacent: one agreed shape for `declaredDeltaSurface`, unwrap `data`, map the field name, a comparator test with a real surface) is a separate human-approved item.
+
+## 2026-10-27: m12 unique index on `actors.github_user_id` (`agent/m12-actors-unique`; tests run, production not touched)
+
+- **`''` in the plan vs the index.** `docs/MIGRATION-LEGACY-TEST-PLAN.md` section 6 (2026-10-26) said two `''` values collide; the approved design is a partial index excluding both NULL and
+  `''`, matching `mintUserToken` / `verifyUserTokenHash`. `createActor` already stores `''` as NULL, so `''` can only exist from a hand-edit or an old import. The plan is updated; the preflight ignores `''`.
+- **The old pre-check-free `createActor` surfaced as an uncaught 500 only after the index existed.** Added a check in `createActor` (one synchronous step with the insert) that answers 409 `an actor with github_user_id "<id>" already exists (<actor id>)`.
+  The UI login (`workers/api/ui.ts` `ensureActor`) does lookup then POST, so two first logins of one user can race: the loser now gets 409 and re-reads, instead of "Could not create your actor record".
+  Old edge against the new DO: the same race ends in a failed login (fail closed); new edge against an old DO: unchanged behaviour (no 409 is ever returned).
+- **Rolled-back floor code** has no duplicate check, so a duplicate insert by it is a 500 from the unique index, not a 409. Only the UI login can trigger it, and it fails closed (`docs/OPS.md` rollback floor).
+- **Test-suite coupling found:** four existing tests built duplicate GitHub ids with `createActor` to exercise "newest wins" (`actors.test.ts`, `ui-actor.test.ts`). They now drop the index and insert raw rows,
+  which models a pre-m12 ledger; those tests still pin the old-DO behaviour of the edge.
+- **Not verified:** the `node:sqlite` harness, not Durable Object SQLite, ran the partial `CREATE UNIQUE INDEX ... WHERE`. Partial indexes exist since SQLite 3.8.0, but the DO's SQLite version was not checked here; the first real run is the deploy
+  itself (the plan's open question 3). The step uses no other new construct.

@@ -48,6 +48,28 @@ retries), so a bad deploy is loud rather than half-migrated.
    Also list what is there, `SELECT type, name FROM sqlite_master ORDER BY type, name`, and
    compare it with `workers/spec-do/schema.sql`: the live ledger once carried a `service_accounts`
    table of another design (`docs/OPEN-QUESTIONS.md` 2026-10-16) that stopped the m6 step.
+   **1a. m12 duplicate check (required, run immediately before the push).** m12 adds a partial UNIQUE index on
+   `actors.github_user_id` (rows where it is neither NULL nor `''`). If two actors share a `github_user_id`, the m12 step
+   **refuses** with `DuplicateGithubIdentityError` (it names the duplicated values and actor ids; it never skips,
+   deletes or merges), `init()` rethrows, the ledger stays at `m11`, and **every request to the Spec DO fails until a
+   human resolves the duplicate: a full outage, not a warning.** So the result of this check must be empty right before
+   you push, not an hour earlier: a login can create an actor in the gap (the 2026-10-17 result predates UI logins).
+   Read-only, through the maintainer's usual access to the ledger (the exact query used 2026-10-26, which found 0
+   duplicates among 3 actors):
+
+   ```sql
+   SELECT github_user_id, COUNT(*) AS n, GROUP_CONCAT(id) AS actor_ids FROM actors WHERE github_user_id IS NOT NULL AND github_user_id != '' GROUP BY github_user_id HAVING n > 1;
+   ```
+
+   The API way (what 2026-10-26 used): page `GET /api/actors?limit=500&offset=<n>` with the master token until a page
+   comes back short, and group the rows by `github_user_id` client-side, ignoring NULL and `''`.
+   `scripts/check-actor-duplicates.sh` does exactly that (read-only, prints only duplicate groups, exits 1 if there are any).
+   Empty result: push. Any row: do not push; decide per group which actor keeps the identity, and clear
+   `github_user_id` on the others (maintainer decision, by hand; check `user_tokens`, `service_accounts.actor_id`, `role`
+   and `promotion_authority` on each first). If the push already happened and the DO answers 5xx with
+   `DuplicateGithubIdentityError` in the `beehive` logs, resolve the named actors the same way; the next request retries
+   the migration and succeeds (nothing was half-applied). Or push the previous commit to `cf` (the ledger is still at `m11`, which the
+   rollback floor tolerates, see below).
 2. Confirm these queues exist, because nothing creates them any more (the old GitHub
    workflow did): `canary-rollback-triggers`, `promotion-events`,
    `preview-scientist-comparisons`, `beehive-scientist-comparisons`. Create any missing one
@@ -60,7 +82,7 @@ retries), so a bad deploy is loud rather than half-migrated.
    `GET /api/organizations?limit=1`). The edge `/health` also calls the DO and answers 503 `unhealthy` while
    the ledger cannot initialise, but only from the deploy that includes that change; the 2026-10-16 m3 -> m8
    deploy still had a static `/health` that passed with the ledger stuck, so keep the script's DO request. Then check the
-   `beehive` logs for `Migration to m[4-8] failed`; any hit, or a 500 from the script, means the ledger
+   `beehive` logs for `Migration to m[0-9]+ failed` (m12: also `DuplicateGithubIdentityError`, step 1a); any hit, or a 500 from the script, means the ledger
    stopped at the previous version and requests are failing until it is fixed.
    `service_accounts has an unexpected shape`: that table is not this design's; if it is empty,
    `DROP TABLE service_accounts` (the next request recreates it), otherwise migrate its rows first.
@@ -91,8 +113,12 @@ retries), so a bad deploy is loud rather than half-migrated.
      `specs`, `candidates` or `issues` makes the floor's `/internal/purge` stop with a 409 `FOREIGN KEY constraint failed`
      while rolled back. The batch rolls back and nothing is corrupted, but purge is unusable until the newer build returns.
    - New columns on old tables are nullable or have a default, so the floor's inserts still succeed.
-   - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. A future unique index on
-     `actors.github_user_id` (M12's `m10`, now `m12` or later: `m10` is idempotency keys and `m11` is canary metrics) would turn a duplicate insert by the floor into a failed login (fail closed, acceptable).
+   - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. The one exception is the
+     m12 partial unique index on `actors.github_user_id` (decided 2026-10-27): the floor's `createActor` has no duplicate
+     check, so a duplicate insert by the floor hits the index and answers 500 (a raw `UNIQUE constraint failed`, not the
+     409 of the current code). The only caller that does that is the UI login (`ensureActor`, lookup then create), and
+     it fails closed: the login page says it could not create the actor record, no session is issued, nothing is
+     corrupted. A rolled-back floor therefore cannot create a second actor for one GitHub identity; accepted.
 6. After deploy: `./scripts/prod-health.sh` passes (`GET /health` answers 200 on each worker with the
    bearer token, and the Spec DO check answers 200);
    `GET /api/service-accounts` answers 410; mint a service token
@@ -107,7 +133,7 @@ retries), so a bad deploy is loud rather than half-migrated.
      commit you meant to deploy; `beehive-promotion-worker` must be the one deployed after `beehive`.
    - `wrangler queues list`: the four queues of step 2 exist.
    - `wrangler tail <worker> --format json` right after the first `beehive` request, to read
-     `Migration to m[4-8] failed` or `service_accounts has an unexpected shape` directly.
+     `Migration to m[0-9]+ failed` (m12: also `DuplicateGithubIdentityError`, step 1a) or `service_accounts has an unexpected shape` directly.
    Never `wrangler deploy` and never write to the Artifacts repo (AGENTS.md).
 
 Moved out of `AGENTS.md` (2026-10-15). The config rules and the fail-closed auth rule stay
