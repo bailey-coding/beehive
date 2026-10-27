@@ -58,7 +58,7 @@ describe('migration matrix: init over every historical ledger shape', () => {
   it('the latest version is the fresh ledger version and the matrix starts below it', () => {
     expect(LATEST_VERSION).toMatch(/^m\d+$/);
     // LATEST_VERSION comes from a fresh ledger, so pin a floor: lowering the constant and removing the last step together must not pass
-    expect(Number(LATEST_VERSION.slice(1))).toBeGreaterThanOrEqual(11);
+    expect(Number(LATEST_VERSION.slice(1))).toBeGreaterThanOrEqual(12);
     expect(legacyFixtures().length).toBeGreaterThanOrEqual(14);
   });
 

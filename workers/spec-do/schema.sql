@@ -503,7 +503,7 @@ CREATE INDEX IF NOT EXISTS idx_canary_deployments_spec ON canary_deployments(spe
 -- the cap of 10 live tokens per actor are enforced in code
 -- (SpecDO.mintUserToken), so either can change without a table rebuild. The
 -- table references actors only, and m9 adds no index on actors (a unique
--- actors.github_user_id index is M11's, now m12). Timestamps are epoch milliseconds.
+-- actors.github_user_id index is m12). Timestamps are epoch milliseconds.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS user_tokens (
@@ -572,3 +572,15 @@ CREATE TABLE IF NOT EXISTS canary_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_canary_metrics_minute ON canary_metrics(minute_bucket);
+
+-- ============================================================================
+-- ACTORS: UNIQUE GITHUB IDENTITY (m11 -> m12, additive)
+-- One actor per GitHub identity. Partial: NULL and '' mean "no GitHub identity" (the code treats them
+-- alike, see SpecDO.mintUserToken / verifyUserTokenHash), so any number of such rows may coexist.
+-- The m12 migration step checks for duplicates BEFORE creating this index and refuses with a named
+-- error that lists them (it never deletes or merges); a fresh ledger has an empty table.
+-- ============================================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_actors_github_user_id_unique
+  ON actors(github_user_id)
+  WHERE github_user_id IS NOT NULL AND github_user_id != '';
