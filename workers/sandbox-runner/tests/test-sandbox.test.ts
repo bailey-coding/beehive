@@ -12,8 +12,9 @@ vi.mock('cloudflare:workers', () => ({
 const createRepoToken = vi.fn(async (..._a: unknown[]) => ({ token: 'secret-read-token', expiresAt: 1 }));
 vi.mock('../../shared/artifacts', () => ({ createRepoToken: (...a: unknown[]) => createRepoToken(...a) }));
 
+import { spawnSync } from 'node:child_process';
 import {
-  NpmRegistryGateway, TestSandbox, TEST_DEADLINE_MS, parseCounts, parseTestError, validateTestRequest,
+  NpmRegistryGateway, PHASE_SCRIPT, TestSandbox, TEST_DEADLINE_MS, parseCounts, parseTestError, validateTestRequest,
 } from '../test-sandbox';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -21,8 +22,8 @@ const enc = (s: string) => new TextEncoder().encode(s);
 const HASH = 'ab'.repeat(32);
 
 type Script = (cmd: string[], opts?: { env?: Record<string, string>; cwd?: string }) => { exitCode: number; stdout?: string; stderr?: string } | undefined;
-/** Phase wrapper: sh -c SCRIPT sh <log> <cpu> timeout --kill-after=5 <limit> ...argv (argv from index 9) */
-const phaseArgv = (cmd: string[]) => (cmd[0] === 'sh' && cmd[1] === '-c' ? cmd.slice(9) : null);
+/** Phase wrapper: sh -c SCRIPT sh <log> <cpu> <limit> ...argv (argv from index 7); the script folds the limit and the timeout in, see PHASE_SCRIPT */
+const phaseArgv = (cmd: string[]) => (cmd[0] === 'sh' && cmd[1] === '-c' ? cmd.slice(7) : null);
 
 function makeSandbox(script: Script, env: Record<string, string | undefined> = { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'tok' }) {
   const calls: string[][] = [];
@@ -74,7 +75,7 @@ describe('validateTestRequest', () => {
       expect(() => validateTestRequest({ ...req, installDirs: [d] }), String(d)).toThrow(/BAD_REQUEST/);
     }
     expect(() => validateTestRequest({ ...req, installDirs: [] })).toThrow(/BAD_REQUEST/);
-    for (const c of [[], [''], ['npm', 5], 'npm test', ['a\0b']]) expect(() => validateTestRequest({ ...req, testCommand: c })).toThrow(/BAD_REQUEST/);
+    for (const c of [['--help'], ['-e', 'x'], [], [''], ['npm', 5], 'npm test', ['a\0b']]) expect(() => validateTestRequest({ ...req, testCommand: c })).toThrow(/BAD_REQUEST/);
     expect(validateTestRequest({ ...req, testCommand: ['npx', 'vitest', 'run'] }).testCommand).toEqual(['npx', 'vitest', 'run']);
   });
   it('transports its error code through a plain Error', () => {
@@ -126,11 +127,14 @@ describe('TestSandbox verdicts', () => {
     expect(phases).toHaveLength(2);
     for (const p of phases) {
       expect(p[2]).toMatch(/ulimit -u 512.*ulimit -t.*ulimit -f/);
+      expect(p[2]).toContain('timeout --kill-after=5 "$lim" "$@"');
       expect(p[2]).not.toMatch(/npm|cand/); // no repo-derived text in the script
-      expect(p.slice(5, 8)).toEqual([expect.stringMatching(/^\d+$/), 'timeout', '--kill-after=5']);
+      // the ulimit lines run in a group whose output goes to the log, and a failure there is exit 125
+      expect(p[2]).toMatch(/\{ ulimit -u 512 && .*; \} >>"\$log" 2>&1 \|\| exit 125/);
+      expect(p.slice(5, 6)).toEqual([expect.stringMatching(/^\d+$/)]);
     }
-    expect(phases[0][8]).toBe('120'); // install budget
-    expect(phases[1].slice(8)).toEqual(['300', 'npm', 'test']);
+    expect(phases[0][6]).toBe('120'); // install budget
+    expect(phases[1].slice(6)).toEqual(['300', 'npm', 'test']);
   });
 
   it('runs a custom test command as given', async () => {
@@ -147,7 +151,8 @@ describe('TestSandbox verdicts', () => {
     expect(installEnv.NODE_EXTRA_CA_CERTS).toMatch(/cloudflare-containers-ca\.crt$/);
     const touch = calls.find((c) => c[0] === 'touch')!;
     expect(touch.slice(1)).toEqual([installEnv.NPM_CONFIG_USERCONFIG, installEnv.NPM_CONFIG_GLOBALCONFIG]);
-    expect(calls).toContainEqual(['rm', '-f', '/workspace/cand/./.npmrc', '/workspace/cand/cli/.npmrc']);
+    expect(calls).toContainEqual(['find', '/workspace/cand', '-name', '.npmrc', '-not', '-path', '*/node_modules/*', '-delete']);
+    expect(calls.findIndex((c) => c[0] === 'find')).toBeLessThan(calls.findIndex(isInstall));
     expect(JSON.stringify([calls, execOpts])).not.toContain('secret-read-token');
     expect(JSON.stringify([calls, execOpts])).not.toContain('tok"');
     // the test phase env is cleared down to a short list (no CA bundle, no secrets)
@@ -180,11 +185,36 @@ describe('TestSandbox verdicts', () => {
     expect(calls.some(isInstall)).toBe(false);
   });
 
-  it('classifies a timed-out install and a timed-out test (exit 124, or 137 after the kill)', async () => {
+  it('classifies a timed-out install and a timed-out test (exit 124 from the wrapper)', async () => {
     expect(await makeSandbox(happy((c) => (isInstall(c) ? { exitCode: 124 } : undefined))).sb.test(req))
       .toMatchObject({ status: 'fail', failureClass: 'timeout_install', phases: { install: { timedOut: true } } });
-    expect(await makeSandbox(happy((c) => (isTest(c) ? { exitCode: 137 } : undefined))).sb.test(req))
+    expect(await makeSandbox(happy((c) => (isTest(c) ? { exitCode: 124 } : undefined))).sb.test(req))
       .toMatchObject({ status: 'fail', failureClass: 'timeout_test', phases: { test: { timedOut: true } } });
+  });
+
+  it('treats exit 125 from the wrapper (limits not applied) as SANDBOX_UNAVAILABLE, not a verdict', async () => {
+    const i = makeSandbox(happy((c) => (isInstall(c) ? { exitCode: 125 } : undefined)));
+    await expect(i.sb.test(req)).rejects.toThrow(/^SANDBOX_UNAVAILABLE/);
+    expect(i.container.destroy).toHaveBeenCalled();
+    const t = makeSandbox(happy((c) => (isTest(c) ? { exitCode: 125 } : undefined)));
+    await expect(t.sb.test(req)).rejects.toThrow(/^SANDBOX_UNAVAILABLE/);
+  });
+
+  it('classifies an outside SIGKILL (exit 137, no timeout) as killed, never as a timeout', async () => {
+    expect(await makeSandbox(happy((c) => (isTest(c) ? { exitCode: 137 } : undefined))).sb.test(req))
+      .toMatchObject({ status: 'fail', failureClass: 'killed', exitCode: 137, phases: { test: { timedOut: false } } });
+    expect(await makeSandbox(happy((c) => (isInstall(c) ? { exitCode: 137 } : undefined))).sb.test(req))
+      .toMatchObject({ status: 'fail', failureClass: 'killed', phases: { install: { timedOut: false } } });
+  });
+
+  it('the wrapper script maps statuses: 124 for a timeout (also 137 after the limit), 1 for a child 125, 137 passthrough when early', () => {
+    const run = (lim: string, ...argv: string[]) => spawnSync('sh', ['-c', PHASE_SCRIPT, 'sh', '/dev/null', '60', lim, ...argv]).status;
+    if (run('5', 'true') !== 0) return; // this host cannot apply the limits (e.g. already past 512 processes): nothing to assert
+    expect(run('1', 'sleep', '5')).toBe(124);
+    expect(run('1', 'sh', '-c', 'trap "" TERM; sleep 20')).toBe(124); // needs the KILL: timeout itself says 137, the elapsed limit makes it 124
+    expect(run('5', 'sh', '-c', 'exit 125')).toBe(1);
+    expect(run('5', 'sh', '-c', 'exit 3')).toBe(3);
+    expect(run('5', 'sh', '-c', 'kill -9 $$')).toBe(137);
   });
 
   it('gives each install directory only what is left of the 120 s install budget', async () => {
@@ -194,7 +224,7 @@ describe('TestSandbox verdicts', () => {
       const p = sb.test({ ...req, installDirs: ['.', 'cli', 'workers/api'] });
       await vi.advanceTimersByTimeAsync(0);
       const r = await p;
-      const limits = calls.filter(isInstall).map((c) => Number(c[8]));
+      const limits = calls.filter(isInstall).map((c) => Number(c[6]));
       expect(limits).toEqual([120, 70, 20]);
       expect(r.status).toBe('pass');
     } finally { vi.useRealTimers(); }

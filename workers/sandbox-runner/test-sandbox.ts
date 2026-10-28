@@ -35,7 +35,7 @@ export function parseTestError(error: unknown): { code: TestErrorCode; message: 
 }
 
 export const FAILURE_CLASSES = [
-  'tests_failed', 'no_tests', 'install_failed', 'no_lockfile', 'timeout_install', 'timeout_test', 'timeout_overall', 'clone_failed',
+  'tests_failed', 'no_tests', 'install_failed', 'killed', 'no_lockfile', 'timeout_install', 'timeout_test', 'timeout_overall', 'clone_failed',
 ] as const;
 export type FailureClass = (typeof FAILURE_CLASSES)[number];
 
@@ -58,7 +58,15 @@ const PATH_ENV = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const MAX_INSTALL_DIRS = 32;
 const INSTALL_DIR_RE = /^(\.|[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*)$/;
 /** Constant wrapper: limits, then the argv (positional, never interpolated) with output to a file, not a pipe. */
-const PHASE_SCRIPT = 'log=$1; cpu=$2; shift 2; ulimit -u 512 || exit 125; ulimit -t "$cpu" || exit 125; ulimit -f 4194304 || exit 125; exec "$@" >>"$log" 2>&1';
+/**
+ * Exit codes of the wrapper: 125 = it could not set the limits (infrastructure; a child that exits 125 is remapped to 1), 124 = the time limit
+ * expired (the `timeout` status 124, or 137 after the kill-after KILL with the limit elapsed), 137 otherwise = the process was killed from
+ * outside (an out-of-memory kill), anything else = the command's own status. Positional: log, cpu seconds, limit seconds, then the argv.
+ */
+export const PHASE_SCRIPT = 'log=$1; cpu=$2; lim=$3; shift 3; '
+  + '{ ulimit -u 512 && ulimit -t "$cpu" && ulimit -f 4194304; } >>"$log" 2>&1 || exit 125; '
+  + 't0=$(date +%s); timeout --kill-after=5 "$lim" "$@" >>"$log" 2>&1; rc=$?; t1=$(date +%s); '
+  + '[ "$rc" -eq 125 ] && exit 1; [ "$rc" -eq 137 ] && [ $((t1 - t0)) -ge "$lim" ] && exit 124; exit "$rc"';
 
 export interface TestRequest {
   repo: string;
@@ -113,6 +121,7 @@ export function validateTestRequest(body: unknown): TestRequest {
     if (!Array.isArray(c) || c.length === 0 || c.length > 16 || !c.every((a) => typeof a === 'string' && a.length > 0 && a.length <= 256 && !/[\u0000-\u001f]/.test(a))) {
       throw new TestError('BAD_REQUEST', 'testCommand must be an argv array of 1-16 non-empty strings');
     }
+    if ((c as string[])[0].startsWith('-')) throw new TestError('BAD_REQUEST', 'testCommand[0] must be a program, not an option');
     testCommand = c as string[];
   }
   return {
@@ -124,6 +133,7 @@ export function validateTestRequest(body: unknown): TestRequest {
 
 /** `Tests  1380 passed | 30 skipped (1410)` (vitest) or `Tests:       1 failed, 5 passed, 6 total` (jest); the last such line wins. Advisory only. */
 export function parseCounts(log: string): TestResult['counts'] {
+  // eslint-disable-next-line no-control-regex
   const clean = log.replace(/\u001b\[[0-9;]*m/g, '');
   let found: TestResult['counts'] = null;
   for (const line of clean.split('\n')) {
@@ -168,7 +178,9 @@ async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-const timedOut = (exit: number) => exit === 124 || exit === 137;
+const timedOut = (exit: number) => exit === 124;
+/** SIGKILL from outside the limit (the kernel's out-of-memory killer): its own class, not a timeout. */
+const killed = (exit: number | null) => exit === 137;
 
 export class TestSandbox extends ContainerSandbox<TestEnv> {
   /** Runs in progress by request: a repeat call (a queue retry after a caller timeout) shares the running one. */
@@ -271,11 +283,14 @@ export class TestSandbox extends ContainerSandbox<TestEnv> {
     }
     await run(['mkdir', '-p', LOG_DIR]);
     await run(['touch', NPMRC_USER, NPMRC_GLOBAL]);
-    await run(['rm', '-f', ...req.installDirs.map((d) => `${WORKDIR}/${d}/.npmrc`)]);
+    // Every .npmrc of the clone (a nested one could still be read by a tool), none of node_modules' own.
+    await run(['find', WORKDIR, '-name', '.npmrc', '-not', '-path', '*/node_modules/*', '-delete']);
     const npmEnv = { PATH: PATH_ENV, HOME: '/workspace', CI: '1', NPM_CONFIG_USERCONFIG: NPMRC_USER, NPM_CONFIG_GLOBALCONFIG: NPMRC_GLOBAL, NPM_CONFIG_CACHE: '/workspace/npm-cache' };
     const phase = async (name: string, dir: string, argv: string[], env: Record<string, string>, limitS: number): Promise<PhaseResult> => {
       const started = Date.now();
-      const out = await run(['sh', '-c', PHASE_SCRIPT, 'sh', `${LOG_DIR}/${name}.log`, String(limitS * 2), 'timeout', '--kill-after=5', String(limitS), ...argv], env, dir === '.' ? WORKDIR : `${WORKDIR}/${dir}`);
+      const out = await run(['sh', '-c', PHASE_SCRIPT, 'sh', `${LOG_DIR}/${name}.log`, String(limitS * 2), String(limitS), ...argv], env, dir === '.' ? WORKDIR : `${WORKDIR}/${dir}`);
+      // The limits could not be set: the run says nothing about the repo, so it is an infrastructure error (non-2xx, retried by the gate).
+      if (out.exitCode === 125) throw new TestError('SANDBOX_UNAVAILABLE', 'the sandbox could not apply its resource limits');
       return { ms: Date.now() - started, exit: out.exitCode, timedOut: timedOut(out.exitCode) };
     };
 
@@ -291,7 +306,7 @@ export class TestSandbox extends ContainerSandbox<TestEnv> {
     }
     if (install.exit !== 0) {
       return this.result({
-        status: 'fail', failureClass: install.timedOut ? 'timeout_install' : 'install_failed', exitCode: install.exit,
+        status: 'fail', failureClass: install.timedOut ? 'timeout_install' : killed(install.exit) ? 'killed' : 'install_failed', exitCode: install.exit,
         phases: { install, test: null }, ...(await this.readLog(run, `${LOG_DIR}/install.log`)),
       });
     }
@@ -310,7 +325,7 @@ export class TestSandbox extends ContainerSandbox<TestEnv> {
     const phases = { install, test };
     const counts = parseCounts(log.logTail);
     if (test.exit !== 0) {
-      return this.result({ status: 'fail', failureClass: test.timedOut ? 'timeout_test' : 'tests_failed', exitCode: test.exit, phases, counts, ...log });
+      return this.result({ status: 'fail', failureClass: test.timedOut ? 'timeout_test' : killed(test.exit) ? 'killed' : 'tests_failed', exitCode: test.exit, phases, counts, ...log });
     }
     if (counts && counts.passed === 0) return this.result({ status: 'fail', failureClass: 'no_tests', exitCode: 0, phases, counts, ...log });
     return this.result({ status: 'pass', failureClass: null, exitCode: 0, phases, counts, ...log });
