@@ -99,6 +99,9 @@ export class DuplicateGithubIdentityError extends Error {
   }
 }
 class BadRequestError extends Error {}
+/** One line per issue ("commitSha: must be 40 lowercase hex characters"), not zod's pretty-printed JSON */
+const zodMessage = (e: { issues: { path: PropertyKey[]; message: string }[] }) =>
+  e.issues.map((i) => `${i.path.map(String).join('.') || '(body)'}: ${i.message}`).join('; ');
 /** A gate-run cap refused the start: 409 with code `busy`, and no idempotency key is left behind (the mutation threw) */
 class GateRunBusyError extends ConflictError {
   constructor(readonly reason: 'repository' | 'global', message: string) {
@@ -4578,12 +4581,12 @@ export class SpecDO {
     try {
       if (isStart) {
         const parsed = StartGateRunRequestSchema.safeParse(await readBody());
-        if (!parsed.success) throw new BadRequestError(parsed.error.message);
+        if (!parsed.success) throw new BadRequestError(zodMessage(parsed.error));
         return this.idempotent(idem, 200, () => ({ success: true, data: this.startGateRun(parsed.data), timestamp: now() }));
       }
       if (result) {
         const parsed = FinishGateRunRequestSchema.safeParse(await readBody());
-        if (!parsed.success) throw new BadRequestError(parsed.error.message);
+        if (!parsed.success) throw new BadRequestError(zodMessage(parsed.error));
         return respond(200, { success: true, data: this.finishGateRun(decodeURIComponent(result[1]), parsed.data) });
       }
       if (detail) {
