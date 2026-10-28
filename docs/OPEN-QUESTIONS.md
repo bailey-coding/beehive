@@ -1123,5 +1123,5 @@ Config, image and export only; nothing here ran on the platform (no Docker on th
   1. Whether two `[[containers]]` blocks with different `dockerfile` paths in one directory each build with their own context; the build image's `Dockerfile` copies nothing, so a shared context is harmless either way.
   2. That the key `images.test` is what `ctx.container.images.test` (`test-sandbox.ts:197`) reads; a wrong key makes `start` fail with `SANDBOX_UNAVAILABLE`, not a verdict.
   3. Whether a new exported Durable Object class plus its container application deploys in the same version as the existing renamed `Sandbox` entry without a lifecycle error (10086 applied only to deleting a bound class).
-  4. Whether `imageDigest` ends up populated (needs `@sha256:` in the image string).
-- **Local checks run:** TOML parse, typecheck, sandbox-runner tests (see the report). `wrangler deploy --dry-run` needs Docker for `[[containers]]` and was not run.
+  4. `imageDigest` is expected to be `null`: wrangler 4.151.1 tags Dockerfile-built images (`<script>-<class>-<image>:wrangler-<time>`, no digest), as for the build image. The base-image digest pin in `Dockerfile.test` is the reproducibility anchor.
+- **Local checks run:** TOML parse, typecheck, sandbox-runner tests (97 pass), all clean. Independent review: `wrangler deploy --dry-run` on the real config passes validation and stops at the Docker check; with containers stripped the bundle builds. CI's dry-run (Docker available) builds `Dockerfile.test` first.
