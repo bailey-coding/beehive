@@ -91,11 +91,14 @@ export class SpikeSandbox extends DurableObject<Env> {
         const url = `https://${this.env.CLOUDFLARE_ACCOUNT_ID}.artifacts.cloudflare.net/git/${ns}/${repo}.git`;
         const g = 'git -c core.hooksPath=/dev/null -c core.symlinks=false';
         steps.push(await this.sh(`rm -rf /tmp/cand && ${g} clone --quiet --no-checkout ${url} /tmp/cand && ${g} -C /tmp/cand checkout --quiet ${commitSha} && ls /tmp/cand | head -20`, { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }));
-        const peak = 'echo peak_mem_bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null); du -sm /tmp/cand | cut -f1 | sed "s/^/disk_mb=/"';
-        const cfg = { NPM_CONFIG_USERCONFIG: '/dev/null', NPM_CONFIG_GLOBALCONFIG: '/dev/null', NPM_CONFIG_CACHE: '/tmp/npm-cache', CI: '1' };
-        steps.push({ ...(await this.sh(`cd /tmp/cand && rm -f .npmrc && npm ci --ignore-scripts --no-audit --no-fund --registry https://${REGISTRY}/ > /tmp/ci.log 2>&1; echo exit=$?; tail -n 15 /tmp/ci.log; ${peak}`, cfg)), name: 'npm ci (registry intercept on)' });
+        // No cgroup memory files and no `free` in this container: sample MemAvailable from /proc/meminfo every 0.3 s and report the minimum.
+        const memStart = `rm -f /tmp/memmin; (min=999999999; while :; do a=$(awk '/MemAvailable/{print $2}' /proc/meminfo); if [ "$a" -lt "$min" ]; then min=$a; echo $min > /tmp/memmin; fi; sleep 0.3; done) & W=$!; `;
+        const peak = 'kill $W 2>/dev/null; t=$(awk \'/MemTotal/{print $2}\' /proc/meminfo); m=$(cat /tmp/memmin 2>/dev/null || echo $t); echo peak_used_mb=$(( (t-m)/1024 )) total_mb=$((t/1024)); du -sm /tmp/cand | cut -f1 | sed "s/^/disk_mb=/"';
+        // npm refuses to load the same file as both the user and the global config (it did with /dev/null twice): two distinct, empty files.
+        const cfg = { NPM_CONFIG_USERCONFIG: '/tmp/npmrc-user', NPM_CONFIG_GLOBALCONFIG: '/tmp/npmrc-global', NPM_CONFIG_CACHE: '/tmp/npm-cache', CI: '1' };
+        steps.push({ ...(await this.sh(`${memStart}cd /tmp/cand && rm -f .npmrc && npm ci --ignore-scripts --no-audit --no-fund --registry https://${REGISTRY}/ > /tmp/ci.log 2>&1; echo exit=$?; tail -n 15 /tmp/ci.log; ${peak}`, cfg)), name: 'npm ci (registry intercept on)' });
         await this.intercepts(deny, deny);
-        steps.push({ ...(await this.sh(`cd /tmp/cand && npm test > /tmp/test.log 2>&1; echo exit=$?; tail -n 25 /tmp/test.log; ${peak}`, cfg)), name: 'npm test (all intercepts denied)' });
+        steps.push({ ...(await this.sh(`${memStart}cd /tmp/cand && npm test > /tmp/test.log 2>&1; echo exit=$?; tail -n 25 /tmp/test.log; ${peak}`, cfg)), name: 'npm test (all intercepts denied)' });
       }
     } catch (e) {
       return { size: a.size, steps, error: e instanceof Error ? e.message : String(e) };

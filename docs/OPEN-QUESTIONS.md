@@ -1066,3 +1066,19 @@ Throwaway worker `beehive-gate-spike` (container class `SpikeSandbox`, `durable_
 - **S3, concurrency: no automatic cap.** 25 `lite` containers started concurrently in 34 s, all OK (first step 0.5 to 2.2 s). `max_instances` is not available under `durable_object` scheduling, so the cap must be ours (queue `max_concurrency` plus a counter in the Spec DO), as the plan says.
 - **S5, 590 s hold: pass.** One 590 s `exec` over an HTTP request to the worker returned 200 in 591.7 s; the same hold inside a queue consumer completed with exit 0 in 590.0 s. Neither hit a wall-clock limit.
 - **Not yet measured:** S1 (clone a real commit via the Artifacts gateway and run `npm ci --ignore-scripts` through the second intercepted host) and S2 (`standard-1` vs `standard-2` peak memory, disk, time). Both need `CLOUDFLARE_API_TOKEN` as a secret on the spike worker; the permission layer blocked agents from writing that secret, so the maintainer must set it. The spike worker, its container application and the queue stay deployed until S1/S2 are done, then must be deleted (`spikes/gate-spike/README.md`).
+
+## 2026-10-28: Real-gate container spike, results S1 and S2 (`docs/REAL-GATE-IMPL-PLAN.md`)
+
+Input: `default/beehive` at `589b280` on Artifacts, cloned inside the container through the credential-injecting gateway (`ArtifactsGateway`), then `npm ci --ignore-scripts` with only the registry intercept allowed, then `npm test` with every intercept replaced by deny. One run per size; image node v24.22.1, npm 11.19.1.
+
+- **S1, clone and install: works.** `git clone` + checkout of the commit took 3.6 to 4.0 s on both sizes; the `.env` `CLOUDFLARE_API_TOKEN` is accepted by the gateway (it has Artifacts permission). `npm ci` completed from the lockfile (199 packages, 342 MB on disk). The first attempt failed only because the spike set `NPM_CONFIG_USERCONFIG` and `NPM_CONFIG_GLOBALCONFIG` to the same path (`/dev/null`): npm refuses to load one file as both ("double-loading config"). Use two distinct empty files; the gate must do the same.
+- **S2, size: CPU is the constraint, not memory or disk.** Peak memory used (MemTotal minus the minimum MemAvailable sampled every 0.3 s from `/proc/meminfo`, since there are no cgroup memory files and no `free`): 506 MB during `npm ci` and 438 MB during `npm test` on `standard-1`, 560 MB during `npm ci` on `standard-2`. Disk 342 MB. Wall time:
+
+  | | `standard-1` | `standard-2` |
+  |---|---|---|
+  | `npm ci` | 70.4 s | 10.8 s |
+  | `npm test` | 191.6 s (vitest 188.5 s) | 37.4 s |
+
+  `nproc` reports 1 on both; the allocation differs (1/2 vs 1 vCPU), and `standard-2` was about 6.5 times faster for install and about 5 times faster for tests. One run each, so treat the ratio as indicative. Both fit the plan's 120 s install and 300 s test limits for this repo, but `standard-1` leaves little headroom for a heavier repo; `standard-2` is the recommended size.
+- **Tests with no network pass.** 1380 passed, 30 skipped, 2 files failed (`tests/cli-behavior.test.ts` and `tests/cli-token.test.ts`) because only the root `npm ci` ran and the `cli/` package's dependencies (configstore) were not installed. The gate's install step must install every workspace package's dependencies the repo's own CI installs (`.github/workflows/ci.yml` runs `npm install` in `cli/` and in each `workers/*/`), or a monorepo-aware equivalent.
+- **Teardown.** The spike worker (with its secrets, including the copied `CLOUDFLARE_API_TOKEN`), its container application and the queue `beehive-gate-spike-q` were deleted after these runs.
