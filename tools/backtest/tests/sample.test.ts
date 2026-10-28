@@ -109,9 +109,9 @@ describe('answers', () => {
     const rows: RowResult[] = [];
     const m = computeMetrics(rows, meta, loaded);
     expect(m.human).toMatchObject({ answered: 2, labelAgree: 1 });
-    const rep = buildReport(meta, { version: 1, plan: 'p', frozenAt: 'f', rows: [] }, rows, m);
+    const rep = buildReport(meta, { version: 1, plan: 'p', frozenAt: 'f', freezes: [], rows: [] }, rows, m);
     expect(rep).toMatch(/Human review of the sample \(human sample \(independent of the same-family grader\)\): 1 of 2 model labels confirmed \(50%\)/);
-    expect(buildReport(meta, { version: 1, plan: 'p', frozenAt: 'f', rows: [] }, rows, computeMetrics(rows, meta))).toMatch(/Human review of the sample: not yet done/);
+    expect(buildReport(meta, { version: 1, plan: 'p', frozenAt: 'f', freezes: [], rows: [] }, rows, computeMetrics(rows, meta))).toMatch(/Human review of the sample: not yet done/);
   });
 });
 

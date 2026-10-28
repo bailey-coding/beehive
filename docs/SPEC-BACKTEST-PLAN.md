@@ -227,6 +227,14 @@ candidates look like), **not a verdict** on A1-A3. Go/no-go for the other rows f
 sandbox on this host), so they cannot run tests; this handicaps them and understates pass rates and divergence. Details:
 `tools/backtest/README.md`. Pilot row A3 (`c2d4906`) was dropped (base red) and replaced by A11 (`de8817c`).
 
+**Corpus status (2026-10-28):** `docs/backtest/corpus.json` now freezes ten rows: A1, A2, A4, A5, A11 (pilot) and A6-A10, each
+green at its base (`check --base-green`: 0 red, 0 flaky), independent, doc-at-base clean. A3 stays dropped. **There is no
+eleventh strict row**: no commit since the first freeze passes the filters (the only new code commit, `4bda598`, is a
+migration), and every other commit that passes filter 1 is bundled, chained to a selected row, spine work, or a refactor. The
+decision rule therefore stays inconclusive by construction (section 5 needs 11). Options for the maintainer: promote a tier-B row
+after a deliberate relaxation, run A3 as a fail-to-pass row (its base is red until `c2d4906`), or accept 10 and say so.
+Rows with scrubbed base docs (the doc states the fix): A4, A6 (four docs), A8; recorded in the corpus.
+
 **Step order:** (1) base-green and key-term grep for all rows, no model cost; (2) freeze corpus and pre-registration;
 (3) build the harness; (4) pilot; (5) maintainer review; (6) full run; (7) confirmation run with a different-family
 grader before any claim.

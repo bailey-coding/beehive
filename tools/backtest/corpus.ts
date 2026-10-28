@@ -42,6 +42,8 @@ export const CorpusSchema = z.object({
   version: z.literal(1),
   plan: z.string(),
   frozenAt: z.string(),
+  /** Every freeze/growth step: no swaps, rows are only ever added (A3 stays listed as dropped in the plan, not here). */
+  freezes: z.array(z.object({ at: z.string(), ids: z.array(z.string()) })).default([]),
   rows: z.array(CorpusRowSchema),
 });
 
@@ -101,7 +103,20 @@ export async function freezeCorpus(repo: string, inputs: FreezeInput[], out: str
   for (const f of inputs) rows.push(await buildRow(repo, f));
   const problems = await checkIndependence(repo, rows);
   if (problems.length) throw new Error(`base independence (filter 4) failed:\n${problems.join('\n')}`);
-  const corpus: Corpus = { version: 1, plan: 'docs/SPEC-BACKTEST-PLAN.md', frozenAt: now.toISOString(), rows };
+  // Growth keeps what an earlier freeze recorded for an unchanged row (base-green results) and never alters an earlier sha.
+  let freezes: Corpus['freezes'] = [];
+  if (fs.existsSync(out)) {
+    const prev = CorpusSchema.parse(JSON.parse(fs.readFileSync(out, 'utf8')));
+    for (const r of rows) {
+      const old = prev.rows.find((x) => x.id === r.id);
+      if (old && old.sha !== r.sha) throw new Error(`row ${r.id}: sha changed from ${old.sha} to ${r.sha}: no swaps`);
+      if (old?.baseGreen) r.baseGreen = old.baseGreen;
+    }
+    freezes = prev.freezes.length ? prev.freezes : [{ at: prev.frozenAt, ids: prev.rows.map((x) => x.id) }];
+    const added = rows.filter((r) => !prev.rows.some((x) => x.id === r.id)).map((r) => r.id);
+    if (added.length) freezes = [...freezes, { at: now.toISOString(), ids: added }];
+  } else freezes = [{ at: now.toISOString(), ids: rows.map((r) => r.id) }];
+  const corpus: Corpus = { version: 1, plan: 'docs/SPEC-BACKTEST-PLAN.md', frozenAt: now.toISOString(), freezes, rows };
   fs.writeFileSync(out, JSON.stringify(corpus, null, 2) + '\n');
   return corpus;
 }

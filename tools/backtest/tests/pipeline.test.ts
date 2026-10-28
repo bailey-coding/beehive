@@ -170,6 +170,41 @@ describe('corpus', () => {
   });
 });
 
+describe('corpus growth', () => {
+  it('re-freezing adds rows without touching earlier ones: baseGreen is kept, the freeze history records each step, a changed sha is refused', async () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'growth-src-'));
+    await git(d, ['init', '-q', '-b', 'main']);
+    await git(d, ['config', 'user.email', 'f@x.invalid']);
+    await git(d, ['config', 'user.name', 'F']);
+    const commit = async (file: string, msg: string) => {
+      fs.mkdirSync(path.join(d, 'workers'), { recursive: true });
+      fs.mkdirSync(path.join(d, 'tests'), { recursive: true });
+      fs.writeFileSync(path.join(d, 'workers', `${file}.ts`), `export const ${file} = '${msg}';\n`);
+      fs.writeFileSync(path.join(d, 'tests', `${file}.test.ts`), 'export {};\n');
+      await git(d, ['add', '-A']);
+      await git(d, ['commit', '-q', '-m', msg]);
+      return (await git(d, ['rev-parse', 'HEAD'])).trim();
+    };
+    await commit('base', 'base');
+    const s1 = await commit('one', 'fix: one');
+    for (let i = 0; i < 30; i++) await commit(`pad${i}`, `pad ${i}`); // independence needs distance only for shared files; unrelated files here
+    const s2 = await commit('two', 'fix: two');
+    const mk = (id: string, sha: string) => ({ id, sha, tier: 'A' as const, obs: 'E' as const, component: 'c', kind: 'body' as const, note: 'n', keyTerms: [] });
+    const out = path.join(os.tmpdir(), `growth-${Date.now()}.json`);
+    const first = await freezeCorpus(d, [mk('A1', s1)], out, new Date('2026-10-27T00:00:00Z'));
+    expect(first.freezes).toEqual([{ at: '2026-10-27T00:00:00.000Z', ids: ['A1'] }]);
+    // an earlier `check --base-green --write` result must survive growth
+    const withGreen = JSON.parse(fs.readFileSync(out, 'utf8'));
+    withGreen.rows[0].baseGreen = { checkedAt: 'x', tests: 3, red: [], flaky: [], loadErrors: [], verdict: 'keep' };
+    fs.writeFileSync(out, JSON.stringify(withGreen));
+    const second = await freezeCorpus(d, [mk('A1', s1), mk('A6', s2)], out, new Date('2026-10-28T00:00:00Z'));
+    expect(second.rows.map((r) => r.id)).toEqual(['A1', 'A6']);
+    expect(second.rows[0].baseGreen).toMatchObject({ verdict: 'keep', tests: 3 });
+    expect(second.freezes).toEqual([{ at: '2026-10-27T00:00:00.000Z', ids: ['A1'] }, { at: '2026-10-28T00:00:00.000Z', ids: ['A6'] }]);
+    await expect(freezeCorpus(d, [mk('A1', s2)], out, new Date())).rejects.toThrow(/no swaps/);
+  }, 120_000);
+});
+
 describe('leakage tests 3 and 4', () => {
   it('doc-at-base: a doc added by the change (absent at base) is rejected; key terms in docs are flagged', async () => {
     const row = corpus.rows[0];

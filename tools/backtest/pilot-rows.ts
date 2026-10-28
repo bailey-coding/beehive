@@ -2,6 +2,8 @@
 // into docs/backtest/corpus.json; after that the file, not this list, is the source of truth. No swaps.
 import type { FreezeInput } from './corpus.ts';
 
+export const PILOT_IDS = ['A1', 'A2', 'A11', 'A4', 'A5'];
+
 export const PILOT_ROWS: FreezeInput[] = [
   {
     id: 'A1', sha: 'b024272', tier: 'A', obs: 'E', component: 'api router', kind: 'body',
@@ -53,3 +55,62 @@ export const PILOT_ROWS: FreezeInput[] = [
     keyTerms: ['BEEHIVE_LOCAL_DEV'],
   },
 ];
+
+/**
+ * Corpus growth (2026-10-28): the plan's remaining tier-A rows A6-A10, frozen without any model call. Issue texts are NOT
+ * generated here: that spends calls and the maintainer reads each one. A3 stays dropped (red base). Only 10 strict rows
+ * exist: no commit since the first freeze passes the plan's filters (the only new non-merge commit touching code, 4bda598, is
+ * a migration: spine work with 17 files), and every other commit that passes filter 1 is bundled, chained, spine or a refactor.
+ */
+export const GROWTH_ROWS: FreezeInput[] = [
+  {
+    id: 'A6', sha: '6d1771a', tier: 'A', obs: 'E', component: 'issue UI', kind: 'body+doc',
+    note: 'commit subject plus the base problem statement in docs/FOCUS.md (code review N1, problem clause only); the commit cites `spec: code-review N1`, ignored. Base docs/AGENTS-REVIEWER.md:68 ("Origin check before every DO read") states the fix, so it is scrubbed from every agent checkout of this row.',
+    docs: [{
+      path: 'docs/FOCUS.md',
+      quote: 'a cross-origin non-write request to an issue route (e.g. POST to',
+    }],
+    keyTerms: ['sameOrigin'],
+    // M12/PRB docs name sameOrigin as a code pointer in unrelated token/UI work, not as this issue's fix.
+    acknowledgedDocHits: ['docs/FOCUS.md', 'docs/M12-IMPL-PLAN-REVIEW.md', 'docs/M12-IMPL-PLAN.md', 'docs/M12-PRB-REVIEW.md', 'docs/M8-PR2-REVIEW.md', 'docs/plans/m6-ui-plan.md'],
+    // The M8 plan and its review say "call sameOrigin once, before any DO read" for the write routes: close to the fix, so scrubbed too.
+    scrubDocs: ['docs/AGENTS-REVIEWER.md', 'docs/M8-UI-ISSUES-PLAN.md', 'docs/M8-UI-ISSUES-PLAN-REVIEW.md', 'docs/M9-NAV-CODE-REVIEW.md'],
+    corpusNote: 'Issue UI component: the plan kept it out of the pilot (issue/lifecycle route) but it is a normal full-run row.',
+  },
+  {
+    id: 'A7', sha: 'bcca5bc', tier: 'A', obs: 'E', component: 'issue API', kind: 'subject',
+    note: 'commit subject only (thin, mechanism-heavy). The OPEN-QUESTIONS line "nothing could close or reopen an issue" and docs/M8-UI-ISSUES-PLAN.md were both added after this base (post-change docs): not cited.',
+    keyTerms: ['reopen'],
+    acknowledgedDocHits: [],
+    corpusNote: 'Adds a new route (PATCH issue status): acceptance must declare it isNew; the delta surface lists the new route.',
+  },
+  {
+    id: 'A8', sha: '3790070', tier: 'A', obs: 'E', component: 'issue UI', kind: 'subject',
+    note: 'commit subject only (mechanism-heavy: it names both routes; the rewrite must drop them). The base docs/FEATURE-PARITY.md names the real route and the cause, so it is scrubbed from every agent checkout of this row.',
+    keyTerms: ['issue_comments'],
+    // spec-do table name and route pointers elsewhere; FEATURE-PARITY is scrubbed
+    acknowledgedDocHits: ['docs/OPEN-QUESTIONS.md', 'docs/ARCHITECTURE.md', 'docs/M8-UI-ISSUES-PLAN.md'],
+    scrubDocs: ['docs/FEATURE-PARITY.md'],
+    corpusNote: 'UI row: observable as an HTML page and a form post, so probes record status and a text body.',
+  },
+  {
+    id: 'A9', sha: '746c42c', tier: 'A', obs: 'W', component: 'shadow-router', kind: 'subject',
+    note: 'commit subject only; mechanism-heavy (a TTL cache, an env name, stale-on-error): the rewrite must state only that every mirrored request pays a Spec DO read for the live deploy refs',
+    keyTerms: ['LIVE_REFS_CACHE_TTL_MS', 'LiveRefsCache'],
+    acknowledgedDocHits: [],
+    corpusNote: 'Worker-to-worker timing/config row (W): weak for the traffic rungs; a mechanism-heavy subject is the main leakage risk.',
+  },
+  {
+    id: 'A10', sha: 'c0cfa86', tier: 'A', obs: 'W', component: 'shadow-router', kind: 'body+doc',
+    note: 'commit subject plus the base problem statement in docs/OPEN-QUESTIONS.md (the unflushed tail of a short burst), problem clause only',
+    docs: [{
+      path: 'docs/OPEN-QUESTIONS.md',
+      quote: 'a short burst leaves its last <20 samples unsent until the next canary request',
+    }],
+    keyTerms: ['unflushed'],
+    acknowledgedDocHits: ['docs/OPEN-QUESTIONS.md'],
+    corpusNote: 'Worker-internal timing row (W): the observable is how many samples are recorded after a burst.',
+  },
+];
+
+export const ALL_ROWS: FreezeInput[] = [...PILOT_ROWS, ...GROWTH_ROWS];

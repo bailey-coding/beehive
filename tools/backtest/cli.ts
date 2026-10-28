@@ -13,7 +13,7 @@ import { runCanary } from './canary.ts';
 import { checkIndependence, freezeCorpus, loadCorpus } from './corpus.ts';
 import { docAtBaseTest } from './leakage.ts';
 import { DEFAULT_ORACLE_CONFIG } from './oracles.ts';
-import { PILOT_ROWS } from './pilot-rows.ts';
+import { ALL_ROWS, PILOT_IDS } from './pilot-rows.ts';
 import { runPilot } from './run.ts';
 import { diffOf, git } from './git.ts';
 import { DEFAULT_SEED, HumanAnswersSchema, loadHumanAnswers, modelJudged, parseAnswers, pickCases, renderSample } from './sample.ts';
@@ -44,7 +44,7 @@ function flags(argv: string[]): { cmd: string; f: Record<string, string | true> 
 
 const ALLOWED: Record<string, string[]> = {
   freeze: ['force', 'corpus'],
-  check: ['base-green', 'write', 'corpus'],
+  check: ['base-green', 'write', 'corpus', 'rows'],
   smoke: ['release-pilot'],
   canary: ['release-pilot', 'allow-bash'],
   pilot: ['release-pilot', 'run', 'k', 'rows', 'out', 'work', 'keep-work', 'allow-bash', 'expected', 'hard-stop', 'corpus'],
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
   if (cmd === 'freeze') {
     if (fs.existsSync(corpusFile) && !f.force) throw new Error(`${corpusFile} exists: the corpus is frozen (no swaps). Use --force only before any model run.`);
     fs.mkdirSync(path.dirname(corpusFile), { recursive: true });
-    const c = await freezeCorpus(repo, PILOT_ROWS, corpusFile);
+    const c = await freezeCorpus(repo, ALL_ROWS, corpusFile);
     log(`froze ${c.rows.length} rows to ${corpusFile}`);
     return;
   }
@@ -85,7 +85,8 @@ async function main(): Promise<void> {
     }
     if (f['base-green']) {
       // Plan step 1, with the base's own dependencies installed (root and cli/); network use is the harness's npm, not an agent's.
-      for (const row of c.rows) {
+      const only = typeof f.rows === 'string' ? f.rows.split(',') : null;
+      for (const row of c.rows.filter((r) => !only || only.includes(r.id))) {
         const g = await baseGreen(repo, row, DEFAULT_ORACLE_CONFIG);
         row.baseGreen = g;
         log(`${row.id} base ${row.base.slice(0, 7)}: ${g.tests} tests, ${g.red.length} red, ${g.flaky.length} flaky, ${g.loadErrors.length} load error(s) => ${g.verdict.toUpperCase()}${g.red.slice(0, 5).map((x) => `\n  red: ${x}`).join('')}${g.flaky.slice(0, 5).map((x) => `\n  flaky: ${x}`).join('')}`);
@@ -146,7 +147,7 @@ async function main(): Promise<void> {
       config.dispose();
       throw e;
     }
-    const rows = typeof f.rows === 'string' ? f.rows.split(',') : PILOT_ROWS.map((r) => r.id);
+    const rows = typeof f.rows === 'string' ? f.rows.split(',') : PILOT_IDS;
     const corpus = await loadCorpus(corpusFile, repo, rows);
     const runId = String(f.run ?? `pilot-${new Date().toISOString().slice(0, 10)}`);
     const tracker = new BudgetTracker(Number(f.expected ?? EXPECTED_CALLS), Number(f['hard-stop'] ?? HARD_STOP_CALLS));
@@ -210,7 +211,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | sample --run NAME [--n 2] [--seed S] [--ingest] [--template-out FILE] | publish --run NAME [--name N] | smoke --release-pilot | canary --release-pilot [--allow-bash] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
+  log('usage: cli.ts freeze [--force] | check [--base-green [--write] [--rows A6,A7]] | sample --run NAME [--n 2] [--seed S] [--ingest] [--template-out FILE] | publish --run NAME [--name N] | smoke --release-pilot | canary --release-pilot [--allow-bash] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main().catch((e) => {

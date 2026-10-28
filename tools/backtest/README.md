@@ -59,3 +59,28 @@ sandbox settings and has not been exercised on this host.
 Pilot-1 lessons now covered by tests: the probe helper crashed on plain-object arguments (every acceptance run on a probed row
 failed), the sandbox's loopback was down (tests that start a local server, like the CLI row's, failed), and random UUIDs in test
 titles made a base test look "missing".
+
+## Bash mode (`--allow-bash`, opt-in per run)
+
+Default: candidates have file tools only. With `--allow-bash` they also get Claude Code's Bash tool, but every Bash command runs
+inside `bwrap` through a prefix script (`CLAUDE_CODE_SHELL_PREFIX`), because the claude process itself needs the network and so
+cannot be unshared. The invocation (`bashsandbox.ts: bwrapArgs`): all namespaces unshared (no network), read-only `/usr` and the
+node toolchain, write access only to the agent's private root (worktree + scratch repo) and a private `/tmp`, empty env with a
+private HOME, no home directory, no `~/.claude`, no `.env`, no main checkout, no harness dirs. The agent's `node_modules` is a plain
+copy of the harness's own `npm ci` tree, inside its root. `--allow-bash` refuses to start unless `bwrap` is on PATH **and** the
+model-independent probe passes (a shell inside cannot read a canary or `.env` outside the root, see HOME, write outside, reach a
+host listener or the internet; it can use its own loopback, the root and `/tmp`). The active sandbox is logged and recorded in
+`run.json` and the report header (`Candidate tools: ...`); a run id started in one mode refuses to continue in the other.
+Unverified until the canary runs: that Claude Code honours `CLAUDE_CODE_SHELL_PREFIX` in the form `prefix <shell> -c <cmd>` assumed here.
+
+## Other commands
+
+- `canary --release-pilot [--allow-bash]`: now up to 4 real calls (the 4th, with `--allow-bash`, asks the model to run `curl`, `cat` of an
+  absolute canary file and a write outside the worktree via Bash and report HOME; expected: HOME is the sandbox HOME and all three refused,
+  checked host-side where possible). Expected cost: about $0.02-0.05 without Bash, about $0.03-0.08 with it (estimates).
+- `sample --run NAME [--n 2] [--seed S] [--template-out FILE]` writes `human-sample.md` (seeded, default seed 20261028: one case per label in the
+  order spec violation, spec-gap, regression, ...). The human fills in `A1/A2/A3`, then `sample --run NAME --ingest` writes
+  `human-answers.json`, which `metrics.ts` reads (agreement of human and model labels, shown in the report) and regenerates `report.md`.
+- `publish --run NAME [--name N]` writes a sanitised summary (no code blocks, tokens or home paths) to `docs/backtest/results/`.
+- `docs/backtest/runs/` is git-ignored; `docs/backtest/results/` holds the committed summaries.
+- `check --base-green [--write] [--rows A6,A7]`: base test run per row (root and cli/ installed from the base's lockfile).
