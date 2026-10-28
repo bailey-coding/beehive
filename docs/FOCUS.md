@@ -8,7 +8,34 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-27
+**Last updated:** 2026-10-28
+
+## Handoff (2026-10-28): start here
+
+**State.** Production (the `cf` remote) and `origin/main` are at `589b280`: m12 (actors unique index, deployed 2026-10-27) plus the corrected About, Roadmap and README
+(gate shown as simulated, no Statsig, M8/M9/M12 added). `scripts/prod-health.sh` was green after each deploy. **Local `main` is ahead and UNPUSHED, not deployed**: the backtest
+harness 2 (bwrap Bash mode, `sample` command, results reports), the gate spike results, the real-gate plan rev 3, and **slice 5 (m13: `gate_runs`, strict routes, `preview_*`
+columns in the base schema; a Spec DO schema change)**. All five `test-org-e2e-sbx-*` orgs are purged. Ledger ops use the `beehive-system` agent actor
+(`9da1f201-89d4-4907-9e86-52426cffcb7d`, maintainer role); `X-Actor-ID` takes an actor UUID, not a name; actors cannot be deleted. The competition is over (not top 3): no deadline.
+
+**Next, in order, each needing the maintainer's explicit go-ahead in a normal chat message:**
+1. Push local `main` to `origin` and wait for CI. Then, only if approved, `git push cf main:main` (deploys all ten workers, no ordering; carries m13). Verify after: the first Spec DO
+   request leaves `schema_version = m13`, `GET /api/candidates`, the old `/api/gate-verdicts` routes and a candidate preview write work. Rollback: revert push; an m12 build can still purge (OPS rollback floor).
+2. Real test gate, `docs/REAL-GATE-IMPL-PLAN.md` rev 3. Done: slices 1-3 and 5, spike S1-S5 (deleted; results in OPEN-QUESTIONS; `standard-2` chosen). Open: slice 4 (`TestSandbox` code, unreachable; the
+   maintainer declined its spawn once: ask), 6 (sandbox-runner `wrangler.toml`: a second container class, a human `cf` push; the image is built from a Dockerfile by Workers Builds), 7a/7b, 8, 9.
+3. MR flow, `docs/MR-FLOW-PLAN.md` rev 2: decisions accepted as recommended; reviewer-agent threat model must be accepted before slice 3; Artifacts non-fast-forward push and branch protection are
+   unprobed (spike before slice 2).
+4. Backtest (`docs/SPEC-BACKTEST-PLAN.md`, `tools/backtest/`, summaries in `docs/backtest/results/`): pilot-1 A1 complete; pilot-2 A4/A5/A11 complete, A2's spec failed (prompt fixed since, not re-run).
+   Pending from the maintainer: answers to the 2-case human sample (`docs/backtest/runs/pilot-2/human-sample.md`, then `npm run backtest -- sample --run pilot-2 --ingest`); release of the Bash canary
+   (`canary --release-pilot --allow-bash`, about 4 calls). Corpus is 10 strict rows (A1, A2, A4, A5, A11, A6-A10; A6-A10 have no issue texts yet); the decision rule needs 11, so results stay
+   inconclusive by construction. Global call ledger `tools/backtest/.ledger.json` (gitignored): 288/850 used. Models: Sonnet 5.5 medium, same-family grader (pilot only).
+5. Housekeeping: `.env` holds an obsolete `SPIKE_TOKEN` and is mode 644; decide the project direction after the competition and update AGENTS.md framing then.
+
+**How to work here (learned).** The permission layer blocks, and you must stop and ask instead of working around: a `cf` push when the approval arrived as a mid-turn notification rather than a chat message,
+writing secrets to a worker, minting registry credentials, installing external binaries, and agent prompts with deploy wording. A plain chat message from the maintainer works. `.env`'s
+`CLOUDFLARE_API_TOKEN` cannot manage containers or read Workers Builds: use the wrangler OAuth login (`env -u CLOUDFLARE_API_TOKEN ...`). A background shell that itself backgrounds the real work (`( ... ) &`)
+notifies early: run the real command as the task. Paseo subagents may start in `acceptEdits` mode and ask permission for every shell command (auto mode avoids it). Agents hit session limits: have them push
+`scratch/*` refs after each step. Review every spine change with an independent agent before merging.
 
 ## Where we are
 
