@@ -8,6 +8,7 @@ import { ClaudeCliClient, FakeClient, buildClaudeArgs, childEnv, parseStreamLine
 import { checkContract, checkDelta, compareRecords, parseDeltaSurface, pathMatches, shapeOf, type ResponseRecord } from '../delta.ts';
 import { extractIssueSource, extractJson, normalizedTokenLevenshtein, overlapFlags } from '../text.ts';
 import { toCreateSpecRequest, validateSpec } from '../spec.ts';
+import { specPrompt } from '../generate.ts';
 import { wrongIssueVerdict } from '../leakage.ts';
 import { parseSpec } from '../spec.ts';
 
@@ -124,22 +125,24 @@ describe('real client plumbing (no process spawned)', () => {
     expect(allowed.trim().split(/\s+/)).toEqual(['Read', 'Edit', 'Write', 'Glob', 'Grep']);
     expect(allowed).not.toContain('Bash');
     expect(a).not.toContain('--settings');
-    for (const denied of ['WebFetch', 'WebSearch', 'Bash(node:*)', 'Bash(git push:*)', 'Bash(curl:*)']) expect(a).toContain(denied);
+    for (const denied of ['WebFetch', 'WebSearch', 'Bash(git push:*)', 'Bash(curl:*)', 'Bash(npm:*)']) expect(a).toContain(denied);
   });
-  it('--allow-bash args add Bash only with the sandbox settings, and never node, npm, push or network commands', () => {
+  it('--allow-bash args add Bash only with the sandbox settings, and never npm, push or network commands', () => {
     const args = buildClaudeArgs({ tools: 'agent' }, { allowBash: true });
     const a = args.join(' ');
     expect(args[args.indexOf('--tools') + 1]).toBe('Read,Edit,Write,Glob,Grep,Bash');
-    expect(a).toContain('"sandbox":{"enabled":true,"failIfUnavailable":true}');
+    expect(a).not.toContain('--settings'); // the sandbox is the bwrap prefix script, not Claude Code's settings
     const allowed = a.split('--allowedTools')[1].split('--disallowedTools')[0];
-    expect(allowed).not.toMatch(/Bash\((node|npm|curl|wget|git push|git remote|sed|cat|mkdir)/);
+    expect(allowed).not.toMatch(/Bash\((npm|curl|wget|git push|git remote)/);
     // read-only spec generation never gets Bash, even with the flag
     expect(buildClaudeArgs({ tools: 'read' }, { allowBash: true }).join(' ').split('--allowedTools')[1].split('--disallowedTools')[0]).not.toContain('Bash');
   });
-  it('--allow-bash refuses to construct without an OS sandbox and logs the sandbox when present', () => {
-    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true, which: () => null })).toThrow(/no OS sandbox/);
+  it('--allow-bash refuses to construct without a passing bwrap proof, and names the active sandbox when proven', () => {
+    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true })).toThrow(/probe was not run/);
+    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true, bash: { ok: false, bwrap: null, detail: 'bwrap (bubblewrap) not found on PATH' } })).toThrow(/bwrap \(bubblewrap\) not found/);
+    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true, bash: { ok: false, bwrap: '/usr/bin/bwrap', detail: 'isolation probe failed: the internet is reachable' } })).toThrow(/internet is reachable/);
     const logs: string[] = [];
-    const c = new ClaudeCliClient({ config: PRIV, allowBash: true, which: () => '/usr/bin/bwrap', log: (s) => logs.push(s) });
+    const c = new ClaudeCliClient({ config: PRIV, allowBash: true, bash: { ok: true, bwrap: '/usr/bin/bwrap', detail: 'bubblewrap /usr/bin/bwrap: ...' }, log: (s) => logs.push(s) });
     expect(c.sandbox).toMatch(/bubblewrap/);
     expect(logs[0]).toMatch(/active sandbox: bubblewrap/);
     expect(new ClaudeCliClient({ config: PRIV }).sandbox).toBeNull();
@@ -288,5 +291,36 @@ describe('budget persistence and flag gating', () => {
     expect(() => validateFlags('pilot', { 'hard-stop': '850', 'allow-bash': true, 'release-pilot': true })).not.toThrow();
     expect(() => validateFlags('smoke', { 'release-pilot': true })).not.toThrow();
     expect(() => validateFlags('smoke', { k: '3' })).toThrow(/unknown flag/);
+  });
+});
+
+describe('spec-generation prompt: public entry point (A2 pilot-2 failure)', () => {
+  // the static template only: the issue text is the only row-specific input
+  const prompt = specPrompt('ISSUE-PLACEHOLDER');
+  it('requires acceptance cases to drive the public entry point where an outside client observes the behaviour', () => {
+    expect(prompt).toMatch(/PUBLIC ENTRY POINT ONLY/);
+    expect(prompt).toMatch(/worker or Durable Object rows: build a `Request` and call the entry point's `fetch\(request/);
+    expect(prompt).toMatch(/CLI rows: run the CLI itself as a subprocess/);
+    expect(prompt).toMatch(/exit code/);
+    expect(prompt).toMatch(/Never import and call an internal function, class method, schema or helper directly[^.]*not even as an extra case/);
+    expect(prompt).toMatch(/different layer/);
+    expect(prompt).toMatch(/limited number of tool calls/);
+  });
+  it('does not leak any answer: the template names no repo-specific function, route, class or fix', () => {
+    for (const leak of ['deployCanary', 'canary', 'workers.dev', 'SpecDO', 'Spec DO', 'applyCanaryRefs', 'ActorIdSchema', 'CANARY_SLO', 'BEEHIVE_LOCAL_DEV', 'roadmap', 'zod']) expect(prompt.toLowerCase(), leak).not.toContain(leak.toLowerCase());
+  });
+  it('keeps the earlier rules (fails on base, passes on a correct implementation, record() signature, no pseudo-routes)', () => {
+    expect(prompt).toMatch(/MUST FAIL on the current code/);
+    expect(prompt).toMatch(/PASS on a correct implementation of the issue/);
+    expect(prompt).toMatch(/record\(label, request, response\) takes a Request/);
+    expect(prompt).toMatch(/never a pseudo-route/);
+  });
+  it('the retry prompt for a spec that ran out of tool calls says so (no silent "no JSON")', async () => {
+    const { generateSpec } = await import('../generate.ts');
+    let n = 0;
+    const fake = new FakeClient(() => ({ text: n++ === 0 ? '' : 'still no json', stopReason: n === 1 ? 'call-limit' : 'done' }));
+    const r = await generateSpec({ client: fake, row: { id: 'A2' } as never, issueText: 'x', baseDir: '/nonexistent', validate: true, runOnBase: async () => ({ outcomes: [], loadErrors: [] }) });
+    expect(r.attempts[0].errors[0]).toMatch(/used all your tool calls/);
+    expect(fake.requests[1].prompt).toMatch(/used all your tool calls/);
   });
 });

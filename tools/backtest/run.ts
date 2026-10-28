@@ -8,9 +8,11 @@ import { labelDeterministically, testAgreement } from './compare.ts';
 import type { Corpus, CorpusRow } from './corpus.ts';
 import { compareRecords } from './delta.ts';
 import { candidatePrompt, cost, docExcerpt, generateSpec, gradePrompt, issuePrompt, parseGrade, sumCost } from './generate.ts';
+import { copyDepsInto } from './bashsandbox.ts';
 import { addedLinesOf, addWorktree, commitAndPush, createScratchRepo, diffOf, git, showAt } from './git.ts';
 import { baseTokenSet, docAtBaseTest, historyTest, reachabilityTest, referenceMarkers, wrongIssueVerdict } from './leakage.ts';
 import { requireSandbox } from './sandbox.ts';
+import { loadHumanAnswers } from './sample.ts';
 import { acceptanceAgainstReference, baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
 import { installProbe } from './probe.ts';
 import { GRADER_LABEL, type CandidateResult, type LeakageResult, type RowResult, type RunMeta } from './results.ts';
@@ -39,6 +41,10 @@ export interface RunOptions {
   issueApproval: 'required' | 'auto';
   candidateMaxCalls?: number;
   candidateTimeoutMs?: number;
+  /** Opt-in: candidates get a bwrap-sandboxed Bash tool. The client must have been built with a passing sandbox proof. */
+  allowBash?: boolean;
+  /** Description of the active Bash sandbox (from the proof), recorded in run.json and the report. */
+  sandboxDetail?: string | null;
   keepWork?: boolean;
   log?: (s: string) => void;
 }
@@ -65,6 +71,12 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   o.tracker.attach(o.ledgerFile);
   const client = new BudgetedClient(o.client, o.tracker);
   const startedAt = new Date().toISOString();
+  const bashMode: 'none' | 'bwrap' = o.allowBash ? 'bwrap' : 'none';
+  const prevMeta = path.join(runDir, 'run.json');
+  if (fs.existsSync(prevMeta)) {
+    const prev = JSON.parse(fs.readFileSync(prevMeta, 'utf8')).meta?.bashMode ?? 'none';
+    if (prev !== bashMode) throw new Error(`run ${o.runId} was started with bashMode=${prev}; refusing to continue it with bashMode=${bashMode} (results of the two modes are never mixed): use a new --run name`);
+  }
   const rows: RowResult[] = o.corpus.rows.map((r) => ({ id: r.id, sha: r.sha, tier: r.tier, obs: r.obs, status: 'aborted', issueCost: null, spec: null, reference: null, candidates: [], graderCalls: 0, leakage: null }));
   let aborted: string | null = null;
   const rowDir = (r: CorpusRow) => path.join(runDir, 'rows', r.id);
@@ -146,6 +158,8 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
 
   const meta: RunMeta = {
     runId: o.runId,
+    bashMode,
+    sandbox: o.allowBash ? o.sandboxDetail ?? null : null,
     client: o.client.name,
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -155,7 +169,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   };
   writeJson(path.join(runDir, 'run.json'), { meta, ledger: o.tracker.ledger, rows });
   const reportPath = path.join(runDir, 'report.md');
-  fs.writeFileSync(reportPath, buildReport(meta, o.corpus, rows, computeMetrics(rows, meta)));
+  fs.writeFileSync(reportPath, buildReport(meta, o.corpus, rows, computeMetrics(rows, meta, loadHumanAnswers(runDir))));
   return { rows, meta, reportPath };
 }
 
@@ -294,6 +308,11 @@ async function runRow(o: RunOptions, client: BudgetedClient, row: CorpusRow, iss
       await addWorktree(scratch.repo, wt, branch);
       installProbe(wt);
       const accFiles = writeAcceptance(wt, parsed.spec);
+      const agentTmp = path.join(croot, 'tmp');
+      if (o.allowBash) {
+        fs.mkdirSync(agentTmp);
+        copyDepsInto(deps.repo, wt); // a plain copy inside the agent's root, never a symlink out of it
+      }
       const h = await historyTest(scratch.repo, croot, o.repo, row);
       const reach = reachabilityTest({ agentRoot: croot, cwd: wt, forbiddenRoots: forbidden, markers });
       leak.history = { passed: (leak.history?.passed ?? true) && h.passed && reach.passed, detail: [...(leak.history?.detail ?? []), ...h.detail, ...reach.detail] };
@@ -304,7 +323,7 @@ async function runRow(o: RunOptions, client: BudgetedClient, row: CorpusRow, iss
       }
       const cr: CandidateResult = { k, stopReason: 'error', cost: { calls: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, costUsd: 0, durationMs: 0 }, commit: null, changedFiles: [], report: null, clearsAllRungs: false, testAgreement: { total: 0, agree: 0 }, probeAgreement: null, label: null, labelSource: null, deterministicRegression: false };
       try {
-        const run = await client.run({ role: 'candidate', rowId: row.id, prompt: candidatePrompt(issueText, specJson, accFiles), tools: 'agent', cwd: wt, maxCalls: o.candidateMaxCalls ?? 40, timeoutMs: o.candidateTimeoutMs ?? 30 * 60_000 });
+        const run = await client.run({ role: 'candidate', rowId: row.id, prompt: candidatePrompt(issueText, specJson, accFiles, { bash: !!o.allowBash }), tools: 'agent', cwd: wt, ...(o.allowBash ? { bashBox: { agentRoot: croot, cwd: wt, tmpDir: agentTmp } } : {}), maxCalls: o.candidateMaxCalls ?? 40, timeoutMs: o.candidateTimeoutMs ?? 30 * 60_000 });
         cr.cost = cost(run);
         cr.stopReason = run.stopReason;
       } catch (e) {

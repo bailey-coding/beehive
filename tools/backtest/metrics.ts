@@ -1,5 +1,6 @@
 // Metrics and the decision rule (plan sections 4 and 5), computed on the strict tier (A) only.
 import type { RowResult, RunMeta, CandidateResult } from './results.ts';
+import { humanAgreement, type HumanAgreement, type HumanAnswers } from './sample.ts';
 
 /** The plan's strict tier: the decision rule's denominators (3 of 11, 8 of 11, ...) assume all 11 rows. */
 export const TIER_A_ROWS = 11;
@@ -55,6 +56,8 @@ export interface Metrics {
   referenceFalseRejects: number;
   rungsRan: boolean;
   graderLabelled: { count: number; byLabel: Record<string, number>; label: 'same-family grader' };
+  /** Agreement of a human reviewer with the model labels on the sampled cases (null until `sample --ingest`). */
+  human: HumanAgreement | null;
   costPerAcceptedChange: number | null;
   costPerAcceptedChangeK1: number | null;
   /** Spec-failed rows already lower A2's counts (specs passing, reference acceptance); the plan's 'spec defects explain most candidate failures' clause is deliberately not implemented. */
@@ -148,7 +151,7 @@ function rowMetrics(r: RowResult): RowMetrics {
   };
 }
 
-export function computeMetrics(rows: RowResult[], _meta: RunMeta): Metrics {
+export function computeMetrics(rows: RowResult[], _meta: RunMeta, human: HumanAnswers | null = null): Metrics {
   const all = rows.map(rowMetrics);
   const tierA = rows.filter((r) => r.tier === 'A');
   const done = all.filter((m) => rows.find((r) => r.id === m.id)!.tier === 'A' && m.complete);
@@ -206,6 +209,7 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta): Metrics {
     specCostShare: specShare,
     catches, falsePositives: fps, escapesE, referenceFalseRejects: falseRejects, rungsRan,
     graderLabelled: { count: glCount, byLabel: gl, label: 'same-family grader' },
+    human: humanAgreement(human),
     costPerAcceptedChange: perAccepted,
     costPerAcceptedChangeK1: perAcceptedK1,
     decision: {

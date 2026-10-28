@@ -3,13 +3,13 @@ import { computeMetrics, TIER_A_ROWS } from '../metrics.ts';
 import type { OracleReport } from '../oracles.ts';
 import type { CandidateResult, RowResult, RunMeta } from '../results.ts';
 
-const meta: RunMeta = { runId: 't', client: 'fake', startedAt: '', finishedAt: '', k: 3, aborted: null, budget: { expected: 565, hardStop: 850, used: 0, byRole: {} } };
+const meta: RunMeta = { runId: 't', bashMode: 'none', sandbox: null, client: 'fake', startedAt: '', finishedAt: '', k: 3, aborted: null, budget: { expected: 565, hardStop: 850, used: 0, byRole: {} } };
 const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 };
 const cc = (calls: number) => ({ calls, usage, costUsd: calls / 10, durationMs: 60_000 });
 
 const report = (over: Partial<OracleReport> & { held?: Record<string, 'passed' | 'failed'> } = {}): OracleReport => ({
   failedRepoTests: [], regressions: [], missingTests: [], acceptance: { total: 1, passed: 1, failed: [] },
-  heldOut: { total: 1, outcomes: over.held ?? { 'a::t': 'passed' } }, tsc: null, loadErrors: [], probeProblems: [], probe: [],
+  heldOut: { total: 1, outcomes: over.held ?? { 'a::t': 'passed' } }, tsc: null, loadErrors: [], probeProblems: [], failureMessages: {}, probe: [],
   rungs: { preMerge: true, conformance: true, shadow: true }, conformanceViolations: [], shadowViolations: [], ...over,
 });
 

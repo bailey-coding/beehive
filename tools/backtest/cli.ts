@@ -8,13 +8,19 @@ import { BudgetTracker, BudgetedClient, EXPECTED_CALLS, HARD_STOP_CALLS } from '
 import { baseGreen } from './basegreen.ts';
 import { ClaudeCliClient } from './client.ts';
 import { createPrivateConfig } from './claudeconfig.ts';
+import { proveBashSandbox } from './bashsandbox.ts';
 import { runCanary } from './canary.ts';
 import { checkIndependence, freezeCorpus, loadCorpus } from './corpus.ts';
 import { docAtBaseTest } from './leakage.ts';
 import { DEFAULT_ORACLE_CONFIG } from './oracles.ts';
-import { PILOT_ROWS } from './pilot-rows.ts';
+import { ALL_ROWS, PILOT_IDS } from './pilot-rows.ts';
 import { runPilot } from './run.ts';
-import { git } from './git.ts';
+import { diffOf, git } from './git.ts';
+import { DEFAULT_SEED, HumanAnswersSchema, loadHumanAnswers, modelJudged, parseAnswers, pickCases, renderSample } from './sample.ts';
+import { sanitizeReport } from './publish.ts';
+import { buildReport } from './report.ts';
+import { computeMetrics } from './metrics.ts';
+import type { RowResult, RunMeta } from './results.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const harnessRoot = path.resolve(here, '..', '..');
@@ -38,10 +44,12 @@ function flags(argv: string[]): { cmd: string; f: Record<string, string | true> 
 
 const ALLOWED: Record<string, string[]> = {
   freeze: ['force', 'corpus'],
-  check: ['base-green', 'write', 'corpus'],
+  check: ['base-green', 'write', 'corpus', 'rows'],
   smoke: ['release-pilot'],
-  canary: ['release-pilot'],
+  canary: ['release-pilot', 'allow-bash'],
   pilot: ['release-pilot', 'run', 'k', 'rows', 'out', 'work', 'keep-work', 'allow-bash', 'expected', 'hard-stop', 'corpus'],
+  sample: ['run', 'n', 'seed', 'out', 'ingest', 'template-out', 'corpus'],
+  publish: ['run', 'name', 'out'],
   help: [],
 };
 
@@ -61,7 +69,7 @@ async function main(): Promise<void> {
   if (cmd === 'freeze') {
     if (fs.existsSync(corpusFile) && !f.force) throw new Error(`${corpusFile} exists: the corpus is frozen (no swaps). Use --force only before any model run.`);
     fs.mkdirSync(path.dirname(corpusFile), { recursive: true });
-    const c = await freezeCorpus(repo, PILOT_ROWS, corpusFile);
+    const c = await freezeCorpus(repo, ALL_ROWS, corpusFile);
     log(`froze ${c.rows.length} rows to ${corpusFile}`);
     return;
   }
@@ -77,7 +85,8 @@ async function main(): Promise<void> {
     }
     if (f['base-green']) {
       // Plan step 1, with the base's own dependencies installed (root and cli/); network use is the harness's npm, not an agent's.
-      for (const row of c.rows) {
+      const only = typeof f.rows === 'string' ? f.rows.split(',') : null;
+      for (const row of c.rows.filter((r) => !only || only.includes(r.id))) {
         const g = await baseGreen(repo, row, DEFAULT_ORACLE_CONFIG);
         row.baseGreen = g;
         log(`${row.id} base ${row.base.slice(0, 7)}: ${g.tests} tests, ${g.red.length} red, ${g.flaky.length} flaky, ${g.loadErrors.length} load error(s) => ${g.verdict.toUpperCase()}${g.red.slice(0, 5).map((x) => `\n  red: ${x}`).join('')}${g.flaky.slice(0, 5).map((x) => `\n  flaky: ${x}`).join('')}`);
@@ -107,7 +116,13 @@ async function main(): Promise<void> {
         // throwOnError=false: the canary inspects failures itself (including the deliberate bad-model call).
         const good = new BudgetedClient(new ClaudeCliClient({ config }), tracker, false);
         const bad = new BudgetedClient(new ClaudeCliClient({ config, model: 'claude-bogus-model-0' }), tracker, false);
-        const { checks } = await runCanary({ client: good, badClient: bad, configDir: config.dir });
+        let bashClient: BudgetedClient | undefined;
+        if (f['allow-bash']) {
+          const proof = await proveBashSandbox();
+          log(`bash sandbox probe: ${proof.ok ? 'PASS' : 'FAIL'} - ${proof.detail}`);
+          bashClient = new BudgetedClient(new ClaudeCliClient({ config, allowBash: true, bash: proof, log }), tracker, false);
+        }
+        const { checks } = await runCanary({ client: good, badClient: bad, configDir: config.dir, bashClient });
         for (const k of checks) log(`${k.pass ? 'PASS' : 'FAIL'}  ${k.name}\n      ${k.detail}`);
         log(`global ledger: ${tracker.used}/${tracker.hardStop} calls`);
         if (checks.some((k) => !k.pass)) process.exitCode = 1;
@@ -124,12 +139,15 @@ async function main(): Promise<void> {
     const config = createPrivateConfig();
     let client: ClaudeCliClient;
     try {
-      client = new ClaudeCliClient({ config, allowBash: !!f['allow-bash'], log });
+      // --allow-bash: bwrap must be on PATH AND the model-independent isolation probe must pass, before any spend.
+      const bash = f['allow-bash'] ? await proveBashSandbox() : undefined;
+      if (bash) log(`bash sandbox probe: ${bash.ok ? 'PASS' : 'FAIL'} - ${bash.detail}`);
+      client = new ClaudeCliClient({ config, allowBash: !!f['allow-bash'], bash, log });
     } catch (e) {
       config.dispose();
       throw e;
     }
-    const rows = typeof f.rows === 'string' ? f.rows.split(',') : PILOT_ROWS.map((r) => r.id);
+    const rows = typeof f.rows === 'string' ? f.rows.split(',') : PILOT_IDS;
     const corpus = await loadCorpus(corpusFile, repo, rows);
     const runId = String(f.run ?? `pilot-${new Date().toISOString().slice(0, 10)}`);
     const tracker = new BudgetTracker(Number(f.expected ?? EXPECTED_CALLS), Number(f['hard-stop'] ?? HARD_STOP_CALLS));
@@ -140,14 +158,60 @@ async function main(): Promise<void> {
       workRoot: String(f.work ?? path.join(os.tmpdir(), 'beehive-backtest')),
       client, tracker, k: Number(f.k ?? 3), cfg: DEFAULT_ORACLE_CONFIG,
       issueApproval: 'required', // the maintainer reads every issue text; there is no auto-approve flag
+      allowBash: !!f['allow-bash'], sandboxDetail: client.sandbox,
       keepWork: !!f['keep-work'], log,
     });
+    client.dispose();
     config.dispose();
     log(`report: ${out.reportPath}\ncalls used: ${out.meta.budget.used}/${out.meta.budget.hardStop}${out.meta.aborted ? `\nABORTED: ${out.meta.aborted}` : ''}`);
     return;
   }
 
-  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | smoke --release-pilot | canary --release-pilot | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
+  if (cmd === 'sample') {
+    const run = String(f.run ?? '');
+    if (!run) throw new Error('--run NAME is required');
+    const runDir = path.join(String(f.out ?? path.join(repo, 'docs/backtest/runs')), run);
+    const seed = Number(f.seed ?? DEFAULT_SEED);
+    const corpus = await loadCorpus(corpusFile, repo);
+    const { cases, candidates } = modelJudged(runDir);
+    const files = { runDir, rows: corpus.rows, referenceDiff: (row: (typeof corpus.rows)[number]) => diffOf(repo, row.sha) };
+    if (f.ingest) {
+      const mdFile = path.join(runDir, 'human-sample.md');
+      const pick = JSON.parse(fs.readFileSync(path.join(runDir, 'human-sample.pick.json'), 'utf8')) as { seed: number };
+      const answers = parseAnswers(fs.readFileSync(mdFile, 'utf8'), run, pick.seed);
+      fs.writeFileSync(path.join(runDir, 'human-answers.json'), JSON.stringify(HumanAnswersSchema.parse(answers), null, 2) + '\n');
+      const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8')) as { meta: RunMeta; rows: RowResult[] };
+      const m = computeMetrics(saved.rows, saved.meta, loadHumanAnswers(runDir));
+      fs.writeFileSync(path.join(runDir, 'report.md'), buildReport(saved.meta, corpus, saved.rows, m));
+      log(`ingested ${answers.cases.length} answers; human agreement with the model labels: ${m.human?.labelAgree}/${m.human?.answered}; report.md regenerated`);
+      return;
+    }
+    const chosen = pickCases(cases, Number(f.n ?? 2), seed);
+    const md = await renderSample({ run, seed, chosen, total: cases.length, files, candidates });
+    fs.writeFileSync(path.join(runDir, 'human-sample.md'), md);
+    fs.writeFileSync(path.join(runDir, 'human-sample.pick.json'), JSON.stringify({ seed, picked: chosen.map((c) => `${c.rowId}-c${c.k}`), total: cases.length }, null, 2) + '\n');
+    log(`wrote ${path.join(runDir, 'human-sample.md')}: ${chosen.map((c) => `${c.rowId}-c${c.k} (${c.label})`).join(', ')} of ${cases.length} model-judged cases, seed ${seed}`);
+    if (f['template-out']) {
+      fs.mkdirSync(path.dirname(String(f['template-out'])), { recursive: true });
+      fs.writeFileSync(String(f['template-out']), await renderSample({ run, seed, chosen, total: cases.length, files, candidates, template: true }));
+      log(`wrote template ${String(f['template-out'])} (no candidate source)`);
+    }
+    return;
+  }
+
+  if (cmd === 'publish') {
+    const run = String(f.run ?? '');
+    if (!run) throw new Error('--run NAME is required');
+    const name = String(f.name ?? run);
+    const src = path.join(String(f.out ?? path.join(repo, 'docs/backtest/runs')), run, 'report.md');
+    const dest = path.join(repo, 'docs/backtest/results', `${name}.md`);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, sanitizeReport(fs.readFileSync(src, 'utf8'), { name, home: os.homedir() }));
+    log(`wrote ${dest}`);
+    return;
+  }
+
+  log('usage: cli.ts freeze [--force] | check [--base-green [--write] [--rows A6,A7]] | sample --run NAME [--n 2] [--seed S] [--ingest] [--template-out FILE] | publish --run NAME [--name N] | smoke --release-pilot | canary --release-pilot [--allow-bash] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main().catch((e) => {

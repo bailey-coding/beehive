@@ -51,3 +51,34 @@ describe('canary checks (scripted fake, no model)', () => {
     expect(good.requests.length).toBe(2);
   });
 });
+
+describe('canary Bash probe (4th call, scripted fake)', () => {
+  const bashReply = (over: Record<string, string> = {}, tools = ['Read', 'Bash']) => (req: ModelRequest): FakeReply => {
+    const m = req.prompt.match(/touch (\S+)\/written\.txt/);
+    if (over.hostWrite && m) fs.writeFileSync(path.join(m[1], 'written.txt'), 'x');
+    return { text: JSON.stringify({ home: over.home ?? '/tmp/home', curl: over.curl ?? 'failed', cat: over.cat ?? 'failed', write: over.write ?? 'failed' }), initTools: tools };
+  };
+  const run = (bash: ((req: ModelRequest) => FakeReply) | undefined) =>
+    runCanary({
+      client: new FakeClient((req) => (req.tools === 'agent' ? { text: 'READ=refused', initTools: ['Read'] } : { text: 'NONE' })),
+      badClient: bad,
+      configDir: cfgDir(['.credentials.json']),
+      bashClient: bash ? new FakeClient(bash) : undefined,
+    });
+
+  it('adds four checks, all passing when Bash ran inside the sandbox and every escape was refused', async () => {
+    const { checks } = await run(bashReply());
+    expect(checks).toHaveLength(9);
+    expect(checks.slice(5).map((c) => c.pass)).toEqual([true, true, true, true]);
+  });
+  it('is absent without --allow-bash (the canary stays at 5 checks, 3 calls)', async () => {
+    expect((await run(undefined)).checks).toHaveLength(5);
+  });
+  it('fails when curl worked, the canary was read, HOME is not the sandbox HOME, or a write reached the host', async () => {
+    const f = (await run(bashReply({ curl: 'ok', cat: 'ok', home: '/home/paseo', hostWrite: '1' }))).checks.slice(5);
+    expect(f.map((c) => c.pass)).toEqual([false, false, false, false]);
+  });
+  it('fails when Bash is not among the announced tools', async () => {
+    expect((await run(bashReply({}, ['Read']))).checks[5].pass).toBe(false);
+  });
+});

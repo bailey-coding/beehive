@@ -9,6 +9,7 @@ const usd = (n: number | null) => (n === null ? 'n/a' : `$${n.toFixed(2)}`);
 export function buildReport(meta: RunMeta, corpus: Corpus, rows: RowResult[], m: Metrics): string {
   const L: string[] = [];
   L.push(`# Backtest report: ${meta.runId}`, '');
+  L.push(`**Candidate tools: ${meta.bashMode === 'bwrap' ? `file tools + Bash in a bwrap sandbox (${meta.sandbox ?? 'sandbox not recorded'})` : 'file tools only (no Bash)'}. Results from the two modes are never mixed.**`, '');
   L.push(`Client: ${meta.client}. K=${meta.k}. Started ${meta.startedAt}, finished ${meta.finishedAt}.`);
   L.push(`Plan: ${corpus.plan}. Corpus frozen ${corpus.frozenAt}. Rows: ${rows.map((r) => r.id).join(', ')}.`, '');
   if (meta.aborted) L.push(`> **ABORTED (partial results):** ${meta.aborted}`, '');
@@ -48,7 +49,8 @@ export function buildReport(meta: RunMeta, corpus: Corpus, rows: RowResult[], m:
   L.push(`- Escapes found by held-out tests (candidate passed its own tests and the acceptance, fails a held-out test the reference passes; not counted as catches): ${m.rows.reduce((n, x) => n + x.heldOutEscapes, 0)}.`);
   L.push(`- Spec-failed rows (count against A2 as evidence): ${m.tierA.specFailedRows}.`);
   L.push(`- Cost per accepted change: ${usd(m.costPerAcceptedChange)}; same spec with K=1: ${usd(m.costPerAcceptedChangeK1)}.`);
-  L.push(`- Model-judged labels (${GRADER_LABEL}): ${m.graderLabelled.count}${Object.keys(m.graderLabelled.byLabel).length ? ` (${Object.entries(m.graderLabelled.byLabel).map(([k, v]) => `${k}: ${v}`).join(', ')})` : ''}. A human samples 20% of these.`, '');
+  L.push(`- Model-judged labels (${GRADER_LABEL}): ${m.graderLabelled.count}${Object.keys(m.graderLabelled.byLabel).length ? ` (${Object.entries(m.graderLabelled.byLabel).map(([k, v]) => `${k}: ${v}`).join(', ')})` : ''}. A human samples 20% of these.`);
+  L.push(m.human ? `- Human review of the sample (${m.human.label}): ${m.human.labelAgree} of ${m.human.answered} model labels confirmed (${(100 * (m.human.agreementRate ?? 0)).toFixed(0)}%); divergence as judged by the human: ${Object.entries(m.human.divergence).map(([k, v]) => `${k} ${v}`).join(', ')}; a reviewer would accept ${m.human.reviewerAccepts} of ${m.human.answered}.` : '- Human review of the sample: not yet done (run `sample`, then `sample --ingest`).', '');
 
   L.push('## Decision rule (pre-registered thresholds, tier A only)', '');
   L.push(`| A1 value of N | A2 specs reliable, cheap | A3 oracles replace review (shadow rung) |`, '|---|---|---|', `| ${m.decision.A1} | ${m.decision.A2} | ${m.decision.A3} |`, '');

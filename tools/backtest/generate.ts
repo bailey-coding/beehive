@@ -64,7 +64,12 @@ export function specPrompt(issueText: string, retry?: { previous: string; errors
     `- acceptance: executable vitest cases, each in a file named in "file" (it will be written to ${ACCEPTANCE_DIR}/<file>). Model them on the existing tests under workers/*/tests/ (same mocks and helpers).`,
     `  Import the probe helper as \`import { record } from './probe';\` and call \`await record(label, request, response)\` on every response BEFORE asserting, with a stable unique label.`,
     '  record(label, request, response) takes a Request (or { method: string, path: string }) and a Response (or { status: number, body?: unknown }). Anything else (for example a request body object) is rejected as misuse. Record only real HTTP responses at real routes: never a pseudo-route or an internal/direct call. If the change is not visible over HTTP (a CLI, config, timing, internal logic), do not call record() at all and use "endpoints": [] with an empty delta surface routes list.',
-    '  Test through the public entrypoint the issue talks about (an HTTP route, the worker\'s fetch handler, the CLI), not through internal methods. Assert only what the issue states; every acceptance case must also PASS on a correct implementation of the issue, and this is checked before any candidate runs.',
+    '  PUBLIC ENTRY POINT ONLY. Every acceptance case must exercise the behaviour where an outside client observes it, and assert only on what that client sees:',
+    '    - worker or Durable Object rows: build a `Request` and call the entry point\'s `fetch(request, ...)` (the same way the existing tests under workers/*/tests do), then assert on the response status and body, and on state a client could read through another public route;',
+    '    - CLI rows: run the CLI itself as a subprocess with arguments and environment, then assert on its exit code, its output, and the requests a local test server received.',
+    '    Never import and call an internal function, class method, schema or helper directly to test the behaviour, not even as an extra case: a correct implementation may place its checks in a different layer (a route handler, a request schema, middleware, the CLI argument parser), so a case that reaches into one layer fails on correct code and is rejected. Calling a public lifecycle method such as `init()` to set a test instance up is fine.',
+    '  Assert only what the issue states; every acceptance case must also PASS on a correct implementation of the issue, and this is checked before any candidate runs.',
+    '  You have a limited number of tool calls (about 10): read the few files you need (AGENTS.md, one or two existing tests as a model, the code at the entry point), then write the JSON object as your final message.',
     '  Every acceptance case MUST FAIL on the current code (they test the wanted behaviour), and must pass once the issue is fixed. A case that passes today is rejected as vacuous.',
     '- declaredDeltaSurface: the routes whose responses may change because of this issue, with the allowed statuses and body fields. Every route not listed must stay byte-for-byte identical.',
     '- out_of_scope: behaviours that must not change.',
@@ -127,7 +132,7 @@ export async function generateSpec(opts: {
         validation = { ok: true, errors: [], vacuous: [] };
       }
     } catch (e) {
-      errors = [e instanceof Error ? e.message : String(e)];
+      errors = [res.stopReason === 'call-limit' ? 'you used all your tool calls before writing the JSON object: read less (AGENTS.md, one or two existing tests, the entry point) and answer with the JSON object' : e instanceof Error ? e.message : String(e)];
       parsed = null;
       validation = { ok: false, errors, vacuous: [] };
     }
@@ -138,12 +143,14 @@ export async function generateSpec(opts: {
   return { attempts, raw, parsed, validation, cost: sumCost(attempts) };
 }
 
-export function candidatePrompt(issueText: string, specJson: string, acceptanceFiles: string[]): string {
+export function candidatePrompt(issueText: string, specJson: string, acceptanceFiles: string[], opts: { bash?: boolean } = {}): string {
   return [
     'Implement the change described below in this repository (your working directory). Read AGENTS.md first and follow its conventions.',
     `The spec's acceptance tests are already in the tree (${acceptanceFiles.join(', ')}) and currently fail. Make them pass without editing them or tests/backtest-acceptance/probe.ts.`,
     'Keep every route outside the spec\'s declaredDeltaSurface identical, and keep the existing tests green. Add or adjust unit tests as the repo conventions require.',
-    'You have file tools only (Read, Edit, Write, Glob, Grep): you cannot run tests or commands, so reason carefully about the existing tests and the acceptance tests. The harness runs everything after you stop. Do not leave the working directory. You do not need to commit.',
+    opts.bash
+      ? 'You have file tools and a sandboxed Bash tool: run tests with `npx vitest run <files>` and type-check with `npx tsc --noEmit`. The sandbox has no network, no home directory and only this worktree and a private /tmp; node_modules is already installed. Do not leave the working directory. You do not need to commit.'
+      : 'You have file tools only (Read, Edit, Write, Glob, Grep): you cannot run tests or commands, so reason carefully about the existing tests and the acceptance tests. The harness runs everything after you stop. Do not leave the working directory. You do not need to commit.',
     'Stop when the change is complete and say briefly what you changed.',
     '',
     '--- issue ---',
