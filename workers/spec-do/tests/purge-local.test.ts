@@ -132,6 +132,52 @@ describe('purge of an organization with gate runs (m13, foreign keys on)', () =>
   });
 });
 
+describe('purge sweep of orphaned gate runs (no FK on candidate_id; docs/OPS.md rollback floor)', () => {
+  /** What an m12-floor purge leaves: the org's rows gone, its gate_runs still there */
+  function floorStyleDelete(orgId: string) {
+    const cands = '(SELECT id FROM candidates WHERE repository_id IN (SELECT id FROM repositories WHERE organization_id = ?))';
+    store.raw.prepare(`DELETE FROM gate_verdicts WHERE candidate_id IN ${cands}`).run(orgId);
+    store.raw.prepare(`DELETE FROM candidates WHERE id IN ${cands}`).run(orgId);
+    store.raw.prepare('DELETE FROM repositories WHERE organization_id = ?').run(orgId);
+    store.raw.prepare('DELETE FROM specs WHERE organization_id = ?').run(orgId);
+    store.raw.prepare('DELETE FROM organizations WHERE id = ?').run(orgId);
+  }
+
+  it('orphans left by a floor-style delete are removed by the next m13 purge, counted in its plan, and not touched when nothing is purged', async () => {
+    const a = await seedTombstoned('org-a', 25, true);
+    floorStyleDelete(a.org.id);
+    expect(count('gate_runs')).toBe(2);
+    expect(count('candidates')).toBe(0);
+
+    // no eligible organization: the plan is empty and the orphans stay
+    const idle = await purge({ orgNamePrefix: 'org-' });
+    expect(idle.json.data!.total).toBe(0);
+    expect(count('gate_runs')).toBe(2);
+
+    const b = await seedTombstoned('org-b', 25, true);
+    expect(count('gate_runs')).toBe(4);
+    const dry = await purge({ orgNamePrefix: 'org-' });
+    expect(dry.json.data!.counts).toMatchObject({ gate_runs: 4 });
+    const res = await purge(real(dry.json.data!.total as number));
+    expect(res.status).toBe(200);
+    expect(count('gate_runs')).toBe(0);
+    expect(count('organizations')).toBe(0);
+    expect(b.c1.id).toBeTruthy();
+  });
+
+  it('a run of a candidate that still exists is never swept', async () => {
+    await seedTombstoned('org-a', 25, true);
+    const keep = spec.createOrganization('keep', 'artifacts');
+    const keepRepo = spec.createRepository('keep-repo', keep.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'keep');
+    const keepSpec = spec.createSpec('keep-spec', 'd', 'contract', [], keep.id, agentId);
+    const keepCand = spec.createCandidate(keepSpec.id, keepRepo.id, 'sha', 'base', agentId);
+    await startRun(keepCand.id, 'e'.repeat(40));
+    const dry = await purge({ orgNamePrefix: 'org-' });
+    expect((await purge(real(dry.json.data!.total as number))).status).toBe(200);
+    expect(store.raw.prepare('SELECT candidate_id FROM gate_runs').all()).toEqual([{ candidate_id: keepCand.id }]);
+  });
+});
+
 describe('purge with candidate Worker cleanup (real Spec DO + edge route)', () => {
   it('order: every candidate Worker is deleted while its ledger rows still exist, then the rows go', async () => {
     const a = await seedTombstoned('org-a');

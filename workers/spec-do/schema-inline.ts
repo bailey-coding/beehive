@@ -725,7 +725,9 @@ export const GATE_RUNS_SQL = `
 -- GATE RUNS (m12 -> m13, additive)
 -- attempt = MAX+1 per (candidate, gate, commit_sha). A running row older than 15 minutes is reported
 -- abandoned at read time and is never rewritten. checks / timings are JSON. log_tail is capped at 32 KiB
--- by the route (no R2 in slice 1). Removed with its candidate on org purge (children first).
+-- by the route (no R2 in slice 1). candidate_id is a LOGICAL reference: a foreign key to candidates would make an m12-floor
+-- build's purge fail while rolled back (docs/OPS.md rollback floor), so only decided_by -> actors is enforced. The m13 purge
+-- removes a candidate's runs first and sweeps orphans left by a floor-build purge.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS gate_runs (
@@ -751,7 +753,6 @@ CREATE TABLE IF NOT EXISTS gate_runs (
   decided_by TEXT NOT NULL,
   started_at INTEGER NOT NULL,
   finished_at INTEGER,
-  FOREIGN KEY (candidate_id) REFERENCES candidates(id),
   FOREIGN KEY (decided_by) REFERENCES actors(id),
   UNIQUE(candidate_id, gate, commit_sha, attempt)
 );

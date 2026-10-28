@@ -114,7 +114,7 @@ step (`index.ts:1084` at `bd06419`), so there must be no gap; MR-FLOW's slice 2 
 **m13 step** (one entry in `runMigrations`, `LATEST_SCHEMA_VERSION = 'm13'` at `:31`): `CREATE TABLE IF NOT EXISTS gate_runs` + indexes, and
 `addColumnsIfMissing('candidates', ['preview_url TEXT','preview_worker_name TEXT','preview_created_at INTEGER'])` (`:1112`). `gate_runs` = MR-FLOW §3 row, with: `log_tail TEXT`,
 `log_sha256`, `log_truncated` replacing `log_key` (no R2, D4); plus `failure_class`, `exit_code`, `checks` (JSON), `timings` (JSON), `instance`. `status` CHECK(running, pass, fail, error,
-not_run). UNIQUE(candidate_id, gate, commit_sha, attempt). Legacy verdicts get no `gate_runs` row.
+not_run). UNIQUE(candidate_id, gate, commit_sha, attempt). **Foreign keys (decided 2026-10-28): `decided_by -> actors` only. `candidate_id` has NO foreign key** (a logical reference; indexed), because `docs/OPS.md` (rollback floor) lets a new table reference only `actors`, so that an m12-floor build over an m13 ledger can still purge. Legacy verdicts get no `gate_runs` row.
 
 **Exactly which files change for the preview columns.** m2 already adds them to migrated ledgers (`index.ts:1040`), and a *fresh* ledger starts at LATEST without running any step (`:623`),
 while `workers/spec-do/schema.sql` and `schema-inline.ts` have no `preview_*` columns (no match). So: (1) add the three columns to the `candidates` table in **both** `schema.sql` and
@@ -134,7 +134,7 @@ existing ledgers that were created fresh at ≤m11 and never ran m2 (a no-op els
   as the latest summary (code change to `createGateVerdict` `:1594`, no schema change), **only if** no later-started run exists for that candidate/gate; (3) `recordHistory`.
 - `GET /api/gate-runs?candidateId=` and `GET /api/candidates/:id/gate-runs` for edge/UI/CLI. A `running` run older than 15 min is *reported* `error`/`abandoned` on read (no write); merge checks
   (slice 2) count only terminal `pass`.
-- `ORG_PURGE_ORDER` (`:116`): `gate_runs` before `gate_verdicts` (`:120`), scoped by `ORG_CANDIDATES`. `POST /api/gate-verdicts` (`:4009-4023`) is unchanged for old callers and other gates.
+- `ORG_PURGE_ORDER` (`:116`): `gate_runs` before `gate_verdicts` (`:120`), scoped by `ORG_CANDIDATES` (as built: after `trials`, before `issues`). Because nothing enforces that order (no candidate FK), the purge plan also adds every `gate_runs` row whose candidate no longer exists (orphans from a floor-build purge) whenever it selects at least one organization. `POST /api/gate-verdicts` (`:4009-4023`) is unchanged for old callers and other gates.
 
 ## 4. gate-workflow changes
 

@@ -165,7 +165,7 @@ const ORG_PURGE_ORDER: [table: string, where: string][] = [
     'trials',
     `spec_id IN (${ORG_SPECS}) OR candidate_a_id IN (${ORG_CANDIDATES}) OR candidate_b_id IN (${ORG_CANDIDATES}) OR winner_id IN (${ORG_CANDIDATES})`,
   ],
-  // gate_runs references candidates and actors only; after trials per docs/REAL-GATE-IMPL-PLAN.md section 3
+  // gate_runs is deleted before its candidates although nothing enforces it (no FK, see the orphan sweep in the purge plan); after trials per docs/REAL-GATE-IMPL-PLAN.md section 3
   ['gate_runs', `candidate_id IN (${ORG_CANDIDATES})`],
   ['issues', `id IN (${ORG_ISSUES})`],
   ['candidates', `id IN (${ORG_CANDIDATES})`],
@@ -2566,6 +2566,11 @@ export class SpecDO {
         const rows = this.queryAll(`SELECT id FROM ${table} WHERE ${where}`, ...Array(bindCount(where)).fill(orgId));
         for (const r of rows) ids.get(table)!.add(r.id as string);
       }
+    }
+    // gate_runs.candidate_id has no foreign key (docs/OPS.md rollback floor): a purge by a build older than m13 deletes candidates
+    // and leaves their runs. Their candidate is gone, so the owning org cannot be told; they are junk, swept by any real purge plan.
+    if (orgIds.length) {
+      for (const r of this.queryAll('SELECT id FROM gate_runs WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('gate_runs')!.add(r.id as string);
     }
     const rows: [string, string][] = ORG_PURGE_ORDER.flatMap(([table]) => [...ids.get(table)!].map((id): [string, string] => [table, id]));
     const counts = Object.fromEntries(ORG_PURGE_ORDER.map(([table]) => [table, ids.get(table)!.size]));

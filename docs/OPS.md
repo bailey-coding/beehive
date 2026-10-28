@@ -112,6 +112,11 @@ retries), so a bad deploy is loud rather than half-migrated.
      `ORG_PURGE_ORDER` (`workers/spec-do/index.ts`). A table with a foreign key to `organizations`, `repositories`,
      `specs`, `candidates` or `issues` makes the floor's `/internal/purge` stop with a 409 `FOREIGN KEY constraint failed`
      while rolled back. The batch rolls back and nothing is corrupted, but purge is unusable until the newer build returns.
+     First example of the rule followed (m13, 2026-10-28): `gate_runs.candidate_id` is a **logical** reference with no foreign key
+     (only `decided_by` references `actors`). The floor's purge does not know the table, so it deletes the candidates and leaves
+     their runs as orphans; the next purge by an m13+ build sweeps every `gate_runs` row whose candidate no longer exists (only when
+     that purge selects at least one organization), so the orphans do not stay forever. The routes still refuse an unknown or
+     tombstoned candidate; only the database constraint is absent.
    - New columns on old tables are nullable or have a default, so the floor's inserts still succeed.
    - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. The one exception is the
      m12 partial unique index on `actors.github_user_id` (decided 2026-10-27): the floor's `createActor` has no duplicate

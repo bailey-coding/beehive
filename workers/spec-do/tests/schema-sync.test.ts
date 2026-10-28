@@ -52,11 +52,12 @@ describe('schema.sql vs schema-inline.ts', () => {
     );
   });
 
-  it('m13 is one additive gate_runs table with its indexes and nothing destructive', () => {
+  it('m13 is one additive gate_runs table with its indexes, a foreign key to actors only, and nothing destructive', () => {
     const sql = GATE_RUNS_SQL.replace(/--.*$/gm, '');
     expect(sql.match(/CREATE TABLE IF NOT EXISTS \w+/g)).toEqual(['CREATE TABLE IF NOT EXISTS gate_runs']);
     expect(sql.match(/CREATE INDEX IF NOT EXISTS \w+/g)).toHaveLength(3);
-    expect(sql.match(/REFERENCES\s+\w+/g)).toEqual(['REFERENCES candidates', 'REFERENCES actors']);
+    // docs/OPS.md rollback floor: only actors (never a table in ORG_PURGE_ORDER); candidate_id is a logical reference
+    expect(sql.match(/REFERENCES\s+\w+/g)).toEqual(['REFERENCES actors']);
     expect(sql).not.toMatch(/\b(DROP|ALTER|DELETE|UPDATE|INSERT)\b/i);
   });
 

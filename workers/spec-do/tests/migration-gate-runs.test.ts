@@ -101,16 +101,15 @@ describe('migration m13: gate_runs and the preview columns', () => {
     expect([master(), JSON.stringify(all(s, 'SELECT * FROM gate_runs'))]).toEqual(before);
   });
 
-  it('gate_runs has the planned shape: foreign keys to candidates and actors, a status CHECK, a unique attempt per sha', async () => {
+  it('gate_runs has the planned shape: a foreign key to actors only (candidate_id is logical), a status CHECK, a unique attempt per sha', async () => {
     const s = await freshLedger();
     expect(cols(s, 'gate_runs')).toEqual([
       'id', 'candidate_id', 'gate', 'commit_sha', 'attempt', 'status', 'failure_class', 'exit_code', 'checks', 'timings', 'runner',
       'instance', 'image_digest', 'tests_passed', 'tests_failed', 'duration_ms', 'log_tail', 'log_sha256', 'log_truncated',
       'decided_by', 'started_at', 'finished_at',
     ]);
-    expect(all(s, 'PRAGMA foreign_key_list(gate_runs)').map((f) => [f.table, f.from])).toEqual(
-      expect.arrayContaining([['candidates', 'candidate_id'], ['actors', 'decided_by']])
-    );
+    // docs/OPS.md rollback floor: a new table may reference only actors, or an m12-floor build's purge fails on it
+    expect(all(s, 'PRAGMA foreign_key_list(gate_runs)').map((f) => [f.table, f.from])).toEqual([['actors', 'decided_by']]);
     const indexes = all(s, "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'gate_runs' AND name NOT LIKE 'sqlite_%' ORDER BY name").map((r) => r.name);
     expect(indexes).toEqual(['idx_gate_runs_candidate', 'idx_gate_runs_started', 'idx_gate_runs_status']);
 
@@ -124,9 +123,10 @@ describe('migration m13: gate_runs and the preview columns', () => {
     ins('r1', 1);
     expect(() => ins('r2', 1)).toThrow(/UNIQUE/);
     expect(() => ins('r3', 2, 'weird')).toThrow(/CHECK/);
-    expect(() => ins('r4', 2, 'running', 'ghost')).toThrow(/FOREIGN KEY/);
+    // the table itself accepts an unknown candidate (no FK); the route refuses it with a 404 (gate-runs.test.ts)
+    expect(() => ins('r4', 2, 'running', 'ghost')).not.toThrow();
     expect(() => ins('r5', 0)).toThrow(/CHECK/);
-    expect(() => ins('r6', 2, 'not_run')).not.toThrow();
+    expect(() => ins('r6', 3, 'not_run')).not.toThrow();
   });
 
   it('every legacy start in the matrix ends with gate_runs and the preview columns (nothing relies on a particular start)', async () => {
@@ -136,6 +136,40 @@ describe('migration m13: gate_runs and the preview columns', () => {
       expect(tables(s), f.name).toContain('gate_runs');
       expect(cols(s, 'candidates'), f.name).toEqual(expect.arrayContaining(PREVIEW));
     }
+  });
+
+  describe('rollback floor (docs/OPS.md): a build older than m13 over an m13 ledger can still purge', () => {
+    it('with gate_runs rows and foreign keys ON, deleting an org\'s rows the way an m12 ORG_PURGE_ORDER does (no gate_runs entry, children first) succeeds and leaves the runs', async () => {
+      const s = await freshLedger();
+      const spec = makeSpecDo(s);
+      await spec.init();
+      const actor = spec.createActor('human', 'maint').id;
+      const org = spec.createOrganization('floor-org', 'artifacts');
+      const repo = spec.createRepository('floor-repo', org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'floor-org');
+      const sp = spec.createSpec('floor-spec', 'd', 'contract', [], org.id, actor);
+      const cand = spec.createCandidate(sp.id, repo.id, 'sha', 'base', actor);
+      const post = (path: string, body: unknown) =>
+        spec.fetch(new Request(`https://spec-do.internal${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+      const started = (await (await post('/api/gate-runs', { candidateId: cand.id, gate: 'pre-merge', commitSha: 'a'.repeat(40), decidedBy: actor })).json()) as { data: { runId: string } };
+      await post(`/api/gate-runs/${started.data.runId}/result`, {
+        status: 'pass',
+        checks: { tests: 'verified', conformance: 'not_run', complexity: 'not_run' },
+        timings: {},
+        instance: 'standard-2',
+      });
+      expect(all(s, 'SELECT COUNT(*) AS n FROM gate_runs')[0].n).toBe(1);
+      expect(all(s, 'PRAGMA foreign_keys')[0].foreign_keys).toBe(1);
+
+      // the m12 list, written out: gate_verdicts, candidates, repositories, specs, organizations (nothing names gate_runs)
+      expect(() => {
+        s.raw.prepare('DELETE FROM gate_verdicts WHERE candidate_id = ?').run(cand.id);
+        s.raw.prepare('DELETE FROM candidates WHERE id = ?').run(cand.id);
+        s.raw.prepare('DELETE FROM repositories WHERE organization_id = ?').run(org.id);
+        s.raw.prepare('DELETE FROM specs WHERE organization_id = ?').run(org.id);
+        s.raw.prepare('DELETE FROM organizations WHERE id = ?').run(org.id);
+      }).not.toThrow();
+      expect(all(s, 'SELECT COUNT(*) AS n FROM gate_runs')[0].n).toBe(1); // orphan, swept by the next m13 purge (purge-local.test.ts)
+    });
   });
 
   describe('untouched: the m12 duplicate refusal still stops a ledger at m11, before m13 is attempted', () => {
