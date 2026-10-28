@@ -311,7 +311,7 @@ describe('purge', () => {
     expect(result).toMatchObject({ dryRun: true, orgIds: [a.org.id], skipped: [], batches: 0 });
     expect(result.counts).toEqual({
       issue_comments: 1, issue_candidate_links: 0, issue_spec_links: 0, gate_verdicts: 1, promotions: 1,
-      trials: 1, issues: 1, candidates: 2, repositories: 1, specs: 1, organizations: 1,
+      trials: 1, gate_runs: 0, issues: 1, candidates: 2, repositories: 1, specs: 1, organizations: 1,
     });
     expect(result.total).toBe(10);
     expect(count('SELECT COUNT(*) AS n FROM organizations')).toBe(1);
