@@ -1,5 +1,7 @@
 // Subprocess helper: no shell, process-group kill on timeout, capped output.
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export interface ExecResult {
   code: number | null;
@@ -72,4 +74,18 @@ export function exec(cmd: string, args: string[], opts: ExecOptions = {}): Promi
     child.stdin.on('error', () => {});
     child.stdin.end(opts.input ?? '');
   });
+}
+
+/** First directory on PATH holding an executable `name`, else null. */
+export function findOnPath(name: string, pathVar = process.env.PATH ?? ''): string | null {
+  for (const d of pathVar.split(path.delimiter).filter(Boolean)) {
+    const p = path.join(d, name);
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return p;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
 }

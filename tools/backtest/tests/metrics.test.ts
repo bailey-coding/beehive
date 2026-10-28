@@ -3,7 +3,7 @@ import { computeMetrics, TIER_A_ROWS } from '../metrics.ts';
 import type { OracleReport } from '../oracles.ts';
 import type { CandidateResult, RowResult, RunMeta } from '../results.ts';
 
-const meta: RunMeta = { runId: 't', client: 'fake', startedAt: '', finishedAt: '', k: 3, aborted: null, budget: { expected: 565, hardStop: 850, used: 0, byRole: {} } };
+const meta: RunMeta = { runId: 't', bashMode: 'none', sandbox: null, client: 'fake', startedAt: '', finishedAt: '', k: 3, aborted: null, budget: { expected: 565, hardStop: 850, used: 0, byRole: {} } };
 const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 };
 const cc = (calls: number) => ({ calls, usage, costUsd: calls / 10, durationMs: 60_000 });
 

@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { PrivateConfig } from './claudeconfig.ts';
-import { exec } from './exec.ts';
+import type { BashBox, BashSandboxProof } from './bashsandbox.ts';
+import { writePrefixScript } from './bashsandbox.ts';
+import { exec, findOnPath } from './exec.ts';
+
+export { findOnPath };
 
 export type Role = 'issue' | 'spec' | 'candidate' | 'grade' | 'leakage' | 'smoke';
 
@@ -14,6 +18,8 @@ export interface ModelRequest {
   /** none = text only; read = Read/Grep/Glob in cwd; agent = read + edit + a small Bash allowlist, in cwd. */
   tools: 'none' | 'read' | 'agent';
   cwd?: string;
+  /** Required for tools 'agent' when the client runs with Bash: the agent's private root, worktree and tmp. */
+  bashBox?: Pick<BashBox, 'agentRoot' | 'cwd' | 'tmpDir'>;
   /** Call limit: assistant API requests. The client stops the run when exceeded. */
   maxCalls: number;
   timeoutMs: number;
@@ -94,8 +100,8 @@ export const EFFORT = 'medium';
  * only a copy of the login. No API key or token variable is passed through, and nothing of the user's own Claude config
  * (CLAUDE.md, settings, memory, plugins) is reachable, so no user-level instruction can reach any arm.
  */
-export function childEnv(priv: Pick<PrivateConfig, 'dir' | 'home'>, src: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = { CI: '1', NO_COLOR: '1', HOME: priv.home, CLAUDE_CONFIG_DIR: priv.dir };
+export function childEnv(priv: Pick<PrivateConfig, 'dir' | 'home'>, src: NodeJS.ProcessEnv = process.env, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { CI: '1', NO_COLOR: '1', HOME: priv.home, CLAUDE_CONFIG_DIR: priv.dir, ...extra };
   for (const k of ['PATH', 'LANG', 'TERM']) if (src[k] !== undefined) out[k] = src[k];
   return out;
 }
@@ -120,9 +126,10 @@ export function redact(text: string, max = 500): string {
 
 const FILE_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
 
-// Only reachable with --allow-bash AND an OS sandbox (bubblewrap): local test/typecheck/inspection commands.
-const BASH_ALLOW = ['npx vitest:*', 'npx tsc:*', 'git status:*', 'git diff:*', 'git log:*', 'git show:*', 'ls:*', 'grep:*', 'head:*', 'tail:*', 'wc:*'];
-const DENY = ['WebFetch', 'WebSearch', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(git push:*)', 'Bash(git remote:*)', 'Bash(git fetch:*)', 'Bash(git pull:*)', 'Bash(git clone:*)', 'Bash(ssh:*)', 'Bash(npm:*)', 'Bash(node:*)', 'Bash(wrangler:*)', 'Bash(npx wrangler:*)'];
+// Only reachable with --allow-bash, where every Bash command runs inside bwrap (no network, no HOME, private root and /tmp).
+// Defence in depth on top of the sandbox: local build/test/inspection commands only.
+const BASH_ALLOW = ['npx vitest:*', 'npx tsc:*', 'node:*', 'git status:*', 'git diff:*', 'git log:*', 'git show:*', 'git add:*', 'git commit:*', 'ls:*', 'cat:*', 'grep:*', 'head:*', 'tail:*', 'wc:*', 'mkdir:*', 'sed:*', 'echo:*', 'pwd'];
+const DENY = ['WebFetch', 'WebSearch', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(git push:*)', 'Bash(git remote:*)', 'Bash(git fetch:*)', 'Bash(git pull:*)', 'Bash(git clone:*)', 'Bash(ssh:*)', 'Bash(npm:*)', 'Bash(wrangler:*)', 'Bash(npx wrangler:*)'];
 
 export interface ArgOptions {
   allowBash?: boolean;
@@ -148,23 +155,8 @@ export function buildClaudeArgs(req: Pick<ModelRequest, 'tools'>, opts: ArgOptio
   const tools = req.tools === 'none' ? [] : req.tools === 'read' ? ['Read', 'Glob', 'Grep'] : [...FILE_TOOLS, ...(bash ? ['Bash'] : [])];
   if (tools.length) args.push('--allowedTools', ...tools, ...(bash ? BASH_ALLOW.map((b) => `Bash(${b})`) : []));
   args.push('--disallowedTools', ...DENY);
-  if (bash) args.push('--settings', JSON.stringify({ sandbox: { enabled: true, failIfUnavailable: true } }));
   args.push('--tools', tools.join(','));
   return args;
-}
-
-/** First directory on PATH holding an executable `name`, else null. */
-export function findOnPath(name: string, pathVar = process.env.PATH ?? ''): string | null {
-  for (const d of pathVar.split(path.delimiter).filter(Boolean)) {
-    const p = path.join(d, name);
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      return p;
-    } catch {
-      /* next */
-    }
-  }
-  return null;
 }
 
 export interface StreamState {
@@ -232,9 +224,9 @@ export interface ClaudeCliOptions {
   config: PrivateConfig;
   /** Model override (the canary uses a deliberately bad id). */
   model?: string;
-  /** Keep the Bash tool for candidates. Refuses to construct unless an OS sandbox (bubblewrap) is on PATH. */
+  /** Keep the Bash tool for candidates, run inside bwrap. Needs `bash`, a passing proveBashSandbox() result. */
   allowBash?: boolean;
-  which?: (name: string) => string | null;
+  bash?: BashSandboxProof;
   log?: (s: string) => void;
 }
 
@@ -245,12 +237,14 @@ export function shouldStop(st: StreamState, maxCalls: number): boolean {
 
 export class ClaudeCliClient implements ModelClient {
   readonly name = 'claude-cli';
+  /** Which sandbox runs the Bash tool (null: Bash is off). */
   readonly sandbox: string | null;
   private readonly bin: string;
   private readonly allowBash: boolean;
-
   private readonly config: PrivateConfig;
   private readonly model: string;
+  private readonly bwrap: string | null;
+  private scriptDir: string | null = null;
 
   constructor(opts: ClaudeCliOptions) {
     this.config = opts.config;
@@ -258,10 +252,11 @@ export class ClaudeCliClient implements ModelClient {
     this.bin = opts.bin ?? 'claude';
     this.allowBash = opts.allowBash === true;
     this.sandbox = null;
+    this.bwrap = null;
     if (this.allowBash) {
-      const bwrap = (opts.which ?? ((n: string) => findOnPath(n)))('bwrap');
-      if (!bwrap) throw new Error('--allow-bash refused: no OS sandbox found (bubblewrap `bwrap` is not on PATH). Candidates stay file-tools-only.');
-      this.sandbox = `bubblewrap (${bwrap}) via Claude Code sandbox settings`;
+      if (!opts.bash || !opts.bash.ok || !opts.bash.bwrap) throw new Error(`--allow-bash refused: ${opts.bash?.detail ?? 'the bwrap sandbox probe was not run'}. Candidates stay file-tools-only.`);
+      this.bwrap = opts.bash.bwrap;
+      this.sandbox = opts.bash.detail;
       (opts.log ?? (() => {}))(`Bash enabled for candidates; active sandbox: ${this.sandbox}`);
     }
   }
@@ -271,10 +266,23 @@ export class ClaudeCliClient implements ModelClient {
     const cwd = req.cwd ?? ownTmp!;
     const st: StreamState = { assistantIds: new Set(), lastText: '', result: null };
     let limited = false;
+    const extra: Record<string, string> = {};
+    const withBash = this.allowBash && req.tools === 'agent';
+    if (withBash) {
+      if (!req.bashBox) throw new Error('agent run with Bash needs request.bashBox (private root, worktree, tmp)');
+      // The CLI writes shell snapshots here and the sandboxed shell sources them: read-only, and ONLY this dir (the
+      // config dir itself holds the credentials copy and is never mounted).
+      const snapshotDir = path.join(this.config.dir, 'shell-snapshots');
+      fs.mkdirSync(snapshotDir, { recursive: true });
+      fs.mkdirSync(req.bashBox.tmpDir, { recursive: true });
+      this.scriptDir ??= fs.mkdtempSync(path.join(os.tmpdir(), 'bt-bashwrap-'));
+      extra.CLAUDE_CODE_SHELL_PREFIX = writePrefixScript(this.scriptDir, this.bwrap!, { ...req.bashBox, extraRo: [snapshotDir] });
+      extra.TMPDIR = req.bashBox.tmpDir;
+    }
     const t0 = Date.now();
     const r = await exec(this.bin, buildClaudeArgs(req, { allowBash: this.allowBash, model: this.model }), {
       cwd,
-      env: childEnv(this.config),
+      env: childEnv(this.config, process.env, extra),
       timeoutMs: req.timeoutMs,
       input: req.prompt,
       onStdoutLine: (line) => {
@@ -287,5 +295,9 @@ export class ClaudeCliClient implements ModelClient {
     });
     if (ownTmp) fs.rmSync(ownTmp, { recursive: true, force: true });
     return responseFromStream(st, Date.now() - t0, r.timedOut ? 'timeout' : limited ? 'call-limit' : 'done', { code: r.code, stderr: redact(r.stderr) });
+  }
+
+  dispose(): void {
+    if (this.scriptDir) fs.rmSync(this.scriptDir, { recursive: true, force: true });
   }
 }

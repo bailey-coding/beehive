@@ -136,6 +136,26 @@ export function reachabilityTest(opts: { agentRoot: string; cwd: string; forbidd
         if (!inside(target, root)) detail.push(`symlink ${rel(p)} escapes the agent root`);
         continue;
       }
+      if (e.isDirectory() && e.name === 'node_modules') {
+        // An installed dependency copy (Bash mode): not scanned for markers (the harness installed it from the base's
+        // lockfile), but symlinks escaping the root and foreign hardlinks are still checked.
+        const nm = [p];
+        while (nm.length) {
+          const nd = nm.pop()!;
+          for (const ne of fs.readdirSync(nd, { withFileTypes: true })) {
+            const np = path.join(nd, ne.name);
+            if (ne.isSymbolicLink()) {
+              try {
+                if (!inside(fs.realpathSync(np), root)) detail.push(`symlink ${rel(np)} escapes the agent root`);
+              } catch {
+                /* dangling relative link inside a package: harmless */
+              }
+            } else if (ne.isDirectory()) nm.push(np);
+            else lstatChecks(np, fs.lstatSync(np));
+          }
+        }
+        continue;
+      }
       if (e.isDirectory()) {
         if (e.name === 'objects' && path.basename(d) === '.git') {
           // Packed/loose objects are compressed (markers cannot match); still check the shared-store file and hardlinks.

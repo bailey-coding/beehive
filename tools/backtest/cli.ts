@@ -8,6 +8,7 @@ import { BudgetTracker, BudgetedClient, EXPECTED_CALLS, HARD_STOP_CALLS } from '
 import { baseGreen } from './basegreen.ts';
 import { ClaudeCliClient } from './client.ts';
 import { createPrivateConfig } from './claudeconfig.ts';
+import { proveBashSandbox } from './bashsandbox.ts';
 import { runCanary } from './canary.ts';
 import { checkIndependence, freezeCorpus, loadCorpus } from './corpus.ts';
 import { docAtBaseTest } from './leakage.ts';
@@ -40,7 +41,7 @@ const ALLOWED: Record<string, string[]> = {
   freeze: ['force', 'corpus'],
   check: ['base-green', 'write', 'corpus'],
   smoke: ['release-pilot'],
-  canary: ['release-pilot'],
+  canary: ['release-pilot', 'allow-bash'],
   pilot: ['release-pilot', 'run', 'k', 'rows', 'out', 'work', 'keep-work', 'allow-bash', 'expected', 'hard-stop', 'corpus'],
   help: [],
 };
@@ -107,7 +108,13 @@ async function main(): Promise<void> {
         // throwOnError=false: the canary inspects failures itself (including the deliberate bad-model call).
         const good = new BudgetedClient(new ClaudeCliClient({ config }), tracker, false);
         const bad = new BudgetedClient(new ClaudeCliClient({ config, model: 'claude-bogus-model-0' }), tracker, false);
-        const { checks } = await runCanary({ client: good, badClient: bad, configDir: config.dir });
+        let bashClient: BudgetedClient | undefined;
+        if (f['allow-bash']) {
+          const proof = await proveBashSandbox();
+          log(`bash sandbox probe: ${proof.ok ? 'PASS' : 'FAIL'} - ${proof.detail}`);
+          bashClient = new BudgetedClient(new ClaudeCliClient({ config, allowBash: true, bash: proof, log }), tracker, false);
+        }
+        const { checks } = await runCanary({ client: good, badClient: bad, configDir: config.dir, bashClient });
         for (const k of checks) log(`${k.pass ? 'PASS' : 'FAIL'}  ${k.name}\n      ${k.detail}`);
         log(`global ledger: ${tracker.used}/${tracker.hardStop} calls`);
         if (checks.some((k) => !k.pass)) process.exitCode = 1;
@@ -124,7 +131,10 @@ async function main(): Promise<void> {
     const config = createPrivateConfig();
     let client: ClaudeCliClient;
     try {
-      client = new ClaudeCliClient({ config, allowBash: !!f['allow-bash'], log });
+      // --allow-bash: bwrap must be on PATH AND the model-independent isolation probe must pass, before any spend.
+      const bash = f['allow-bash'] ? await proveBashSandbox() : undefined;
+      if (bash) log(`bash sandbox probe: ${bash.ok ? 'PASS' : 'FAIL'} - ${bash.detail}`);
+      client = new ClaudeCliClient({ config, allowBash: !!f['allow-bash'], bash, log });
     } catch (e) {
       config.dispose();
       throw e;
@@ -140,14 +150,16 @@ async function main(): Promise<void> {
       workRoot: String(f.work ?? path.join(os.tmpdir(), 'beehive-backtest')),
       client, tracker, k: Number(f.k ?? 3), cfg: DEFAULT_ORACLE_CONFIG,
       issueApproval: 'required', // the maintainer reads every issue text; there is no auto-approve flag
+      allowBash: !!f['allow-bash'], sandboxDetail: client.sandbox,
       keepWork: !!f['keep-work'], log,
     });
+    client.dispose();
     config.dispose();
     log(`report: ${out.reportPath}\ncalls used: ${out.meta.budget.used}/${out.meta.budget.hardStop}${out.meta.aborted ? `\nABORTED: ${out.meta.aborted}` : ''}`);
     return;
   }
 
-  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | smoke --release-pilot | canary --release-pilot | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
+  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | smoke --release-pilot | canary --release-pilot [--allow-bash] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main().catch((e) => {

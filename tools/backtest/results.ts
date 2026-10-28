@@ -76,6 +76,9 @@ export interface RowResult {
 
 export interface RunMeta {
   runId: string;
+  /** 'none': file tools only. 'bwrap': candidates also had Bash, run inside bwrap. Results of the two modes are never mixed. */
+  bashMode: 'none' | 'bwrap';
+  sandbox: string | null;
   client: string;
   startedAt: string;
   finishedAt: string;

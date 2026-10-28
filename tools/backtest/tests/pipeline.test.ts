@@ -622,6 +622,40 @@ describe('model failures and the global ledger', () => {
   }, 120_000);
 });
 
+describe('Bash mode bookkeeping (fake client, no model)', () => {
+  it('records bashMode and the active sandbox in run.json and the report header, gives candidates a bashBox and a plain dependency copy, and never mixes modes', async () => {
+    const o = baseOpts('bashmode');
+    const fake = client();
+    const res = await runPilot({ ...o, client: fake, tracker: new BudgetTracker(), k: 1, allowBash: true, sandboxDetail: 'bubblewrap /usr/bin/bwrap: test', keepWork: true });
+    expect(res.meta).toMatchObject({ bashMode: 'bwrap', sandbox: 'bubblewrap /usr/bin/bwrap: test' });
+    const saved = JSON.parse(fs.readFileSync(path.join(o.outDir, 'bashmode', 'run.json'), 'utf8'));
+    expect(saved.meta.bashMode).toBe('bwrap');
+    expect(fs.readFileSync(res.reportPath, 'utf8')).toMatch(/Candidate tools: file tools \+ Bash in a bwrap sandbox \(bubblewrap \/usr\/bin\/bwrap: test\)/);
+    const cand = fake.requests.find((r) => r.role === 'candidate')!;
+    expect(cand.bashBox).toMatchObject({ cwd: cand.cwd });
+    expect(path.dirname(cand.cwd!)).toBe(cand.bashBox!.agentRoot);
+    expect(cand.bashBox!.tmpDir).toBe(path.join(cand.bashBox!.agentRoot, 'tmp'));
+    expect(cand.prompt).toMatch(/sandboxed Bash tool/);
+    // the dependency tree inside the agent root is a plain copy, not a link
+    const nm = path.join(cand.cwd!, 'node_modules');
+    expect(fs.lstatSync(nm).isSymbolicLink()).toBe(false);
+    expect(fs.readdirSync(nm).length).toBeGreaterThan(10);
+    fs.rmSync(path.dirname(cand.cwd!), { recursive: true, force: true });
+    // resuming the same run id in the other mode is refused
+    await expect(runPilot({ ...o, client: client(), tracker: new BudgetTracker(), k: 1 })).rejects.toThrow(/never mixed/);
+  }, 280_000);
+
+  it('the default (no Bash) run says so in the report header and gives candidates no bashBox', async () => {
+    const o = baseOpts('nobash');
+    const fake = client();
+    const res = await runPilot({ ...o, client: fake, tracker: new BudgetTracker(), k: 1 });
+    expect(res.meta).toMatchObject({ bashMode: 'none', sandbox: null });
+    expect(fs.readFileSync(res.reportPath, 'utf8')).toMatch(/Candidate tools: file tools only \(no Bash\)/);
+    expect(fake.requests.find((r) => r.role === 'candidate')!.bashBox).toBeUndefined();
+    expect(fake.requests.find((r) => r.role === 'candidate')!.prompt).toMatch(/file tools only/);
+  }, 200_000);
+});
+
 describe('abort and stop-rule statuses', () => {
   it('keeps spec-failed rows spec-failed when the two-spec-fail stop rule aborts the run', async () => {
     const o = baseOpts('stoprule');

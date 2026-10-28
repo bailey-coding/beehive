@@ -138,12 +138,14 @@ export async function generateSpec(opts: {
   return { attempts, raw, parsed, validation, cost: sumCost(attempts) };
 }
 
-export function candidatePrompt(issueText: string, specJson: string, acceptanceFiles: string[]): string {
+export function candidatePrompt(issueText: string, specJson: string, acceptanceFiles: string[], opts: { bash?: boolean } = {}): string {
   return [
     'Implement the change described below in this repository (your working directory). Read AGENTS.md first and follow its conventions.',
     `The spec's acceptance tests are already in the tree (${acceptanceFiles.join(', ')}) and currently fail. Make them pass without editing them or tests/backtest-acceptance/probe.ts.`,
     'Keep every route outside the spec\'s declaredDeltaSurface identical, and keep the existing tests green. Add or adjust unit tests as the repo conventions require.',
-    'You have file tools only (Read, Edit, Write, Glob, Grep): you cannot run tests or commands, so reason carefully about the existing tests and the acceptance tests. The harness runs everything after you stop. Do not leave the working directory. You do not need to commit.',
+    opts.bash
+      ? 'You have file tools and a sandboxed Bash tool: run tests with `npx vitest run <files>` and type-check with `npx tsc --noEmit`. The sandbox has no network, no home directory and only this worktree and a private /tmp; node_modules is already installed. Do not leave the working directory. You do not need to commit.'
+      : 'You have file tools only (Read, Edit, Write, Glob, Grep): you cannot run tests or commands, so reason carefully about the existing tests and the acceptance tests. The harness runs everything after you stop. Do not leave the working directory. You do not need to commit.',
     'Stop when the change is complete and say briefly what you changed.',
     '',
     '--- issue ---',

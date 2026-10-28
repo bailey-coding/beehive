@@ -124,22 +124,24 @@ describe('real client plumbing (no process spawned)', () => {
     expect(allowed.trim().split(/\s+/)).toEqual(['Read', 'Edit', 'Write', 'Glob', 'Grep']);
     expect(allowed).not.toContain('Bash');
     expect(a).not.toContain('--settings');
-    for (const denied of ['WebFetch', 'WebSearch', 'Bash(node:*)', 'Bash(git push:*)', 'Bash(curl:*)']) expect(a).toContain(denied);
+    for (const denied of ['WebFetch', 'WebSearch', 'Bash(git push:*)', 'Bash(curl:*)', 'Bash(npm:*)']) expect(a).toContain(denied);
   });
-  it('--allow-bash args add Bash only with the sandbox settings, and never node, npm, push or network commands', () => {
+  it('--allow-bash args add Bash only with the sandbox settings, and never npm, push or network commands', () => {
     const args = buildClaudeArgs({ tools: 'agent' }, { allowBash: true });
     const a = args.join(' ');
     expect(args[args.indexOf('--tools') + 1]).toBe('Read,Edit,Write,Glob,Grep,Bash');
-    expect(a).toContain('"sandbox":{"enabled":true,"failIfUnavailable":true}');
+    expect(a).not.toContain('--settings'); // the sandbox is the bwrap prefix script, not Claude Code's settings
     const allowed = a.split('--allowedTools')[1].split('--disallowedTools')[0];
-    expect(allowed).not.toMatch(/Bash\((node|npm|curl|wget|git push|git remote|sed|cat|mkdir)/);
+    expect(allowed).not.toMatch(/Bash\((npm|curl|wget|git push|git remote)/);
     // read-only spec generation never gets Bash, even with the flag
     expect(buildClaudeArgs({ tools: 'read' }, { allowBash: true }).join(' ').split('--allowedTools')[1].split('--disallowedTools')[0]).not.toContain('Bash');
   });
-  it('--allow-bash refuses to construct without an OS sandbox and logs the sandbox when present', () => {
-    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true, which: () => null })).toThrow(/no OS sandbox/);
+  it('--allow-bash refuses to construct without a passing bwrap proof, and names the active sandbox when proven', () => {
+    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true })).toThrow(/probe was not run/);
+    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true, bash: { ok: false, bwrap: null, detail: 'bwrap (bubblewrap) not found on PATH' } })).toThrow(/bwrap \(bubblewrap\) not found/);
+    expect(() => new ClaudeCliClient({ config: PRIV, allowBash: true, bash: { ok: false, bwrap: '/usr/bin/bwrap', detail: 'isolation probe failed: the internet is reachable' } })).toThrow(/internet is reachable/);
     const logs: string[] = [];
-    const c = new ClaudeCliClient({ config: PRIV, allowBash: true, which: () => '/usr/bin/bwrap', log: (s) => logs.push(s) });
+    const c = new ClaudeCliClient({ config: PRIV, allowBash: true, bash: { ok: true, bwrap: '/usr/bin/bwrap', detail: 'bubblewrap /usr/bin/bwrap: ...' }, log: (s) => logs.push(s) });
     expect(c.sandbox).toMatch(/bubblewrap/);
     expect(logs[0]).toMatch(/active sandbox: bubblewrap/);
     expect(new ClaudeCliClient({ config: PRIV }).sandbox).toBeNull();

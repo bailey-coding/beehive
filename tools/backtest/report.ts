@@ -9,6 +9,7 @@ const usd = (n: number | null) => (n === null ? 'n/a' : `$${n.toFixed(2)}`);
 export function buildReport(meta: RunMeta, corpus: Corpus, rows: RowResult[], m: Metrics): string {
   const L: string[] = [];
   L.push(`# Backtest report: ${meta.runId}`, '');
+  L.push(`**Candidate tools: ${meta.bashMode === 'bwrap' ? `file tools + Bash in a bwrap sandbox (${meta.sandbox ?? 'sandbox not recorded'})` : 'file tools only (no Bash)'}. Results from the two modes are never mixed.**`, '');
   L.push(`Client: ${meta.client}. K=${meta.k}. Started ${meta.startedAt}, finished ${meta.finishedAt}.`);
   L.push(`Plan: ${corpus.plan}. Corpus frozen ${corpus.frozenAt}. Rows: ${rows.map((r) => r.id).join(', ')}.`, '');
   if (meta.aborted) L.push(`> **ABORTED (partial results):** ${meta.aborted}`, '');
