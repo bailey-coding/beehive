@@ -7,7 +7,7 @@ audience: human,agent
 # Plan: real test gate, implementation (MR-FLOW-PLAN slice 1)
 
 **Status:** plan, branch `agent/real-gate-plan`, rev 3 2026-10-28. D1-D9 accepted; **spikes S1-S5 are done** (`docs/OPEN-QUESTIONS.md`, two entries dated 2026-10-28; results below are
-facts, not assumptions); m12 shipped. **Slice 4 (`agent/real-gate-slice4`) is implemented; slice 5 (`agent/real-gate-slice5`) is merged** from this plan. Implements
+facts, not assumptions); m12 shipped. **Slice 4 (`agent/real-gate-slice4`) is implemented; slice 5 (`agent/real-gate-slice5`) is merged.** Implements
 `docs/MR-FLOW-PLAN.md` §7 and §11 slice 1 on `docs/SANDBOX-BUILD-PLAN.md`. **[SPINE]** = needs the maintainer (AGENTS.md rule 2). Cites are `path:line` on `main` at `bd06419` (m12 moved
 some `spec-do/index.ts` lines). Riskiest remaining assumptions: the multi-package install (only the root install was measured, §1) fits 120 s, and our own counter (§2) is the only cost cap.
 
