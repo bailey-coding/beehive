@@ -7,7 +7,7 @@ audience: human,agent
 # Plan: real test gate, implementation (MR-FLOW-PLAN slice 1)
 
 **Status:** plan, branch `agent/real-gate-plan`, rev 3 2026-10-28. D1-D9 accepted; **spikes S1-S5 are done** (`docs/OPEN-QUESTIONS.md`, two entries dated 2026-10-28; results below are
-facts, not assumptions); m12 shipped. **Slices 4 (`agent/real-gate-slice4`) and 5 (`agent/real-gate-slice5`) are being implemented in parallel** from this plan. Implements
+facts, not assumptions); m12 shipped. **Slice 4 (`agent/real-gate-slice4`) is implemented; slice 5 (`agent/real-gate-slice5`) is merged** from this plan. Implements
 `docs/MR-FLOW-PLAN.md` §7 and §11 slice 1 on `docs/SANDBOX-BUILD-PLAN.md`. **[SPINE]** = needs the maintainer (AGENTS.md rule 2). Cites are `path:line` on `main` at `bd06419` (m12 moved
 some `spec-do/index.ts` lines). Riskiest remaining assumptions: the multi-package install (only the root install was measured, §1) fits 120 s, and our own counter (§2) is the only cost cap.
 
@@ -217,7 +217,7 @@ Also: the queue must exist before the push that adds the consumer (human); the n
 1. **Done.** Public pages, README and ARCHITECTURE corrected to "Simulated" and merged (`589b280`).
 2. **Done.** m12 actors unique index, shipped 2026-10-27 at `88e40e1`.
 3. **Done 2026-10-28.** Spike S1-S5 run by the maintainer; results in OPEN-QUESTIONS; the spike worker is deleted.
-4. **In progress (`agent/real-gate-slice4`).** Code only, unreachable: `sandbox-base.ts` extraction, `TestSandbox`, `NpmRegistryGateway` and the deny handler, `/sandbox/test` (`installDirs`, two config
+4. **Done 2026-10-28 on `agent/real-gate-slice4` (not merged, not deployed).** Code only, unreachable (details in OPEN-QUESTIONS 2026-10-28, slice 4): `sandbox-base.ts` extraction, `TestSandbox`, `NpmRegistryGateway` and the deny handler, `/sandbox/test` (`installDirs`, two config
    files, `standard-2`), `SANDBOX_MODE=stub`, tests.
 5. **In progress (`agent/real-gate-slice5`).** `workers/shared/gate-run-schema.ts` + DO m13 (`gate_runs`, `candidates` columns in `schema.sql`/`schema-inline.ts`/m13, routes, dedupe/quota/caps, summary upsert,
    purge order) + migration tests [SPINE]. Own push; before 7a, so the gate's first call finds its routes.
