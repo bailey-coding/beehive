@@ -12,6 +12,7 @@ import { copyDepsInto } from './bashsandbox.ts';
 import { addedLinesOf, addWorktree, commitAndPush, createScratchRepo, diffOf, git, showAt } from './git.ts';
 import { baseTokenSet, docAtBaseTest, historyTest, reachabilityTest, referenceMarkers, wrongIssueVerdict } from './leakage.ts';
 import { requireSandbox } from './sandbox.ts';
+import { loadHumanAnswers } from './sample.ts';
 import { acceptanceAgainstReference, baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
 import { installProbe } from './probe.ts';
 import { GRADER_LABEL, type CandidateResult, type LeakageResult, type RowResult, type RunMeta } from './results.ts';
@@ -168,7 +169,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   };
   writeJson(path.join(runDir, 'run.json'), { meta, ledger: o.tracker.ledger, rows });
   const reportPath = path.join(runDir, 'report.md');
-  fs.writeFileSync(reportPath, buildReport(meta, o.corpus, rows, computeMetrics(rows, meta)));
+  fs.writeFileSync(reportPath, buildReport(meta, o.corpus, rows, computeMetrics(rows, meta, loadHumanAnswers(runDir))));
   return { rows, meta, reportPath };
 }
 

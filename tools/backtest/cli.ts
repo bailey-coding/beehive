@@ -15,7 +15,12 @@ import { docAtBaseTest } from './leakage.ts';
 import { DEFAULT_ORACLE_CONFIG } from './oracles.ts';
 import { PILOT_ROWS } from './pilot-rows.ts';
 import { runPilot } from './run.ts';
-import { git } from './git.ts';
+import { diffOf, git } from './git.ts';
+import { DEFAULT_SEED, HumanAnswersSchema, loadHumanAnswers, modelJudged, parseAnswers, pickCases, renderSample } from './sample.ts';
+import { sanitizeReport } from './publish.ts';
+import { buildReport } from './report.ts';
+import { computeMetrics } from './metrics.ts';
+import type { RowResult, RunMeta } from './results.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const harnessRoot = path.resolve(here, '..', '..');
@@ -43,6 +48,8 @@ const ALLOWED: Record<string, string[]> = {
   smoke: ['release-pilot'],
   canary: ['release-pilot', 'allow-bash'],
   pilot: ['release-pilot', 'run', 'k', 'rows', 'out', 'work', 'keep-work', 'allow-bash', 'expected', 'hard-stop', 'corpus'],
+  sample: ['run', 'n', 'seed', 'out', 'ingest', 'template-out', 'corpus'],
+  publish: ['run', 'name', 'out'],
   help: [],
 };
 
@@ -159,7 +166,51 @@ async function main(): Promise<void> {
     return;
   }
 
-  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | smoke --release-pilot | canary --release-pilot [--allow-bash] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
+  if (cmd === 'sample') {
+    const run = String(f.run ?? '');
+    if (!run) throw new Error('--run NAME is required');
+    const runDir = path.join(String(f.out ?? path.join(repo, 'docs/backtest/runs')), run);
+    const seed = Number(f.seed ?? DEFAULT_SEED);
+    const corpus = await loadCorpus(corpusFile, repo);
+    const { cases, candidates } = modelJudged(runDir);
+    const files = { runDir, rows: corpus.rows, referenceDiff: (row: (typeof corpus.rows)[number]) => diffOf(repo, row.sha) };
+    if (f.ingest) {
+      const mdFile = path.join(runDir, 'human-sample.md');
+      const pick = JSON.parse(fs.readFileSync(path.join(runDir, 'human-sample.pick.json'), 'utf8')) as { seed: number };
+      const answers = parseAnswers(fs.readFileSync(mdFile, 'utf8'), run, pick.seed);
+      fs.writeFileSync(path.join(runDir, 'human-answers.json'), JSON.stringify(HumanAnswersSchema.parse(answers), null, 2) + '\n');
+      const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8')) as { meta: RunMeta; rows: RowResult[] };
+      const m = computeMetrics(saved.rows, saved.meta, loadHumanAnswers(runDir));
+      fs.writeFileSync(path.join(runDir, 'report.md'), buildReport(saved.meta, corpus, saved.rows, m));
+      log(`ingested ${answers.cases.length} answers; human agreement with the model labels: ${m.human?.labelAgree}/${m.human?.answered}; report.md regenerated`);
+      return;
+    }
+    const chosen = pickCases(cases, Number(f.n ?? 2), seed);
+    const md = await renderSample({ run, seed, chosen, total: cases.length, files, candidates });
+    fs.writeFileSync(path.join(runDir, 'human-sample.md'), md);
+    fs.writeFileSync(path.join(runDir, 'human-sample.pick.json'), JSON.stringify({ seed, picked: chosen.map((c) => `${c.rowId}-c${c.k}`), total: cases.length }, null, 2) + '\n');
+    log(`wrote ${path.join(runDir, 'human-sample.md')}: ${chosen.map((c) => `${c.rowId}-c${c.k} (${c.label})`).join(', ')} of ${cases.length} model-judged cases, seed ${seed}`);
+    if (f['template-out']) {
+      fs.mkdirSync(path.dirname(String(f['template-out'])), { recursive: true });
+      fs.writeFileSync(String(f['template-out']), await renderSample({ run, seed, chosen, total: cases.length, files, candidates, template: true }));
+      log(`wrote template ${String(f['template-out'])} (no candidate source)`);
+    }
+    return;
+  }
+
+  if (cmd === 'publish') {
+    const run = String(f.run ?? '');
+    if (!run) throw new Error('--run NAME is required');
+    const name = String(f.name ?? run);
+    const src = path.join(String(f.out ?? path.join(repo, 'docs/backtest/runs')), run, 'report.md');
+    const dest = path.join(repo, 'docs/backtest/results', `${name}.md`);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, sanitizeReport(fs.readFileSync(src, 'utf8'), { name, home: os.homedir() }));
+    log(`wrote ${dest}`);
+    return;
+  }
+
+  log('usage: cli.ts freeze [--force] | check [--base-green [--write]] | sample --run NAME [--n 2] [--seed S] [--ingest] [--template-out FILE] | publish --run NAME [--name N] | smoke --release-pilot | canary --release-pilot [--allow-bash] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main().catch((e) => {

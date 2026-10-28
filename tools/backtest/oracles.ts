@@ -212,6 +212,8 @@ export interface OracleReport {
   loadErrors: string[];
   /** record() misuse in the acceptance tests (never silently ignored). */
   probeProblems: string[];
+  /** First failure message per failing acceptance or held-out test (human evidence; never fed to a model). */
+  failureMessages: Record<string, string>;
   probe: ResponseRecord[];
   rungs: { preMerge: boolean; conformance: boolean | null; shadow: boolean | null };
   conformanceViolations: string[];
@@ -293,13 +295,17 @@ export async function evaluateCheckout(opts: {
   // Held-out tests overlay (after the main run; reset again afterwards).
   const heldFiles = Object.keys(opts.heldOut.files);
   const heldOutcomes: Record<string, TestOutcome['status']> = {};
+  const heldMessages: Record<string, string> = {};
   if (heldFiles.length) {
     for (const [f, content] of Object.entries(opts.heldOut.files)) {
       fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
       fs.writeFileSync(path.join(dir, f), content);
     }
     const h = await stableRun(dir, cfg, cfg.evalAttempts, heldFiles);
-    for (const o of h.outcomes) heldOutcomes[key(o)] = o.status;
+    for (const o of h.outcomes) {
+      heldOutcomes[key(o)] = o.status;
+      if (o.status === 'failed' && o.message) heldMessages[key(o)] = o.message;
+    }
     for (const e of h.loadErrors) {
       loadErrors.push(`held-out: ${e}`);
       heldOutcomes[`${e.split(':')[0]}::<load>`] = 'failed';
@@ -307,6 +313,8 @@ export async function evaluateCheckout(opts: {
     await resetTree(dir);
   }
 
+  const failureMessages: Record<string, string> = {};
+  for (const x of run.outcomes) if (x.status === 'failed' && x.message && isAcceptance(x)) failureMessages[key(x)] = x.message;
   const preMerge =
     !run.crashed && !run.timedOut && failedRepoTests.length === 0 && newLoadErrors.length === 0 &&
     acceptance.total > 0 && acceptance.passed === acceptance.total &&
@@ -336,6 +344,7 @@ export async function evaluateCheckout(opts: {
     tsc: tscReport,
     loadErrors,
     probeProblems: malformed,
+    failureMessages: { ...failureMessages, ...heldMessages },
     probe,
     rungs: { preMerge, conformance, shadow },
     conformanceViolations,
