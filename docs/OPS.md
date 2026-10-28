@@ -562,3 +562,11 @@ returns a Worker bundle; `GET /sandbox/probe` returns the image's tool versions 
 - **Cost:** no instance runs until a build or probe starts one (`lite`), and every build destroys its container.
 - **Local e2e / CI:** the worker is not started by `scripts/start-e2e-workers.sh`; `SANDBOX_MODE=stub` with `BEEHIVE_LOCAL_DEV=1` returns a fixed bundle.
 
+### Gate test container (`TestSandbox`, beehive-sandbox-runner, slice 6 of `docs/REAL-GATE-IMPL-PLAN.md`)
+
+`POST /sandbox/test` runs a candidate commit's install and tests in a second container-backed Durable Object (`TestSandbox`, binding `TEST_SANDBOX`, image `workers/sandbox-runner/Dockerfile.test`). Until the binding exists the route answers 503 `NOT_CONFIGURED`.
+- **Deploys:** like the build container, the maintainer's push to the Artifacts repo; Workers Builds builds `Dockerfile.test` (~2 min) as a second container application. Do not run `wrangler deploy` by hand. `[exports.TestSandbox]` is a new class (additive); the existing `BuildSandbox` application and namespace are untouched.
+- **No platform cap:** under the `durable_object` policy `instance_type` and `max_instances` cannot be set in wrangler. The size (`standard-2`) is chosen in code; concurrency is bounded by the gate's queue consumer and the Spec DO counter (plan section 2), not by the platform.
+- **Cost:** no instance runs until a gate run starts one; every run destroys its container. No secret is added (`CLOUDFLARE_API_TOKEN` is the one the build container already uses).
+- **Rollback:** a previous worker version still carries both container applications; deleting the `TestSandbox` application is by hand (`wrangler containers list`, `wrangler containers delete <id>`) and only after the worker no longer binds it.
+

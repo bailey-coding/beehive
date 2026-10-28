@@ -221,8 +221,8 @@ Also: the queue must exist before the push that adds the consumer (human); the n
    files, `standard-2`), `SANDBOX_MODE=stub`, tests.
 5. **In progress (`agent/real-gate-slice5`).** `workers/shared/gate-run-schema.ts` + DO m13 (`gate_runs`, `candidates` columns in `schema.sql`/`schema-inline.ts`/m13, routes, dedupe/quota/caps, summary upsert,
    purge order) + migration tests [SPINE]. Own push; before 7a, so the gate's first call finds its routes.
-6. sandbox-runner `wrangler.toml` (**and `export { TestSandbox } from './test-sandbox'` in `workers/sandbox-runner/index.ts`**, deliberately left out of slice 4 so no undeclared Durable Object class is exported): a second `[[containers]]` block with only `class_name`, `scheduling_policy`, `images.<name>.dockerfile` (no `instance_type`, no `max_instances`, no `docker.io` image),
-   the binding, `[exports.TestSandbox]`, the Dockerfile; OPS paragraph. **Deployed by the maintainer's push (Workers Builds builds the image), not by hand** (§2).
+6. **Done 2026-10-28 on `agent/real-gate-slice6` (not merged, not deployed; the image is first built by the maintainer's push).** sandbox-runner `wrangler.toml` (**and `export { TestSandbox } from './test-sandbox'` in `workers/sandbox-runner/index.ts`**, deliberately left out of slice 4 so no undeclared Durable Object class is exported): a second `[[containers]]` block with only `class_name`, `scheduling_policy`, `images.<name>.dockerfile` (no `instance_type`, no `max_instances`, no `docker.io` image),
+   the binding, `[exports.TestSandbox]`, the Dockerfile (`Dockerfile.test`, since `Dockerfile` is the build image's); OPS paragraph. **Deployed by the maintainer's push (Workers Builds builds the image), not by hand** (§2).
 7a. Gate consumer **behind the old path**: queue + `SANDBOX_RUNNER` binding + `queue()` handler + `POST /gates/runs`; `/gates/pre-merge` still simulates. Maintainer creates the queue first.
    Then the **approved production run** (§7) through `POST /gates/runs`.
 7b. Switch: `/gates/pre-merge` enqueues; delete the simulation, the Map, the simulated routes, rewrite `gate.test.ts`; the `isProductionPush` guard in `queue-consumer`.
