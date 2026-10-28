@@ -461,3 +461,57 @@ describe('POST /sandbox/build', () => {
     expect(getByName).toHaveBeenCalled();
   });
 });
+
+describe('POST /sandbox/test', () => {
+  const sha = 'b'.repeat(40);
+  const passResult = { status: 'pass', failureClass: null, exitCode: 0 };
+  const testRun = vi.fn();
+  const envWith = (extra: Record<string, unknown>) => ({ ...mockEnv, ...extra }) as never;
+  const post = (env: never, body: unknown) =>
+    handler.fetch(createRequest('/sandbox/test', 'POST', body, { Authorization: 'Bearer test-auth-token' }), env, mockCtx as never);
+
+  it('runs in a sandbox keyed by namespace, repo and short commit and returns the verdict', async () => {
+    const getTest = vi.fn(() => ({ test: testRun }));
+    testRun.mockResolvedValueOnce(passResult);
+    const res = await post(envWith({ TEST_SANDBOX: { getByName: getTest } }), { repo: 'cand-1', commitSha: sha, namespace: 'my-org', installDirs: ['.', 'cli'] });
+    expect(res.status).toBe(200);
+    expect(await readJson(res)).toEqual({ success: true, result: passResult });
+    expect(getTest).toHaveBeenCalledWith(`test-my-org/cand-1-${'b'.repeat(8)}`);
+    expect(testRun).toHaveBeenCalledWith({ repo: 'cand-1', commitSha: sha, namespace: 'my-org', installDirs: ['.', 'cli'] });
+  });
+
+  it('rejects a malformed request with 400/422 before any container work', async () => {
+    const getTest = vi.fn(() => ({ test: testRun }));
+    const env = envWith({ TEST_SANDBOX: { getByName: getTest } });
+    for (const body of [{ repo: '../x', commitSha: sha }, { repo: 'ok', commitSha: 'abc' }, { repo: 'ok', commitSha: sha, installDirs: ['../x'] }, { repo: 'ok', commitSha: sha, installDirs: ['/etc'] }, { repo: 'ok', commitSha: sha, testCommand: [] }]) {
+      expect((await post(env, body)).status).toBe(400);
+    }
+    expect((await post(env, { repo: 'ok', commitSha: sha, namespace: 'a.b' })).status).toBe(422);
+    expect(getTest).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 NOT_CONFIGURED while the container is not bound, and 502 for an unknown failure', async () => {
+    const res = await post(envWith({}), { repo: 'ok', commitSha: sha });
+    expect(res.status).toBe(503);
+    expect(await readJson(res)).toMatchObject({ success: false, code: 'NOT_CONFIGURED' });
+    testRun.mockRejectedValueOnce(new Error('container exploded'));
+    const bad = await post(envWith({ TEST_SANDBOX: { getByName: () => ({ test: testRun }) } }), { repo: 'ok', commitSha: sha });
+    expect(bad.status).toBe(502);
+    testRun.mockRejectedValueOnce(new Error('SANDBOX_UNAVAILABLE: the test container could not be started'));
+    const down = await post(envWith({ TEST_SANDBOX: { getByName: () => ({ test: testRun }) } }), { repo: 'ok', commitSha: sha });
+    expect(down.status).toBe(503);
+    expect(await readJson(down)).toMatchObject({ code: 'SANDBOX_UNAVAILABLE' });
+  });
+
+  it('returns a fixed pass in stub mode only together with BEEHIVE_LOCAL_DEV=1', async () => {
+    const stubbed = await post(envWith({ SANDBOX_MODE: 'stub', BEEHIVE_LOCAL_DEV: '1' }), { repo: 'ok', commitSha: sha });
+    expect(await readJson(stubbed)).toMatchObject({ success: true, result: { status: 'pass', failureClass: null, instance: 'stub', logSha256: expect.stringMatching(/^[0-9a-f]{64}$/) } });
+    const real = await post(envWith({ SANDBOX_MODE: 'stub' }), { repo: 'ok', commitSha: sha });
+    expect(real.status).toBe(503); // not stubbed: falls through to the (unbound) real path
+  });
+
+  it('still validates in stub mode', async () => {
+    const res = await post(envWith({ SANDBOX_MODE: 'stub', BEEHIVE_LOCAL_DEV: '1' }), { repo: 'ok', commitSha: 'nope' });
+    expect(res.status).toBe(400);
+  });
+});

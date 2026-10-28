@@ -11,16 +11,13 @@
  * build, and an alarm destroys a container that a Durable Object restart left behind.
  */
 
-import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
-import { createRepoToken } from '../shared/artifacts';
 import { isValidNamespace } from '../shared/namespace';
+import { ContainerSandbox, REPO_RE, SHA_RE, scrub, type SandboxEnv } from './sandbox-base';
 
-export interface BuildEnv {
-  CLOUDFLARE_ACCOUNT_ID?: string;
-  CLOUDFLARE_API_TOKEN?: string;
-  /** Fallback Artifacts namespace when a build request names none (docs/SF-8-NAMESPACE-PLAN.md). */
-  ARTIFACTS_NAMESPACE?: string;
-}
+// Shared plumbing lives in sandbox-base.ts; re-exported so existing importers keep working.
+export { ArtifactsGateway, artifactsHost, isAllowedGitRequest, scrub, type GatewayProps } from './sandbox-base';
+
+export type BuildEnv = SandboxEnv;
 
 export interface BuildRequest {
   /** Artifacts repository name. */
@@ -70,24 +67,11 @@ export function parseBuildError(error: unknown): { code: BuildErrorCode; message
 export const MAX_BUNDLE_BYTES = 1024 * 1024;
 export const BUILD_DEADLINE_MS = 150_000;
 const BUILD_TIMEOUT_S = 60;
-const CLONE_TIMEOUT_S = 60;
-const CHECKOUT_TIMEOUT_S = 30;
 const TOKEN_TTL_S = 240; // a build is bounded by BUILD_DEADLINE_MS (150 s) plus clone/checkout, so the read token need not outlive it by much
-/** destroy()/setAlarm()/deleteAlarm() must never hold the serialized queue: a hung call is abandoned after this long. */
-const CLEANUP_TIMEOUT_MS = 10_000;
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
-/** The alarm only has to outlive the deadline; it destroys a container a restarted Durable Object forgot. */
-const ALARM_AFTER_MS = BUILD_DEADLINE_MS + 60_000;
 const COMPATIBILITY_DATE = '2026-10-01';
-const CA_CERT = '/etc/cloudflare/certs/cloudflare-containers-ca.crt';
 const WORKDIR = '/workspace/cand';
 const OUTDIR = '/workspace/out';
-/** The only request headers the container may pass on to Artifacts. */
-const FORWARDED_HEADERS = ['content-type', 'accept', 'git-protocol', 'content-encoding', 'user-agent'];
-
-const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-const SHA_RE = /^[0-9a-f]{40}$/;
-
 export function validateBuildRequest(body: unknown): BuildRequest {
   const b = (body ?? {}) as Record<string, unknown>;
   if (typeof b.repo !== 'string' || !REPO_RE.test(b.repo) || b.repo.includes('..')) {
@@ -103,134 +87,23 @@ export function validateBuildRequest(body: unknown): BuildRequest {
   return b.namespace === undefined ? { repo: b.repo, commitSha: b.commitSha } : { repo: b.repo, commitSha: b.commitSha, namespace: b.namespace };
 }
 
-export function artifactsHost(accountId: string): string {
-  return `${accountId}.artifacts.cloudflare.net`;
-}
-
-/** Request the gateway lets through: a read-only clone of exactly one repository, and nothing else. */
-export function isAllowedGitRequest(method: string, url: URL, namespace: string, repo: string): boolean {
-  const base = `/git/${namespace}/${repo}.git`;
-  if (method === 'GET' && url.pathname === `${base}/info/refs`) return url.search === '?service=git-upload-pack';
-  if (method === 'POST' && url.pathname === `${base}/git-upload-pack`) return url.search === '';
-  return false;
-}
-
-export interface GatewayProps {
-  repo: string;
-  namespace: string;
-  /** Short-lived read token minted by the Durable Object; it never enters the container. */
-  token: string;
-}
-
-function validGatewayProps(p: Partial<GatewayProps> | undefined): p is GatewayProps {
-  return !!p && typeof p.repo === 'string' && REPO_RE.test(p.repo) && isValidNamespace(p.namespace)
-    && typeof p.token === 'string' && p.token.length > 0;
-}
-
-/**
- * Receives every HTTPS request the build container makes to the Artifacts host. Props pick the one repository this
- * build may read and carry its read token. Anything else gets 403; redirects are refused; the container's own headers
- * are dropped except a short allowlist.
- */
-export class ArtifactsGateway extends WorkerEntrypoint<unknown, GatewayProps> {
-  async fetch(request: Request): Promise<Response> {
-    const props = this.ctx.props as Partial<GatewayProps> | undefined;
-    if (!validGatewayProps(props)) return new Response('Gateway is not configured for a build', { status: 403 });
-    if (!isAllowedGitRequest(request.method, new URL(request.url), props.namespace, props.repo)) {
-      return new Response('Only a read-only clone of the build repository is allowed', { status: 403 });
-    }
-    const headers = new Headers();
-    for (const name of FORWARDED_HEADERS) {
-      const value = request.headers.get(name);
-      if (value !== null) headers.set(name, value);
-    }
-    headers.set('Authorization', `Bearer ${props.token}`);
-    const res = await fetch(new Request(request, { headers, redirect: 'manual' }));
-    if (res.status >= 300 && res.status < 400) return new Response('Unexpected redirect from Artifacts', { status: 502 });
-    return res;
-  }
-}
-
-function decode(bytes: ArrayBuffer | Uint8Array): string {
-  return new TextDecoder().decode(bytes);
-}
-
-/** Short, single-purpose excerpt of tool output: ANSI and control characters removed, account-host URLs masked. */
-export function scrub(text: string, max: number): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\u001b\[[0-9;]*m/g, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ')
-    .replace(/https?:\/\/[^\s'"]*artifacts\.cloudflare\.net[^\s'"]*/g, '<artifacts-url>').trim().slice(0, max);
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms); });
-  return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
-}
-
-export class BuildSandbox extends DurableObject<BuildEnv> {
-  /** Tail of the call chain: build() and probe() on one instance run one at a time. */
-  private chain: Promise<unknown> = Promise.resolve();
+export class BuildSandbox extends ContainerSandbox<BuildEnv> {
   /** Builds in progress by `namespace/repo@sha`: a repeat call for the same commit (a retry after a caller's timeout) shares the running build. */
   private inflight = new Map<string, Promise<BuildResult>>();
-  /**
-   * Identity of the build that owns the container right now. When the deadline abandons a build its work keeps running in the
-   * background; every container action checks this first, so that leftover work throws instead of acting on the container of the
-   * build that was started after it.
-   */
-  private active: symbol | null = null;
 
-  constructor(ctx: DurableObjectState, env: BuildEnv) {
-    super(ctx, env);
-    // The inactivity timeout does not survive a restart of this Durable Object.
-    const container = ctx.container;
-    if (container?.running) void ctx.blockConcurrencyWhile(() => container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS));
+  protected deadlineMs() { return BUILD_DEADLINE_MS; }
+  protected inactivityMs() { return INACTIVITY_TIMEOUT_MS; }
+  protected logName() { return 'BuildSandbox'; }
+  protected failure(kind: 'deadline' | 'abandoned') {
+    return new BuildError('BUILD_FAILED', kind === 'deadline' ? `the build exceeded ${BUILD_DEADLINE_MS / 1000}s` : 'the build was abandoned');
   }
-
-  private get container(): Container {
-    const container = this.ctx.container;
-    if (!container) throw new Error('No container is configured');
-    return container;
-  }
-
-  private serialize<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.chain.then(fn, fn);
-    this.chain = result.catch(() => undefined);
-    return result;
-  }
-
-  /** Runs `fn` with a wall-clock deadline and an alarm backstop, and always stops the container afterwards. */
-  private async guarded<T>(fn: (token: symbol) => Promise<T>): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const token = Symbol('build');
-    this.active = token;
-    try {
-      await withTimeout(this.ctx.storage.setAlarm(Date.now() + ALARM_AFTER_MS), CLEANUP_TIMEOUT_MS, 'setAlarm');
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new BuildError('BUILD_FAILED', `the build exceeded ${BUILD_DEADLINE_MS / 1000}s`)), BUILD_DEADLINE_MS);
-      });
-      return await Promise.race([fn(token), deadline]);
-    } finally {
-      if (timer) clearTimeout(timer);
-      this.active = null; // abandoned work stops acting on the container before it is destroyed and reused
-      await this.stop();
-      try { await withTimeout(this.ctx.storage.deleteAlarm(), CLEANUP_TIMEOUT_MS, 'deleteAlarm'); } catch { /* the alarm is only a backstop */ }
-    }
-  }
-
-  /** Backstop for a container left running by a restart mid-build; also harmless when nothing is running. */
-  async alarm(): Promise<void> {
-    await this.stop();
-  }
-
-  private assertActive(token: symbol): void {
-    if (this.active !== token) throw new BuildError('BUILD_FAILED', 'the build was abandoned');
-  }
-
-  private async run(cmd: string[], env?: Record<string, string>): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    const proc = await this.container.exec(cmd, { cwd: '/workspace', ...(env ? { env } : {}) });
-    const out = await proc.output();
-    return { exitCode: out.exitCode, stdout: decode(out.stdout), stderr: decode(out.stderr) };
+  protected startOptions() {
+    return {
+      image: this.container.images.build,
+      instance: 'lite' as const,
+      // Reaches only the hostnames intercepted in build().
+      enableInternet: false,
+    };
   }
 
   /** Tool versions of the running image; proves a deploy shipped the image this code expects. */
@@ -271,7 +144,7 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     // One token per build, held by the gateway props. If this fails nothing has started yet.
     let readToken: string;
     try {
-      readToken = (await createRepoToken({ accountId, apiToken, namespace }, req.repo, 'read', TOKEN_TTL_S)).token;
+      readToken = await this.mintReadToken(accountId, apiToken, namespace, req.repo, TOKEN_TTL_S);
     } catch (error) {
       console.error('[BuildSandbox] read token mint failed:', error instanceof Error ? error.message : String(error));
       throw new BuildError('CLONE_FAILED', 'could not obtain read access to the repository');
@@ -280,27 +153,13 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     this.assertActive(token);
     await this.start();
     this.assertActive(token);
-    // Registering again replaces an earlier intercept, so this is safe on every build.
-    await this.container.interceptOutboundHttps(
-      artifactsHost(accountId),
-      (this.ctx.exports as unknown as { ArtifactsGateway: (o: { props: GatewayProps }) => Fetcher }).ArtifactsGateway({
-        props: { repo: req.repo, namespace, token: readToken },
-      })
-    );
-    const url = `https://${artifactsHost(accountId)}/git/${namespace}/${req.repo}.git`;
-    // No config file or hook of the candidate repo may influence git: nothing global/system, no hooks, no symlinks.
-    const gitEnv = { GIT_SSL_CAINFO: CA_CERT, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-    const git = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.symlinks=false'];
-
-    await run(['rm', '-rf', WORKDIR, OUTDIR]);
-    const clone = await run(['timeout', '--kill-after=5', String(CLONE_TIMEOUT_S), ...git, 'clone', '--quiet', '--no-checkout', url, WORKDIR], gitEnv);
-    if (clone.exitCode !== 0) {
-      console.error(`[BuildSandbox] clone of ${req.repo} failed (${clone.exitCode}):`, scrub(clone.stderr, 500));
-      throw new BuildError('CLONE_FAILED', `git clone failed (exit ${clone.exitCode}); the repository may not exist or may not be readable`);
+    const cloned = await this.cloneCommit(run, { accountId, namespace, repo: req.repo, commitSha: req.commitSha, token: readToken, clean: [WORKDIR, OUTDIR], workdir: WORKDIR });
+    if (!cloned.ok && cloned.stage === 'clone') {
+      console.error(`[BuildSandbox] clone of ${req.repo} failed (${cloned.exitCode}):`, scrub(cloned.stderr, 500));
+      throw new BuildError('CLONE_FAILED', `git clone failed (exit ${cloned.exitCode}); the repository may not exist or may not be readable`);
     }
-    const checkout = await run(['timeout', '--kill-after=5', String(CHECKOUT_TIMEOUT_S), ...git, '-C', WORKDIR, 'checkout', '--quiet', req.commitSha], gitEnv);
-    if (checkout.exitCode !== 0) {
-      console.error(`[BuildSandbox] checkout ${req.commitSha} failed (${checkout.exitCode}):`, scrub(checkout.stderr, 500));
+    if (!cloned.ok) {
+      console.error(`[BuildSandbox] checkout ${req.commitSha} failed (${cloned.exitCode}):`, scrub(cloned.stderr, 500));
       throw new BuildError('CLONE_FAILED', 'the commit was not found; only commits reachable from the repository branches or tags can be built');
     }
 
@@ -331,25 +190,5 @@ export class BuildSandbox extends DurableObject<BuildEnv> {
     const content = await run(['cat', outFile]);
     if (content.exitCode !== 0) throw new BuildError('BUILD_FAILED', 'could not read the build output');
     return { mainModule: 'index.js', modules: [{ name: 'index.js', content: content.stdout }], compatibilityDate: COMPATIBILITY_DATE, source, namespace };
-  }
-
-  private async start(): Promise<void> {
-    if (this.container.running) return;
-    this.container.start({
-      image: this.container.images.build,
-      instance: 'lite',
-      // Reaches only the hostnames intercepted in build().
-      enableInternet: false,
-    });
-    await this.container.setInactivityTimeout(INACTIVITY_TIMEOUT_MS);
-  }
-
-  /** One container per build: always stop it, even after a failure. */
-  private async stop(): Promise<void> {
-    try {
-      if (this.ctx.container?.running) await withTimeout(this.ctx.container.destroy('build finished'), CLEANUP_TIMEOUT_MS, 'destroy');
-    } catch (error) {
-      console.error('[BuildSandbox] destroy failed:', error instanceof Error ? error.message : String(error));
-    }
   }
 }

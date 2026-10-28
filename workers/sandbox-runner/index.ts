@@ -14,20 +14,29 @@
 
 import { authGate } from '../shared/auth';
 import { parseBuildError, validateBuildRequest, type BuildErrorCode, type BuildResult, type BuildSandbox } from './build-sandbox';
+import { parseTestError, validateTestRequest, type TestErrorCode, type TestResult, type TestSandbox } from './test-sandbox';
 
 // The Durable Object class (wrangler.toml [[containers]] / [exports]) and the outbound entrypoint it uses
 // (`ctx.exports.ArtifactsGateway`) must be exported from the entry module.
 export { BuildSandbox, ArtifactsGateway } from './build-sandbox';
+// Gate test container (docs/REAL-GATE-IMPL-PLAN.md): the entrypoint is exported now; `export { TestSandbox }` joins it in the wrangler.toml slice (6),
+// together with its [[containers]] block and [exports.TestSandbox]. Until then /sandbox/test answers 503.
+export { NpmRegistryGateway } from './test-sandbox';
 
 // Not exported: workerd treats every named export of this module as an entrypoint, and a plain object is not one.
 const BUILD_ERROR_STATUS: Record<BuildErrorCode, number> = {
   BAD_REQUEST: 400, BAD_NAMESPACE: 422, NOT_CONFIGURED: 503, CLONE_FAILED: 502, NO_ENTRY: 422, BUILD_FAILED: 422, TOO_LARGE: 413,
 };
 
+const TEST_ERROR_STATUS: Record<TestErrorCode, number> = {
+  BAD_REQUEST: 400, BAD_NAMESPACE: 422, NOT_CONFIGURED: 503, SANDBOX_UNAVAILABLE: 503,
+};
+
 interface Env {
   SPEC_DO: DurableObjectNamespace;
   ARTIFACTS: unknown; // Cloudflare Artifacts binding
   SANDBOX: DurableObjectNamespace<BuildSandbox>; // build container (Dockerfile in this directory)
+  TEST_SANDBOX?: DurableObjectNamespace<TestSandbox>; // gate test container; absent until it is bound in wrangler.toml
   BEEHIVE_LOCAL_DEV?: string;
   SANDBOX_MODE?: string;
   API_AUTH_TOKEN?: string;
@@ -140,6 +149,42 @@ export default {
         if (known) return Response.json({ success: false, code: known.code, error: known.message }, { status: BUILD_ERROR_STATUS[known.code] });
         console.error('[Sandbox] build failed:', error instanceof Error ? error.message : String(error));
         return Response.json({ success: false, error: 'the build failed for an internal reason' }, { status: 502 });
+      }
+    }
+
+    // POST /sandbox/test { repo, commitSha, namespace?, installDirs?, testCommand? } - Run a commit's own tests in a clean container
+    // (docs/REAL-GATE-IMPL-PLAN.md section 2). 200 `{ success: true, result }` for every verdict, pass, fail or error alike; a non-2xx is an
+    // infrastructure problem (the gate retries it). Local e2e: SANDBOX_MODE=stub with BEEHIVE_LOCAL_DEV=1 returns a fixed pass.
+    if (path === '/sandbox/test' && method === 'POST') {
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+      }
+      try {
+        const input = validateTestRequest(raw);
+        if (env.SANDBOX_MODE === 'stub' && env.BEEHIVE_LOCAL_DEV === '1') {
+          const logTail = 'stub run: nothing was executed';
+          const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(logTail));
+          const stub: TestResult = {
+            status: 'pass', failureClass: null, exitCode: 0,
+            phases: { install: { ms: 0, exit: 0, timedOut: false }, test: { ms: 0, exit: 0, timedOut: false } },
+            logTail, logSha256: [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join(''), truncated: false,
+            imageDigest: null, instance: 'stub', counts: { passed: 1, failed: 0, skipped: 0 },
+          };
+          return Response.json({ success: true, result: stub });
+        }
+        if (!env.TEST_SANDBOX) return Response.json({ success: false, code: 'NOT_CONFIGURED', error: 'the test container is not configured' }, { status: 503 });
+        // One sandbox per (repo, commit); the namespace is part of the name ('/' cannot occur in either), as for builds.
+        const instance = `test-${input.namespace ?? env.ARTIFACTS_NAMESPACE ?? 'default'}/${input.repo}-${input.commitSha.slice(0, 8)}`;
+        const result = await env.TEST_SANDBOX.getByName(instance).test(input);
+        return Response.json({ success: true, result });
+      } catch (error) {
+        const known = parseTestError(error);
+        if (known) return Response.json({ success: false, code: known.code, error: known.message }, { status: TEST_ERROR_STATUS[known.code] });
+        console.error('[Sandbox] test run failed:', error instanceof Error ? error.message : String(error));
+        return Response.json({ success: false, error: 'the test run failed for an internal reason' }, { status: 502 });
       }
     }
 
