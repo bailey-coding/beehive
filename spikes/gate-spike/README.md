@@ -1,8 +1,11 @@
-# beehive-gate-spike (throwaway)
+# beehive-gate-spike (throwaway) — DONE 2026-10-28
+
+**Historical record.** S1-S5 were run and the worker, its container application and the queue were deleted. Results: `docs/OPEN-QUESTIONS.md` (two entries dated 2026-10-28) and
+`docs/REAL-GATE-IMPL-PLAN.md` §2. The deploy steps below are obsolete (wrangler 4.151.1 also rejects the `docker.io` image they assumed; the run used a digest-pinned managed-registry image).
 
 Answers S1-S5 of `docs/REAL-GATE-IMPL-PLAN.md`. **Maintainer-only: agents must not deploy it.** It is a separate Worker with its own
 container application; it touches none of the ten workers and no ledger. It is outside `workers/`, so CI, typecheck and Workers
-Builds ignore it. Typechecked once against the repo's types; **never run**, so expect to fix small things at first deploy.
+Builds ignore it.
 
 ## Deploy (no local Docker needed: the image is a registry image)
 
