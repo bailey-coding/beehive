@@ -10,32 +10,41 @@ Completed items are removed, not struck through; history lives in git.*
 
 **Last updated:** 2026-10-28
 
-## Handoff (2026-10-28): start here
+## Handoff (2026-10-28, end of session): start here
 
-**State.** Production (the `cf` remote) and `origin/main` are at `589b280`: m12 (actors unique index, deployed 2026-10-27) plus the corrected About, Roadmap and README
-(gate shown as simulated, no Statsig, M8/M9/M12 added). `scripts/prod-health.sh` was green after each deploy. **Local `main` is ahead and UNPUSHED, not deployed**: the backtest
-harness 2 (bwrap Bash mode, `sample` command, results reports), the gate spike results, the real-gate plan rev 3, and **slice 5 (m13: `gate_runs`, strict routes, `preview_*`
-columns in the base schema; a Spec DO schema change)**. All five `test-org-e2e-sbx-*` orgs are purged. Ledger ops use the `beehive-system` agent actor
-(`9da1f201-89d4-4907-9e86-52426cffcb7d`, maintainer role); `X-Actor-ID` takes an actor UUID, not a name; actors cannot be deleted. The competition is over (not top 3): no deadline.
+**State.** Production (the `cf` remote) and `origin/main` are both at `523291b` (pushed and built 2026-10-28 on the maintainer's go-ahead; CI green before the cf push). It carries
+**m13** (slice 5: `gate_runs`, strict routes, `preview_*` columns in the base schema), the backtest harness 2, the gate spike results, real-gate plan rev 3, **slice 4** (`TestSandbox`,
+`NpmRegistryGateway`, `POST /sandbox/test`, `SANDBOX_MODE=stub`; independently reviewed, fixes applied) and **slice 6** (second `[[containers]]` block, `Dockerfile.test`, `TEST_SANDBOX`
+binding, `[exports.TestSandbox]`; independently reviewed). After the push `scripts/prod-health.sh` was green (all ten workers 200, Spec DO 200), `GET /sandbox/probe` still returned node
+v24.22.1, and a bad `POST /sandbox/test` answered 400 `BAD_REQUEST`.
+**Not verified:** `schema_version = m13` (no CLI reads DO SQLite: dashboard SQL editor only; trusted from the green Spec DO call), that the `TestSandbox` image built and the
+container application exists (the wrangler OAuth login returned `Authentication error`: re-run `wrangler login`; the `.env` token cannot read Workers Builds, use the dashboard), that
+`TEST_SANDBOX` is bound (a valid-shaped `POST /sandbox/test` starts a container = the first production run, needs approval), and a candidate preview write.
+Ledger ops use the `beehive-system` agent actor (`9da1f201-89d4-4907-9e86-52426cffcb7d`, maintainer role); `X-Actor-ID` takes an actor UUID; actors cannot be deleted. Competition over: no deadline.
 
 **Next, in order, each needing the maintainer's explicit go-ahead in a normal chat message:**
-1. Push local `main` to `origin` and wait for CI. Then, only if approved, `git push cf main:main` (deploys all ten workers, no ordering; carries m13). Verify after: the first Spec DO
-   request leaves `schema_version = m13`, `GET /api/candidates`, the old `/api/gate-verdicts` routes and a candidate preview write work. Rollback: revert push; an m12 build can still purge (OPS rollback floor).
-2. Real test gate, `docs/REAL-GATE-IMPL-PLAN.md` rev 3. Done: slices 1-3 and 5, spike S1-S5 (deleted; results in OPEN-QUESTIONS; `standard-2` chosen). Open: slice 4 (`TestSandbox` code, unreachable; the
-   maintainer declined its spawn once: ask), 6 (sandbox-runner `wrangler.toml`: a second container class, a human `cf` push; the image is built from a Dockerfile by Workers Builds), 7a/7b, 8, 9.
+1. Verify the slice 6 push: Workers Builds log for `beehive-sandbox-runner` (two images built, elapsed time against the 5.5 min kill precedent), `wrangler containers list` / `images list` after
+   `wrangler login`, no 10086 lifecycle error. If the sandbox-runner build failed, the other nine are unaffected; fix forward (rollback of this worker is probably forward-fix only, OPS).
+2. Real test gate, `docs/REAL-GATE-IMPL-PLAN.md` rev 3. Done: slices 1-6, spike S1-S5. Open: 7a (gate consumer behind the old path: queue + `SANDBOX_RUNNER` binding + `queue()` handler +
+   `POST /gates/runs`; the maintainer creates the queue first; then the approved production run), 7b, 8, 9. The first run must check: `imageDigest` (expected `null`, wrangler tags images),
+   `instance = standard-2`, bash ran the `ulimit` wrapper (no exit 125), `ulimit -u 512` with a multi-threaded test run, container destroyed. Slice 7a must make the gate's class table and zod
+   schema accept the `killed` class, and choose the gate abort (e.g. 630 s) above the runner's 600 s deadline.
 3. MR flow, `docs/MR-FLOW-PLAN.md` rev 2: decisions accepted as recommended; reviewer-agent threat model must be accepted before slice 3; Artifacts non-fast-forward push and branch protection are
    unprobed (spike before slice 2).
 4. Backtest (`docs/SPEC-BACKTEST-PLAN.md`, `tools/backtest/`, summaries in `docs/backtest/results/`): pilot-1 A1 complete; pilot-2 A4/A5/A11 complete, A2's spec failed (prompt fixed since, not re-run).
    Pending from the maintainer: answers to the 2-case human sample (`docs/backtest/runs/pilot-2/human-sample.md`, then `npm run backtest -- sample --run pilot-2 --ingest`); release of the Bash canary
-   (`canary --release-pilot --allow-bash`, about 4 calls). Corpus is 10 strict rows (A1, A2, A4, A5, A11, A6-A10; A6-A10 have no issue texts yet); the decision rule needs 11, so results stay
-   inconclusive by construction. Global call ledger `tools/backtest/.ledger.json` (gitignored): 288/850 used. Models: Sonnet 5.5 medium, same-family grader (pilot only).
-5. Housekeeping: `.env` holds an obsolete `SPIKE_TOKEN` and is mode 644; decide the project direction after the competition and update AGENTS.md framing then.
+   (`canary --release-pilot --allow-bash`, about 4 calls). Corpus is 10 strict rows (A6-A10 have no issue texts yet); the decision rule needs 11, so results stay inconclusive by construction.
+   Global call ledger `tools/backtest/.ledger.json` (gitignored): 288/850 used. Models: Sonnet 5.5 medium, same-family grader (pilot only).
+5. Housekeeping: `.env` holds an obsolete `SPIKE_TOKEN` and is mode 644; decide the project direction after the competition and update AGENTS.md framing then. Optional: a test tying
+   `workers/sandbox-runner/wrangler.toml` exports to `index.ts` (review N3).
 
-**How to work here (learned).** The permission layer blocks, and you must stop and ask instead of working around: a `cf` push when the approval arrived as a mid-turn notification rather than a chat message,
-writing secrets to a worker, minting registry credentials, installing external binaries, and agent prompts with deploy wording. A plain chat message from the maintainer works. `.env`'s
-`CLOUDFLARE_API_TOKEN` cannot manage containers or read Workers Builds: use the wrangler OAuth login (`env -u CLOUDFLARE_API_TOKEN ...`). A background shell that itself backgrounds the real work (`( ... ) &`)
-notifies early: run the real command as the task. Paseo subagents may start in `acceptEdits` mode and ask permission for every shell command (auto mode avoids it). Agents hit session limits: have them push
-`scratch/*` refs after each step. Review every spine change with an independent agent before merging.
+**How to work here (learned).** The permission layer blocks, and you must stop and ask instead of working around: a `cf` push when the approval arrived as a mid-turn notification rather than a chat
+message, writing secrets to a worker, minting registry credentials, installing external binaries, and agent prompts with deploy wording (describe local validation only, never mention deploying). A plain
+chat message from the maintainer works, including "push to origin, and to cf once CI passes". `.env`'s `CLOUDFLARE_API_TOKEN` cannot manage containers or read Workers Builds: use the wrangler OAuth
+login (`env -u CLOUDFLARE_API_TOKEN ...`; it expires). A background shell that itself backgrounds the real work (`( ... ) &`) notifies early: run the real command as the task; no chained `sleep`, use a
+loop in a background task. Paseo subagents: create with `modeId: auto` (acceptEdits asks for every shell command); review agents in `plan` mode try to call ExitPlanMode: tell them to report as their final
+message, and deny the request. Agents hit session limits: have them push `scratch/*` refs after each step. A review agent's temp-dir `rm -rf` is fine once the path is checked. Review every spine or
+deploy-config change with an independent agent before merging. Sonnet 5.5 medium is the subagent default.
 
 ## Where we are
 
