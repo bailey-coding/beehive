@@ -32,11 +32,30 @@ dockerfile = "./Dockerfile"
 name = "SANDBOX"
 class_name = "BuildSandbox"
 
+# Gate test sandbox (docs/REAL-GATE-IMPL-PLAN.md section 2): its own container application and image (Dockerfile.test,
+# built by Workers Builds on the push). Under the durable_object policy wrangler rejects `instance_type` and
+# `max_instances` (the size, `standard-2`, is chosen in code) and a `docker.io` image, so only these keys are set.
+[[containers]]
+class_name = "TestSandbox"
+scheduling_policy = "durable_object"
+
+[containers.images.test]
+dockerfile = "./Dockerfile.test"
+
+[[durable_objects.bindings]]
+name = "TEST_SANDBOX"
+class_name = "TestSandbox"
+
 # Declarative class lifecycle (replaces the legacy migrations v1 that created the 0.x `Sandbox` class). A tombstone
 # `deleted` fails while the live worker still binds the namespace (error 10086, seen on the first attempt), so the old
 # class (no data) is renamed: the namespace and the SANDBOX binding carry over to BuildSandbox. The 0.x container
 # application was deleted by hand before this deploy.
 [exports.BuildSandbox]
+type = "durable-object"
+storage = "sqlite"
+
+# Additive: a new class with its own namespace; the live worker never binds it before this deploy.
+[exports.TestSandbox]
 type = "durable-object"
 storage = "sqlite"
 

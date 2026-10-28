@@ -19,9 +19,8 @@ import { parseTestError, validateTestRequest, type TestErrorCode, type TestResul
 // The Durable Object class (wrangler.toml [[containers]] / [exports]) and the outbound entrypoint it uses
 // (`ctx.exports.ArtifactsGateway`) must be exported from the entry module.
 export { BuildSandbox, ArtifactsGateway } from './build-sandbox';
-// Gate test container (docs/REAL-GATE-IMPL-PLAN.md): the entrypoint is exported now; `export { TestSandbox }` joins it in the wrangler.toml slice (6),
-// together with its [[containers]] block and [exports.TestSandbox]. Until then /sandbox/test answers 503.
-export { NpmRegistryGateway } from './test-sandbox';
+// Gate test container (docs/REAL-GATE-IMPL-PLAN.md): declared in wrangler.toml by its own [[containers]] block and [exports.TestSandbox].
+export { TestSandbox, NpmRegistryGateway } from './test-sandbox';
 
 // Not exported: workerd treats every named export of this module as an entrypoint, and a plain object is not one.
 const BUILD_ERROR_STATUS: Record<BuildErrorCode, number> = {
@@ -36,7 +35,7 @@ interface Env {
   SPEC_DO: DurableObjectNamespace;
   ARTIFACTS: unknown; // Cloudflare Artifacts binding
   SANDBOX: DurableObjectNamespace<BuildSandbox>; // build container (Dockerfile in this directory)
-  TEST_SANDBOX?: DurableObjectNamespace<TestSandbox>; // gate test container; absent until it is bound in wrangler.toml
+  TEST_SANDBOX?: DurableObjectNamespace<TestSandbox>; // gate test container (Dockerfile.test); optional so a mixed-version or local run without the binding answers 503
   BEEHIVE_LOCAL_DEV?: string;
   SANDBOX_MODE?: string;
   API_AUTH_TOKEN?: string;

@@ -1,0 +1,18 @@
+# Gate test image (docs/REAL-GATE-IMPL-PLAN.md section 2). Commands run through the Durable Object container API.
+# git clones the candidate commit through the Artifacts intercept; bash runs the phase wrapper (dash has no `ulimit -u`);
+# npm and node come with the base. Nothing candidate-specific is preinstalled: install and test run per request.
+# Same base as the build image (node:24-trixie-slim, digest read from Docker Hub 2026-10-25, node v24.22.1 / npm 11.19.1 /
+# git 2.47.3 as measured in the spike); bump both deliberately.
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+
+# bash and findutils are in the base already; listing them makes the dependency explicit and fails the image build if one is missing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates findutils git \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v bash find git npm >/dev/null
+
+# Runs as the unprivileged `node` user (uid 1000) in /workspace (clone, logs, npm config and cache live there).
+RUN mkdir -p /workspace && chown node:node /workspace
+USER node
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

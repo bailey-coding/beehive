@@ -1114,3 +1114,14 @@ Code only; no `wrangler.toml`, Dockerfile or Spec DO change. Unit-tested with a 
 - **Review fixes (same day).** `TestSandbox` is no longer exported from `index.ts` (slice 6 adds it; plan item 6); the dry-run bundle with `[[containers]]` removed still builds with only `NpmRegistryGateway` exported. The phase wrapper now applies `ulimit` inside `{ ...; } >>"$log" 2>&1` and exits 125 on failure, which `TestSandbox` throws as `SANDBOX_UNAVAILABLE` (a child that exits 125 is remapped to 1). Only the wrapper's own 124 (or 137 after the KILL with the limit elapsed) is a timeout; any other 137 is the new failure class **`killed`** (an outside SIGKILL, e.g. the OOM killer), which the gate's zod schema and class table (plan section 4) must learn in slice 7a. `.npmrc` removal is `find <clone> -name .npmrc -not -path '*/node_modules/*' -delete`; `testCommand[0]` may not start with `-`.
 - **Not done (optional in the plan):** `peakMemMb` sampling. The verdict omits the field.
 
+
+## 2026-10-28: Real-gate slice 6, TestSandbox container config (`agent/real-gate-slice6`, not merged or deployed)
+
+Config, image and export only; nothing here ran on the platform (no Docker on this host, no deploy).
+- **Files.** `workers/sandbox-runner/wrangler.toml`: second `[[containers]]` (`class_name`, `scheduling_policy = "durable_object"`, `[containers.images.test] dockerfile = "./Dockerfile.test"`), binding `TEST_SANDBOX`, `[exports.TestSandbox]` (new class, sqlite). `index.ts` exports `TestSandbox`. `Dockerfile.test`: same digest-pinned `node:24-trixie-slim` as the build image, plus bash, ca-certificates, findutils, git (clone, the bash phase wrapper, `find`/`test`); no esbuild.
+- **Unverified until the maintainer's push (checks in the slice 6 report).**
+  1. Whether two `[[containers]]` blocks with different `dockerfile` paths in one directory each build with their own context; the build image's `Dockerfile` copies nothing, so a shared context is harmless either way.
+  2. That the key `images.test` is what `ctx.container.images.test` (`test-sandbox.ts:197`) reads; a wrong key makes `start` fail with `SANDBOX_UNAVAILABLE`, not a verdict.
+  3. Whether a new exported Durable Object class plus its container application deploys in the same version as the existing renamed `Sandbox` entry without a lifecycle error (10086 applied only to deleting a bound class).
+  4. `imageDigest` is expected to be `null`: wrangler 4.151.1 tags Dockerfile-built images (`<script>-<class>-<image>:wrangler-<time>`, no digest), as for the build image. The base-image digest pin in `Dockerfile.test` is the reproducibility anchor.
+- **Local checks run:** TOML parse, typecheck, sandbox-runner tests (97 pass), all clean. Independent review: `wrangler deploy --dry-run` on the real config passes validation and stops at the Docker check; with containers stripped the bundle builds. CI's dry-run (Docker available) builds `Dockerfile.test` first.
