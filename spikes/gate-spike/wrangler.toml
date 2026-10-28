@@ -14,9 +14,11 @@ ARTIFACTS_NAMESPACE = "default"
 class_name = "SpikeSandbox"
 scheduling_policy = "durable_object"
 
-# A registry image: no local Docker needed (docs/OPEN-QUESTIONS.md 2026-10-24). node, npm and git are in it; the entrypoint is replaced by `sleep` in code.
+# The sandbox-runner's build image, already in the managed registry (wrangler 4.151.1 refuses docker.io references: the image must be
+# digest-pinned in registry.cloudflare.com). Digest resolved with crane 2026-10-28 from tag wrangler-mvrnwhxo of
+# beehive-sandbox-runner-buildsandbox-build. node, npm, git and esbuild are in it; the entrypoint is replaced by `sleep` in code.
 [containers.images.spike]
-image = "docker.io/cloudflare/sandbox:0.12.14"
+image = "registry.cloudflare.com/bb21fa3c93c3cc02ac97b091b2d57811/beehive-sandbox-runner-buildsandbox-build@sha256:1677b9e5bda4770148679c4445af6fb7feb42bbc4ba66b581930744ff7cee2bf"
 
 [[durable_objects.bindings]]
 name = "SPIKE"
