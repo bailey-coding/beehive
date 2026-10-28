@@ -184,7 +184,9 @@ describe('migration m12: unique index on actors.github_user_id', () => {
   });
 
   describe('every legacy ledger shape in the matrix', () => {
-    describe.each(legacyFixtures().map((f) => [f.name, f] as const))('from %s', (_name, fx) => {
+    // Shapes that start at m12 or later already have the index (or are past the step): only earlier starts exercise it
+    const beforeM12 = (f: { startVersion: string | null }) => f.startVersion === null || Number(f.startVersion.slice(1)) < 12;
+    describe.each(legacyFixtures().filter(beforeM12).map((f) => [f.name, f] as const))('from %s', (_name, fx) => {
       const start = () => loadLegacyLedger({ ddl: fx.ddl, seed: fx.seed, version: fx.startVersion });
 
       it('migrates to m12 with the index (the matrix seed holds no duplicate)', async () => {
