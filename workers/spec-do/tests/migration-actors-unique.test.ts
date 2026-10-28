@@ -43,9 +43,9 @@ async function m11Ledger(): Promise<SqliteState> {
 
 describe('migration m12: unique index on actors.github_user_id', () => {
   it('the latest version is m12 and a fresh ledger has the partial index and starts there', async () => {
-    expect(LATEST_VERSION).toBe('m12');
+    expect(Number(LATEST_VERSION.slice(1))).toBeGreaterThanOrEqual(12); // m12 shipped; later steps move LATEST_VERSION on
     const fresh = await freshLedger();
-    expect(readVersion(fresh)).toBe('m12');
+    expect(readVersion(fresh)).toBe(LATEST_VERSION);
     expect(hasIndex(fresh)).toBe(true);
     const sql = all(fresh, `SELECT sql FROM sqlite_master WHERE name = '${INDEX}'`)[0].sql as string;
     expect(sql).toMatch(/CREATE UNIQUE INDEX/);
@@ -62,7 +62,7 @@ describe('migration m12: unique index on actors.github_user_id', () => {
 
     await makeSpecDo(s).init();
 
-    expect(readVersion(s)).toBe('m12');
+    expect(readVersion(s)).toBe(LATEST_VERSION);
     expect(hasIndex(s)).toBe(true);
     expect(actorRows(s)).toEqual(before);
 
@@ -74,7 +74,7 @@ describe('migration m12: unique index on actors.github_user_id', () => {
     // re-running the step itself from m11 is a no-op too (the index is there already)
     s.raw.prepare("UPDATE metadata SET value = 'm11' WHERE key = 'schema_version'").run();
     await makeSpecDo(makeSqliteState(s.raw, s.kv)).init();
-    expect(readVersion(s)).toBe('m12');
+    expect(readVersion(s)).toBe(LATEST_VERSION);
     expect(objects(s)).toBe(schema);
     expect(actorRows(s)).toEqual(before);
   });
@@ -95,7 +95,7 @@ describe('migration m12: unique index on actors.github_user_id', () => {
     insertActor(s, 'e1', '');
     insertActor(s, 'e2', '');
     await makeSpecDo(s).init();
-    expect(readVersion(s)).toBe('m12');
+    expect(readVersion(s)).toBe(LATEST_VERSION);
     expect(hasIndex(s)).toBe(true);
   });
 
@@ -168,7 +168,7 @@ describe('migration m12: unique index on actors.github_user_id', () => {
       s.raw.prepare("UPDATE actors SET github_user_id = NULL WHERE id IN ('zeta', 'delta', 'epsilon')").run();
       await spec.init();
 
-      expect(readVersion(s)).toBe('m12');
+      expect(readVersion(s)).toBe(LATEST_VERSION);
       expect(hasIndex(s)).toBe(true);
       expect(all(s, 'SELECT COUNT(*) AS n FROM actors')[0].n).toBe(7);
       expect(() => insertActor(s, 'again', '4242')).toThrow(/UNIQUE constraint failed/);
@@ -179,18 +179,20 @@ describe('migration m12: unique index on actors.github_user_id', () => {
       insertActor(s, 'x', 'Abc');
       insertActor(s, 'y', 'abc');
       await makeSpecDo(s).init();
-      expect(readVersion(s)).toBe('m12');
+      expect(readVersion(s)).toBe(LATEST_VERSION);
     });
   });
 
   describe('every legacy ledger shape in the matrix', () => {
-    describe.each(legacyFixtures().map((f) => [f.name, f] as const))('from %s', (_name, fx) => {
+    // Shapes that start at m12 or later already have the index (or are past the step): only earlier starts exercise it
+    const beforeM12 = (f: { startVersion: string | null }) => f.startVersion === null || Number(f.startVersion.slice(1)) < 12;
+    describe.each(legacyFixtures().filter(beforeM12).map((f) => [f.name, f] as const))('from %s', (_name, fx) => {
       const start = () => loadLegacyLedger({ ddl: fx.ddl, seed: fx.seed, version: fx.startVersion });
 
       it('migrates to m12 with the index (the matrix seed holds no duplicate)', async () => {
         const s = start();
         await makeSpecDo(s).init();
-        expect(readVersion(s)).toBe('m12');
+        expect(readVersion(s)).toBe(LATEST_VERSION);
         expect(hasIndex(s)).toBe(true);
       });
 
@@ -210,7 +212,7 @@ describe('migration m12: unique index on actors.github_user_id', () => {
 
         s.raw.prepare("UPDATE actors SET github_user_id = NULL WHERE id = 'dup-2'").run();
         await spec.init();
-        expect(readVersion(s)).toBe('m12');
+        expect(readVersion(s)).toBe(LATEST_VERSION);
         expect(hasIndex(s)).toBe(true);
       });
     });

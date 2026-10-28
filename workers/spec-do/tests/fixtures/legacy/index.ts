@@ -84,6 +84,23 @@ function m2FromFirstCommit(): string {
   return sql.slice(0, sql.lastIndexOf('-- ====', at));
 }
 
+// The m12 step's index, as it was written (a copy, not an import: the fixture must not move with schema-inline.ts)
+const M12_INDEX =
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_actors_github_user_id_unique ON actors(github_user_id) WHERE github_user_id IS NOT NULL AND github_user_id != ''";
+
+/**
+ * Ledgers created FRESH at m11 or m12: a fresh ledger starts at the latest version without running any step, and its base
+ * candidates table had no preview_* columns (only the m1 -> m2 step added them, and it never runs once a version is stamped).
+ * These are the shapes the m13 step's addColumnsIfMissing exists for.
+ */
+function freshAtM11M12(): LegacyFixture[] {
+  const withoutPreview = historicalDdl('m11-19705f8.sql', 11).filter((sql) => !/ADD COLUMN preview_/.test(sql));
+  return [
+    { name: 'm11-fresh-no-preview', ddl: withoutPreview, seed: BASE_SEED, startVersion: 'm11' },
+    { name: 'm12-fresh-no-preview', ddl: [...withoutPreview, M12_INDEX], seed: BASE_SEED, startVersion: 'm12' },
+  ];
+}
+
 export function legacyFixtures(): LegacyFixture[] {
   const m2 = m2FromFirstCommit();
   return [
@@ -96,5 +113,8 @@ export function legacyFixtures(): LegacyFixture[] {
       startVersion: 'm2',
     },
     ...historical(),
+    // m12 as a migrated ledger (preview columns from m2) and as a fresh one
+    { name: 'm12-migrated', ddl: [...historicalDdl('m11-19705f8.sql', 11), M12_INDEX], seed: BASE_SEED, startVersion: 'm12' },
+    ...freshAtM11M12(),
   ];
 }

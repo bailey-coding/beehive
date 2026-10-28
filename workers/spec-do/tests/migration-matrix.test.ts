@@ -45,12 +45,12 @@ function originalColumnRows(s: SqliteState, before: { table: string; cols: strin
 
 afterEach(() => vi.restoreAllMocks());
 
-// Finding (OPEN-QUESTIONS 2026-10-26): a fresh ledger lacks these three columns that every migrated ledger
-// has, and updateCandidatePreview writes them. A4 leaves them out so it still checks everything else.
+// Finding (OPEN-QUESTIONS 2026-10-26), fixed by m13 and the base candidates table: a fresh ledger lacked these three
+// columns that every migrated ledger has, and updateCandidatePreview writes them.
 const PREVIEW_COLUMNS = ['preview_url', 'preview_worker_name', 'preview_created_at'];
 
 describe('migration matrix: init over every historical ledger shape', () => {
-  it.fails('a fresh ledger has the candidates preview columns that every migrated ledger has', async () => {
+  it('a fresh ledger has the candidates preview columns that every migrated ledger has', async () => {
     const fresh = await freshLedger();
     expect(columnsOf(fresh, 'candidates').map((c) => c.name)).toEqual(expect.arrayContaining(PREVIEW_COLUMNS));
   });
@@ -58,7 +58,7 @@ describe('migration matrix: init over every historical ledger shape', () => {
   it('the latest version is the fresh ledger version and the matrix starts below it', () => {
     expect(LATEST_VERSION).toMatch(/^m\d+$/);
     // LATEST_VERSION comes from a fresh ledger, so pin a floor: lowering the constant and removing the last step together must not pass
-    expect(Number(LATEST_VERSION.slice(1))).toBeGreaterThanOrEqual(12);
+    expect(Number(LATEST_VERSION.slice(1))).toBeGreaterThanOrEqual(13);
     expect(legacyFixtures().length).toBeGreaterThanOrEqual(14);
   });
 
@@ -133,10 +133,9 @@ describe('migration matrix: init over every historical ledger shape', () => {
       await makeSpecDo(s).init();
       const fresh = await freshLedger();
       expect(userTables(s)).toEqual(userTables(fresh).filter((t) => t !== missingTable));
-      const skip = (t: string, name: unknown) => t === 'candidates' && PREVIEW_COLUMNS.includes(String(name));
       const byName = (a: { name: unknown }, b: { name: unknown }) => String(a.name).localeCompare(String(b.name));
       for (const t of userTables(fresh).filter((x) => x !== missingTable)) {
-        const shape = (x: SqliteState) => columnsOf(x, t).filter((c) => !skip(t, c.name)).map((c) => ({ name: c.name, type: c.type, notnull: c.notnull, dflt: c.dflt_value, pk: c.pk }));
+        const shape = (x: SqliteState) => columnsOf(x, t).map((c) => ({ name: c.name, type: c.type, notnull: c.notnull, dflt: c.dflt_value, pk: c.pk }));
         // column order differs when a column was appended by ALTER: compare sorted by name
         expect(shape(s).sort(byName), `columns of ${t}`).toEqual(shape(fresh).sort(byName));
         expect(indexNames(s, t), `indexes of ${t}`).toEqual(indexNames(fresh, t));

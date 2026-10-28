@@ -51,13 +51,28 @@ async function purge(body: unknown, binding: ReturnType<typeof previewManager>['
 }
 
 /** org -> repo -> spec -> two candidates (+ a verdict), tombstoned and aged past the default 24h */
-async function seedTombstoned(name: string, ageHours = 25) {
+async function startRun(candidateId: string, commitSha: string) {
+  return post('/api/gate-runs', { candidateId, gate: 'pre-merge', commitSha, decidedBy: agentId });
+}
+
+async function seedTombstoned(name: string, ageHours = 25, withRuns = false) {
   const org = spec.createOrganization(name, 'artifacts');
   const repo = spec.createRepository(`${name}-repo`, org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'ns');
   const s = spec.createSpec(`${name}-spec`, 'd', 'contract', [], org.id, agentId);
   const c1 = spec.createCandidate(s.id, repo.id, 'sha1', 'base', agentId);
   const c2 = spec.createCandidate(s.id, repo.id, 'sha2', 'base', agentId);
   spec.createGateVerdict(c1.id, 'pre-merge', 'pass', 90, 0, agentId);
+  if (withRuns) {
+    // one finished run on c1 (its legacy verdict row above stays; the summary upsert would conflict-update it), one running on c2
+    const run = await startRun(c1.id, 'a'.repeat(40));
+    await post(`/api/gate-runs/${run.runId}/result`, {
+      status: 'pass',
+      checks: { tests: 'verified', conformance: 'not_run', complexity: 'not_run' },
+      timings: {},
+      instance: 'standard-2',
+    });
+    await startRun(c2.id, 'b'.repeat(40));
+  }
   const res = await spec.fetch(new Request('https://spec-do.internal/internal/tombstone', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Actor-ID': maintainerId },
@@ -84,6 +99,83 @@ beforeEach(async () => {
   maintainerId = spec.createActor('human', 'maint').id;
   agentId = spec.createActor('agent', 'agent-1').id;
   store.raw.prepare(`UPDATE actors SET role = 'maintainer' WHERE id = ?`).run(maintainerId);
+});
+
+const post = async (path: string, body: unknown) => {
+  const res = await spec.fetch(new Request(`https://spec-do.internal${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { data: Record<string, any> }).data;
+};
+
+describe('purge of an organization with gate runs (m13, foreign keys on)', () => {
+  it('removes gate_runs with their candidates, before the candidates, and leaves another organization\'s runs alone', async () => {
+    const a = await seedTombstoned('org-a', 25, true);
+    const keep = spec.createOrganization('keep', 'artifacts');
+    const keepRepo = spec.createRepository('keep-repo', keep.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'keep');
+    const keepSpec = spec.createSpec('keep-spec', 'd', 'contract', [], keep.id, agentId);
+    const keepCand = spec.createCandidate(keepSpec.id, keepRepo.id, 'sha', 'base', agentId);
+    await startRun(keepCand.id, 'e'.repeat(40));
+    expect(count('gate_runs')).toBe(3);
+
+    const dry = await purge({ orgNamePrefix: 'org-' });
+    expect(dry.json.data!.counts).toMatchObject({ gate_runs: 2, candidates: 2, gate_verdicts: 1 });
+    const total = dry.json.data!.total as number;
+    const res = await purge(real(total));
+    expect(res.status).toBe(200);
+
+    expect(count('gate_runs')).toBe(1);
+    expect(store.raw.prepare('SELECT candidate_id FROM gate_runs').get()).toEqual({ candidate_id: keepCand.id });
+    expect(count('candidates')).toBe(1);
+    expect(a.c1.id).toBeTruthy();
+    // a second purge has nothing left to do
+    expect((await purge(real(0))).json.data!.total).toBe(0);
+  });
+});
+
+describe('purge sweep of orphaned gate runs (no FK on candidate_id; docs/OPS.md rollback floor)', () => {
+  /** What an m12-floor purge leaves: the org's rows gone, its gate_runs still there */
+  function floorStyleDelete(orgId: string) {
+    const cands = '(SELECT id FROM candidates WHERE repository_id IN (SELECT id FROM repositories WHERE organization_id = ?))';
+    store.raw.prepare(`DELETE FROM gate_verdicts WHERE candidate_id IN ${cands}`).run(orgId);
+    store.raw.prepare(`DELETE FROM candidates WHERE id IN ${cands}`).run(orgId);
+    store.raw.prepare('DELETE FROM repositories WHERE organization_id = ?').run(orgId);
+    store.raw.prepare('DELETE FROM specs WHERE organization_id = ?').run(orgId);
+    store.raw.prepare('DELETE FROM organizations WHERE id = ?').run(orgId);
+  }
+
+  it('orphans left by a floor-style delete are removed by the next m13 purge, counted in its plan, and not touched when nothing is purged', async () => {
+    const a = await seedTombstoned('org-a', 25, true);
+    floorStyleDelete(a.org.id);
+    expect(count('gate_runs')).toBe(2);
+    expect(count('candidates')).toBe(0);
+
+    // no eligible organization: the plan is empty and the orphans stay
+    const idle = await purge({ orgNamePrefix: 'org-' });
+    expect(idle.json.data!.total).toBe(0);
+    expect(count('gate_runs')).toBe(2);
+
+    const b = await seedTombstoned('org-b', 25, true);
+    expect(count('gate_runs')).toBe(4);
+    const dry = await purge({ orgNamePrefix: 'org-' });
+    expect(dry.json.data!.counts).toMatchObject({ gate_runs: 4 });
+    const res = await purge(real(dry.json.data!.total as number));
+    expect(res.status).toBe(200);
+    expect(count('gate_runs')).toBe(0);
+    expect(count('organizations')).toBe(0);
+    expect(b.c1.id).toBeTruthy();
+  });
+
+  it('a run of a candidate that still exists is never swept', async () => {
+    await seedTombstoned('org-a', 25, true);
+    const keep = spec.createOrganization('keep', 'artifacts');
+    const keepRepo = spec.createRepository('keep-repo', keep.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'keep');
+    const keepSpec = spec.createSpec('keep-spec', 'd', 'contract', [], keep.id, agentId);
+    const keepCand = spec.createCandidate(keepSpec.id, keepRepo.id, 'sha', 'base', agentId);
+    await startRun(keepCand.id, 'e'.repeat(40));
+    const dry = await purge({ orgNamePrefix: 'org-' });
+    expect((await purge(real(dry.json.data!.total as number))).status).toBe(200);
+    expect(store.raw.prepare('SELECT candidate_id FROM gate_runs').all()).toEqual([{ candidate_id: keepCand.id }]);
+  });
 });
 
 describe('purge with candidate Worker cleanup (real Spec DO + edge route)', () => {
