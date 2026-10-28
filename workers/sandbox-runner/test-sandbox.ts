@@ -288,7 +288,7 @@ export class TestSandbox extends ContainerSandbox<TestEnv> {
     const npmEnv = { PATH: PATH_ENV, HOME: '/workspace', CI: '1', NPM_CONFIG_USERCONFIG: NPMRC_USER, NPM_CONFIG_GLOBALCONFIG: NPMRC_GLOBAL, NPM_CONFIG_CACHE: '/workspace/npm-cache' };
     const phase = async (name: string, dir: string, argv: string[], env: Record<string, string>, limitS: number): Promise<PhaseResult> => {
       const started = Date.now();
-      const out = await run(['sh', '-c', PHASE_SCRIPT, 'sh', `${LOG_DIR}/${name}.log`, String(limitS * 2), String(limitS), ...argv], env, dir === '.' ? WORKDIR : `${WORKDIR}/${dir}`);
+      const out = await run(['bash', '-c', PHASE_SCRIPT, 'bash', `${LOG_DIR}/${name}.log`, String(limitS * 2), String(limitS), ...argv], env, dir === '.' ? WORKDIR : `${WORKDIR}/${dir}`);
       // The limits could not be set: the run says nothing about the repo, so it is an infrastructure error (non-2xx, retried by the gate).
       if (out.exitCode === 125) throw new TestError('SANDBOX_UNAVAILABLE', 'the sandbox could not apply its resource limits');
       return { ms: Date.now() - started, exit: out.exitCode, timedOut: timedOut(out.exitCode) };

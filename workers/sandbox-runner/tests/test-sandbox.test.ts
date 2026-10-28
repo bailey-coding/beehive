@@ -23,7 +23,7 @@ const HASH = 'ab'.repeat(32);
 
 type Script = (cmd: string[], opts?: { env?: Record<string, string>; cwd?: string }) => { exitCode: number; stdout?: string; stderr?: string } | undefined;
 /** Phase wrapper: sh -c SCRIPT sh <log> <cpu> <limit> ...argv (argv from index 7); the script folds the limit and the timeout in, see PHASE_SCRIPT */
-const phaseArgv = (cmd: string[]) => (cmd[0] === 'sh' && cmd[1] === '-c' ? cmd.slice(7) : null);
+const phaseArgv = (cmd: string[]) => (cmd[0] === 'bash' && cmd[1] === '-c' ? cmd.slice(7) : null);
 
 function makeSandbox(script: Script, env: Record<string, string | undefined> = { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'tok' }) {
   const calls: string[][] = [];
@@ -208,8 +208,8 @@ describe('TestSandbox verdicts', () => {
   });
 
   it('the wrapper script maps statuses: 124 for a timeout (also 137 after the limit), 1 for a child 125, 137 passthrough when early', () => {
-    const run = (lim: string, ...argv: string[]) => spawnSync('sh', ['-c', PHASE_SCRIPT, 'sh', '/dev/null', '60', lim, ...argv]).status;
-    if (run('5', 'true') !== 0) return; // this host cannot apply the limits (e.g. already past 512 processes): nothing to assert
+    const run = (lim: string, ...argv: string[]) => spawnSync('bash', ['-c', PHASE_SCRIPT, 'bash', '/dev/null', '60', lim, ...argv]).status;
+    expect(run('5', 'true')).toBe(0); // bash applies the limits here; dash has no ulimit -u, hence bash
     expect(run('1', 'sleep', '5')).toBe(124);
     expect(run('1', 'sh', '-c', 'trap "" TERM; sleep 20')).toBe(124); // needs the KILL: timeout itself says 137, the elapsed limit makes it 124
     expect(run('5', 'sh', '-c', 'exit 125')).toBe(1);
