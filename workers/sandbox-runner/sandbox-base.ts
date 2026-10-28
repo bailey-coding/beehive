@@ -94,7 +94,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, what: string): P
 }
 
 export type RunResult = { exitCode: number; stdout: string; stderr: string };
-export type RunFn = (cmd: string[], env?: Record<string, string>) => Promise<RunResult>;
+export type RunFn = (cmd: string[], env?: Record<string, string>, cwd?: string) => Promise<RunResult>;
 
 export interface CloneRequest {
   accountId: string;
@@ -184,8 +184,8 @@ export abstract class ContainerSandbox<E extends SandboxEnv = SandboxEnv> extend
     if (this.active !== token) throw this.failure('abandoned');
   }
 
-  protected async run(cmd: string[], env?: Record<string, string>): Promise<RunResult> {
-    const proc = await this.container.exec(cmd, { cwd: '/workspace', ...(env ? { env } : {}) });
+  protected async run(cmd: string[], env?: Record<string, string>, cwd = '/workspace'): Promise<RunResult> {
+    const proc = await this.container.exec(cmd, { cwd, ...(env ? { env } : {}) });
     const out = await proc.output();
     return { exitCode: out.exitCode, stdout: decode(out.stdout), stderr: decode(out.stderr) };
   }
