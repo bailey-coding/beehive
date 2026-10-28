@@ -13,6 +13,7 @@ import {
   GATE_RUN_QUOTA_WINDOW_MS,
   GATE_RUN_STALE_MS,
   MAX_GATE_RUNS_PER_ORG_PER_DAY,
+  MAX_GATE_RUN_ATTEMPTS_PER_SHA,
   FinishGateRunRequestSchema,
   StartGateRunResultSchema,
   GateRunSchema,
@@ -357,6 +358,34 @@ describe('start', () => {
     });
   });
 
+  describe('attempt cap per sha', () => {
+    const terminal = { terminal: { status: 'error', failureClass: 'sandbox_unavailable' } };
+
+    it('the 11th start on one sha, terminal or not, is 409 too_many_attempts and writes nothing; another sha and org are unaffected', async () => {
+      const s = seed('org-a');
+      for (let i = 1; i <= MAX_GATE_RUN_ATTEMPTS_PER_SHA; i++) {
+        expect((await start(s.cand.id, sha(5), terminal)).json.data.attempt).toBe(i);
+      }
+      const keys = () => count('SELECT COUNT(*) AS n FROM idempotency_keys');
+      const before = [runRows(), keys(), count('SELECT COUNT(*) AS n FROM entity_history')];
+      for (const extra of [terminal, {}]) {
+        const res = await start(s.cand.id, sha(5), extra, { 'Idempotency-Key': `gate-run:cap-${Object.keys(extra).length}` });
+        expect(res.status).toBe(409);
+        expect(res.json).toMatchObject({ success: false, code: 'too_many_attempts' });
+      }
+      expect([runRows(), keys(), count('SELECT COUNT(*) AS n FROM entity_history')]).toEqual(before);
+      expect((await start(s.cand.id, sha(6))).json.data).toMatchObject({ attempt: 1, status: 'running' });
+    });
+
+    it('a pass or fail on the sha still dedupes before the cap, and a live running run is not an error', async () => {
+      const s = seed('org-a');
+      for (let i = 1; i < MAX_GATE_RUN_ATTEMPTS_PER_SHA; i++) await start(s.cand.id, sha(5), terminal);
+      const last = await runTo(s.cand.id, sha(5), passBody());
+      expect(store.raw.prepare('SELECT MAX(attempt) AS n FROM gate_runs').get()).toEqual({ n: MAX_GATE_RUN_ATTEMPTS_PER_SHA });
+      expect((await start(s.cand.id, sha(5))).json.data).toEqual({ deduped: true, runId: last });
+    });
+  });
+
   describe('idempotent redelivery (Idempotency-Key)', () => {
     it('a redelivered message replays its own run: one row, the stored body, even after the run finished', async () => {
       const s = seed('org-a');
@@ -430,6 +459,27 @@ describe('finish', () => {
     expect(other.json.error).toContain('already fail');
     expect((await finish('nope', passBody())).status).toBe(404);
     expect(store.raw.prepare('SELECT status FROM gate_runs WHERE id = ?').get(id)).toEqual({ status: 'fail' });
+  });
+
+  it('a replay compares by value, not by key order: a stored result with reordered JSON keys, or a reordered body, is still 200', async () => {
+    const s = seed('org-a');
+    const id = (await start(s.cand.id, sha(5))).json.data.runId;
+    expect((await finish(id, passBody())).status).toBe(200);
+    // the same value written with the keys the other way round (a row from another writer or version)
+    store.raw
+      .prepare('UPDATE gate_runs SET checks = ?, timings = ? WHERE id = ?')
+      .run(
+        '{"complexity":"not_run","conformance":"not_run","tests":"verified"}',
+        '{"totalMs":3200,"test":{"timedOut":false,"exit":0,"ms":2000},"install":{"timedOut":false,"exit":0,"ms":1000}}',
+        id
+      );
+    expect((await finish(id, passBody())).status).toBe(200);
+    // and a request whose own keys are reordered
+    const raw =
+      '{"instance":"standard-2","logSha256":"' + 'a'.repeat(64) + '","logTail":"ok\\n","counts":{"failed":0,"passed":12},"timings":{"totalMs":3200,"test":{"timedOut":false,"exit":0,"ms":2000},"install":{"timedOut":false,"exit":0,"ms":1000}},"checks":{"complexity":"not_run","conformance":"not_run","tests":"verified"},"exitCode":0,"status":"pass"}';
+    expect((await call(`/api/gate-runs/${id}/result`, 'POST', raw)).status).toBe(200);
+    // a different value is still a conflict
+    expect((await finish(id, passBody({ timings: { totalMs: 1 } }))).status).toBe(409);
   });
 
   it('a terminal-start row cannot be finished with a different result', async () => {

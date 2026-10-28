@@ -31,6 +31,11 @@ export const GATE_RUN_QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Non-stale running runs, per repository and across the ledger */
 export const MAX_RUNNING_GATE_RUNS_PER_REPOSITORY = 1;
 export const MAX_RUNNING_GATE_RUNS_GLOBAL = 3;
+/**
+ * Attempts per (candidate, gate, commit sha), terminal rows included: the 11th start answers 409 `too_many_attempts` and writes
+ * nothing, so a caller cannot grow the table or burn the organization quota with `terminal` rows on one sha.
+ */
+export const MAX_GATE_RUN_ATTEMPTS_PER_SHA = 10;
 /** A `running` row older than this is reported as abandoned and frees its slot; nothing is written */
 export const GATE_RUN_STALE_MS = 15 * 60 * 1000;
 /** logTail ceiling, in UTF-8 bytes (the runner keeps `tail -c 32768`, then scrubs; cap after scrubbing) */
@@ -213,3 +218,5 @@ export type StartGateRunResult = z.infer<typeof StartGateRunResultSchema>;
 
 /** 409 body `code` when a cap refuses a start; the gate re-sends later instead of consuming a queue retry */
 export const GATE_RUN_BUSY = 'busy';
+/** 409 body `code` when the sha already has MAX_GATE_RUN_ATTEMPTS_PER_SHA attempts; retrying cannot help, the gate acks */
+export const GATE_RUN_TOO_MANY_ATTEMPTS = 'too_many_attempts';

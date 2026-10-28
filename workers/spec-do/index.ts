@@ -100,8 +100,24 @@ export class DuplicateGithubIdentityError extends Error {
 }
 class BadRequestError extends Error {}
 /** One line per issue ("commitSha: must be 40 lowercase hex characters"), not zod's pretty-printed JSON */
+/** JSON text -> key-order-independent text, so a replay compares by value; unparsable text compares as itself */
+const canonicalJson = (text: unknown): string => {
+  const sort = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort((v as Record<string, unknown>)[k])]))
+        : v;
+  try {
+    return JSON.stringify(sort(JSON.parse(String(text))));
+  } catch {
+    return String(text);
+  }
+};
 const zodMessage = (e: { issues: { path: PropertyKey[]; message: string }[] }) =>
   e.issues.map((i) => `${i.path.map(String).join('.') || '(body)'}: ${i.message}`).join('; ');
+/** The sha already has MAX_GATE_RUN_ATTEMPTS_PER_SHA attempts: 409 `too_many_attempts` (permanent, unlike busy) */
+class GateRunTooManyAttemptsError extends ConflictError {}
 /** A gate-run cap refused the start: 409 with code `busy`, and no idempotency key is left behind (the mutation threw) */
 class GateRunBusyError extends ConflictError {
   constructor(readonly reason: 'repository' | 'global', message: string) {
@@ -355,6 +371,8 @@ import {
   StartGateRunRequestSchema,
   FinishGateRunRequestSchema,
   GATE_RUN_BUSY,
+  GATE_RUN_TOO_MANY_ATTEMPTS,
+  MAX_GATE_RUN_ATTEMPTS_PER_SHA,
   GATE_RUN_QUOTA_WINDOW_MS,
   GATE_RUN_STALE_MS,
   MAX_GATE_RUNS_PER_ORG_PER_DAY,
@@ -4612,6 +4630,7 @@ export class SpecDO {
       return respond(200, { success: true, data: runs });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      if (e instanceof GateRunTooManyAttemptsError) return respond(409, { success: false, error: message, code: GATE_RUN_TOO_MANY_ATTEMPTS });
       if (e instanceof GateRunBusyError) return respond(409, { success: false, error: message, code: GATE_RUN_BUSY, reason: e.reason });
       if (e instanceof ConflictError) return respond(409, { success: false, error: message });
       if (e instanceof NotFoundError) return respond(404, { success: false, error: message });
@@ -4655,6 +4674,11 @@ export class SpecDO {
         req.candidateId, req.gate, req.commitSha
       );
       const attempt = next as number;
+      if (attempt > MAX_GATE_RUN_ATTEMPTS_PER_SHA) {
+        throw new GateRunTooManyAttemptsError(
+          `too_many_attempts: ${req.commitSha.slice(0, 12)} already has ${MAX_GATE_RUN_ATTEMPTS_PER_SHA} gate run attempts; push a new commit`
+        );
+      }
       const runId = generateId();
       const insertFinished = (status: 'error' | 'not_run', failureClass: string) => {
         this.run(
@@ -4741,7 +4765,9 @@ export class SpecDO {
         log_truncated: body.logTruncated ? 1 : 0,
       };
       if (row.status !== 'running') {
-        const same = Object.entries(fields).every(([k, v]) => row[k] === v);
+        const same = Object.entries(fields).every(([k, v]) =>
+          k === 'checks' || k === 'timings' ? canonicalJson(row[k]) === canonicalJson(v) : row[k] === v
+        );
         if (same) return this.getGateRun(runId, true)!;
         throw new ConflictError(`gate run ${runId} is already ${row.status}; a finished run is not rewritten`);
       }
