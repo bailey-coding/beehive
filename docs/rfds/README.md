@@ -3,23 +3,23 @@ category: planning
 status: active
 audience: human,agent
 tags:
-  - rfc
-  - rfcs
+  - rfd
+  - rfd
   - proposals
   - governance
 ---
 
-# Requests for Comments (RFCs)
+# Requests for Discussion (RFDs)
 
 **Purpose:** Propose and discuss new features, significant changes, and major enhancements to Beehive.
 
-**Location:** `docs/rfcs/`
+**Location:** `docs/rfds/`
 
 ---
 
-## 📋 What is an RFC?
+## 📋 What is an RFD?
 
-A Request for Comments (RFC) is a formal proposal document that describes a new feature, enhancement, or significant change to Beehive. RFCs are:
+A Request for Discussion (RFD) is a formal proposal document that describes a new feature, enhancement, or significant change to Beehive. RFDs are:
 
 - **Proactive** - Written before implementation begins
 - **Collaborative** - Open for community feedback and iteration
@@ -28,22 +28,22 @@ A Request for Comments (RFC) is a formal proposal document that describes a new 
 
 ---
 
-## 📁 Current RFCs
+## 📁 Current RFDs
 
 | Number | Title | Status | Date | Author |
 |--------|-------|--------|------|--------|
-| [RFC-0001](./0001-oracle-ladder-architecture.md) | Oracle Ladder Architecture | Implemented (Retrospective) | 2026-10-09 | unattributed |
-| [RFC-0002](./0002-workers-native-stores.md) | Workers-Native Stores Architecture | Implemented (Retrospective) | 2026-10-09 | unattributed |
-| [RFC-0003](./0003-service-tokens-ocap.md) | Service Tokens (capability model not built) | Implemented (Retrospective) | 2026-10-16 | unattributed |
-| [RFC-0004](./0004-canary-deploy-rollback.md) | Canary Deploy + Auto-Rollback System | Implemented (Retrospective) | 2026-10-16 | unattributed |
-| [RFC-0005](./0005-shadow-router-cache.md) | Shadow Router In-Isolate Caching | Implemented (Retrospective) | 2026-10-16 | unattributed |
-| [RFC-0006](./0006-ledger-compare-and-swap.md) | Ledger Compare-and-Swap with Tournament State | Implemented (Retrospective) | 2026-10-16 | unattributed |
-| [RFC-0007](./0007-two-tier-token-authentication.md) | Two-Tier Internal Token Authentication | Implemented (Retrospective) | 2026-10-16 | unattributed |
-| [RFC-0008](./0008-verified-identity-user-tokens.md) | Verified identity and user tokens (M12) | Accepted | 2026-10-17 | agent (m12-rfc) |
+| [RFD-0001](./0001-oracle-ladder-architecture.md) | Oracle Ladder Architecture | Implemented (Retrospective) | 2026-10-09 | unattributed |
+| [RFD-0002](./0002-workers-native-stores.md) | Workers-Native Stores Architecture | Implemented (Retrospective) | 2026-10-09 | unattributed |
+| [RFD-0003](./0003-service-tokens-ocap.md) | Service Tokens (capability model not built) | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFD-0004](./0004-canary-deploy-rollback.md) | Canary Deploy + Auto-Rollback System | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFD-0005](./0005-shadow-router-cache.md) | Shadow Router In-Isolate Caching | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFD-0006](./0006-ledger-compare-and-swap.md) | Ledger Compare-and-Swap with Tournament State | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFD-0007](./0007-two-tier-token-authentication.md) | Two-Tier Internal Token Authentication | Implemented (Retrospective) | 2026-10-16 | unattributed |
+| [RFD-0008](./0008-verified-identity-user-tokens.md) | Verified identity and user tokens (M12) | Accepted | 2026-10-17 | agent (m12-rfc) |
 
 ---
 
-## 📝 RFC Lifecycle
+## 📝 RFD Lifecycle
 
 ```
 Draft → Proposed → Active Review → Accepted/Rejected → Implemented/Archived
@@ -61,9 +61,9 @@ Draft → Proposed → Active Review → Accepted/Rejected → Implemented/Archi
 
 ---
 
-## 🎯 When to Create an RFC
+## 🎯 When to Create an RFD
 
-Create an RFC when proposing:
+Create an RFD when proposing:
 
 ✅ New user-facing features or capabilities
 ✅ Major changes to existing features
@@ -75,7 +75,7 @@ Create an RFC when proposing:
 ✅ New types of specs or candidates
 ✅ Changes to authentication, authorization, or security models
 
-❌ **Do NOT** create an RFC for:
+❌ **Do NOT** create an RFD for:
 - Simple bug fixes
 - Minor improvements to existing features
 - Documentation-only changes
@@ -84,22 +84,22 @@ Create an RFC when proposing:
 
 ---
 
-## 📄 RFC Template
+## 📄 RFD Template
 
-Use this template when creating a new RFC. Save as `docs/rfcs/NNNN-short-title.md` where NNNN is the next available number.
+Use this template when creating a new RFD. Save as `docs/rfds/NNNN-short-title.md` where NNNN is the next available number.
 
 ```markdown
 ---
-RFC-NNNN
+RFD-NNNN
 ---
 
-# RFC: [Short Title]
+# RFD: [Short Title]
 
 **Status:** Draft  # Draft, Proposed, Active Review, Accepted, Rejected, Implemented, Archived
 **Date:** YYYY-MM-DD
 **Author:** [Your name/handle]
-**Related:** [RFC-XXXX, ADR-XXXX, Spec-XXXX if applicable]
-**Supersedes:** [RFC-XXXX if applicable]
+**Related:** [RFD-XXXX, ADR-XXXX, Spec-XXXX if applicable]
+**Supersedes:** [RFD-XXXX if applicable]
 
 ## Summary
 
@@ -180,27 +180,27 @@ RFC-NNNN
 
 ## 🔢 Numbering Scheme
 
-RFCs are numbered sequentially using 4-digit zero-padded numbers (0001, 0002, ...). The number is assigned when the RFC is first proposed (moved from Draft to Proposed status).
+RFDs are numbered sequentially using 4-digit zero-padded numbers (0001, 0002, ...). The number is assigned when the RFD is first proposed (moved from Draft to Proposed status).
 
 ---
 
-## 📊 RFC Workflow
+## 📊 RFD Workflow
 
 ### 1. Draft
-- Copy the template to `docs/rfcs/NNNN-short-title.md`
+- Copy the template to `docs/rfds/NNNN-short-title.md`
 - Fill in the initial details with **Draft** status
 - Work locally, gather early feedback from collaborators
 
 ### 2. Propose
 - Move status to **Proposed**
-- Create a PR for the RFC document itself
-- Announce the RFC for community review
+- Create a PR for the RFD document itself
+- Announce the RFD for community review
 
 ### 3. Active Review
 - Gather feedback from maintainers and contributors
 - Iterate on the proposal based on feedback
 - Address concerns and answer questions
-- Update the RFC document with revisions
+- Update the RFD document with revisions
 
 ### 4. Decision
 - Maintainers discuss and make a final decision
@@ -209,26 +209,26 @@ RFCs are numbered sequentially using 4-digit zero-padded numbers (0001, 0002, ..
 - If accepted, move to implementation
 
 ### 5. Implementation
-- Implement the accepted RFC
+- Implement the accepted RFD
 - Update status to **Implemented** once complete
-- Reference the RFC in PRs and commit messages
+- Reference the RFD in PRs and commit messages
 
 ### 6. Archive
-- Update status to **Archived** if the RFC becomes irrelevant
+- Update status to **Archived** if the RFD becomes irrelevant
 - Keep for historical reference
 
 ---
 
 ## 🎭 Relationship to Other Artifacts
 
-RFCs fit into the broader Beehive documentation workflow:
+RFDs fit into the broader Beehive documentation workflow:
 
 ```
-RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
+RFD → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
 ```
 
-- **RFC**: Proposes a new feature or major change (this document)
-- **ADR**: Records architectural decisions made during RFC review or implementation
+- **RFD**: Proposes a new feature or major change (this document)
+- **ADR**: Records architectural decisions made during RFD review or implementation
 - **Spec**: Machine-readable contract for the implemented feature
 - **Candidate**: Implementation of the spec
 - **Promotion**: Deployment through the oracle ladder
@@ -242,30 +242,30 @@ See also:
 
 ---
 
-## 🔍 Finding RFCs
+## 🔍 Finding RFDs
 
-To find relevant RFCs:
+To find relevant RFDs:
 
 ```bash
-# List all RFCs
-grep -l "^RFC-" docs/rfcs/*.md
+# List all RFDs
+grep -l "^RFD-" docs/rfds/*.md
 
-# Search RFC content
-grep -r "search term" docs/rfcs/
+# Search RFD content
+grep -r "search term" docs/rfds/
 
-# Find RFCs by status
-grep "Status:" docs/rfcs/*.md
+# Find RFDs by status
+grep "Status:" docs/rfds/*.md
 ```
 
 ---
 
 ## 📝 Maintenance
 
-- **Adding an RFC:** Update this README with a new entry in the Current RFCs table
-- **Updating an RFC:** Edit the file directly, update status as needed
+- **Adding an RFD:** Update this README with a new entry in the Current RFDs table
+- **Updating an RFD:** Edit the file directly, update status as needed
 - **Accepting/Rejecting:** Update status, add decision rationale as a comment or in the document
-- **Superseding:** Create a new RFC and reference the old one in the Supersedes field
+- **Superseding:** Create a new RFD and reference the old one in the Supersedes field
 
 ---
 
-*For questions about the RFC process, contact maintainers or open a discussion.*
+*For questions about the RFD process, contact maintainers or open a discussion.*

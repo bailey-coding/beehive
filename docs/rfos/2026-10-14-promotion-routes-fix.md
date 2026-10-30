@@ -8,7 +8,7 @@ RFO-2026-10-14-promotion-routes-fix
 **Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** SEV-2 (Significant degradation - promotion worker unable to complete promotions)  
-**Related:** ADR-0002 (Coordination State Storage), RFC-0001 (Oracle Ladder Architecture), 6f5b2a8, b487a18, 48fd866, 3d97f48
+**Related:** ADR-0002 (Coordination State Storage), RFD-0001 (Oracle Ladder Architecture), 6f5b2a8, b487a18, 48fd866, 3d97f48
 
 ---
 
@@ -226,7 +226,7 @@ Based on this RFO, the following preventive measures were implemented:
 ## References
 
 - [ADR-0002: Coordination State Storage](../decisions/0002-coordination-state.md) - Spec DO is authoritative
-- [RFC-0001: Oracle Ladder Architecture](../rfcs/0001-oracle-ladder-architecture.md) - Promotion flow design
+- [RFD-0001: Oracle Ladder Architecture](../rfds/0001-oracle-ladder-architecture.md) - Promotion flow design
 - [AGENTS.md](../../AGENTS.md) - Working conventions, including Response.ok check
 - [OPEN-QUESTIONS.md](../OPEN-QUESTIONS.md) - Related findings and learnings
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Spec DO route documentation

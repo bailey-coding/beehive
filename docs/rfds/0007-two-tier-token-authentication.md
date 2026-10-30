@@ -1,20 +1,20 @@
 ---
-RFC-0007
+RFD-0007
 ---
 
-# RFC: Two-Tier Internal Token Authentication for Spec DO
+# RFD: Two-Tier Internal Token Authentication for Spec DO
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-16 (commit 36c0716, 07:10 UTC)  
 **Author:** unattributed (backfilled from git history)  
-**Related:** RFC-0003 (Service Tokens; its service tokens are end-user bearer tokens checked at the edge, a separate layer), ADR-0002 (Coordination State Storage)  
+**Related:** RFD-0003 (Service Tokens; its service tokens are end-user bearer tokens checked at the edge, a separate layer), ADR-0002 (Coordination State Storage)  
 **Supersedes:** None
 
 ---
 
 ## Summary
 
-This retrospective RFC documents the **two-tier internal token authentication system** implemented for Spec Durable Object routes. The system provides different levels of access control for different types of operations, with a fail-closed approach to authentication.
+This retrospective RFD documents the **two-tier internal token authentication system** implemented for Spec Durable Object routes. The system provides different levels of access control for different types of operations, with a fail-closed approach to authentication.
 
 ---
 
@@ -202,7 +202,7 @@ From the git history:
 
 ## References
 
-- [RFC-0003: Service Tokens & OCAP](../rfcs/0003-service-tokens-ocap.md) - User-facing token system
+- [RFD-0003: Service Tokens & OCAP](../rfds/0003-service-tokens-ocap.md) - User-facing token system
 - [ADR-0002: Coordination State Storage](../decisions/0002-coordination-state.md) - Spec DO as authoritative store
 - [AGENTS.md](../../AGENTS.md#non-negotiable-architectural-rules) - Fail-closed auth requirement
 - [Commit 36c0716](https://github.com/bailey-coding/beehive/commit/36c0716) - Implementation commit
@@ -210,4 +210,4 @@ From the git history:
 
 ---
 
-*This is a retrospective RFC documenting the two-tier internal token authentication system for Spec DO routes. This system provides fail-closed authentication with differentiated access levels for internal worker-to-worker communication.*
+*This is a retrospective RFD documenting the two-tier internal token authentication system for Spec DO routes. This system provides fail-closed authentication with differentiated access levels for internal worker-to-worker communication.*

@@ -8,7 +8,7 @@ RFO-2026-10-14-zod-build-failure
 **Author:** unattributed (backfilled from git history)  
 **Status:** Actioned  
 **Severity:** SEV-2 (Build failures blocking deployment)  
-**Related:** AGENTS.md#deployment-topology-ops, f847f75, RFC-0002 (Workers-Native Stores)
+**Related:** AGENTS.md#deployment-topology-ops, f847f75, RFD-0002 (Workers-Native Stores)
 
 ---
 
@@ -214,7 +214,7 @@ Based on this RFO, the following preventive measures were implemented:
 
 ## References
 
-- [RFC-0002: Workers-Native Stores Architecture](../rfcs/0002-workers-native-stores.md) - Storage architecture
+- [RFD-0002: Workers-Native Stores Architecture](../rfds/0002-workers-native-stores.md) - Storage architecture
 - [AGENTS.md](../../AGENTS.md#deployment-topology-ops) - Deployment and build conventions
 - [OPEN-QUESTIONS.md](../OPEN-QUESTIONS.md) - Build and deployment learnings
 - [SETUP.md](../SETUP.md) - Local development setup

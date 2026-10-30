@@ -195,7 +195,7 @@ Vitest only; no DOM library, so string/regex assertions (no new dev dependency).
 8. `ui-pages.ts` (1386 lines) is edited by every page step: serial steps on one branch.
 9. `#search` kept on GET submit is spec'd but unverified here: manual check.
 10. A future CSP needs `style-src 'unsafe-inline'` (inline `<style>` and existing `style=""` attributes); M9 adds no new inline style.
-11. RFC-0008's `/app/settings/tokens` (`origin/agent/m12-rfc`) must render through `appPage`; `Chrome`/`renderAccount` leave room for M10.
+11. RFD-0008's `/app/settings/tokens` (`origin/agent/m12-rfc`) must render through `appPage`; `Chrome`/`renderAccount` leave room for M10.
 
 ## 7. Task list (branch `agent/m9-nav`, serial; tiers per `docs/AGENT-ROUTING.md`)
 

@@ -204,7 +204,7 @@ Based on this RFO, the following preventive measures were implemented:
 
 ## References
 
-- [RFC-0006: Ledger Compare-and-Swap](../rfcs/0006-ledger-compare-and-swap.md) - Related migration work
+- [RFD-0006: Ledger Compare-and-Swap](../rfds/0006-ledger-compare-and-swap.md) - Related migration work
 - [MILESTONES.md](../MILESTONES.md) - Migration and version details
 - [AGENTS.md](../../AGENTS.md#state-management) - State management rules
 

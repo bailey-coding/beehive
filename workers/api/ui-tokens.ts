@@ -1,5 +1,5 @@
 /**
- * API tokens settings page (M12, RFC-0008): `/app/settings/tokens`.
+ * API tokens settings page (M12, RFD-0008): `/app/settings/tokens`.
  *
  *   GET  /app/settings/tokens              the session actor's tokens (prefix only) and the mint form
  *   POST /app/settings/tokens              mint for the session actor; a 200 page shows the plaintext once

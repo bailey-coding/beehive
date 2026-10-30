@@ -666,7 +666,7 @@ For detailed rationales and the ADR (Architecture Decision Record) process, see 
 | [0007](./docs/decisions/0007-fail-closed-edge-auth.md) | Fail-closed edge authentication | Accepted |
 | [0008](./docs/decisions/0008-tombstone-then-purge.md) | Tombstone, then guarded purge | Accepted |
 
-**Note:** For proposing new features or major changes, use the [RFC process](docs/rfcs/README.md). For documenting learnings from incidents, use the [RFO process](docs/rfos/README.md).
+**Note:** For proposing new features or major changes, use the [RFD process](docs/rfds/README.md). For documenting learnings from incidents, use the [RFO process](docs/rfos/README.md).
 
 ---
 
@@ -681,7 +681,7 @@ For detailed rationales and the ADR (Architecture Decision Record) process, see 
 | `docs/ARTIFACTS-SETUP.md` | Cloudflare Artifacts configuration |
 | `docs/UI-DASHBOARD-PLAN.md` | Dashboard implementation roadmap |
 | `docs/decisions/README.md` | ADR process and all Architecture Decision Records |
-| `docs/rfcs/README.md` | RFC process for proposing new features |
+| `docs/rfds/README.md` | RFD process for proposing new features |
 | `docs/rfos/README.md` | RFO process for incident post-mortems |
 | `docs/templates/README.md` | Reusable templates for documentation |
 

@@ -2,7 +2,7 @@
  * Principal types shared by the edge (and, later, the fork-token endpoint).
  *
  * Produced today: `master`, `service` (always `read` only) and `user` (a `bh_usr_`
- * token of one human actor, RFC-0008). `session` is reserved so the fork-token work
+ * token of one human actor, RFD-0008). `session` is reserved so the fork-token work
  * can extend the interface without reshaping it.
  */
 

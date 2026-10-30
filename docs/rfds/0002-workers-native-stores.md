@@ -1,8 +1,8 @@
 ---
-RFC-0002
+RFD-0002
 ---
 
-# RFC: Workers-Native Stores Architecture
+# RFD: Workers-Native Stores Architecture
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-09 (Approximate, based on ADR-0002 timestamp)  
@@ -14,7 +14,7 @@ RFC-0002
 
 ## Summary
 
-This retrospective RFC documents the foundational architectural decision to use **Cloudflare Workers-native stores** (Durable Objects, D1, Analytics Engine, R2) for all coordination state, rather than relying on Git notes or external databases. This aligns with the non-negotiable architectural rule: "Coordination state lives in Workers-native stores, never in the repo."
+This retrospective RFD documents the foundational architectural decision to use **Cloudflare Workers-native stores** (Durable Objects, D1, Analytics Engine, R2) for all coordination state, rather than relying on Git notes or external databases. This aligns with the non-negotiable architectural rule: "Coordination state lives in Workers-native stores, never in the repo."
 
 ---
 
@@ -294,4 +294,4 @@ From the git history:
 
 ---
 
-*This is a retrospective RFC documenting decisions already made and implemented. For the actual implementation, see the Spec DO worker code and related components.*
+*This is a retrospective RFD documenting decisions already made and implemented. For the actual implementation, see the Spec DO worker code and related components.*

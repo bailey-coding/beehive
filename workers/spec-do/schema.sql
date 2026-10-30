@@ -494,7 +494,7 @@ CREATE INDEX IF NOT EXISTS idx_canary_deployments_spec ON canary_deployments(spe
 -- ============================================================================
 
 -- ============================================================================
--- USER TOKENS (m8 -> m9, additive; RFC-0008)
+-- USER TOKENS (m8 -> m9, additive; RFD-0008)
 -- One row per bh_usr_ token of one human actor. The actor must be type 'human'
 -- with a github_user_id and not a service account's actor (checked in code at
 -- mint and again at verify). token_hash is the SHA-256 hex of the plaintext and

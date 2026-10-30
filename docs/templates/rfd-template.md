@@ -1,14 +1,14 @@
 ---
-RFC-NNNN
+RFD-NNNN
 ---
 
-# RFC: [Short Title]
+# RFD: [Short Title]
 
 **Status:** Draft  # Draft, Proposed, Active Review, Accepted, Rejected, Implemented, Archived
 **Date:** YYYY-MM-DD
 **Author:** [Your name/handle]
-**Related:** [RFC-XXXX, ADR-XXXX, Spec-XXXX if applicable]
-**Supersedes:** [RFC-XXXX if applicable]
+**Related:** [RFD-XXXX, ADR-XXXX, Spec-XXXX if applicable]
+**Supersedes:** [RFD-XXXX if applicable]
 
 ## Summary
 
@@ -198,6 +198,6 @@ interface NewType {
 ## References
 
 - [Link to related documents, discussions, or external resources]
-- [RFC-XXXX: Related RFC]
+- [RFD-XXXX: Related RFD]
 - [ADR-XXXX: Related ADR]
 - [Spec-XXXX: Related Spec]

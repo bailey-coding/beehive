@@ -194,7 +194,7 @@ function tokenView(t: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-// User tokens (RFC-0008). The edge validates the same rules; the DO re-checks them as the
+// User tokens (RFD-0008). The edge validates the same rules; the DO re-checks them as the
 // store of record. The lifetime ceiling has a minute of slack for the edge-to-DO hop.
 const USER_TOKEN_SCOPES = ['read', 'read_write', 'maintainer'];
 const USER_TOKEN_PREFIX_SHAPE = /^bh_usr_[A-Za-z0-9_-]{5}$/;
@@ -871,7 +871,7 @@ export class SpecDO {
   }
 
   // ============================================================================
-  // USER TOKENS (RFC-0008: bh_usr_ tokens of one human actor)
+  // USER TOKENS (RFD-0008: bh_usr_ tokens of one human actor)
   // No entity_history rows: its CHECK has no user-token type (widening it needs a table
   // rebuild). The token row is the audit record: created_by/via, revoked_at/by.
   // ============================================================================
@@ -2181,7 +2181,7 @@ export class SpecDO {
           : fail('Not found', 404);
       }
 
-      // User tokens (RFC-0008). Tier 2 except verify. X-Actor-ID is the minting/revoking actor;
+      // User tokens (RFD-0008). Tier 2 except verify. X-Actor-ID is the minting/revoking actor;
       // the token's actor comes from the body (the edge sets it: the session's actor, or master's choice).
       if (path === '/internal/user-tokens' && method === 'POST') {
         const body = await readBody();

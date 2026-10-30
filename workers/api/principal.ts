@@ -56,7 +56,7 @@ const UserVerifySchema = z.union([
 ]);
 
 // Failed bh_usr_ verifications per client IP, best effort and per isolate: every well-formed fake
-// token costs one Spec DO request (RFC-0008 decision 8), so a source that keeps failing is answered
+// token costs one Spec DO request (RFD-0008 decision 8), so a source that keeps failing is answered
 // 429 without that request. Per isolate on purpose: no new binding or config, so it is safe in a
 // mixed-version deploy; a global (Workers rate-limiting binding) limit is a follow-up.
 export const USER_TOKEN_FAIL_LIMIT = 20;
@@ -198,7 +198,7 @@ export async function authenticate(
     }
   }
 
-  // User tokens (RFC-0008), Authorization: Bearer only. Every request verifies in the DO (no
+  // User tokens (RFD-0008), Authorization: Bearer only. Every request verifies in the DO (no
   // cache), so a revocation or an expiry applies from the next request.
   if (bearer !== null && bearer.startsWith(USER_TOKEN_PREFIX)) {
     if (!looksLikeUserToken(bearer)) return jsonError('Unauthorized', 401);

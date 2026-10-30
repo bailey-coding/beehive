@@ -1,20 +1,20 @@
 ---
-RFC-0006
+RFD-0006
 ---
 
-# RFC: Ledger Compare-and-Swap (CAS) with Tournament State Machine
+# RFD: Ledger Compare-and-Swap (CAS) with Tournament State Machine
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-16 (commit fbc9fb5, 20:04 UTC)  
 **Author:** unattributed (backfilled from git history)  
-**Related:** RFC-0001 (Oracle Ladder), RFC-0004 (Canary Deploy), MILESTONES.md M5a (idempotency)  
+**Related:** RFD-0001 (Oracle Ladder), RFD-0004 (Canary Deploy), MILESTONES.md M5a (idempotency)  
 **Supersedes:** None
 
 ---
 
 ## Summary
 
-This retrospective RFC documents the implementation of **compare-and-swap (CAS) versioning** in the Spec Durable Object ledger, along with a **tournament state machine** for managing concurrent promotion operations. This addresses the challenge of handling concurrent writes in a multi-writer environment while maintaining consistency.
+This retrospective RFD documents the implementation of **compare-and-swap (CAS) versioning** in the Spec Durable Object ledger, along with a **tournament state machine** for managing concurrent promotion operations. This addresses the challenge of handling concurrent writes in a multi-writer environment while maintaining consistency.
 
 ---
 
@@ -220,8 +220,8 @@ This finding is related - it shows the importance of proper error handling when 
 
 ## References
 
-- [RFC-0001: Oracle Ladder Architecture](../rfcs/0001-oracle-ladder-architecture.md) - The ladder context
-- [RFC-0004: Canary Deploy + Rollback](../rfcs/0004-canary-deploy-rollback.md) - Related deployment flow
+- [RFD-0001: Oracle Ladder Architecture](../rfds/0001-oracle-ladder-architecture.md) - The ladder context
+- [RFD-0004: Canary Deploy + Rollback](../rfds/0004-canary-deploy-rollback.md) - Related deployment flow
 - [MILESTONES.md](../MILESTONES.md) - M7 and M8 milestone details
 - [Commit fbc9fb5](https://github.com/bailey-coding/beehive/commit/fbc9fb5) - Implementation commit
 - [Commit 8ef8b61](https://github.com/bailey-coding/beehive/commit/8ef8b61) - Related session learnings
@@ -229,4 +229,4 @@ This finding is related - it shows the importance of proper error handling when 
 
 ---
 
-*This is a retrospective RFC documenting the compare-and-swap (CAS) versioning and tournament state machine implemented in the Spec DO. This system enables safe concurrent updates while maintaining consistency in the multi-writer ledger environment.*
+*This is a retrospective RFD documenting the compare-and-swap (CAS) versioning and tournament state machine implemented in the Spec DO. This system enables safe concurrent updates while maintaining consistency in the multi-writer ledger environment.*

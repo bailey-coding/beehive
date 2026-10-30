@@ -8,7 +8,7 @@ This directory contains all Beehive project documentation, organized for **human
 
 | Category | Purpose | Key Files |
 |----------|---------|-----------|
-| **📚 Governance** | ADRs, RFCs, RFOs - decision records and proposals | [decisions/](./decisions/README.md), [rfcs/](./rfcs/README.md), [rfos/](./rfos/README.md) |
+| **📚 Governance** | ADRs, RFDs, RFOs - decision records and proposals | [decisions/](./decisions/README.md), [rfds/](./rfds/README.md), [rfos/](./rfos/README.md) |
 | **🏗️ Architecture** | Core system design, non-negotiable rules, orchestration spine | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | **🎯 Milestones & Planning** | Roadmaps, phased implementation, timeline tracking | [MILESTONES.md](./MILESTONES.md), [FOCUS.md](./FOCUS.md) |
 | **📜 Feature Specs** | Detailed designs for specific capabilities | [SEMANTIC-NAVIGATION-PLAN.md](./SEMANTIC-NAVIGATION-PLAN.md), [UI-DASHBOARD-PLAN.md](./UI-DASHBOARD-PLAN.md) |
@@ -27,7 +27,7 @@ This directory contains all Beehive project documentation, organized for **human
 ### 📚 Governance & Version Control
 **Decision records, proposals, and retrospectives** - The Beehive Version Control System for documentation.
 
-All artifacts follow the workflow: **RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO**
+All artifacts follow the workflow: **RFD → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO**
 
 - [GOVERNANCE-SUMMARY.md](./GOVERNANCE-SUMMARY.md) - *Overview of the complete version control system*
 - [decisions/README.md](./decisions/README.md) - *ADR (Architecture Decision Records) process and index*
@@ -36,9 +36,9 @@ All artifacts follow the workflow: **RFC → ADR → Spec → Candidate → Prom
   - [ADR-0003: Language Strategy](./decisions/0003-language.md)
   - [ADR-0004: CI and Builds](./decisions/0004-ci.md)
   - [ADR-0005: Organizational Memory](./decisions/0005-org-memory.md)
-- [rfcs/README.md](./rfcs/README.md) - *RFC (Request for Comments) process for proposing features*
+- [rfds/README.md](./rfds/README.md) - *RFD (Request for Discussion) process for proposing features*
 - [rfos/README.md](./rfos/README.md) - *RFO (Request for Observation) process for post-mortems and learnings*
-- [templates/README.md](./templates/README.md) - *Reusable templates for ADRs, RFCs, and RFOs*
+- [templates/README.md](./templates/README.md) - *Reusable templates for ADRs, RFDs, and RFOs*
 
 ### 🏗️ Architecture
 Core system design and inviolable rules. Start here to understand **how Beehive works**.
@@ -147,7 +147,7 @@ M1, M2, M3, M4, M5, M6, M6.5, M7
 
 ### By Document Type
 ```
-ADR, RFC, RFO, PLAN, REVIEW, REPORT, SPEC, SUMMARY, GUIDE, SETUP, INTEGRATION, TEMPLATE
+ADR, RFD, RFO, PLAN, REVIEW, REPORT, SPEC, SUMMARY, GUIDE, SETUP, INTEGRATION, TEMPLATE
 ```
 
 ### Common Patterns
@@ -163,7 +163,7 @@ When searching for implementation details:
 2. Look in **PLAN.md** files for the relevant milestone
 3. Review **[OPEN-QUESTIONS.md](./OPEN-QUESTIONS.md)** for known issues and findings
 4. Consult **IMPLEMENTATION-RESULTS.md** for prior work
-5. For governance questions, see **[decisions/](./decisions/README.md)**, **[rfcs/](./rfcs/README.md)**, **[rfos/](./rfos/README.md)**
+5. For governance questions, see **[decisions/](./decisions/README.md)**, **[rfds/](./rfds/README.md)**, **[rfos/](./rfos/README.md)**
 
 ---
 

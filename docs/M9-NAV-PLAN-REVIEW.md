@@ -78,7 +78,7 @@ computed with the WCAG 2.x relative-luminance formula (script outside the repo).
 - N7 Once the layout owns `<h1>`, `<h3>Details</h3>` right after the title (`ui-pages.ts:226,367,724,909,1032`) skips h2; make it h2
   in the step that migrates the page.
 - N8 Leave M10/M12 slots cheaply: render login + sign-out in one `renderAccount(chrome)` and keep `Chrome` an interface M10 can
-  extend (user menu, notification count). RFC-0008 (`origin/agent/m12-rfc`) plans `/app/settings/tokens`: it must use `appPage`.
+  extend (user menu, notification count). RFD-0008 (`origin/agent/m12-rfc`) plans `/app/settings/tokens`: it must use `appPage`.
 - N9 Switcher summary text when no org is current (dashboard, status pages) is unspecified; use "Organizations".
 - N10 `reader.list` maps a success reply with non-array `data` to `[]` (`ui.ts:79`), which the switcher would show as "No
   organizations". Low risk; mention in the L2 test list.
@@ -106,7 +106,7 @@ computed with the WCAG 2.x relative-luminance formula (script outside the repo).
 - Tests: none pin the old header (`Beehive</h1>`, `subbar`, `Signed in as`: no hits in `ui*.test.ts`); all go through `handleUi`, so
   page-function signature changes stay internal. The E2E_UI dummy-OAuth harness exists (`scripts/start-e2e-workers.sh:24-29,87-89`).
 - Conflicts: no `origin/*` branch ahead of `main` touches `workers/api/ui*` or `tests/e2e/ui*`; `agent/m12-rfc` touches only
-  `docs/rfcs/`. The plan leaves the Spec DO, schema, CLI, session cookie and signing (`ui.ts:318,834`, M12's target) alone.
+  `docs/rfds/`. The plan leaves the Spec DO, schema, CLI, session cookie and signing (`ui.ts:318,834`, M12's target) alone.
   Mixed-version: one worker, no new route; tolerable.
 
 ## Section 9 answers

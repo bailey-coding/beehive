@@ -8,7 +8,7 @@ RFO-YYYY-MM-DD
 **Author:** [Your name/handle]
 **Status:** Draft  # Draft, In Review, Published, Actioned, Archived
 **Severity:** SEV-1/SEV-2/SEV-3/Near-Miss/Observation
-**Related:** [RFC-XXXX, ADR-XXXX, Spec-XXXX, Candidate-XXXX if applicable]
+**Related:** [RFD-XXXX, ADR-XXXX, Spec-XXXX, Candidate-XXXX if applicable]
 **Component:** [Affected component or worker]
 
 ## Summary
@@ -124,5 +124,5 @@ RFO-YYYY-MM-DD
 
 - [Link to relevant documents, discussions, or external resources]
 - [ADR-XXXX: Related architectural decision]
-- [RFC-XXXX: Related proposal]
+- [RFD-XXXX: Related proposal]
 - [Spec-XXXX: Related specification]

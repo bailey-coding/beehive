@@ -108,7 +108,7 @@ RFO-YYYY-MM-DD
 **Author:** [Your name/handle]
 **Status:** Draft  # Draft, In Review, Published, Actioned, Archived
 **Severity:** SEV-1/SEV-2/SEV-3/Near-Miss/Observation
-**Related:** [RFC-XXXX, ADR-XXXX, Spec-XXXX, Candidate-XXXX if applicable]
+**Related:** [RFD-XXXX, ADR-XXXX, Spec-XXXX, Candidate-XXXX if applicable]
 
 ## Summary
 
@@ -183,7 +183,7 @@ RFO-NNNN
 **Author:** [Your name/handle]
 **Status:** Draft
 **Severity:** SEV-1/SEV-2/SEV-3/Near-Miss/Observation
-**Related:** [RFC-XXXX, ADR-XXXX, Spec-XXXX, Candidate-XXXX if applicable]
+**Related:** [RFD-XXXX, ADR-XXXX, Spec-XXXX, Candidate-XXXX if applicable]
 
 [Rest of the template is the same as Option 1]
 ```
@@ -241,10 +241,10 @@ Near-misses are especially valuable for Beehive because they represent candidate
 RFOs fit into the broader Beehive documentation workflow:
 
 ```
-RFD/RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
+RFD → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
 ```
 
-- **RFC/ADR**: Upstream decisions that led to the implemented system
+- **RFD/ADR**: Upstream decisions that led to the implemented system
 - **Spec**: The contract that the candidate was implementing
 - **Candidate**: The implementation that was promoted (or failed to promote)
 - **Promotion**: The process of deploying through the oracle ladder
@@ -252,7 +252,7 @@ RFD/RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
 - **RFO**: This document - the learnings and improvements
 
 See also:
-- [RFC Process](../rfcs/README.md)
+- [RFD Process](../rfds/README.md)
 - [ADR Process](../decisions/README.md)
 - [Specs](../specs/README.md)
 - [OPEN-QUESTIONS](../OPEN-QUESTIONS.md) - For ongoing questions and findings

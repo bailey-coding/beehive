@@ -1,5 +1,5 @@
 /**
- * User tokens (RFC-0008) at the edge: the DO client shared by the master-only admin routes
+ * User tokens (RFD-0008) at the edge: the DO client shared by the master-only admin routes
  * here and the UI settings page (ui-tokens.ts), and the admin routes themselves.
  *
  *   POST /api/admin/user-tokens {actorId, name, scope?, expiresInDays?}  mint; plaintext once, no-store

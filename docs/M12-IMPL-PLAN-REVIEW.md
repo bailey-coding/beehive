@@ -1,6 +1,6 @@
 # Review: M12 implementation plan (`docs/M12-IMPL-PLAN.md`)
 
-**Task:** m12-plan-review | **Spec:** `docs/rfcs/0008-verified-identity-user-tokens.md` §9 (not re-opened) |
+**Task:** m12-plan-review | **Spec:** `docs/rfds/0008-verified-identity-user-tokens.md` §9 (not re-opened) |
 **Date:** 2026-10-18 | **Reviewed:** `origin/agent/m12-plan` at e9e680d. Line numbers below are on that tree (code
 is identical to `main` e06cf48). Every claim was checked against code; none was taken from the plan.
 
@@ -90,7 +90,7 @@ to T6 (light).
   only. Say so in the OPS section.
 - N4 PR-C: write the config to a temp file with mode 0600 and rename it, because `chmodSync` after the write leaves a
   0644 window. N5 S12: truncate the client-controlled `actorId` (for example to 128 chars) before logging it.
-- N6 Name the deviations from the RFC: a single `scope` instead of `scopes` (fine), Q1 narrowing decision 3, and the
+- N6 Name the deviations from the RFD: a single `scope` instead of `scopes` (fine), Q1 narrowing decision 3, and the
   new 10-token cap. N7 Rollback race: a write that a new edge verified can land on a just-rolled-back DO that ignores
   the cap. The window is milliseconds and the old edge then answers 401. Accept it, and note it in R3.
 
@@ -105,7 +105,7 @@ to T6 (light).
   never reaches the DO except through the rewrite, so a spoofed cap only removes power. The UI path never
   forwards client headers, and it carries session power only (no cap: intended).
 - Paths that skip `authenticate()`: the UI (session), public pages, and the nine workers and queue consumers that use
-  the tier-1 internal token with their own `X-Actor-ID` (`spec-do-auth.ts:82-100`). That last one is an RFC non-goal
+  the tier-1 internal token with their own `X-Actor-ID` (`spec-do-auth.ts:82-100`). That last one is an RFD non-goal
   (R2): "verified" covers the edge `/api` path only. Verify is tier 1. A tier-1 holder can already write as any actor,
   and the hash of a 256-bit token gives an enumerator nothing, so "always 200, found/not found" leaks nothing new.
   Timing differences among unknown, revoked and expired tokens need the plaintext to matter.
@@ -139,7 +139,7 @@ open path). **C** has no worker effect. I found no combination that fails open o
 **Tasks.** The dependencies, tiers and PR split are sound: T3 and T4 are heavy, T0 goes first (decision 9), and
 T5→T8 is ordered on `ui.ts`. Proving tests that need tightening: T1 (F4a); T4 (F1c, B1 rows); T0 (F2, and the
 lookup order from F3). A mental mutation that the planned tests would *not* catch is passing the unwrapped stub to one
-write handler. F1(a) and F1(c) catch it. No scope creep beyond the RFC apart from N6.
+write handler. F1(a) and F1(c) catch it. No scope creep beyond the RFD apart from N6.
 
 - **Q1: confirm master-only in M12.** It satisfies decision 3 ("require the maintainer scope") as a strict subset and
   keeps `lifecycle.ts:76` unchanged. Opening lifecycle to `maintainer` tokens is a prerequisite for master stage 2, so
@@ -160,6 +160,6 @@ write handler. F1(a) and F1(c) catch it. No scope creep beyond the RFC apart fro
   entry, `invocation_logs = false` (and header capture off for traces) on `beehive`, then rotate the exposed secrets.
 
 ## 5. Verdict
-**Approve with changes.** The design follows RFC §9, its claims about the code are accurate, and it fails closed in
+**Approve with changes.** The design follows RFD §9, its claims about the code are accurate, and it fails closed in
 every mixed-version cell I checked. B1 must be fixed in the plan before T4 starts. F1-F4 should be folded into
 T0, T1, T3 and T4 before those tasks start. F5-F8 and the nits can land with T6.

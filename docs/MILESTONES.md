@@ -228,7 +228,7 @@ Spine work: a human designs it; start from the 2026-10-17 proposal in `docs/OPEN
   as `X-Actor-ID`, `--actor` still overriding; the actor must be a real `actors` row. This is attribution, not
   authentication; document it as an admin stopgap in `docs/OPS.md`.
 - **Exit criteria:** to be set in the design; at minimum, a write by a user token cannot name a different actor.
-- **Status (2026-10-19):** designed in RFC-0008 (Accepted), planned in `docs/M12-IMPL-PLAN.md`. PR-0 (actor lookup) and
+- **Status (2026-10-19):** designed in RFD-0008 (Accepted), planned in `docs/M12-IMPL-PLAN.md`. PR-0 (actor lookup) and
   push A (rollback floor `8de5485`) are live. PR-B (T2-T6d: `bh_usr_` tokens in the Spec DO, schema `m9`, the edge
   branch and write allow-list, the maintainer cap, admin routes, `/app/settings/tokens`, master stage-1 logging) is on
   `agent/m12-pr-b`, **T2 merged** (`e786f60`, `50728bc`, 2026-10-19: user token helpers generalized to `bh_usr_` prefix

@@ -1,6 +1,6 @@
 # M12 implementation plan: verified identity and user tokens
 
-**Task:** m12-plan | **Spec:** `docs/rfcs/0008-verified-identity-user-tokens.md` (Accepted; section 9 decisions are not
+**Task:** m12-plan | **Spec:** `docs/rfds/0008-verified-identity-user-tokens.md` (Accepted; section 9 decisions are not
 re-opened here) | **Date:** 2026-10-18 | Spine work (AGENTS.md rule 2): every PR is reviewed by the maintainer plus an
 independent review agent. Line numbers are on `main` at e06cf48. No code here; master stage 2 is out of scope.
 
@@ -213,16 +213,16 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
   independent review, mutation-style checks as in `docs/M8-PR1-REVIEW.md` (each S-row test must fail with its guard
   removed).
 - R2 The master token is still all-powerful until stage 2 (a separate decision). M12 makes user writes verified, not master
-  writes, and the internal tier-1 trust is unchanged (RFC non-goal).
+  writes, and the internal tier-1 trust is unchanged (RFD non-goal).
 - R3 Revocations are lost during a B rollback (section 5). Also a rollback race (N7): a write that a new edge verified can land
   on a DO that was just rolled back and ignores the cap. The window is milliseconds, and the old edge then answers 401.
   Accepted.
-- R7 Deviations from the RFC, named (N6): a single `scope` column instead of `scopes`; the 10-live-token cap per actor
+- R7 Deviations from the RFD, named (N6): a single `scope` column instead of `scopes`; the 10-live-token cap per actor
   (new); lifecycle stays master-only, a strict subset of decision 3 (A1).
 - R4 Rate limiting is deferred (decision 8): a flood of well-formed fake `bh_usr_` tokens is DO load. Recorded in FOCUS.
 - R5 `ui.ts` is touched by T0, T5 and T8: land them in that order.
 - R6 The verify contract differs from the service branch (`principal.ts:67` maps 404 to 401). This is deliberate for user
-  tokens (RFC section 3.A). The service branch is left alone, and the difference is noted in FOCUS.
+  tokens (RFD section 3.A). The service branch is left alone, and the difference is noted in FOCUS.
 
 ## 7. Maintainer answers (2026-10-18; these replace the earlier open questions Q1-Q4)
 
@@ -264,5 +264,5 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 | N3 future `iat`, return path, freshness scope | **Accepted in part.** A future `iat` is not fresh, and the OPS note explains what freshness bounds. **Rejected: the return path to the settings page.** It changes the OAuth state flow (`startLogin`/`finishLogin`, `ui.ts:245-330`), which M12 does not need; the "sign in again" page links there afterwards | S14, T6d |
 | N4 temp file + rename | **Accepted** | §1 PR-C, T7 |
 | N5 truncate `actorId` | **Accepted** (128 chars; now enforced as a 400 by `ActorIdSchema`) | S12 |
-| N6 name the RFC deviations | **Accepted** | R7 |
+| N6 name the RFD deviations | **Accepted** | R7 |
 | N7 rollback race | **Accepted** as a known risk | R3 |

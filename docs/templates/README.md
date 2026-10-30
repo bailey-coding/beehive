@@ -20,7 +20,7 @@ tags:
 | Template | Purpose | Output Location |
 |----------|---------|-----------------|
 | [adr-template.md](./adr-template.md) | Architecture Decision Records | `docs/decisions/NNNN-name.md` |
-| [rfc-template.md](./rfc-template.md) | Requests for Comments | `docs/rfcs/NNNN-name.md` |
+| [rfd-template.md](./rfd-template.md) | Requests for Discussion | `docs/rfds/NNNN-name.md` |
 | [rfo-template.md](./rfo-template.md) | Requests for Observation (Post-mortems) | `docs/rfos/YYYY-MM-DD-name.md` |
 
 ---
@@ -43,21 +43,21 @@ tags:
 
 4. See the [ADR Process](../decisions/README.md) for full workflow
 
-### For RFCs (Requests for Comments)
+### For RFDs (Requests for Discussion)
 
 1. Copy the template:
    ```bash
-   cp docs/templates/rfc-template.md docs/rfcs/NNNN-short-title.md
+   cp docs/templates/rfd-template.md docs/rfds/NNNN-short-title.md
    ```
 
 2. Fill in the details:
-   - Replace `NNNN` with the next RFC number
+   - Replace `NNNN` with the next RFD number
    - Start with **Draft** status
    - Complete all sections
 
-3. Create a PR for the RFC document
+3. Create a PR for the RFD document
 
-4. See the [RFC Process](../rfcs/README.md) for full workflow
+4. See the [RFD Process](../rfds/README.md) for full workflow
 
 ### For RFOs (Requests for Observation)
 
@@ -82,7 +82,7 @@ tags:
 ### Naming Conventions
 
 - **ADRs:** `NNNN-short-description.md` (4-digit sequential number)
-- **RFCs:** `NNNN-short-description.md` (4-digit sequential number)
+- **RFDs:** `NNNN-short-description.md` (4-digit sequential number)
 - **RFOs:** `YYYY-MM-DD-short-description.md` (date-based)
 
 ### Required Sections
@@ -98,8 +98,8 @@ All templates include these essential sections:
 
 Templates may include optional sections like:
 
-- Alternatives Considered (ADR, RFC)
-- Impact Analysis (RFC)
+- Alternatives Considered (ADR, RFD)
+- Impact Analysis (RFD)
 - Timeline (RFO)
 - Action Items (RFO)
 
@@ -110,15 +110,15 @@ Templates may include optional sections like:
 These templates support the Beehive documentation workflow:
 
 ```
-RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
+RFD → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
 ```
 
-- **RFC Template** → Create proposals for new features
+- **RFD Template** → Create proposals for new features
 - **ADR Template** → Record architectural decisions
 - **RFO Template** → Document learnings from incidents
 
 All three artifact types work together to provide a complete picture of:
-- **What we're building** (RFCs)
+- **What we're building** (RFDs)
 - **How we decided to build it** (ADRs)
 - **What we learned** (RFOs)
 
@@ -127,7 +127,7 @@ All three artifact types work together to provide a complete picture of:
 ## 📚 Additional Resources
 
 - [ADR Process and Index](../decisions/README.md)
-- [RFC Process and Index](../rfcs/README.md)
+- [RFD Process and Index](../rfds/README.md)
 - [RFO Process and Index](../rfos/README.md)
 - [Documentation Index](../README.md)
 - [Architecture Document](../ARCHITECTURE.md)

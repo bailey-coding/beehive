@@ -66,4 +66,4 @@ ADR-NNNN
 
 - [Link to relevant documents, discussions, or external resources]
 - [ADR-XXXX: Related Decision]
-- [RFC-XXXX: Related Proposal]
+- [RFD-XXXX: Related Proposal]

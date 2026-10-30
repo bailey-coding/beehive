@@ -58,7 +58,7 @@ const ADMIN_PATTERNS: Array<{ method: string; path: RegExp }> = [
   // Service accounts and tokens: list, mint, revoke, token mint/rotate/revoke.
   // /internal/service-tokens/verify (the edge's per-request token check) is tier 1.
   { method: '*', path: /^\/internal\/service-accounts(?:\/.*)?$/ },
-  // User tokens: mint, list, revoke, revoke-all (RFC-0008). /internal/user-tokens/verify is
+  // User tokens: mint, list, revoke, revoke-all (RFD-0008). /internal/user-tokens/verify is
   // tier 1, like the service-token verify; the lookahead excludes exactly that path.
   { method: '*', path: /^\/internal\/user-tokens(?!\/verify$)(?:\/.*)?$/ },
   // Sets the flag that lets an actor promote; the edge allows it for the master principal only

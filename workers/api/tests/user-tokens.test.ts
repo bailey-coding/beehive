@@ -1,5 +1,5 @@
 /**
- * Edge side of user tokens (M12, RFC-0008): authenticate() for bh_usr_ (every verify outcome
+ * Edge side of user tokens (M12, RFD-0008): authenticate() for bh_usr_ (every verify outcome
  * to its status), the S9 route-class matrix with a default-deny enumeration of every write
  * route the edge dispatches, the X-Actor-ID rewrite, the maintainer cap on every DO request,
  * the master-only admin routes, whoami, and the master stage-1 log line.

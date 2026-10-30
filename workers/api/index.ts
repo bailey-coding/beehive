@@ -395,7 +395,7 @@ function extractParentId(urlOrPath: string): string {
 }
 
 // ============================================================================
-// MASTER TOKEN STAGE 1 (RFC-0008 section 5): log, change nothing
+// MASTER TOKEN STAGE 1 (RFD-0008 section 5): log, change nothing
 // ============================================================================
 
 const MAX_LOGGED_ACTOR_CHARS = ACTOR_ID_MAX_CHARS;

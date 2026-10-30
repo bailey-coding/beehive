@@ -1,20 +1,20 @@
 ---
-RFC-0005
+RFD-0005
 ---
 
-# RFC: Shadow Router In-Isolate Caching
+# RFD: Shadow Router In-Isolate Caching
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-16 (commit 746c42c, 07:12 UTC)  
 **Author:** unattributed (backfilled from git history)  
-**Related:** RFC-0001 (Oracle Ladder), MILESTONES.md M2/M3  
+**Related:** RFD-0001 (Oracle Ladder), MILESTONES.md M2/M3  
 **Supersedes:** None
 
 ---
 
 ## Summary
 
-This retrospective RFC documents the implementation of **in-isolate caching in the Shadow Router** for live canary deploy reference pointers. This caching mechanism enables the shadow router to efficiently track and route to live canary deployments while maintaining data consistency and minimizing redundant operations.
+This retrospective RFD documents the implementation of **in-isolate caching in the Shadow Router** for live canary deploy reference pointers. This caching mechanism enables the shadow router to efficiently track and route to live canary deployments while maintaining data consistency and minimizing redundant operations.
 
 ---
 
@@ -111,7 +111,7 @@ holding the full list of live canary pointers, not one entry per spec/candidate.
 - `LIVE_REFS_CACHE_TTL_MS` (wrangler var / secret, string): unset or invalid -> 5000 ms;
   `0` disables the cache; values above `MAX_LIVE_REFS_TTL_MS` (60000) are clamped.
 - There is no `LIVE_REFS_CACHE_ENABLED` flag; the earlier text invented it (`grep` finds it only
-  in this RFC). On a failed read with no servable value, the caller falls back to the static config.
+  in this RFD). On a failed read with no servable value, the caller falls back to the static config.
 
 ### Cache Behavior Details
 
@@ -268,12 +268,12 @@ From the git history:
 
 ## References
 
-- [RFC-0001: Oracle Ladder Architecture](../rfcs/0001-oracle-ladder-architecture.md) - The ladder this supports
-- [RFC-0004: Canary Deploy + Rollback](../rfcs/0004-canary-deploy-rollback.md) - Canary deployment system
+- [RFD-0001: Oracle Ladder Architecture](../rfds/0001-oracle-ladder-architecture.md) - The ladder this supports
+- [RFD-0004: Canary Deploy + Rollback](../rfds/0004-canary-deploy-rollback.md) - Canary deployment system
 - [MILESTONES.md](../MILESTONES.md) - M2 and M3 milestone details
 - [Commit 746c42c](https://github.com/bailey-coding/beehive/commit/746c42c) - Implementation commit
 - [AGENTS.md](../../AGENTS.md#the-oracle-ladder) - Oracle ladder context
 
 ---
 
-*This is a retrospective RFC documenting the in-isolate caching mechanism implemented in the Shadow Router. This caching enables efficient tracking of live canary deployments while maintaining consistency and performance.*
+*This is a retrospective RFD documenting the in-isolate caching mechanism implemented in the Shadow Router. This caching enables efficient tracking of live canary deployments while maintaining consistency and performance.*

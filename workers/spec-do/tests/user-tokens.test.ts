@@ -1,5 +1,5 @@
 /**
- * SpecDO user tokens (M12, RFC-0008): mint / list / revoke / revoke-all / verify on the
+ * SpecDO user tokens (M12, RFD-0008): mint / list / revoke / revoke-all / verify on the
  * m9 user_tokens table, the human-with-GitHub-id rule, the maintainer scope, the 90-day
  * ceiling, the cap of 10 live tokens, and "never store or log the plaintext or the hash".
  * Real SQL (node:sqlite, FKs on) through the real router. Rows refer to the security

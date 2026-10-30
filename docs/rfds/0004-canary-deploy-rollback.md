@@ -1,20 +1,20 @@
 ---
-RFC-0004
+RFD-0004
 ---
 
-# RFC: Canary Deploy + Auto-Rollback System
+# RFD: Canary Deploy + Auto-Rollback System
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-16 (commit c27628a, 01:26 UTC)  
 **Author:** unattributed (backfilled from git history)  
-**Related:** RFC-0001 (Oracle Ladder), MILESTONES.md M3/M6.5  
+**Related:** RFD-0001 (Oracle Ladder), MILESTONES.md M3/M6.5  
 **Supersedes:** None
 
 ---
 
 ## Summary
 
-This retrospective RFC documents the **canary deployment and auto-rollback system** implemented as part of the oracle ladder (RFC-0001, rung 4). The system enables safe deployment of candidates to a small percentage of live traffic with automatic rollback if SLO violations are detected.
+This retrospective RFD documents the **canary deployment and auto-rollback system** implemented as part of the oracle ladder (RFD-0001, rung 4). The system enables safe deployment of candidates to a small percentage of live traffic with automatic rollback if SLO violations are detected.
 
 ---
 
@@ -22,7 +22,7 @@ This retrospective RFC documents the **canary deployment and auto-rollback syste
 
 ### The Problem
 
-Deploying candidates directly to full production is risky. Even with the pre-merge, shadow, and train gates (RFC-0001), we need a final validation step with real live traffic before full deployment. This requires:
+Deploying candidates directly to full production is risky. Even with the pre-merge, shadow, and train gates (RFD-0001), we need a final validation step with real live traffic before full deployment. This requires:
 
 1. **Controlled exposure** - Limit blast radius during initial live deployment
 2. **Automated monitoring** - Continuously check SLOs during canary
@@ -67,7 +67,7 @@ Implemented in c27628a (2026-10-16 01:26 UTC), migration m6 -> m7, additive.
 - **Flow.** `preview-manager` `POST /api/preview/canary` deploys (Workers Versions are stubbed
   unless `BEEHIVE_LOCAL_DEV=1` and `WORKER_VERSIONS_MODE=stub`; production answers 501, e326b8c);
   `canary-worker` holds the SLO monitor, `/slo-status`, and the auto-rollback route; the shadow
-  router reads the live canary pointers from the Spec DO (cached, RFC-0005).
+  router reads the live canary pointers from the Spec DO (cached, RFD-0005).
 - **Traffic percentage** is validated as `0 < x <= 100` with `traffic + holdout <= 100`
   (`workers/canary-worker/canary.ts:116`); no 1-5% default exists in code.
 
@@ -198,7 +198,7 @@ From the git history:
 
 ## References
 
-- [RFC-0001: Oracle Ladder Architecture](../rfcs/0001-oracle-ladder-architecture.md) - The 5-rung ladder this implements
+- [RFD-0001: Oracle Ladder Architecture](../rfds/0001-oracle-ladder-architecture.md) - The 5-rung ladder this implements
 - [MILESTONES.md](../MILESTONES.md) - M3 and M6.5 milestone details
 - [Commit c27628a](https://github.com/bailey-coding/beehive/commit/c27628a) - Implementation commit
 - [AGENTS.md](../../AGENTS.md#the-oracle-ladder-memorize) - Oracle ladder definition
@@ -206,4 +206,4 @@ From the git history:
 
 ---
 
-*This is a retrospective RFC documenting the canary deployment and auto-rollback system implemented as part of the oracle ladder. This system enables safe, gradual deployment of candidates to live traffic with automatic rollback on SLO violations.*
+*This is a retrospective RFD documenting the canary deployment and auto-rollback system implemented as part of the oracle ladder. This system enables safe, gradual deployment of candidates to live traffic with automatic rollback on SLO violations.*

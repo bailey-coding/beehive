@@ -260,7 +260,7 @@ anonymous, never master). Accounts from before m6 (if any) have no actor and no 
 so they cannot authenticate: revoke them and mint new ones. The old `/api/service-accounts*`
 routes are retired (410).
 
-### User tokens: mint, rotate, revoke (M12, RFC-0008)
+### User tokens: mint, rotate, revoke (M12, RFD-0008)
 
 Live once push B (schema `m9`, table `user_tokens`) reaches the deploy flow. A user token
 (`bh_usr_...`, `Authorization: Bearer` only) acts as **one human actor** that has a GitHub id; the edge

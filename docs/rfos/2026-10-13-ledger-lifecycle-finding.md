@@ -26,8 +26,8 @@ During M1 implementation, it was discovered that **the Spec Durable Object was a
 
 ## Timeline
 
-> Rewritten by the 2026-10-17 audit. The earlier rows (a lifecycle "RFC created" on 10-13, implementation
-> dated 10-14) had no repo evidence: no such RFC exists, and 48a5f54, e57e6b1 and f7dd837 are all 2026-10-15.
+> Rewritten by the 2026-10-17 audit. The earlier rows (a lifecycle "RFD created" on 10-13, implementation
+> dated 10-14) had no repo evidence: no such RFD exists, and 48a5f54, e57e6b1 and f7dd837 are all 2026-10-15.
 
 | Time (UTC) | Event | Evidence |
 |---|---|---|

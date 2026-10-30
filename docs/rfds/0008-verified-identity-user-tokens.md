@@ -1,18 +1,18 @@
 ---
-RFC-0008
+RFD-0008
 ---
 
-# RFC: Verified identity and user tokens (M12)
+# RFD: Verified identity and user tokens (M12)
 
 **Status:** Accepted (2026-10-17; decisions in section 9)
 **Date:** 2026-10-17
 **Author:** the agent (Claude Opus 5.5, task m12-rfc); spine work, so the decisions in section 8 are the maintainer's
-**Related:** RFC-0003 (service tokens), RFC-0007 (Spec DO tier tokens), ADR-0007 (fail-closed edge auth), `docs/MILESTONES.md` M12, M3, M6.2
+**Related:** RFD-0003 (service tokens), RFD-0007 (Spec DO tier tokens), ADR-0007 (fail-closed edge auth), `docs/MILESTONES.md` M12, M3, M6.2
 **Supersedes:** None
 
 ## Summary
 
-Capability minting (M3 + M6.2) has to grant capabilities to an actor, and today nothing proves who an actor is. This RFC lays out
+Capability minting (M3 + M6.2) has to grant capabilities to an actor, and today nothing proves who an actor is. This RFD lays out
 three options for a verified `kind: 'user'` principal, plus one minor variant. It recommends option A: opaque per-user tokens,
 stored hashed in the Spec DO like `service_tokens`, minted from the UI session. It also covers the two-push schema migration,
 the future of the master token, and the decisions the maintainer must make. It decides nothing.
@@ -52,7 +52,7 @@ M12 protects the public edge, not the internal mesh); enforcing `promotionAuthor
 
 ## 3. Options
 
-### A. Opaque per-user tokens in a Spec DO table (extends RFC-0003)
+### A. Opaque per-user tokens in a Spec DO table (extends RFD-0003)
 
 - **Format:** `bh_usr_` + base64url of 32 random bytes. `generateServiceToken`, `hashToken` and `looksLikeServiceToken`
   (`workers/shared/service-tokens.ts:17-35`) generalise to take the prefix as a parameter. The distinct prefix lets
@@ -182,7 +182,7 @@ Today the master token asserts any actor (section 1). Proposed in stages:
   (decision 5).
 - **Who mints for whom:** a session can mint only for its own `actorId`. Master can mint for any actor that is `human`, is
   not a service actor, and has a `github_user_id` (decision 2). **Agent actors do not hold user tokens.** Agents read through
-  service accounts (RFC-0003) and get write access later through M3 capabilities. That keeps a single kind of grant for
+  service accounts (RFD-0003) and get write access later through M3 capabilities. That keeps a single kind of grant for
   agents.
 - **Maintainer via tokens:** `isMaintainer` reads `actors.role` (`index.ts:1946`), so a maintainer's write token can do
   everything the maintainer can on DO routes. That is the same power the UI session has today (`ui.ts:128`). Alternatively,
@@ -226,7 +226,7 @@ the token and expect 401 on the next request. **No production e2e without human 
 
 **Option A**, minted from the UI settings page, with the master admin route for bootstrap. Device-code login is deferred.
 Reasons:
-- It reuses a design that already ships, is reviewed and has tests (RFC-0003): same hashing, prefix check and verify route
+- It reuses a design that already ships, is reviewed and has tests (RFD-0003): same hashing, prefix check and verify route
   pattern.
 - Revocation takes effect on the next request and needs no key management, which satisfies R2 and R3 without the gaps of
   option B.

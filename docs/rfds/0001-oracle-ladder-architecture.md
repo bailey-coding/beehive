@@ -1,8 +1,8 @@
 ---
-RFC-0001
+RFD-0001
 ---
 
-# RFC: Oracle Ladder Architecture
+# RFD: Oracle Ladder Architecture
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-09 (approximate; ADR-0001 is the VCS client model and does not define the ladder, whose first written form is `AGENTS.md`)  
@@ -14,7 +14,7 @@ RFC-0001
 
 ## Summary
 
-This retrospective RFC documents the foundational architectural decision to implement a 5-rung "oracle ladder" for progressively validating candidate implementations through increasingly rigorous gates, with live production traffic as the final arbiter.
+This retrospective RFD documents the foundational architectural decision to implement a 5-rung "oracle ladder" for progressively validating candidate implementations through increasingly rigorous gates, with live production traffic as the final arbiter.
 
 ---
 
@@ -225,7 +225,7 @@ None - This was a foundational design decision made at project inception.
 
 ## Implementation History
 
-This RFC documents decisions that were **already implemented** in the initial project structure:
+This RFD documents decisions that were **already implemented** in the initial project structure:
 
 - **M2 (completed 2026-10-12 per `docs/MILESTONES.md`):** Shadow Router, Scientist Comparator, Preview Manager implemented
 - **M3 (partial per `docs/MILESTONES.md`):** `promotion-worker` (tournament and merge-train modes) and `canary-worker`; the Full rung and the drift/holdout checks are not verified here
@@ -294,4 +294,4 @@ The oracle ladder implementation spans multiple commits and milestones. Key impl
 
 ---
 
-*This is a retrospective RFC documenting decisions already made and implemented. For the actual implementation details, see the referenced components and milestones.*
+*This is a retrospective RFD documenting decisions already made and implemented. For the actual implementation details, see the referenced components and milestones.*

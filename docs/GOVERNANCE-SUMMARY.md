@@ -6,7 +6,7 @@ tags:
   - governance
   - version-control
   - adr
-  - rfc
+  - rfd
   - rfo
 ---
 
@@ -21,7 +21,7 @@ tags:
 ## 🎯 Problem Statement
 
 As noted in ADR-0005 (Organizational Memory), Beehive wasn't fully practicing what it preached regarding version control for documentation artifacts. While the repo had ADRs (Architecture Decision Records) and specs, there was no formalized process for:
-- Proposing new features (RFCs)
+- Proposing new features (RFDs)
 - Documenting post-mortems and learnings (RFOs)
 - Consistent templating for documentation artifacts
 - Easy discovery and navigation of governance documents
@@ -39,7 +39,7 @@ As noted in ADR-0005 (Organizational Memory), Beehive wasn't fully practicing wh
 - Decision criteria: When to create an ADR
 - Complete template with context, alternatives, consequences
 - Index of existing ADRs with status tracking
-- Integration with RFC and RFO processes
+- Integration with RFD and RFO processes
 
 **Existing ADRs (5):**
 - ADR-0001: VCS Client Model
@@ -50,7 +50,7 @@ As noted in ADR-0005 (Organizational Memory), Beehive wasn't fully practicing wh
 
 ---
 
-### 2. RFC Process (`docs/rfcs/README.md`)
+### 2. RFD Process (`docs/rfds/README.md`)
 
 **Purpose:** Provide a structured way to propose new features and major changes.
 
@@ -62,7 +62,7 @@ As noted in ADR-0005 (Organizational Memory), Beehive wasn't fully practicing wh
   - Impact analysis (breaking changes, performance, security)
   - Implementation plan and rollout strategy
   - Alternatives considered
-- Clear criteria for when an RFC is needed
+- Clear criteria for when an RFD is needed
 - Status tracking and search capabilities
 
 ---
@@ -87,7 +87,7 @@ As noted in ADR-0005 (Organizational Memory), Beehive wasn't fully practicing wh
 
 **Templates provided:**
 - `adr-template.md` - Architecture Decision Records
-- `rfc-template.md` - Requests for Comments
+- `rfd-template.md` - Requests for Discussion
 - `rfo-template.md` - Requests for Observation
 
 **Features:**
@@ -107,7 +107,7 @@ As noted in ADR-0005 (Organizational Memory), Beehive wasn't fully practicing wh
 **New navigation:**
 - Quick Navigation table includes Governance
 - Category Deep Dive has dedicated Governance & Version Control section
-- Search tips updated for ADR, RFC, RFO document types
+- Search tips updated for ADR, RFD, RFO document types
 - Pro Tip for Agents references governance docs
 
 ---
@@ -121,7 +121,7 @@ All documentation artifacts now follow a consistent workflow:
 │                    BEHIVE VERSION CONTROL SYSTEM                    │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  RFC                ADR                Spec              Candidate │
+│  RFD                ADR                Spec              Candidate │
 │  ├── Propose ─────►├── Record ──────►├── Define ────────►┤ Impl    │
 │  │   Feature      │   Decision       │   Contract       │         │
 │  │                 │                  │                  │         │
@@ -142,7 +142,7 @@ All documentation artifacts now follow a consistent workflow:
 
 ### Step-by-Step Flow:
 
-1. **RFC (Request for Comments)**
+1. **RFD (Request for Discussion)**
    - Propose a new feature or major change
    - Gather feedback and iterate
    - Get acceptance from maintainers
@@ -193,7 +193,7 @@ As stated in ADR-0005, this system ensures:
 - Trust scores can be calibrated by measured outcomes
 
 ### 2. Better Decision Making
-- RFCs ensure features are well-thought-out before implementation
+- RFDs ensure features are well-thought-out before implementation
 - ADRs capture the reasoning behind architectural choices
 - RFOs prevent repeating the same mistakes
 
@@ -223,7 +223,7 @@ As stated in ADR-0005, this system ensures:
 
 1. **Propose a new feature:**
    ```bash
-   cp docs/templates/rfc-template.md docs/rfcs/NNNN-your-feature.md
+   cp docs/templates/rfd-template.md docs/rfds/NNNN-your-feature.md
    # Fill in the template, then create a PR
    ```
 
@@ -242,14 +242,14 @@ As stated in ADR-0005, this system ensures:
 ### For Agents
 
 1. Always check existing ADRs before making architectural changes
-2. Reference relevant RFCs and ADRs in your work
+2. Reference relevant RFDs and ADRs in your work
 3. Use the templates when creating new governance documents
 4. Update the appropriate READMEs when adding new documents
 
 ### For Maintainers
 
-1. Review new RFCs and provide feedback
-2. Accept or reject RFCs based on alignment with project goals
+1. Review new RFDs and provide feedback
+2. Accept or reject RFDs based on alignment with project goals
 3. Ensure ADRs are created for significant architectural decisions
 4. Verify RFOs are created for all significant incidents
 
@@ -268,14 +268,14 @@ docs/
 │   ├── 0003-language.md
 │   ├── 0004-ci.md
 │   └── 0005-org-memory.md
-├── rfcs/
-│   └── README.md                # RFC process and index
+├── rfds/
+│   └── README.md                # RFD process and index
 ├── rfos/
 │   └── README.md                # RFO process and index
 └── templates/
     ├── README.md                # Templates index
     ├── adr-template.md
-    ├── rfc-template.md
+    ├── rfd-template.md
     └── rfo-template.md
 ```
 
@@ -285,7 +285,7 @@ docs/
 
 - [ADR-0005: Organizational Memory](decisions/0005-org-memory.md) - The foundational ADR that inspired this system
 - [ADR Process](decisions/README.md) - Detailed ADR workflow
-- [RFC Process](rfcs/README.md) - Detailed RFC workflow
+- [RFD Process](rfds/README.md) - Detailed RFD workflow
 - [RFO Process](rfos/README.md) - Detailed RFO workflow
 - [Documentation Index](README.md) - Main documentation entry point
 - [Architecture](ARCHITECTURE.md) - Technical architecture with ADR references
@@ -296,10 +296,10 @@ docs/
 
 Potential improvements to consider:
 
-- [ ] Automated validation of ADR/RFC/RFO format
+- [ ] Automated validation of ADR/RFD/RFO format
 - [ ] Script to generate new artifact numbers automatically
 - [ ] Integration with GitHub Issues for tracking artifact status
-- [ ] Metrics dashboard for RFC/ADR/RFO statistics
+- [ ] Metrics dashboard for RFD/ADR/RFO statistics
 - [ ] Automated reminders for action items in RFOs
 - [ ] LLM-optimized search index for governance documents
 
@@ -316,4 +316,4 @@ The implementation has been:
 
 ---
 
-*This document provides an overview of the Beehive Documentation Version Control System. For detailed information on each process, refer to the respective README files in the `docs/decisions/`, `docs/rfcs/`, and `docs/rfos/` directories.*
+*This document provides an overview of the Beehive Documentation Version Control System. For detailed information on each process, refer to the respective README files in the `docs/decisions/`, `docs/rfds/`, and `docs/rfos/` directories.*

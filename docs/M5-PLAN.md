@@ -79,7 +79,7 @@ M5 consists of **four interconnected components:**
 Cloudflare shipped a `web_search` tool for the Agents SDK on 2026-10-12 ([changelog](https://developers.cloudflare.com/changelog/post/2026-10-12-web-search/)): v0.27.0+, Web Search API backed by Exa, Linkup or ceramic.ai, pairs with `web_fetch`, runs in a Durable Object via the `AI` binding, and has a model-free mode (`createAIWebSearch()`) for scheduled jobs. Beehive does not use the Agents SDK today, so adopting it is new infrastructure.
 
 Treat web access as a capability in the trust registry, granted per role and **off by default**:
-- **Spec authors and issue triage (first target):** research upstream RFCs, docs and prior art while drafting a spec. Specs get human review anyway, so a bad source is caught before anything is built on it.
+- **Spec authors and issue triage (first target):** research upstream RFDs, docs and prior art while drafting a spec. Specs get human review anyway, so a bad source is caught before anything is built on it.
 - **Dependency/security oracle:** when a candidate adds or bumps a dependency, look up advisories and CVEs and flag likely typosquats. Feeds the `dependency-change` change type and the two-person rule.
 - **Model-free watchers:** a scheduled job that watches Cloudflare changelogs (Artifacts, Sandbox, Workers) and drafts `docs/OPEN-QUESTIONS.md` entries.
 - **Candidate implementers (last, if at all):** prompt injection, supply-chain and reproducibility risk. Allow only with an allowlist of docs domains, and record every query and fetched URL in the candidate's provenance (git notes) so gates and reviewers can see what influenced it.

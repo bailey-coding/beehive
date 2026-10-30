@@ -175,10 +175,10 @@ grep "Status:" docs/decisions/*.md
 ADRs fit into the broader Beehive documentation workflow:
 
 ```
-RFD/RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
+RFD → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
 ```
 
-- **RFD/RFC** (Request for Discussion/Comments): Proposes new features or major changes
+- **RFD** (Request for Discussion): Proposes new features or major changes
 - **ADR**: Records architectural decisions that guide implementation
 - **Spec**: Machine-readable contract defining expected behavior
 - **Candidate**: Implementation of a spec
@@ -187,7 +187,7 @@ RFD/RFC → ADR → Spec → Candidate → Promotion → SLO Outcome → RFO
 - **RFO** (Request for Observation): Post-mortem or retrospective analysis
 
 See also:
-- [RFC Process](../rfcs/README.md)
+- [RFD Process](../rfds/README.md)
 - [RFO Process](../rfos/README.md)
 - [Specs](../specs/README.md)
 

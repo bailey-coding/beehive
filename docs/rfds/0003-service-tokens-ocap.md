@@ -1,8 +1,8 @@
 ---
-RFC-0003
+RFD-0003
 ---
 
-# RFC: Service Tokens (object-capability model not built)
+# RFD: Service Tokens (object-capability model not built)
 
 **Status:** Implemented (Retrospective)  
 **Date:** 2026-10-16 (commit aeec713, 01:04 UTC)  
@@ -14,7 +14,7 @@ RFC-0003
 
 ## Summary
 
-This retrospective RFC documents the decision to implement **service-scoped object-capability (OCAP) tokens** as the authentication and authorization model for Beehive. This replaced the legacy `/api/service-accounts` endpoint with expiring, revocable, hashed bearer tokens carrying coarse `read`/`write`/`read_write` scopes, one actor per account. Service-scoped capabilities and path restrictions were not built (M6.2).
+This retrospective RFD documents the decision to implement **service-scoped object-capability (OCAP) tokens** as the authentication and authorization model for Beehive. This replaced the legacy `/api/service-accounts` endpoint with expiring, revocable, hashed bearer tokens carrying coarse `read`/`write`/`read_write` scopes, one actor per account. Service-scoped capabilities and path restrictions were not built (M6.2).
 
 ---
 
@@ -191,4 +191,4 @@ From the git history:
 
 ---
 
-*This is a retrospective RFC documenting the service tokens and object-capability model that was implemented as part of the M5→M6 migration. This system provides fine-grained access control aligned with Beehive's capability-based architecture.*
+*This is a retrospective RFD documenting the service tokens and object-capability model that was implemented as part of the M5→M6 migration. This system provides fine-grained access control aligned with Beehive's capability-based architecture.*
