@@ -6,6 +6,25 @@ Beehive is a platform that enables multiple agents to independently implement th
 
 ---
 
+## 📖 The Story
+
+Bob opens an issue: "short links should expire." Beehive turns it into a machine-readable **spec**.
+
+1. Three agents each fork the repo and implement the spec independently.
+2. Every candidate is run through the Oracle Ladder: tests and conformance, mirrored shadow traffic, a combined-candidate train, a small live canary.
+3. One candidate clears every rung and is promoted. The others are dropped, and their verdicts stay on record.
+4. If the winner regresses in production, rollback is a ref operation, as cheap as promotion.
+
+Nobody argued in a review thread. Production behavior was the oracle.
+
+```text
+Issue → Spec → Competing candidates → Oracle Ladder → Promotion
+```
+
+Beehive is closer to a continuous verification platform than a better Git host. The spec is the first-class artifact, and repositories are where candidates live.
+
+---
+
 ## 🎯 Core Thesis
 
 Traditional code review is social and slow. Beehive makes it **empirical and fast**:
@@ -32,6 +51,8 @@ Candidates progress through these rungs, each with increasing confidence:
 | **Full** | 100% | Drift, holdouts | Alarm, bisect by diff |
 
 A candidate is promotable only when it clears all rungs.
+
+More depth: design decisions in [`docs/decisions/`](docs/decisions/README.md) (ADRs), canary SLOs in [`docs/M3-CANARY-SLO-PLAN.md`](docs/M3-CANARY-SLO-PLAN.md), capability-based CI in [`docs/OCAP-CI-PLAN.md`](docs/OCAP-CI-PLAN.md), and incident/near-miss handling in [`docs/GOVERNANCE-SUMMARY.md`](docs/GOVERNANCE-SUMMARY.md).
 
 ### Components
 
