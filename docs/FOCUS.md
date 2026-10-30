@@ -119,7 +119,8 @@ cleanups. Confirm, in this order:
 - **M5a idempotency gaps:** (1) edge key forwarding and (2) queue-consumer retry plus gate dedupe are implemented on
   `claude/pr1-review-lmgqik` (2026-10-30, plan reviewed twice, code reviewed once; not merged or deployed; first deploy
   checks: Workers Logs for `Giving up on message` / `Dropping message`, `docs/OPS.md`). Still open: (3) the other mutation routes are
-  unkeyed. Details: `docs/M5A-AUDIT.md`, `docs/M5A-2-IMPL-PLAN.md`.
+  unkeyed; (4) queue follow-ups: dead-letter queue (maintainer creates it), negative cache for repos with no candidate,
+  and the `limit=100` lookups (`docs/MILESTONES.md` M5a-2). Details: `docs/M5A-AUDIT.md`, `docs/M5A-2-IMPL-PLAN.md`.
 - **Docs changed 2026-10-30:** RFC is now RFD (`docs/rfds/`); agents may write the spine under plan + review (`AGENTS.md` rule 2).
 
 - **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci-enhanced.yml` now builds
