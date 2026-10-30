@@ -89,8 +89,8 @@ Bootstrap governance with minimal viable ledger changes and change-type classifi
 **Exit criteria:** Idempotency keys prevent double-writes; bootstrap fields added to ledger; change-type classification operational; two-person rule logic in place (even if only self-approvals for now). **Met so far: idempotency on 9 routes only. The other three are M5a-2.**
 
 **M5a-2 — Governance schema and idempotency completion (next; spine work, plan + independent review first).** From `docs/M5A-AUDIT.md`:
-- **Edge forwards `Idempotency-Key`** to the Spec DO (the helper at `workers/api/index.ts:467` drops it today), with an edge-level test.
-- **Queue consumer:** key the gate-workflow trigger, not just the history write; call `message.retry()` on failure; treat a 409 as "same key, different body" and log it.
+- **DONE 2026-10-30: Edge forwards `Idempotency-Key`** to the Spec DO on the 8 keyed POST routes (`workers/api/index.ts` `idemKey`), with an edge-level test.
+- **DONE 2026-10-30: Queue consumer** keys the gate trigger and the history write, retries transient failures with `message.retry()` (cap 5), treats a 409 as "same key, different body" and logs it; the gate worker dedupes by key (`docs/M5A-2-IMPL-PLAN.md`).
 - **Wire the remaining mutation routes** (issues, comments, links, stage changes, claim, decide, execute, gate/pre-merge, promotion/tournament/merge-train/canary/deploy-ref), or document each as intentionally unkeyed.
 - **One additive migration (m13 or later)** carrying ADR 0005's retrofit-once fields: change type + confidence, approval records with self-approval marker, cost attribution, initiator/executor/reviewer, outcome link, and the **near-miss table** (written when a candidate loses a trial or promotion; read route).
 - **Change-type classifier** and the **two-person rule** at the promotion step (bootstrap mode: self-approvals marked as such). Maintainer approval stays human-only (`docs/M5-PLAN.md`); agents write the code, not the approvals.

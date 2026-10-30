@@ -116,10 +116,10 @@ cleanups. Confirm, in this order:
 
 ## Open work
 
-- **M5a idempotency gaps (spine; plan + independent review before code):** (1) the edge helper `workers/api/index.ts:467`
-  drops `Idempotency-Key`, so `/api` callers get no protection; (2) the queue consumer triggers the gate workflow before its
-  keyed history write (a redelivery re-runs the gate) and never calls `retry()`/`ack()`, so failures are dropped; (3) only 9 of the
-  mutation routes are keyed. Details: `docs/M5A-AUDIT.md`.
+- **M5a idempotency gaps:** (1) edge key forwarding and (2) queue-consumer retry plus gate dedupe are implemented on
+  `claude/pr1-review-lmgqik` (2026-10-30, plan reviewed twice, code reviewed once; not merged or deployed; first deploy
+  checks: Workers Logs for `Giving up on message` / `Dropping message`, `docs/OPS.md`). Still open: (3) the other mutation routes are
+  unkeyed. Details: `docs/M5A-AUDIT.md`, `docs/M5A-2-IMPL-PLAN.md`.
 - **Docs changed 2026-10-30:** RFC is now RFD (`docs/rfds/`); agents may write the spine under plan + review (`AGENTS.md` rule 2).
 
 - **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci-enhanced.yml` now builds

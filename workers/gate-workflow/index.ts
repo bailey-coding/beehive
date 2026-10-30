@@ -230,6 +230,12 @@ async function handleStartPreMergeGate(
 ): Promise<Response> {
   // Set once this invocation owns a map entry, so the catch removes only its own
   let ownedVerdictId: string | null = null;
+  let ownedEntry: WorkflowEntry | null = null;
+  const setOwned = (verdictId: string, entry: WorkflowEntry) => {
+    ownedVerdictId = verdictId;
+    ownedEntry = entry;
+    workflows.set(verdictId, entry);
+  };
   try {
     // Validate request body with Zod - prevents field name mismatches
     const rawBody = await request.text();
@@ -269,8 +275,7 @@ async function handleStartPreMergeGate(
     }
 
     // Create workflow state
-    ownedVerdictId = verdictId;
-    workflows.set(verdictId, {
+    setOwned(verdictId, {
       bodyHash,
       startedMs: startedAt,
       status: 'running',
@@ -324,7 +329,7 @@ async function handleStartPreMergeGate(
     );
 
     // Update workflow state (not yet replayable: the verdict is not recorded)
-    workflows.set(verdictId, {
+    setOwned(verdictId, {
       bodyHash,
       startedMs: startedAt,
       status: 'complete',
@@ -333,7 +338,7 @@ async function handleStartPreMergeGate(
 
     // Record verdict in Spec DO; throws unless the Spec DO confirmed it
     await recordGateVerdict(env, result, actorId, idempotencyKey);
-    workflows.set(verdictId, {
+    setOwned(verdictId, {
       bodyHash,
       startedMs: startedAt,
       status: 'complete',
@@ -352,7 +357,8 @@ async function handleStartPreMergeGate(
     });
   } catch (error: unknown) {
     // A failed run must not stay replayable or in flight: the retry has to run again
-    if (ownedVerdictId) workflows.delete(ownedVerdictId);
+    // (only our own entry: a rerun that superseded a stale run owns the id now)
+    if (ownedVerdictId && workflows.get(ownedVerdictId) === ownedEntry) workflows.delete(ownedVerdictId);
     const status =
       error instanceof GateHttpError ? error.status
       : error instanceof z.ZodError || error instanceof SyntaxError ? 400
@@ -953,9 +959,10 @@ async function recordGateVerdict(
       body: JSON.stringify(verdictData),
     })
   );
-  if (response.status === 409 && idempotencyKey) {
+  if (response.status === 409 && idempotencyKey && (await response.clone().text()).includes('Idempotency key conflict')) {
     // The first write under this key is authoritative: a re-run can differ (the simulated conformance
-    // warning is random), and the DO answers 409 for the same key with another body.
+    // warning is random), and the DO answers 409 for the same key with another body. Any other 409
+    // (a future ConflictError on this route) is a real failure and falls through to the throw below.
     console.warn(`[Gate] Verdict for key already recorded with a different body (${result.verdictId}); keeping the first`);
     return;
   }

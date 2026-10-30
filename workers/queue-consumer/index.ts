@@ -216,7 +216,8 @@ async function triggerPreviewDeployment(event: ArtifactsPushEvent, env: Env, spe
 /** Delivery attempts after which a transient failure is given up (matches max_retries = 4 in wrangler.toml). */
 const MAX_ATTEMPTS = 5;
 const MAX_BACKOFF_SECONDS = 900;
-const IN_FLIGHT_RETRY_SECONDS = 10;
+// 4 retries x 35 s = 140 s, past the gate's 120 s window after which a hung run is rerun; 10 s would give up first
+const IN_FLIGHT_RETRY_SECONDS = 35;
 const CONFIG_RETRY_SECONDS = 3600;
 // The Spec DO rejects Idempotency-Key values over 255 characters; the gate key adds ':gate'
 const MAX_BASE_KEY_CHARS = 200;

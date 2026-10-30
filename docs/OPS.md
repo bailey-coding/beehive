@@ -478,3 +478,5 @@ gotchas, deploy learnings).
   key is the guard and the gate re-runs once. Errors: 400 invalid body, 404 unknown spec, 409 `{inFlight:true}` while a
   run is still going, 500 otherwise (including a failed verdict write).
 - Preview deploys run on the first delivery only and are best effort.
+- A master token can pre-plant the Spec DO key `<queue>:<event id>:gate` as actor `queue-consumer` with another body; the gate then treats its verdict write as already recorded. Master is trusted, so this is accepted.
+- Known load: a push for a repository with no candidate is retried 5 times (about 7.5 minutes). A dead-letter queue or a negative cache is the follow-up.

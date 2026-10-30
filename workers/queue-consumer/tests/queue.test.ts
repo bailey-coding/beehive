@@ -881,11 +881,21 @@ describe('Retry, classification and idempotency', () => {
     it('retries soon on a 409 inFlight, drops a plain 409', async () => {
       stubGate(status(409, { inFlight: true }));
       const inFlight = await run();
-      expect(inFlight.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
+      expect(inFlight.retry).toHaveBeenCalledWith({ delaySeconds: 35 });
 
       stubGate(status(409, { error: 'Idempotency key conflict' }));
       const conflict = await run();
       expect(conflict.retry).not.toHaveBeenCalled();
+    });
+
+    it('keeps retrying an in-flight run long enough to outlast the gate stale window (120 s)', async () => {
+      stubGate(status(409, { inFlight: true }));
+      let waited = 0;
+      for (const attempts of [1, 2, 3, 4]) {
+        const message = await run({ attempts });
+        waited += (message.retry.mock.calls[0][0] as { delaySeconds: number }).delaySeconds;
+      }
+      expect(waited).toBeGreaterThan(120);
     });
 
     it('retries when the gate fetch throws', async () => {

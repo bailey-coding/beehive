@@ -1,6 +1,6 @@
 ---
 category: planning
-status: implemented-pending-review
+status: implemented-reviewed
 milestone: m5a-2
 audience: human,agent
 tags:
@@ -110,4 +110,5 @@ Implemented on `claude/pr1-review-lmgqik` in three commits (gate, consumer, edge
 - The consumer does not call `message.ack()`: a normal return acks, and only `retry()` is called explicitly. The existing test literals were left in place and run through a `runQueue()` wrapper that adds `attempts`/`retry`/`ack`; `makeMessage()` is used by the new tests.
 - 404 on a missing spec is the only status propagated from the Spec DO; any other non-OK is a gate 500.
 - A stale in-flight entry (older than 120 s) is rerun; a different request body under a live key is a plain 409.
+- Implementation review (independent agent, 2026-10-30): approve with changes, no blockers. Fixed: in-flight retry delay is 35 s (4 retries outlast the 120 s stale window; 10 s gave up first), the catch deletes only its own map entry, a DO 409 on the verdict write counts as recorded only when the body says `Idempotency key conflict`, plus tests for a restarted isolate and the in-flight schedule. Accepted and noted in `docs/OPS.md`: master pre-planted keys, 5x retry load for unrelated pushes.
 - Full unit suite: 55 files, 1182 tests pass, typecheck clean. Not run: e2e.

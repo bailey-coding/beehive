@@ -529,7 +529,11 @@ describe('Gate start idempotency', () => {
         if (url.pathname === `/api/specs/${TEST_SPEC_ID}`) return Response.json(spec);
         if (url.pathname === '/api/gate-verdicts') {
           verdictPosts.push(req.clone());
-          return Response.json({ success: true }, { status: verdictStatuses.shift() ?? 201 });
+          const code = verdictStatuses.shift() ?? 201;
+          const reply = code === 409
+            ? { success: false, error: 'Idempotency key conflict: same key used with different request' }
+            : { success: true };
+          return Response.json(reply, { status: code });
         }
         return Response.json({ error: 'Not found' }, { status: 404 });
       }),
@@ -599,6 +603,38 @@ describe('Gate start idempotency', () => {
     expect(response.status).toBe(201);
     const replay = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
     expect(replay.status).toBe(200);
+  });
+
+  it('throws on a 409 that is not an idempotency conflict', async () => {
+    const key = nextKey();
+    const base = mockEnv.SPEC_DO.get();
+    mockEnv.SPEC_DO.get.mockReturnValue({
+      fetch: vi.fn().mockImplementation(async (req: Request) =>
+        new URL(req.url).pathname === '/api/gate-verdicts'
+          ? Response.json({ success: false, error: 'verdict already exists' }, { status: 409 })
+          : base.fetch(req)),
+    });
+    const response = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(response.status).toBe(500);
+  });
+
+  it('after an isolate restart (empty run map) reruns with the same verdict id and key, so the DO key decides', async () => {
+    const key = nextKey();
+    const first = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(first.status).toBe(201);
+
+    vi.resetModules();
+    const fresh = (await import('../index')).default;
+    // @ts-ignore - mock environment
+    const second = await fresh.fetch(createRequest('/gates/pre-merge', 'POST', body, {
+      Authorization: 'Bearer test-auth-token',
+      'Idempotency-Key': key,
+    }), mockEnv, mockCtx);
+    expect(second.status).toBe(201);
+    expect((await readJson(second)).verdictId).toBe((await readJson(first)).verdictId);
+    expect(verdictPosts).toHaveLength(2);
+    expect(verdictPosts[1].headers.get('Idempotency-Key')).toBe(key);
+    expect(verdictPosts[1].headers.get('X-Actor-ID')).toBe(TEST_ACTOR_ID);
   });
 
   it('answers 409 inFlight for a duplicate while the first run has not recorded', async () => {
