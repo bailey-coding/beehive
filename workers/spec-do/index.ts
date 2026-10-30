@@ -9,6 +9,7 @@
  *         promotion ledger: promotion_states, tournaments, merge_trains.
  */
 
+import { isValidNamespace } from '../shared/namespace';
 import { DurableObject } from '@cloudflare/workers-types/experimental';
 import { createSqlStorage, SqlDb } from './sql-storage';
 
@@ -24,10 +25,12 @@ import {
   USER_TOKENS_SQL,
   IDEMPOTENCY_KEYS_SQL,
   CANARY_METRICS_SQL,
+  ACTORS_GITHUB_UNIQUE_SQL,
+  GATE_RUNS_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm11';
+const LATEST_SCHEMA_VERSION = 'm13';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -38,6 +41,7 @@ const IDEMPOTENCY_CLEANUP_EVERY = 50; // expired-key sweep runs on one keyed req
 const IDEMPOTENT_ROUTES: Set<string | RegExp> = new Set([
   'POST /api/organizations', 'POST /api/actors', 'POST /api/repositories', 'POST /api/specs',
   'POST /api/candidates', 'POST /api/gate-verdicts', 'POST /api/trials', 'POST /api/promotions',
+  'POST /api/gate-runs', // start only; the result route is a compare-and-set and replays on its own
   /^POST \/api\/entities\/[^\/]+\/[^\/]+\/history$/, // Dynamic entity history POST
 ]);
 
@@ -80,7 +84,46 @@ function checkExpectedVersion(
 }
 class NotFoundError extends Error {}
 class ForbiddenError extends Error {}
+/**
+ * Thrown by the m12 migration step when actors share a github_user_id. The message lists those values and
+ * actor ids only; resolve them by hand (docs/OPS.md), nothing is deleted or merged on the way.
+ */
+export class DuplicateGithubIdentityError extends Error {
+  constructor(readonly duplicates: { githubUserId: string; actorIds: string[] }[]) {
+    super(
+      `DuplicateGithubIdentityError: m12 refused, ${duplicates.length} github_user_id value(s) belong to more than one actor: ` +
+        duplicates.map((d) => `${JSON.stringify(d.githubUserId)} -> ${d.actorIds.join(', ')}`).join('; ') +
+        '. Resolve them (docs/OPS.md "Deploy checklist"); the ledger is still at m11 and nothing was changed.'
+    );
+    this.name = 'DuplicateGithubIdentityError';
+  }
+}
 class BadRequestError extends Error {}
+/** One line per issue ("commitSha: must be 40 lowercase hex characters"), not zod's pretty-printed JSON */
+/** JSON text -> key-order-independent text, so a replay compares by value; unparsable text compares as itself */
+const canonicalJson = (text: unknown): string => {
+  const sort = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort((v as Record<string, unknown>)[k])]))
+        : v;
+  try {
+    return JSON.stringify(sort(JSON.parse(String(text))));
+  } catch {
+    return String(text);
+  }
+};
+const zodMessage = (e: { issues: { path: PropertyKey[]; message: string }[] }) =>
+  e.issues.map((i) => `${i.path.map(String).join('.') || '(body)'}: ${i.message}`).join('; ');
+/** The sha already has MAX_GATE_RUN_ATTEMPTS_PER_SHA attempts: 409 `too_many_attempts` (permanent, unlike busy) */
+class GateRunTooManyAttemptsError extends ConflictError {}
+/** A gate-run cap refused the start: 409 with code `busy`, and no idempotency key is left behind (the mutation threw) */
+class GateRunBusyError extends ConflictError {
+  constructor(readonly reason: 'repository' | 'global', message: string) {
+    super(message);
+  }
+}
 
 const COMMENT_POLICIES = ['open', 'maintainers_only', 'locked'];
 const MAX_COMMENT_CHARS = 10_000;
@@ -122,6 +165,8 @@ const ORG_PURGE_ORDER: [table: string, where: string][] = [
     'trials',
     `spec_id IN (${ORG_SPECS}) OR candidate_a_id IN (${ORG_CANDIDATES}) OR candidate_b_id IN (${ORG_CANDIDATES}) OR winner_id IN (${ORG_CANDIDATES})`,
   ],
+  // gate_runs is deleted before its candidates although nothing enforces it (no FK, see the orphan sweep in the purge plan); after trials per docs/REAL-GATE-IMPL-PLAN.md section 3
+  ['gate_runs', `candidate_id IN (${ORG_CANDIDATES})`],
   ['issues', `id IN (${ORG_ISSUES})`],
   ['candidates', `id IN (${ORG_CANDIDATES})`],
   ['repositories', 'organization_id = ?'],
@@ -318,7 +363,27 @@ import {
   type CanaryDeployRequest,
   type CanaryMoveResult,
   type LiveRef,
+  isAcceptableCanaryUrl,
 } from '../shared/deploy-refs';
+
+// Gate runs (shared with the gate worker)
+import {
+  StartGateRunRequestSchema,
+  FinishGateRunRequestSchema,
+  GATE_RUN_BUSY,
+  GATE_RUN_TOO_MANY_ATTEMPTS,
+  MAX_GATE_RUN_ATTEMPTS_PER_SHA,
+  GATE_RUN_QUOTA_WINDOW_MS,
+  GATE_RUN_STALE_MS,
+  MAX_GATE_RUNS_PER_ORG_PER_DAY,
+  MAX_RUNNING_GATE_RUNS_GLOBAL,
+  MAX_RUNNING_GATE_RUNS_PER_REPOSITORY,
+  type FinishGateRunRequest,
+  type GateRun,
+  type GateRunChecks,
+  type StartGateRunRequest,
+  type StartGateRunResult,
+} from '../shared/gate-run-schema';
 
 // Types
 import type {
@@ -365,9 +430,16 @@ interface Env {
   SPEC_DO_ADMIN_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  // The account's workers.dev subdomain: when set, a canary url must be one of its Workers (shared/deploy-refs.ts)
+  WORKERS_SUBDOMAIN?: string;
   // Minimum tombstone age before purge may hard-delete (hours, default 24). Local e2e sets 0.
   PURGE_MIN_AGE_HOURS?: string;
+  // Producer for canary SLO ticks (docs/M3-CANARY-SLO-PLAN.md). Optional: an unbound DO still arms and re-arms.
+  CANARY_SLO_TICKS?: { send(message: unknown): Promise<void> };
 }
+
+/** Delay between canary SLO ticks while a canary is live. */
+export const CANARY_TICK_INTERVAL_MS = 60_000;
 
 // Tombstone columns, present on organizations/repositories/specs/candidates/issues rows
 // only when the row is tombstoned (live rows serialize exactly as before m5)
@@ -598,6 +670,12 @@ export class SpecDO {
 
       // canary_metrics: likewise
       this.db.exec(CANARY_METRICS_SQL);
+
+      // unique actors.github_user_id: likewise (the table is empty here, so no duplicate check)
+      this.db.exec(ACTORS_GITHUB_UNIQUE_SQL);
+
+      // gate_runs: likewise (candidates.preview_* are in the base table above)
+      this.db.exec(GATE_RUNS_SQL);
 
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
@@ -1051,6 +1129,11 @@ export class SpecDO {
       ['m10', () => this.db!.exec(IDEMPOTENCY_KEYS_SQL)],
       // m10 -> m11: canary metrics (M3 SLO loop; shadow-sourced until real canary traffic exists)
       ['m11', () => this.db!.exec(CANARY_METRICS_SQL)],
+      // m11 -> m12: unique actors.github_user_id. Refuses (DuplicateGithubIdentityError) on duplicates, before the index
+      ['m12', () => this.applyActorsGithubUnique()],
+      // m12 -> m13: gate_runs, plus the candidates.preview_* columns. A ledger created fresh at m11 or m12 has them only
+      // if its base table did; the m2 step above ran on migrated ledgers alone and never re-runs once a version is stamped
+      ['m13', () => this.applyGateRuns()],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -1098,6 +1181,35 @@ export class SpecDO {
 
   private writeSchemaVersion(version: string): void {
     this.run('INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)', 'schema_version', version, now());
+  }
+
+  /**
+   * m12. Looks for duplicate GitHub identities first and throws DuplicateGithubIdentityError, which lists the
+   * duplicated github_user_id values and actor ids and nothing else, before it creates anything: the ledger
+   * stays at m11 with every row intact, init() rethrows and the next request retries. It never deletes,
+   * merges or skips. A human resolves the duplicate (docs/OPS.md "Deploy checklist"), and the retry succeeds.
+   * The WHERE clause is the index's own (NULL and '' are "no identity").
+   */
+  private applyActorsGithubUnique(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    const dups = this.queryAll(
+      `SELECT github_user_id, GROUP_CONCAT(id) AS actor_ids FROM actors
+       WHERE github_user_id IS NOT NULL AND github_user_id != ''
+       GROUP BY github_user_id HAVING COUNT(*) > 1 ORDER BY github_user_id`
+    );
+    if (dups.length) {
+      throw new DuplicateGithubIdentityError(
+        dups.map((d) => ({ githubUserId: d.github_user_id as string, actorIds: (d.actor_ids as string).split(',').sort() }))
+      );
+    }
+    this.db.exec(ACTORS_GITHUB_UNIQUE_SQL);
+  }
+
+  /** m13. Additive and idempotent: IF NOT EXISTS table and indexes, then the preview columns behind a PRAGMA check. */
+  private applyGateRuns(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.addColumnsIfMissing('candidates', ['preview_url TEXT', 'preview_worker_name TEXT', 'preview_created_at INTEGER']);
+    this.db.exec(GATE_RUNS_SQL);
   }
 
   private addColumnsIfMissing(table: string, columns: string[]): void {
@@ -1252,6 +1364,12 @@ export class SpecDO {
   ): ActorRow {
     if (!this.db) throw new Error('Database not initialized');
     
+    // One actor per GitHub identity (m12 unique index). The check and the insert are one synchronous step,
+    // so a concurrent login cannot slip between them; a duplicate is a 409, never a constraint 500.
+    if (githubUserId) {
+      const taken = this.queryAll(`SELECT id FROM actors WHERE github_user_id = ?`, githubUserId)[0];
+      if (taken) throw new ConflictError(`an actor with github_user_id ${JSON.stringify(githubUserId)} already exists (${taken.id})`);
+    }
     const id = generateId();
     const stmt = this.db.prepare(
       `INSERT INTO actors (id, type, name, github_user_id, trust_score, promotion_authority, created_at) 
@@ -2449,6 +2567,11 @@ export class SpecDO {
         for (const r of rows) ids.get(table)!.add(r.id as string);
       }
     }
+    // gate_runs.candidate_id has no foreign key (docs/OPS.md rollback floor): a purge by a build older than m13 deletes candidates
+    // and leaves their runs. Their candidate is gone, so the owning org cannot be told; they are junk, swept by any real purge plan.
+    if (orgIds.length) {
+      for (const r of this.queryAll('SELECT id FROM gate_runs WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('gate_runs')!.add(r.id as string);
+    }
     const rows: [string, string][] = ORG_PURGE_ORDER.flatMap(([table]) => [...ids.get(table)!].map((id): [string, string] => [table, id]));
     const counts = Object.fromEntries(ORG_PURGE_ORDER.map(([table]) => [table, ids.get(table)!.size]));
     return { orgIds, skipped, rows, counts, total: rows.length, candidateIds: [...ids.get('candidates')!] };
@@ -2500,6 +2623,7 @@ export class SpecDO {
       counts: plan.counts,
       total: plan.total,
       batches,
+      ...(req.withCandidateIds ? { candidateIds: plan.candidateIds } : {}),
     });
     const refuse = (detail: string) => {
       this.logLifecycle({ ...log, outcome: 'refused', detail, finishedAt: now() });
@@ -3069,7 +3193,12 @@ export class SpecDO {
         if (id === undefined && method === 'POST') {
           const p = parse(CanaryDeployRequestSchema, 'canary deployment');
           if ('error' in p) return p.error;
-          return json(this.deployCanary(p.data, actorId), 201);
+          if (!isAcceptableCanaryUrl(p.data.url, this.env.WORKERS_SUBDOMAIN)) {
+            return fail(`Invalid canary deployment: url must be an https Worker on this account's workers.dev subdomain`, 400);
+          }
+          const moved = this.deployCanary(p.data, actorId);
+          await this.armCanaryAlarm();
+          return json(moved, 201);
         }
         if (id !== undefined && sub === undefined && method === 'GET') {
           const deployment = this.getCanaryDeployment(id);
@@ -3205,6 +3334,41 @@ export class SpecDO {
       this.syncCanaryStatuses(request.specId);
       return { deployment: this.getCanaryDeployment(id)!, ref };
     });
+  }
+
+  /** Set the tick alarm for +60s when a canary is live and none is pending. Best effort: never throws. */
+  async armCanaryAlarm(): Promise<void> {
+    try {
+      if (!this.db || this.liveRefs('canary').length === 0) return;
+      if ((await this.state.storage.getAlarm()) != null) return;
+      await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS);
+    } catch (e) {
+      console.error('[SpecDO] canary alarm arm failed:', e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Canary SLO tick: while any canary head is live, send one message to the tick queue and re-arm. With none
+   * live nothing is re-armed, so the chain stops. Never throws (a throw would make the runtime retry with backoff).
+   */
+  async alarm(): Promise<void> {
+    let live = false;
+    try {
+      if (!this.db) await this.init();
+      if (this.liveRefs('canary').length === 0) return;
+      live = true;
+      try {
+        await this.env.CANARY_SLO_TICKS?.send({ type: 'canary-slo-tick', at: now() });
+      } catch (e) {
+        console.error('[SpecDO] canary tick send failed:', e instanceof Error ? e.message : String(e));
+      }
+      await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS);
+    } catch (e) {
+      console.error('[SpecDO] canary alarm failed:', e instanceof Error ? e.message : String(e));
+      // Keep the chain alive only if a canary was known to be live; a persistent init/read failure must not
+      // re-arm forever. The next request or canary deploy re-arms otherwise.
+      if (live) { try { await this.state.storage.setAlarm(Date.now() + CANARY_TICK_INTERVAL_MS); } catch { /* ignore */ } }
+    }
   }
 
   /** Roll back a live canary: its spec's canary ref moves to the previous target. */
@@ -3611,6 +3775,8 @@ export class SpecDO {
 
     if (!this.db) {
       await this.init();
+      // A canary may already be live from before this deploy or an eviction
+      await this.armCanaryAlarm();
     }
     
     const url = new URL(request.url);
@@ -3663,6 +3829,12 @@ export class SpecDO {
       
       if (path === '/api/organizations' && method === 'POST') {
         const body: CreateOrganizationRequest = await request.json();
+        // The name becomes the Artifacts namespace of fork-created candidate repos (createFork), and the sandbox runner builds
+        // from it, so only a valid namespace is accepted. New names only; existing rows are untouched (docs/SF-8-NAMESPACE-PLAN.md).
+        // Checked here, not in createOrganization, so legacy-shaped rows stay constructible in tests.
+        if (!isValidNamespace(body.name)) {
+          return new Response(JSON.stringify({ success: false, error: "organization name must be 1-64 characters: letters, digits, '_' and '-', starting with a letter or digit", timestamp: Date.now() }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
         return this.idempotent(idem, 201, () => {
           const org = this.createOrganization(body.name, body.type, body.externalId);
           return { success: true, data: org, timestamp: Date.now() };
@@ -3944,6 +4116,10 @@ export class SpecDO {
         });
       }
       
+      // Gate runs: zod-validated, unlike the verdict routes below
+      const gateRunResponse = await this.handleGateRuns(request, url, path, method, actorId, idem);
+      if (gateRunResponse) return gateRunResponse;
+
       // ============================================================================
       // GATE VERDICTS
       // ============================================================================
@@ -4391,6 +4567,320 @@ export class SpecDO {
         { status: error instanceof ConflictError ? 409 : 500, headers: { 'Content-Type': 'application/json' } }
       );
     }
+  }
+
+  // ============================================================================
+  // GATE RUNS (docs/REAL-GATE-IMPL-PLAN.md section 3)
+  // One row per run of a gate on (candidate, commit sha). gate_verdicts stays the latest-summary
+  // table that existing readers use; every write to gate_runs that ends a run updates it in the same transaction.
+  // Contract and limits: workers/shared/gate-run-schema.ts.
+  // ============================================================================
+
+  /** null when the path is not a gate-run route */
+  private async handleGateRuns(
+    request: Request,
+    url: URL,
+    path: string,
+    method: string,
+    actorId: string,
+    idem: IdempotencyContext | null
+  ): Promise<Response | null> {
+    const detail = path.match(/^\/api\/gate-runs\/([^\/]+)$/);
+    const result = path.match(/^\/api\/gate-runs\/([^\/]+)\/result$/);
+    const forCandidate = path.match(/^\/api\/candidates\/([^\/]+)\/gate-runs$/);
+    const isStart = path === '/api/gate-runs' && method === 'POST';
+    const isList = (path === '/api/gate-runs' || forCandidate) && method === 'GET';
+    if (!isStart && !isList && !(detail && method === 'GET') && !(result && method === 'POST')) return null;
+
+    const respond = (status: number, body: Record<string, unknown>) =>
+      new Response(JSON.stringify({ ...body, timestamp: now() }), { status, headers: { 'Content-Type': 'application/json' } });
+    const readBody = async (): Promise<unknown> => {
+      try {
+        return await request.json();
+      } catch {
+        throw new BadRequestError('invalid JSON body');
+      }
+    };
+    try {
+      if (isStart) {
+        const parsed = StartGateRunRequestSchema.safeParse(await readBody());
+        if (!parsed.success) throw new BadRequestError(zodMessage(parsed.error));
+        return this.idempotent(idem, 200, () => ({ success: true, data: this.startGateRun(parsed.data), timestamp: now() }));
+      }
+      if (result) {
+        const parsed = FinishGateRunRequestSchema.safeParse(await readBody());
+        if (!parsed.success) throw new BadRequestError(zodMessage(parsed.error));
+        return respond(200, { success: true, data: this.finishGateRun(decodeURIComponent(result[1]), parsed.data) });
+      }
+      if (detail) {
+        const run = this.getGateRun(decodeURIComponent(detail[1]), true);
+        if (!run) throw new NotFoundError('Gate run not found');
+        return respond(200, { success: true, data: run });
+      }
+      // list
+      const candidateId = forCandidate ? decodeURIComponent(forCandidate[1]) : url.searchParams.get('candidateId');
+      if (!candidateId) throw new BadRequestError('candidateId is required');
+      if (!this.getCandidate(candidateId)) throw new NotFoundError('Candidate not found');
+      const sha = url.searchParams.get('commitSha');
+      if (sha !== null && !/^[0-9a-f]{40}$/.test(sha)) throw new BadRequestError('commitSha must be 40 lowercase hex characters');
+      const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 1), 100);
+      const offset = Math.max(parseInt(url.searchParams.get('offset') ?? '0', 10) || 0, 0);
+      const runs = this.listGateRuns(candidateId, {
+        commitSha: sha ?? undefined,
+        latestPerSha: url.searchParams.get('latest') === '1',
+        includeLog: url.searchParams.get('includeLog') === '1',
+        limit,
+        offset,
+      });
+      return respond(200, { success: true, data: runs });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (e instanceof GateRunTooManyAttemptsError) return respond(409, { success: false, error: message, code: GATE_RUN_TOO_MANY_ATTEMPTS });
+      if (e instanceof GateRunBusyError) return respond(409, { success: false, error: message, code: GATE_RUN_BUSY, reason: e.reason });
+      if (e instanceof ConflictError) return respond(409, { success: false, error: message });
+      if (e instanceof NotFoundError) return respond(404, { success: false, error: message });
+      if (e instanceof BadRequestError) return respond(400, { success: false, error: message });
+      return respond(500, { success: false, error: message });
+    }
+  }
+
+  /**
+   * Start a run, in one transaction: (1) dedupe, (2) org quota, (3) caps, (4) insert `running` with attempt = MAX+1 for that sha.
+   * `terminal` skips (2) and (3) and inserts an already finished row. Repo and namespace come from the ledger, never from the caller.
+   */
+  private startGateRun(req: StartGateRunRequest): StartGateRunResult {
+    const candidate = this.getCandidate(req.candidateId);
+    if (!candidate) throw new NotFoundError('Candidate not found');
+    const repo = this.getRepository(candidate.repository_id);
+    if (!repo) throw new NotFoundError('Repository not found');
+    if (!isValidNamespace(repo.namespace)) {
+      throw new BadRequestError(`repository ${repo.id} has no valid Artifacts namespace; a gate run cannot be started for it`);
+    }
+    if (this.queryAll('SELECT 1 AS x FROM actors WHERE id = ?', req.decidedBy).length === 0) {
+      throw new BadRequestError('decidedBy must be an existing actor');
+    }
+
+    return this.state.storage.transactionSync((): StartGateRunResult => {
+      const at = now();
+      const live = at - GATE_RUN_STALE_MS;
+
+      // (1) dedupe: a redelivered push is not a new billed run. error / not_run / stale-running rows may be re-run.
+      const [dup] = this.queryAll(
+        `SELECT id FROM gate_runs
+         WHERE candidate_id = ? AND gate = ? AND commit_sha = ?
+           AND (status IN ('pass', 'fail') OR (status = 'running' AND started_at >= ?))
+         ORDER BY attempt DESC LIMIT 1`,
+        req.candidateId, req.gate, req.commitSha, live
+      );
+      if (dup) return { deduped: true, runId: dup.id as string };
+
+      const [{ next }] = this.queryAll(
+        'SELECT COALESCE(MAX(attempt), 0) + 1 AS next FROM gate_runs WHERE candidate_id = ? AND gate = ? AND commit_sha = ?',
+        req.candidateId, req.gate, req.commitSha
+      );
+      const attempt = next as number;
+      if (attempt > MAX_GATE_RUN_ATTEMPTS_PER_SHA) {
+        throw new GateRunTooManyAttemptsError(
+          `too_many_attempts: ${req.commitSha.slice(0, 12)} already has ${MAX_GATE_RUN_ATTEMPTS_PER_SHA} gate run attempts; push a new commit`
+        );
+      }
+      const runId = generateId();
+      const insertFinished = (status: 'error' | 'not_run', failureClass: string) => {
+        this.run(
+          `INSERT INTO gate_runs (id, candidate_id, gate, commit_sha, attempt, status, failure_class, checks, decided_by, started_at, finished_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          runId, req.candidateId, req.gate, req.commitSha, attempt, status, failureClass,
+          JSON.stringify({ tests: 'unverified', conformance: 'not_run', complexity: 'not_run' } satisfies GateRunChecks),
+          req.decidedBy, at, at
+        );
+        this.upsertGateVerdictSummary(runId);
+      };
+
+      if (req.terminal) {
+        insertFinished(req.terminal.status, req.terminal.failureClass);
+        return { runId, attempt, repo: repo.name, namespace: repo.namespace, status: req.terminal.status };
+      }
+
+      // (2) quota: runs started for the organization in the window. Rows that never ran a container do not count.
+      const [{ n: started }] = this.queryAll(
+        `SELECT COUNT(*) AS n FROM gate_runs g
+         JOIN candidates c ON c.id = g.candidate_id
+         JOIN repositories r ON r.id = c.repository_id
+         WHERE r.organization_id = ? AND g.started_at > ? AND g.status != 'not_run'
+           AND (g.failure_class IS NULL OR g.failure_class NOT IN ('busy_timeout', 'quota'))`,
+        repo.organization_id, at - GATE_RUN_QUOTA_WINDOW_MS
+      );
+      if ((started as number) >= MAX_GATE_RUNS_PER_ORG_PER_DAY) {
+        // one refusal row per sha per window: a flood of pushes must not grow the table
+        const [again] = this.queryAll(
+          `SELECT id FROM gate_runs WHERE candidate_id = ? AND gate = ? AND commit_sha = ? AND status = 'not_run' AND failure_class = 'quota' AND started_at > ? LIMIT 1`,
+          req.candidateId, req.gate, req.commitSha, at - GATE_RUN_QUOTA_WINDOW_MS
+        );
+        if (again) return { quota: true, runId: again.id as string };
+        insertFinished('not_run', 'quota');
+        return { quota: true, runId };
+      }
+
+      // (3) caps: throwing rolls back, so a busy refusal leaves no idempotency key and the gate may re-send
+      const running = (scope: string, ...binds: string[]) =>
+        this.queryAll(
+          `SELECT COUNT(*) AS n FROM gate_runs g JOIN candidates c ON c.id = g.candidate_id
+           WHERE g.status = 'running' AND g.started_at >= ? ${scope}`,
+          live, ...binds
+        )[0].n as number;
+      if (running('AND c.repository_id = ?', repo.id) >= MAX_RUNNING_GATE_RUNS_PER_REPOSITORY) {
+        throw new GateRunBusyError('repository', `busy: repository ${repo.name} already has a gate run in progress`);
+      }
+      if (running('') >= MAX_RUNNING_GATE_RUNS_GLOBAL) {
+        throw new GateRunBusyError('global', `busy: ${MAX_RUNNING_GATE_RUNS_GLOBAL} gate runs are already in progress`);
+      }
+
+      // (4)
+      this.run(
+        `INSERT INTO gate_runs (id, candidate_id, gate, commit_sha, attempt, status, decided_by, started_at)
+         VALUES (?, ?, ?, ?, ?, 'running', ?, ?)`,
+        runId, req.candidateId, req.gate, req.commitSha, attempt, req.decidedBy, at
+      );
+      return { runId, attempt, repo: repo.name, namespace: repo.namespace, status: 'running' };
+    });
+  }
+
+  /**
+   * Finish a running run, in one transaction: compare-and-set on status = 'running' (terminal states are written once; an
+   * identical replay is 200, a different body 409), then the gate_verdicts summary, then history.
+   */
+  private finishGateRun(runId: string, body: FinishGateRunRequest): GateRun {
+    return this.state.storage.transactionSync((): GateRun => {
+      const at = now();
+      const [row] = this.queryAll('SELECT * FROM gate_runs WHERE id = ?', runId);
+      if (!row) throw new NotFoundError('Gate run not found');
+      const fields = {
+        status: body.status,
+        failure_class: body.failureClass ?? null,
+        exit_code: body.exitCode ?? null,
+        checks: JSON.stringify(body.checks),
+        timings: JSON.stringify(body.timings),
+        runner: body.runner ?? null,
+        instance: body.instance,
+        image_digest: body.imageDigest ?? null,
+        tests_passed: body.counts?.passed ?? null,
+        tests_failed: body.counts?.failed ?? null,
+        log_tail: body.logTail ?? null,
+        log_sha256: body.logSha256 ?? null,
+        log_truncated: body.logTruncated ? 1 : 0,
+      };
+      if (row.status !== 'running') {
+        const same = Object.entries(fields).every(([k, v]) =>
+          k === 'checks' || k === 'timings' ? canonicalJson(row[k]) === canonicalJson(v) : row[k] === v
+        );
+        if (same) return this.getGateRun(runId, true)!;
+        throw new ConflictError(`gate run ${runId} is already ${row.status}; a finished run is not rewritten`);
+      }
+      const cols = Object.keys(fields);
+      this.run(
+        `UPDATE gate_runs SET ${cols.map((c) => `${c} = ?`).join(', ')}, duration_ms = ?, finished_at = ? WHERE id = ? AND status = 'running'`,
+        ...(Object.values(fields) as (string | number | null)[]),
+        body.timings.totalMs ?? at - (row.started_at as number),
+        at,
+        runId
+      );
+      this.upsertGateVerdictSummary(runId);
+      return this.getGateRun(runId, true)!;
+    });
+  }
+
+  /**
+   * gate_verdicts is the latest summary per (candidate, gate): upsert it from a finished run, unless a later-started run of that
+   * candidate and gate exists (a late result of an older sha or attempt must not overwrite). Runs inside the caller's transaction.
+   * error / not_run are `pending` there (its CHECK allows pass, fail, pending); the true value is in gate_runs.
+   */
+  private upsertGateVerdictSummary(runId: string): void {
+    const [r] = this.queryAll('SELECT rowid AS rid, * FROM gate_runs WHERE id = ?', runId);
+    const [later] = this.queryAll(
+      `SELECT 1 AS x FROM gate_runs WHERE candidate_id = ? AND gate = ? AND id != ? AND (started_at > ? OR (started_at = ? AND rowid > ?)) LIMIT 1`,
+      r.candidate_id as string, r.gate as string, runId, r.started_at as number, r.started_at as number, r.rid as number
+    );
+    if (later) return;
+    const status = r.status === 'pass' || r.status === 'fail' ? (r.status as 'pass' | 'fail') : 'pending';
+    const checks = r.checks ? (JSON.parse(r.checks as string) as GateRunChecks) : null;
+    const detail = `gate run ${runId} attempt ${r.attempt} at ${(r.commit_sha as string).slice(0, 12)}: ${r.status}${r.failure_class ? ` (${r.failure_class})` : ''}`;
+    const notes = [
+      ...(r.status === 'pass' && checks?.tests === 'unverified' ? ['pass indistinguishable from no tests'] : []),
+      'complexity not measured',
+      'conformance not run',
+      detail,
+    ].join('; ');
+    const [existing] = this.queryAll('SELECT id FROM gate_verdicts WHERE candidate_id = ? AND gate = ?', r.candidate_id as string, r.gate as string);
+    const verdictId = (existing?.id as string | undefined) ?? generateId();
+    this.run(
+      `INSERT INTO gate_verdicts (id, candidate_id, gate, status, score, complexity_delta, notes, created_at, decided_by, stage)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 'pending')
+       ON CONFLICT(candidate_id, gate) DO UPDATE SET
+         status = excluded.status, score = excluded.score, complexity_delta = 0, notes = excluded.notes,
+         created_at = excluded.created_at, decided_by = excluded.decided_by`,
+      verdictId, r.candidate_id as string, r.gate as string, status, status === 'pass' ? 100 : 0, notes, now(), r.decided_by as string
+    );
+    this.recordHistory('gate_verdict', verdictId, status, r.decided_by as string, notes);
+  }
+
+  private getGateRun(id: string, includeLog: boolean): GateRun | null {
+    const [row] = this.queryAll('SELECT * FROM gate_runs WHERE id = ?', id);
+    return row ? this.rowToGateRun(row, includeLog) : null;
+  }
+
+  /** Newest first. latestPerSha keeps only the highest attempt of each (gate, sha). */
+  private listGateRuns(
+    candidateId: string,
+    opts: { commitSha?: string; latestPerSha: boolean; includeLog: boolean; limit: number; offset: number }
+  ): GateRun[] {
+    const rows = this.queryAll(
+      `SELECT g.* FROM gate_runs g WHERE g.candidate_id = ?
+         ${opts.commitSha ? 'AND g.commit_sha = ?' : ''}
+         ${opts.latestPerSha ? 'AND g.attempt = (SELECT MAX(h.attempt) FROM gate_runs h WHERE h.candidate_id = g.candidate_id AND h.gate = g.gate AND h.commit_sha = g.commit_sha)' : ''}
+       ORDER BY g.started_at DESC, g.rowid DESC LIMIT ? OFFSET ?`,
+      candidateId, ...(opts.commitSha ? [opts.commitSha] : []), opts.limit, opts.offset
+    );
+    return rows.map((r) => this.rowToGateRun(r, opts.includeLog));
+  }
+
+  /** A `running` row past GATE_RUN_STALE_MS is reported `error` / `abandoned` (read time only, nothing is written). */
+  private rowToGateRun(row: Record<string, unknown>, includeLog: boolean): GateRun {
+    const json = <T>(v: unknown): T | null => {
+      if (typeof v !== 'string') return null;
+      try {
+        return JSON.parse(v) as T;
+      } catch {
+        return null;
+      }
+    };
+    const stale = row.status === 'running' && (row.started_at as number) < now() - GATE_RUN_STALE_MS;
+    return {
+      id: row.id as string,
+      candidateId: row.candidate_id as string,
+      gate: row.gate as string,
+      commitSha: row.commit_sha as string,
+      attempt: row.attempt as number,
+      status: stale ? 'error' : (row.status as GateRun['status']),
+      failureClass: stale ? 'abandoned' : ((row.failure_class as GateRun['failureClass']) ?? null),
+      stale,
+      exitCode: (row.exit_code as number | null) ?? null,
+      checks: json(row.checks),
+      timings: json(row.timings),
+      counts:
+        row.tests_passed != null && row.tests_failed != null
+          ? { passed: row.tests_passed as number, failed: row.tests_failed as number }
+          : null,
+      runner: (row.runner as string | null) ?? null,
+      instance: (row.instance as string | null) ?? null,
+      imageDigest: (row.image_digest as string | null) ?? null,
+      durationMs: (row.duration_ms as number | null) ?? null,
+      logSha256: (row.log_sha256 as string | null) ?? null,
+      logTruncated: row.log_truncated === 1,
+      ...(includeLog ? { logTail: (row.log_tail as string | null) ?? null } : {}),
+      decidedBy: row.decided_by as string,
+      startedAt: row.started_at as number,
+      finishedAt: (row.finished_at as number | null) ?? null,
+    };
   }
 
   // ============================================================================

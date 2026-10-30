@@ -369,13 +369,54 @@ live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 fail
   `deploy_ref_id`, status `deployed`/`superseded`/`rolled_back`). No foreign keys, like the
   promotion ledger: e2e (and the promotion worker) use candidate/spec ids with no ledger row.
   A tombstoned candidate or spec is refused (404).
-- **Workers Versions API: unverified, stubbed, not called.** Open: can a version be created from
-  a candidate commit, and can a deployment be switched to it instantly? Nothing here depends on
-  it. `workers/preview-manager/versions.ts` has only `StubWorkerVersionsClient` (`stub-<uuid>`,
-  URL `<prefix>-<worker>.<subdomain>.workers.dev`), selected by `WORKER_VERSIONS_MODE=stub`
-  plus `BEEHIVE_LOCAL_DEV=1` (both set by `scripts/start-e2e-workers.sh`). Unset (production) the route answers **501**, so
-  production canary deploys fail closed until a real client is written and verified. Rollback
-  calls no Cloudflare API at all: traffic follows the ref.
+- **Workers Versions API: verified 2026-10-24 (spike on a throwaway worker, since deleted).**
+  Docs (cloudflare MCP) plus real calls against `beehive-versions-spike` only.
+  - **(a) Version from built code: yes.** `POST /accounts/{acct}/workers/scripts/{name}/versions`
+    (multipart: `metadata` JSON part with `main_module`, `compatibility_date`, `bindings`,
+    `annotations`; one part per module, `application/javascript+module`) uploads WITHOUT deploying.
+    It needs the built modules, not a commit: nothing here builds a candidate, so a bundle source is
+    still unwired (below). `annotations`: `workers/tag` (<=100 B), `workers/commit_sha` (<=64 B),
+    `workers/message`. Response `result`: `{id (uuid), number, metadata{has_preview,...}, annotations, resources}`.
+    **The first upload of a Worker cannot be a version upload**: 404, code 10007 "This Worker does
+    not exist". Use `PUT .../scripts/{name}` (creates v1 AND a 100% deployment; `result.deployment_id`
+    is v1's id as undashed 32-hex). New Workers have no version URL until
+    `POST .../scripts/{name}/subdomain {"enabled":true,"previews_enabled":true}` (set explicitly).
+  - **(b) Switch / split: yes.** `POST .../scripts/{name}/deployments`
+    `{"strategy":"percentage","versions":[{"version_id","percentage"}]}` (percentage 0.01-100, must total
+    100 within 1e-6, else 400 code 10210; 0% is rejected, so a 0% "dark" entry is not expressible
+    this way). Returns `{id}`. Only the last 100 uploaded versions are deployable. Observed: 50/50 gave
+    9 v1 / 7 v2 in 16 requests; a switch to 100% v2 was visible on the next request, but **one request
+    after the switch still hit v1**: fast (seconds), not atomic. Rollback = another deployment (~1.1 s per call).
+  - **(c) Auth/limits.** Token: "Workers Scripts Write" (upload, deployments, subdomain); read needs
+    "Workers Scripts Read". Wrangler OAuth `workers (write)` sufficed. Rate limit: global 1200 requests
+    / 5 min per token, 429 beyond, then blocked 5 min (docs, fundamentals/api/reference/limits); no
+    Workers-specific limit documented. Calls took 0.9-1.2 s each. Not exercised: 429 behavior, quotas on
+    number of Workers per account.
+  - **(d) Version URLs.** `https://<first 8 hex of version id>-<worker>.<subdomain>.workers.dev`
+    (confirmed: `1496f34f-...` served v2 with 200 while the deployment was elsewhere). Label
+    `<8>-<worker>` must be <=63 chars. Public unless Cloudflare Access is added; not generated for
+    Workers with Durable Objects, Containers/Sandbox, or Workers for Platforms user Workers (candidate
+    services are stateless, so fine); no logs for version URLs. The header
+    `Cloudflare-Workers-Version-Overrides: <worker>="<version-id>"` (confirmed) also pins a version on
+    the normal URL. A version URL works for a non-deployed version, so canary needs no deployment
+    switch: the ref names the version and the router targets its URL.
+  - **Mapping.** `ApiWorkerVersionsClient` (`workers/preview-manager/versions.ts`, mode
+    `WORKER_VERSIONS_MODE=api`) implements `createVersion` as: POST versions; on 10007 PUT script then
+    enable subdomain; URL from the id prefix. `setDeployment` wraps the deployments call (not part of the
+    interface; unused by the ref-driven path). Mocked-fetch tests in `tests/versions.test.ts`; the
+    real-API shapes above came from the spike, but the client code itself was never run live.
+  - **Unverified.** 429 behavior; behavior of `bindings` other than none (a candidate needing KV/DO
+    bindings; `inherit` bindings only resolve against the latest uploaded version); propagation bound of
+    a switch (saw one stale request); whether `previews_enabled` is needed on top of workers.dev being
+    on (set explicitly, not tested without); wrangler-free multi-module / wasm uploads; where the built
+    bundle comes from.
+  - **Human wiring needed (not done; spine/promotion path).** (1) a `CandidateBundleSource`
+    passed as 2nd arg of `workerVersionsClientFor(env, bundle)` in `workers/preview-manager/index.ts`
+    (fetch built output of the candidate commit, e.g. from the Workers Builds artifact or Artifacts
+    repo); (2) set `WORKER_VERSIONS_MODE=api`, `CLOUDFLARE_API_TOKEN` (Workers Scripts Write) and
+    `WORKERS_SUBDOMAIN` on preview-manager (`CLOUDFLARE_ACCOUNT_ID` is already typed); (3) the route's
+    `versionsClient` field now may be `'api'`; (4) cleanup of `beehive-candidate-*` Workers on purge
+    (nothing deletes them). Default unchanged: unset mode answers 501.
 - **Where traffic follows the ref.** shadow-router now binds `SpecDO` and, per mirrored request,
   reads `GET /deploy-refs/live?rung=canary`: each live canary becomes a mirror target at its
   version URL with its split. If the read fails, no canary target is added. No cache (a cache
@@ -729,3 +770,364 @@ M5a now closes the at-least-once double-write for all nine POST routes in `IDEMP
 `workers/promotion-worker/merge-train.ts:342` calls `GATE_WORKFLOW.fetch('/run', ...)` with a relative URL, and the gate worker has no `/run` route (only `/gates/pre-merge`, status and result routes), so the call answers 404. Found while reviewing `docs/M5A-2-IMPL-PLAN.md`; not changed there. Same class as the three nonexistent DO routes of 2026-10-16: check `Response.ok` and decide whether the merge train should call `/gates/pre-merge`.
 
 **Status**: Open.
+
+## Sandbox build spike: containers deploy and build work (2026-10-24)
+
+Phase 0 of `docs/SANDBOX-BUILD-PLAN.md`, run by the maintainer-approved `wrangler deploy` of a throwaway worker
+`beehive-sandbox-spike` (SDK 0.x `@cloudflare/sandbox@0.12.14`, image `docker.io/cloudflare/sandbox:0.12.14`, `lite`,
+`max_instances = 1`). The worker and its container application were deleted afterwards; the ten production workers were not touched.
+
+- **Containers are entitled on the account.** The first `wrangler deploy` created the container application directly.
+- **No local Docker is needed for a registry image.** This host has no `docker`; a `docker.io/...` image reference deployed
+  fine. A `./Dockerfile` image does need Docker (or Workers Builds). **Still unanswered (U1):** whether the Artifacts push
+  deploy flow builds a Dockerfile image; the registry-image route avoids the question for the 0.x SDK.
+- **The container has node v22, git 2.34.1 and npm 10.9.** `npx esbuild@0.25.0 src/index.js --bundle --format=esm` produced a
+  112-byte ESM bundle that `sandbox.readFile` returned.
+- **Timing:** first request (cold container, includes provisioning) ~57 s; `npx esbuild` with a fresh npm fetch ~28 s; a warm
+  `exec` ~5 s over the default HTTP transport. Preinstall esbuild in the image and keep builds off request paths with a timeout.
+- Not tried: SDK 1.0 (needs a `Dockerfile` copying `sandbox-shim`, so Docker or Workers Builds), cloning from an Artifacts
+  repo (U3), outbound-handler credential injection, snapshots, cost at volume.
+
+### Sandbox build spike, part 2: U1 and U3 (2026-10-24)
+
+- **U3 verified: a sandbox can clone an Artifacts repo at an exact commit.** Throwaway repo `beehive-sandbox-spike` in namespace
+  `default` (one commit pushed with a short-lived write token), a 30-minute **read** token passed to the sandbox as
+  an `exec` `env` value, and `git -c http.extraHeader="Authorization: Bearer $ART_TOKEN" clone https://<account>.artifacts.cloudflare.net/git/default/<repo>.git`
+  followed by `git checkout <40-hex sha>` returned the right commit and file in ~35 s cold. The token was not found in `.git/` afterwards.
+  Design consequence: pass the token only to the clone `exec`, and run the build in a separate `exec` without it. The repo, the
+  token (expired anyway), the worker and its container application were deleted; the ten production workers were not touched.
+  Not tried: the SDK 1.0 outbound handler that injects credentials per hostname.
+- **U1 VERIFIED later the same day (see "U1 result" below); the paragraph that follows is the earlier docs-only reasoning.**
+  **U1 was not verified empirically at this point; the docs said yes.** Production deploys are Workers Builds per worker (`docs/OPS.md`
+  "Workers Builds watch paths"). Cloudflare documents that `wrangler deploy` in Workers Builds builds and publishes container
+  images (only `wrangler versions upload`, the non-production default, does not). So a Dockerfile image should build on the
+  push. The only real test is to deploy a Dockerfile-based worker through that flow, which deploys all ten; do it with the first
+  real Phase 1 change and watch that worker's Builds log. A registry image (`docker.io/cloudflare/sandbox:0.12.14`) needs no
+  Docker at all and was verified.
+- **Constraint found in the docs:** Workers that implement Durable Objects (including Containers) get no version URLs
+  and non-production Workers Builds runs create a version but do not roll out a new image, so the sandbox-runner must be
+  deployed via the production branch's `wrangler deploy`, as today.
+
+### U1 result: the push deploy builds a Dockerfile image (2026-10-24)
+
+Pushing `35e8eec` to `cf` (which added `workers/sandbox-runner/Dockerfile`, a `[[containers]]` block with `image = "./Dockerfile"`,
+a `SANDBOX` Durable Object binding and migration `v1`) made Workers Builds run `wrangler deploy` for `beehive-sandbox-runner`:
+the worker redeployed at 18:56:28Z and container application `beehive-sandbox-runner-sandbox` appeared (`ready`, 0 instances) at
+18:56:46Z. `GET /sandbox/probe` (authenticated) then returned `{"success":true,"stdout":"v22.23.4\n0.25.0"}`: esbuild 0.25.0 is
+installed only by the Dockerfile's `RUN npm install -g esbuild@0.25.0`, so the image built in Workers Builds is the one running.
+No local Docker was involved. Sandbox SDK 1.0 (which needs a Dockerfile) is therefore deployable too.
+Two gotchas found on the way:
+- CI `npm run typecheck` resolves imports from the **root** `node_modules`: `@cloudflare/sandbox` had to be added to the root
+  `package.json` (a per-worker dependency alone fails with TS2307). vitest cannot load the SDK (`cloudflare:workers`), so tests
+  `vi.mock('@cloudflare/sandbox')`.
+- **Deleting `[triggers]` does not remove an existing cron.** After `35e8eec` the canary worker's `* * * * *` schedule kept firing
+  and every invocation threw "Handler does not export a scheduled() function" until `crons = []` is deployed (`3908e42`).
+
+### Sandbox build on the container DO API works in production (2026-10-25)
+
+`beehive-sandbox-runner` now runs `BuildSandbox` (Durable Object driving `ctx.container`, the Sandbox SDK 1.0 model, no
+`@cloudflare/sandbox` package) with `ArtifactsGateway` as the outbound intercept. Deployed by the push to `cf` (`7733d4b`).
+- **Verified live:** `GET /sandbox/probe` returns node v24.22.1, esbuild 0.25.0, git 2.47.3 (the Dockerfile image).
+  `POST /sandbox/build {repo, commitSha}` against a throwaway Artifacts repo with `src/index.ts` + `src/helper.ts` cloned the exact
+  commit through the intercept (the container has no Internet and never holds a token), bundled it with esbuild and returned the
+  ESM module. Error paths: malformed commit 400 `BAD_REQUEST`; missing repo 502 `CLONE_FAILED` ("Empty reply from server");
+  unknown commit 502 `CLONE_FAILED`. The throwaway repo was deleted. The `.env` `CLOUDFLARE_API_TOKEN` (set as a secret on the
+  worker) has Artifacts scope.
+- **Not tried:** a `dist/index.js` prebuilt path in production, the 60 s build timeout, the 1 MiB cap, concurrent builds, cold-start
+  timing of `/sandbox/build` (it completed within one 200 s request), cost at volume, a candidate that imports npm packages (there is
+  no `npm install`, so it fails at the bundle step by design).
+- **Gotcha 1: a `deleted` tombstone fails while the live worker binds the class** (build log, code 10086: "Cannot delete the Durable
+  Object namespace ... still referenced by the binding"). Re-pointing the binding and deleting the class in one deploy is not
+  allowed. Fix used: `state = "renamed"`, `renamed_to = "BuildSandbox"` (namespace and binding carry over; the old class held no data).
+- **Gotcha 2: the old 0.x container application is not removed by the deploy.** Delete it by hand
+  (`wrangler containers delete <id>`, id from `wrangler containers list`) before the deploy that moves the class to a new container config.
+- **Gotcha 3: `crons = []` clears the schedule, but the scheduler lags.** `GET .../schedules` returned `[]` immediately, yet the
+  minute cron kept firing (and throwing) for ~10 minutes after the deploy; it stopped without further action.
+- **Gotcha 4: Workers Builds termination was transient.** The ten builds for `34c1864` were terminated after ~5.5 minutes with no log;
+  the next push (`22149a3`) built nine workers in about a minute each. The sandbox-runner build (with the Docker image) takes ~2 minutes.
+
+### Sandbox build review fixes verified live (2026-10-25)
+
+A Sonnet review (10 should-fix items, no blockers) led to `bb1ec51` (deployed by the push to `cf`): symlinks disabled at checkout, builds
+serialized per Durable Object instance, an alarm backstop and a 150 s deadline, a hardened `ArtifactsGateway` (one read token minted per build
+and passed in props, redirects refused, header allowlist, exact query, props validated), scrubbed error text, `--tsconfig-raw={}`, a
+digest-pinned non-root image. Live checks against throwaway repos (deleted afterwards):
+- **Non-root image works:** probe returns node v24.22.1, esbuild 0.25.0, git 2.47.3; a clone through the intercept and an esbuild bundle of
+  `src/index.ts` succeeded in ~1.6 s warm (the container could read the CA file and write `/workspace` as `node`).
+- **The error code survives the RPC hop:** a repo with only a README returned HTTP 422 `{"code":"NO_ENTRY"}` (the message prefix is preserved,
+  so `parseBuildError` works; the reviewer's main uncovered risk).
+- **Symlinks are neutralized:** a commit with `dist/index.js -> /usr/local/bin/node` was checked out as a plain 19-byte file holding the path
+  text, so no read of the real file happened. It is returned as a `prebuilt` bundle, which the version upload will reject as invalid JavaScript.
+- **Concurrency:** three parallel builds of one commit all returned 200, ~1.5 s, ~3.5 s and ~4.5 s: they ran one after another.
+- **Not tried live:** the 150 s deadline and the alarm backstop (unit-tested with fakes only), a DO restart mid-build, the 60 s esbuild and
+  30 s checkout timeouts, a bundle over 1 MiB, commits reachable only from `scratch/*` refs (checkout fails with "the commit was not found;
+  only commits reachable from the repository branches or tags can be built"), cost at volume.
+- **Known limits, by design:** an `import` of an absolute path in candidate source makes esbuild bundle that container file (the container holds
+  no secrets); a committed `dist/index.js` silently takes precedence over `src/` (the bundle reports `source: prebuilt`).
+
+### Sandbox Phase 2: preview-manager builds through the sandbox runner (2026-10-25)
+
+`workers/preview-manager` now builds a candidate commit through the service binding `SANDBOX_RUNNER` -> `beehive-sandbox-runner`
+(`bundle-source.ts`, zod-checked, `Response.ok`-checked) and uploads it with the api Versions client. Production still answers 501 until
+`WORKER_VERSIONS_MODE=api`. A Sonnet review (no blockers) led to these rules, all unit-tested:
+- **Safety:** a candidate id must be a UUID in api mode, and `RESERVED_WORKER_NAMES` (the ten platform workers) are refused by the shared name check.
+  Without them a candidate id `service` would have uploaded a version to, or deleted, the production `beehive-candidate-service` worker.
+- **Ledger:** api mode needs the candidate and its repository in the ledger; the repo name comes from `GET /api/repositories/:id`. The repo's
+  recorded `namespace` must equal `ARTIFACTS_NAMESPACE` (default `default`, the namespace the runner reads), else 422. (Superseded 2026-10-25: the namespace is sent per request, see SF-8.)
+- **Errors:** candidate-attributable runner codes (`BAD_REQUEST`, `NO_ENTRY`, `BUILD_FAILED`, `TOO_LARGE`) keep their 4xx; a runner 401/403/404/429/500
+  becomes 502, 503/504 stay, so an infrastructure fault never looks like a missing candidate.
+- **Timeouts and retries:** the build call aborts after 320 s (two runner deadlines). The runner coalesces repeat builds of the same `repo@commit`, so a
+  retry after a caller's timeout joins the running build instead of queueing another.
+- **Built file check:** the main module must start an `export` statement, which catches a checked-out symlink (a text file holding a path).
+- **DELETE `/api/preview/canary/:candidateId`** deletes `beehive-candidate-<uuid>` (api mode only); it refuses while the candidate has a `deployed`
+  canary (409) and when that check fails (502). **It is not called by anything yet** (no purge hook; purge is a spine path in `beehive`), so it is
+  dead code until the maintainer decides how purge triggers it.
+- **Known gap, unverified:** if two uploads for one candidate worker race (for example two different callers), both can take the first-upload path and
+  create two versions/deployments; coalescing makes this unlikely for retries but not impossible. Not tested against the real API.
+
+### Preview-manager deploy failure: `Could not resolve "zod"` from workers/shared (2026-10-25)
+
+The first Phase 2 push failed only for `beehive-preview-manager` (build `120736d4`, 22 s): the worker started importing `workers/shared/deploy-refs.ts`
+(the live-canary guard of the DELETE route), which imports `zod`, and Node/esbuild resolve a shared file's imports from `workers/shared` upward, never from
+the importing worker's `node_modules`. Fix: the worker's `postinstall` installs `workers/shared`'s dependencies (`npm install --prefix ../shared ...`),
+as `canary-worker` and `sandbox-runner` already did (`21bea5a`). Reproduced in a clean worktree: `wrangler deploy --dry-run` fails without the
+postinstall and bundles with it. Neither unit tests, `tsc` nor CI Enhanced catch this (local `shared/node_modules` hides it; CI Enhanced only checks
+that installs succeed). A `wrangler deploy --dry-run` per worker in a clean install in CI Enhanced would (sandbox-runner needs Docker for its container build).
+
+### First real canary through the sandbox build (2026-10-25, `e6f6948`)
+
+`WORKER_VERSIONS_MODE = "api"` is set in `workers/preview-manager/wrangler.toml` (maintainer-approved Phase 3; remove the line and push to turn it off:
+the canary route then answers 501 again). A throwaway candidate was run end to end against production:
+1. Artifacts repo with `src/index.ts` + `src/helper.ts` (TypeScript, one import), ledger actor/org (`test-org-e2e-sbx-...`)/repository (`candidate`,
+   namespace `default`)/spec/candidate with the full 40-hex commit.
+2. `POST /deploy-canary` on the canary worker: **200 in 6.9 s**. The preview-manager read the candidate and its repository from the ledger, the sandbox
+   runner cloned and bundled the commit, the api client created Worker `beehive-candidate-<uuid>` and its version (first-upload path, `PUT` + subdomain enable),
+   the canary worker moved the canary deploy ref and recorded the deployment (`status: deployed`).
+3. The version URL `https://<8 hex>-beehive-candidate-<uuid>.bz23711.workers.dev` answered 200 `hello from beehive sandbox e2e`: the bundled TypeScript.
+   The token on the preview-manager has Workers Scripts:Edit.
+4. `DELETE /api/preview/canary/<id>` while the canary was live: **409** (guard works). `POST /rollback` (manual): deployment `rolled_back` (a ref move, no
+   redeploy). The DELETE then returned `deleted: true`, and the version URL answered 404.
+5. Cleanup: org tombstoned (cascade: 1 org, 1 repo, 1 spec, 1 candidate), Artifacts repo deleted. **Left behind:** the tombstoned org (purge needs
+   `PURGE_MIN_AGE_HOURS` = 24 h and a maintainer) and one actor `e2e-sbx-probe-actor` (`acaf5d73-b21e-48b2-8e7d-4a47556262b7`), created by a probe call.
+Not exercised: the alarm-driven SLO tick with a live canary (the canary was rolled back within minutes; `canary-slo-ticks` consumption was not observed),
+shadow traffic reaching the canary URL, a second upload to an existing candidate Worker (the plain `POST /versions` path against the real API), and
+concurrent callers.
+
+### The shadow router never reached candidates: workers.dev error 1042 (2026-10-25)
+
+Found while running a longer canary against production (alarm ticks, shadow traffic, SLO loop). **What worked:** the Spec DO alarm armed 60 s after
+the canary deploy; `canary-slo-ticks` messages were consumed every ~61 s (`canary_slo_cycle`, `checked: 1`); after a rollback the next alarm found no
+live canary and the chain stopped (no ticks for 2+ minutes); `slo-status` showed `healthy` with real numbers (105 requests, p95 50 ms, 0 errors).
+**What did not:** a candidate that answers HTTP 500 to everything was still recorded as `healthy` with 98 then 206 requests and **0 errors**.
+- **Cause:** the shadow router mirrors with `fetch('https://<ver>-beehive-candidate-<uuid>.bz23711.workers.dev/...')`. A Worker's global `fetch()` to
+  another Worker on the same account's `workers.dev` is blocked by default and answered `404` with body `error code: 1042`. Verified with a probe
+  Worker: it received `{"status":404,"body":"error code: 1042"}` for the very URL that answers `500 simulated failure` when called directly. A 404 is
+  not a 5xx, so the recorder counted every mirrored request as a success. The same holds for the baseline target `beehive-main`.
+  So mirroring, Scientist comparison and the SLO verdict all saw 404s in production; none of it ever ran against candidate code.
+- **Fix:** compatibility flag `global_fetch_strictly_public` on `beehive-shadow-router` (the documented remedy; the probe Worker then received the
+  candidate's real 500). **Companion fix, required before the flag ships:** the router forwarded every incoming header to candidate URLs, including the
+  caller's `Authorization` (the platform bearer token), cookies and `X-Actor-ID`; once mirroring really reaches candidates that would hand credentials to
+  agent-written code. `candidate-headers.ts` now sends candidates only `accept`, `accept-language`, `content-type`, `user-agent`, `x-request-id`; the
+  trusted baseline (`beehive-main`) keeps the original headers. Tests: `tests/candidate-headers.test.ts` (unit + through the handler).
+- **Related, by design but worth knowing:** the recorder counts only `status >= 500` as an error, so a candidate that answers 4xx to everything (for
+  example one that requires auth) is `healthy`. Unflushed tail: the recorder flushes only when another sample is added (20 samples or 10 s since the
+  first), so a short burst leaves its last <20 samples unsent until the next canary request; with the default 1% top-level canary split a few hundred
+  requests produce too few samples to verdict. Candidate URLs are chosen by a hash of the request URL, so a test can pick URLs that land in the split.
+- **Throwaway resources:** two test candidates and their Workers (`beehive-candidate-<uuid>`), org `test-org-e2e-sbx-1792918848` (tombstoned, purge after
+  24 h), Artifacts repo (deleted), probe Worker `beehive-fetch-probe-tmp` (deleted). Left: actor `e2e-sbx-probe-actor`.
+
+### Shadow router fix verified: a failing canary is rolled back by the loop (2026-10-25, `4bfba1e`)
+
+Deployed by the push to `cf` (compat flag `global_fetch_strictly_public` on `beehive-shadow-router` confirmed in the worker settings, header allowlist for
+candidates). Re-ran the failing-canary test against production with a candidate whose second commit answers HTTP 500 to everything:
+- Canary deployed at 10:28:32 with `autoRollback: true`; 119 URLs from the 0.5% hash range sent through the shadow router (after the version URL had
+  ~25 s to propagate). `slo-status`: **`violation`, errorRate 1, 101 requests, `error_rate`**. (Before the fix the same candidate read `healthy`, 0 errors.)
+- The queue tick at **10:30:39** logged `canary_slo_cycle ... rolledBack: [<deployment id>]` (the earlier tick at 10:29:39 saw too few flushed samples:
+  `rolledBack: []`). The deployment record: `status: rolled_back`, `rollbackReason: error_rate`, `updatedAt` 10:30:40, about two minutes after deploy,
+  with no human call. No tick followed (chain stopped); the live-canary list was empty.
+- Cleanup: Worker deleted through the DELETE route, org tombstoned (cascade 1 org/repo/spec/candidate), Artifacts repo deleted, health green.
+- **Not verified live:** that the candidate no longer receives `Authorization`/cookies (covered by `tests/candidate-headers.test.ts`; the candidate's
+  response is discarded by the router, so there is no cheap live probe). The sandbox-runner redeploy of this push was still building its image when the
+  test ran; its previous deployment served (identical code).
+- First-minute caveat seen again: a Worker's version URL can take tens of seconds after its first upload before it serves; requests in that window are
+  recorded with whatever the edge answered (with the old behavior always a 404). Give a new canary ~25 s before sending traffic.
+
+### Canary metrics recorder: the tail of a burst is now flushed (2026-10-25)
+
+`CanaryMetricsRecorder.shouldFlush()` was only asked when another sample was added, so the last <20 samples of a burst stayed in the isolate
+(and were lost if it recycled): a live run of 119 canary-range requests recorded 98. Fix: `scheduleTailFlush()` hands `ctx.waitUntil` a one-shot
+promise that waits `FLUSH_AFTER_MS` (10 s, inside the ~30 s the platform gives `waitUntil` work after the response) and then flushes whatever is
+still pending; at most one is outstanding per isolate, it is a no-op if the count/age path already flushed, a failing or missing Spec DO is
+swallowed, and the pending set is still taken before sending so nothing is sent twice. Tests: `canary-recorder.test.ts` (fake timers) and
+`canary-wiring.test.ts` (through the handler; the tail test fails if the call in `recordCanaryMetrics` is removed). **Not verified live** (needs a deploy).
+Note: a competing change (`scratch/mistral-recorder-flush`, a `setTimeout` that only cleared a field and still relied on the next sample) was not used:
+it did not flush anything by itself.
+
+### Review of the post-review changes and what it led to (2026-10-25)
+
+A Sonnet review of `bb1ec51`, `b768300`..`3a8bdc1`, `e6f6948`/`4bfba1e` and the recorder tail flush found no blockers and eight should-fix items.
+Fixed in the commit after `c0cfa86` (unit-tested; **not deployed**; the zombie-build and tail-flush tests were checked by mutation):
+- **SF-1 request bodies reached only the first mirror target.** The router handed the same body stream to every target, so it locked after the first (the
+  production baseline `beehive-main`, first in the map) and every canary after it was silently never called, with no sample recorded: a candidate that 500s
+  every POST would have stayed `healthy`. The body is now read once (cap 1 MiB, larger bodies are not mirrored) and each target gets its own copy; a failure
+  to build the request is now a recorded synthetic 5xx instead of a dropped promise.
+- **SF-2 mirrored writes reached production with the caller's credentials.** With `global_fetch_strictly_public` the baseline mirror is real, and it
+  carries the original headers. Non-`GET`/`HEAD` requests are no longer replayed against the baseline (candidates still get them). Nothing in the repo sends
+  writes to the router; if something outside does, this is the safe default.
+- **SF-3 a live canary ref could replace the baseline target.** The Spec DO accepts any `candidateId` and `url`, and the router trusted the id string
+  `beehive-main` for full headers. `applyCanaryRefs` now ignores a ref whose id is a static target and one whose url is not `https://*.workers.dev`
+  (no credentials in the url). **Closed 2026-10-25:** the Spec DO route now validates both (`CanaryDeployRequestSchema`: id is a plain token not starting with `beehive-`; url is https `*.workers.dev` without credentials; the shared `isAcceptableCanaryUrl`); the router keeps its own check for rows written before. Pinned to the account subdomain (`WORKERS_SUBDOMAIN`, a plain var on `beehive` and the shadow router; with the var unset any `*.workers.dev` still passes, so a worker deployed before its var exists keeps working). Not yet deployed at the time of writing.
+- **SF-4 no timeout on the candidate fetch.** 10 s abort (a plain `setTimeout`, cleared in `finally`), recorded as a synthetic 5xx; `redirect: 'manual'`.
+- **SF-5 an abandoned (deadline) build could act on the next build's container.** Each build now owns an identity token; every container step and the
+  intercept registration check it, so leftover work throws instead.
+- **SF-6 a hung `destroy()`/`setAlarm()`/`deleteAlarm()` blocked the serialized queue.** Each is abandoned after 10 s.
+- **SF-7 samples added during an in-flight tail flush were stranded.** The "scheduled" flag is cleared when the timer fires, before the flush.
+- Also: the Scientist queue message no longer persists `Authorization`/cookies; the gateway read-token TTL is 240 s (was 600).
+**Left open on purpose:**
+- **SF-8 namespace (resolved in code 2026-10-25, not yet deployed: `docs/SF-8-NAMESPACE-PLAN.md`; the runner takes the namespace per request and echoes it, `preview-manager` refuses a runner that does not echo it).** Was: fork-created candidate repos get `repositories.namespace = org.name` in the ledger (`spec-do/index.ts:1504`), while the runner and the
+  preview-manager read `ARTIFACTS_NAMESPACE` (`default`). Such a candidate is refused with 422 on every canary deploy (fails closed). Decide whether the runner
+  takes the namespace per request (widens which namespaces it can mint read tokens for) or the ledger records the real Artifacts namespace.
+- **Local dev:** `global_fetch_strictly_public` blocks loopback/private targets, so mirroring to `http://localhost:8787` under `wrangler dev` probably stops;
+  check at the next local e2e run. `BUILD_FAILED` is used for platform conditions (the 150 s deadline) as well as candidate faults and maps to 422; the
+  `Dockerfile` digest should be confirmed as the multi-arch index digest; an `export` after a leading block comment on one line is missed by the heuristic.
+
+### Review fixes deployed and verified: POST bodies reach canaries, the loop rolls back on them (2026-10-25, `ebb5c75`)
+
+Pushed to `cf` (all ten builds succeeded; the sandbox-runner Worker code was live at 12:45Z, its container rollout step unchanged). Live test against
+production with a candidate that answers HTTP 500 **only** to a POST whose body is exactly `fail-me` (and `ok` to GETs):
+- Canary deployed 12:46:10 (`autoRollback: true`); 119 POSTs with body `fail-me` to URLs in the 0.5% hash range of `POST:<url>` sent through the shadow router.
+- The first queue tick at **12:47:12** logged `canary_slo_cycle ... rolledBack: [<deployment id>]`; the record: `status: rolled_back`, `rollbackReason: error_rate`.
+  Because the candidate only fails when the body arrives intact, this shows the SF-1 fix works in production: the body reaches the canary target and the SLO
+  loop sees body-carrying traffic (before the fix the canary request was silently never made for any POST).
+- Cleanup: Worker deleted through the DELETE route, org tombstoned (cascade 1 org/repo/spec/candidate), Artifacts repo deleted, health green.
+- **Not verified live:** that the production baseline is no longer replayed for POSTs (unit-tested; nothing observable from outside), the 10 s candidate timeout,
+  the abandoned-build guard and the bounded cleanup (unit tests with fakes only), SF-8 (still open). A first attempt at this test failed in setup, not in the
+  product: `wrangler artifacts repos create` returned no repo once (transient), and the shell chain went on to register a candidate with an empty commit;
+  the half-made org was tombstoned. Use `set -e` style checks in fixture scripts.
+
+## 2026-10-26: Legacy-shape migration matrix findings (`workers/spec-do/tests/migration-matrix.test.ts`)
+
+Found by running `SpecDO.init()` over the schema.sql of all 11 historical commits (plus synthetic m1/m2). No migration or schema code was changed (spine); both cases are pinned with `it.fails` so a fix flips them to red until the marker is removed.
+
+1. **A fresh ledger lacks `candidates.preview_url`, `preview_worker_name`, `preview_created_at`; every migrated ledger has them.** The columns are added only by the m1 -> m2 step (`index.ts:1041`). `initSchema` (fresh path) runs `SCHEMA_SQL`, which has no such columns, then writes `schema_version = latest`, so the m2 step never runs. Confirmed: on a fresh ledger `updateCandidatePreview()` (`index.ts:1463`, route `PUT /api/candidates/:id/preview`) throws `no such column: preview_url`. Production is a migrated ledger, so it is not hit today; a new self-hosted or wiped ledger is (OPS.md "ledger wipe" recreates a fresh one). Fix is spine: add the columns to the fresh path (or to `schema.sql`/`schema-inline.ts` plus a migration-safe guard). Test: `it.fails('a fresh ledger has the candidates preview columns ...')`; A4 excludes those three columns so it still checks the rest.
+2. **Ledgers from `d34db95` and `469389b` (m9 = `idempotency_keys`, no `user_tokens`) never get `user_tokens`.** On that line the code's `m9` created `idempotency_keys` and neither `schema.sql` nor the code had `user_tokens`; `98d43df` made `m9` = `user_tokens` and `m10` = `idempotency_keys`. A ledger stamped `m9` or `m10` by those commits skips the current `m9` step, so `user_tokens` is never created and every user-token route would fail `no such table`. Whether any deploy ever ran those commits is unknown to agents; the maintainer can answer with the T2 read-only query (`SELECT name FROM sqlite_master WHERE name = 'user_tokens'`, `docs/MIGRATION-LEGACY-TEST-PLAN.md` section 3) or from deploy history. Test: the A3/A4 cases for `m9-d34db95` and `m10-469389b` are `it.fails`.
+
+Everything else passed for every start version (m1 with and without a `schema_version` row through m11): init reaches the latest version, no object or original column value is lost, a second init and a re-run of every step from every earlier version change nothing, and tables, columns and indexes equal a fresh ledger's (apart from finding 1).
+
+## 2026-10-26: Artifacts fork and merge semantics for the MR flow (`docs/MR-FLOW-PLAN.md` §2, §8)
+
+**Status:** Open. These are planning findings from the docs; nothing has been probed and no code depends on them yet.
+
+- **The native fork API exists, and our client does not use it.** REST `POST /artifacts/namespaces/:ns/repos/:name/fork` and
+  binding `repo.fork(name, {description, readOnly, defaultBranchOnly})` (developers.cloudflare.com/artifacts/api/rest-api,
+  `/workers-binding`). `createFork` creates an empty repo, and its comment saying there is no "fork from"
+  (`workers/shared/artifacts.ts:125`) is stale. `docs/ARTIFACTS-SETUP.md` has no fork section.
+- **Forks stay in the source namespace.** The fork route takes only a name, no target namespace, so a fork lives in the org of its
+  upstream.
+- **A forking repo is not usable yet.** Listed repos carry `status` `ready | importing | forking`, and `get()` throws while the
+  repo "is not ready yet". Callers must poll for `ready` (or retry `get()`) before handing out the remote or a token.
+- **Doc mismatch:** the docs page marks the fork body's `name` as required, but the OpenAPI request body does not list it. Probe
+  before relying on either.
+- **No documented server-side merge, compare or ref-update API.** Refs change only over git, so a merge is a sandbox
+  clone/merge/push.
+- **Undocumented, to probe before MR slice 2:**
+  - Is a non-fast-forward push accepted, and is `--force-with-lease` honoured?
+  - Does any branch protection exist?
+  - Are objects shared between a fork and its upstream, and what does a cross-repo fetch cost?
+  - Can a fork be forked again?
+  - Does a push to a fork emit the event shape the queue consumer parses?
+- **Related:** the pre-merge gate is simulated (`workers/gate-workflow/index.ts:615-622`, `:725`, `:789`;
+  `workers/sandbox-runner/index.ts:371-374`), and its verdict POST ignores `Response.ok` (`:865-875`). Every `gate_verdicts`
+  row so far is synthetic, and a second run for a candidate violates UNIQUE(candidate_id, gate) unseen (`schema-inline.ts:144`).
+
+## 2026-10-26: The shadow rung's declared-delta-surface check cannot work for any stored spec (found while planning `docs/SPEC-BACKTEST-PLAN.md`; code read, not run; nothing changed)
+
+Three mismatches stack on the path Spec DO -> Scientist comparator:
+1. **Stored shape.** `CreateSpecRequestSchema` takes `declaredDeltaSurface: string[]` (`workers/shared/schemas.ts:138`) and the Spec DO stores `JSON.stringify(array)` (`workers/spec-do/index.ts:1336`). The comparator's `parseDeltaSurface` wants one object with a `version` field (`delta-surface/parser.ts:57-59`, `:66`), so an array fails with "missing required version" even if it reached the parser unwrapped.
+2. **Envelope and casing.** `GET /api/specs/:id` answers `{ success, data: { ..., declared_delta_surface } }` (`index.ts:3890`; snake_case from the row mapper at `:1941`). `SpecDOClient.getSpec` returns that whole envelope unchanged (`scientist-comparator/storage/spec-do.ts:49-50`), so `spec.declaredDeltaSurface` at `scientist-comparator/index.ts:208` is `undefined` and `parseDeltaSurface(undefined)` throws "must be an object" (`parser.ts:57-59`). The default surface is used only when the spec is not found.
+3. **Blast radius.** The throw is inside the `Promise.all` over a message's candidates, so one existing spec fails that whole comparison. The queue handler catches and logs it (`index.ts:129`; its comment says "will trigger retry", but as read the handler returns normally and never calls `retry()`), so no verdict is recorded for the message. `workers/scientist-comparator/tests/scientist.test.ts` has no case with a spec-backed delta surface, so nothing covers this. The gate workflow reads `declaredDeltaSurface` from the same snake_case response (`gate-workflow/index.ts:720`) and always gets `[]`; it only feeds a simulated complexity number.
+
+Not yet tried: a live comparison with a spec that has a surface (production has not been touched). **Consequence for the backtest:** the shadow rung's delta check cannot be used as is, and not even as a fixed reference to compare against. The backtest harness computes its own delta check (spec JSON object in, response diff out, optionally reusing `delta-surface/matcher.ts` once unit-checked in isolation). Fixing the path (spine-adjacent: one agreed shape for `declaredDeltaSurface`, unwrap `data`, map the field name, a comparator test with a real surface) is a separate human-approved item.
+
+## 2026-10-27: m12 unique index on `actors.github_user_id` (`agent/m12-actors-unique`; tests run, production not touched)
+
+- **`''` in the plan vs the index.** `docs/MIGRATION-LEGACY-TEST-PLAN.md` section 6 (2026-10-26) said two `''` values collide; the approved design is a partial index excluding both NULL and
+  `''`, matching `mintUserToken` / `verifyUserTokenHash`. `createActor` already stores `''` as NULL, so `''` can only exist from a hand-edit or an old import. The plan is updated; the preflight ignores `''`.
+- **The old pre-check-free `createActor` surfaced as an uncaught 500 only after the index existed.** Added a check in `createActor` (one synchronous step with the insert) that answers 409 `an actor with github_user_id "<id>" already exists (<actor id>)`.
+  The UI login (`workers/api/ui.ts` `ensureActor`) does lookup then POST, so two first logins of one user can race: the loser now gets 409 and re-reads, instead of "Could not create your actor record".
+  Old edge against the new DO: the same race ends in a failed login (fail closed); new edge against an old DO: unchanged behaviour (no 409 is ever returned).
+- **Rolled-back floor code** has no duplicate check, so a duplicate insert by it is a 500 from the unique index, not a 409. Only the UI login can trigger it, and it fails closed (`docs/OPS.md` rollback floor).
+- **Test-suite coupling found:** four existing tests built duplicate GitHub ids with `createActor` to exercise "newest wins" (`actors.test.ts`, `ui-actor.test.ts`). They now drop the index and insert raw rows,
+  which models a pre-m12 ledger; those tests still pin the old-DO behaviour of the edge.
+- **Not verified:** the `node:sqlite` harness, not Durable Object SQLite, ran the partial `CREATE UNIQUE INDEX ... WHERE`. Partial indexes exist since SQLite 3.8.0, but the DO's SQLite version was not checked here; the first real run is the deploy
+  itself (the plan's open question 3). The step uses no other new construct.
+
+## 2026-10-28: Real-gate container spike, results S3, S4, S5 (S1, S2 pending a secret) (`docs/REAL-GATE-IMPL-PLAN.md`, `spikes/gate-spike/`)
+
+Throwaway worker `beehive-gate-spike` (container class `SpikeSandbox`, `durable_object` policy, queue `beehive-gate-spike-q`) deployed 2026-10-28 with the maintainer's wrangler OAuth login (the `.env` `CLOUDFLARE_API_TOKEN` cannot manage containers or read Workers Builds).
+
+- **Config finding.** Wrangler 4.151.1 rejects a `docker.io/...` image: `containers.images.<name>.image` must be a digest-pinned image in the managed registry (`registry.cloudflare.com/<account>/<repo>@sha256:...`). The 2026-10-24 note that a registry image needs no Docker predates this validation. This host has no Docker, so the spike reuses the sandbox runner's build image, `beehive-sandbox-runner-buildsandbox-build`, tag `wrangler-mvrnwhxo`, digest resolved with `crane` (v0.22.1, checksum-verified) using a short-lived `wrangler containers registries credentials` pull credential in a private `DOCKER_CONFIG`, deleted afterwards. Wrangler lists tags but no digests (`containers images list`).
+- **Image and size.** node v24.22.1, npm 11.19.1, git 2.47.3. `standard-2` gives 1 vCPU and 11445 MB disk; `lite` gives 1908 MB. `/sys/fs/cgroup/memory.max` does not exist and `free` is not installed, so peak memory must be measured from `/proc` (meminfo, `/proc/<pid>/status` VmHWM) during a run.
+- **S4, egress: pass.** With only the registry intercept installed (`enableInternet: false`) the registry control returned 200 and every other path failed (HTTP and HTTPS to example.com timed out, HTTPS to an IP `ECONNRESET`, DNS `EAI_AGAIN`). Replacing the intercept handler on the running container with a deny handler turned the registry answer into a 403 without a restart. A raw TCP connect to `1.1.1.1:443` reports connected, but no byte ever came back: an HTTP request to `1.1.1.1:80` and a probe to `8.8.8.8:53` timed out with 0 bytes, and `1.1.1.1:443` reset after 0 bytes. Read as the intercept layer accepting the handshake on 443, not egress; do not treat a bare TCP connect as proof of network access in tests.
+- **S3, concurrency: no automatic cap.** 25 `lite` containers started concurrently in 34 s, all OK (first step 0.5 to 2.2 s). `max_instances` is not available under `durable_object` scheduling, so the cap must be ours (queue `max_concurrency` plus a counter in the Spec DO), as the plan says.
+- **S5, 590 s hold: pass.** One 590 s `exec` over an HTTP request to the worker returned 200 in 591.7 s; the same hold inside a queue consumer completed with exit 0 in 590.0 s. Neither hit a wall-clock limit.
+- **Not yet measured:** S1 (clone a real commit via the Artifacts gateway and run `npm ci --ignore-scripts` through the second intercepted host) and S2 (`standard-1` vs `standard-2` peak memory, disk, time). Both need `CLOUDFLARE_API_TOKEN` as a secret on the spike worker; the permission layer blocked agents from writing that secret, so the maintainer must set it. The spike worker, its container application and the queue stay deployed until S1/S2 are done, then must be deleted (`spikes/gate-spike/README.md`).
+
+## 2026-10-28: Real-gate container spike, results S1 and S2 (`docs/REAL-GATE-IMPL-PLAN.md`)
+
+Input: `default/beehive` at `589b280` on Artifacts, cloned inside the container through the credential-injecting gateway (`ArtifactsGateway`), then `npm ci --ignore-scripts` with only the registry intercept allowed, then `npm test` with every intercept replaced by deny. One run per size; image node v24.22.1, npm 11.19.1.
+
+- **S1, clone and install: works.** `git clone` + checkout of the commit took 3.6 to 4.0 s on both sizes; the `.env` `CLOUDFLARE_API_TOKEN` is accepted by the gateway (it has Artifacts permission). `npm ci` completed from the lockfile (199 packages, 342 MB on disk). The first attempt failed only because the spike set `NPM_CONFIG_USERCONFIG` and `NPM_CONFIG_GLOBALCONFIG` to the same path (`/dev/null`): npm refuses to load one file as both ("double-loading config"). Use two distinct empty files; the gate must do the same.
+- **S2, size: CPU is the constraint, not memory or disk.** Peak memory used (MemTotal minus the minimum MemAvailable sampled every 0.3 s from `/proc/meminfo`, since there are no cgroup memory files and no `free`): 506 MB during `npm ci` and 438 MB during `npm test` on `standard-1`, 560 MB during `npm ci` on `standard-2`. Disk 342 MB. Wall time:
+
+  | | `standard-1` | `standard-2` |
+  |---|---|---|
+  | `npm ci` | 70.4 s | 10.8 s |
+  | `npm test` | 191.6 s (vitest 188.5 s) | 37.4 s |
+
+  `nproc` reports 1 on both; the allocation differs (1/2 vs 1 vCPU), and `standard-2` was about 6.5 times faster for install and about 5 times faster for tests. One run each, so treat the ratio as indicative. Both fit the plan's 120 s install and 300 s test limits for this repo, but `standard-1` leaves little headroom for a heavier repo; `standard-2` is the recommended size.
+- **Tests with no network pass.** 1380 passed, 30 skipped, 2 files failed (`tests/cli-behavior.test.ts` and `tests/cli-token.test.ts`) because only the root `npm ci` ran and the `cli/` package's dependencies (configstore) were not installed. The gate's install step must install every workspace package's dependencies the repo's own CI installs (`.github/workflows/ci.yml` runs `npm install` in `cli/` and in each `workers/*/`), or a monorepo-aware equivalent.
+- **Teardown.** The spike worker (with its secrets, including the copied `CLOUDFLARE_API_TOKEN`), its container application and the queue `beehive-gate-spike-q` were deleted after these runs.
+
+## 2026-10-28: m13 on workerd, and gate-run routes not yet on the edge (`agent/real-gate-slice5`, not merged or deployed)
+
+- **The preview-columns finding of 2026-10-26 is fixed in code.** The three `candidates.preview_*` columns are now in the base `candidates` table (`schema.sql` and `schema-inline.ts`, kept equal by `schema-sync.test.ts`) and the m13 step runs `addColumnsIfMissing` for them, which repairs ledgers that were created fresh at m11 or m12 and stamped without running m2. The `it.fails` pin is now an `it`. A4 no longer excludes them.
+- **Run on workerd's real SQLite (local only).** A ledger created by `main` (`087b876`, m12) through `scripts/start-e2e-workers.sh` had `schema_version = m12` and **no preview columns** (the finding, observed on workerd, not only on `node:sqlite`). The same persisted state under this branch's code went to `m13`: `gate_runs` with its three indexes and foreign keys to `candidates` and `actors`, the three preview columns added, the candidate and organization rows kept. Start, dedupe (running), 409 `busy` (repository), strict 400, finish, list and the `gate_verdicts` summary upsert answered as designed through the local probe worker. Idempotent redelivery was exercised on `node:sqlite` only (the probe forwards no `Idempotency-Key`).
+- **The edge does not route `/api/gate-runs`** (a `GET` through `beehive` answers 404 "Not found"): by plan it is slice 8, so only the tier-1 Spec DO stub (the gate worker, slice 7a) can reach the new routes.
+- **Quota answer.** A start over the 50/24 h organization limit answers **200 `{ quota: true, runId }`** and writes a `not_run`/`quota` row (plan §3), not a 429, so the gate's `Response.ok` check acks it. Caps answer 409 with `code: 'busy'` and `reason: 'repository' | 'global'`.
+- **Review notes (2026-10-28, independent review of `agent/real-gate-slice5`).**
+  1. **The `gate_verdicts` summary is not tied to a sha.** It is one row per (candidate, gate): the latest-started run's outcome, whichever sha that was (`notes` names the sha only as text). Merge and policy checks must read `gate_runs` at the head sha (plan §3), never `gate_verdicts`.
+  2. **`decidedBy` is trusted from the body**, like the existing `POST /api/gate-verdicts`: the DO checks only that the actor exists, not that it is the caller. The routes are tier-1 only (no edge route until slice 8), so the trust boundary is the gate worker; if an edge route is ever added it must set `decidedBy` from the principal.
+  3. **Stale running rows count twice toward the quota.** A `running` row past 15 minutes is reported `abandoned` and frees its repository and global slot, but it still counts as a started run in the organization's 50/24 h (it did start a container), and the re-run that follows counts again. Deliberate for now (the cap is a cost bound, not a fairness rule); revisit if abandoned rows prove common.
+  4. **Terminal rows and the quota.** `terminal` rows other than `busy_timeout`/`quota` count toward the quota; the per-sha attempt cap (10) bounds one sha, but a tier-1 caller can still use many shas.
+  5. **`gate_runs.candidate_id` foreign key: decided A on 2026-10-28 (dropped).** `docs/OPS.md` (rollback floor) allows a new table to reference only `actors`, so that an m12-floor build over an m13 ledger can still purge. The table keeps `decided_by -> actors`; `candidate_id` is a logical reference (route 404s unknown/tombstoned candidates), the m13 purge deletes a candidate's runs first and sweeps orphans left by a floor-build purge. Tests: `migration-gate-runs.test.ts` (rollback floor), `purge-local.test.ts` (orphan sweep).
+- **Idempotency-Key on workerd (2026-10-28, local).** With the e2e probe relaying an allow-listed `Idempotency-Key`: start 200; same key and body replayed with `Idempotent-Replay: true` and the same `runId`; same key with another sha 409 `Idempotency key conflict`; a 409 `busy` under a key left no key row, and the same key after the first run finished started the run (200, new `runId`, later replayed). Nested `transactionSync` (route inside `idempotent()`) behaved as on `node:sqlite`.
+
+## 2026-10-28: Real-gate slice 4, TestSandbox and `/sandbox/test` (`agent/real-gate-slice4`, not merged or deployed)
+
+Code only; no `wrangler.toml`, Dockerfile or Spec DO change. Unit-tested with a fake container; nothing here ran on the platform.
+
+- **Shape.** `sandbox-base.ts` (`ContainerSandbox` base: serialize, deadline + alarm, abandoned-call check, destroy; `ArtifactsGateway`; `cloneCommit`), `test-sandbox.ts` (`TestSandbox`, `NpmRegistryGateway` with `deny` prop as the replacement handler, `validateTestRequest`, `parseCounts`), `POST /sandbox/test` in `index.ts`. Config is read through methods, not fields, because the base constructor runs before subclass field initializers. `build-sandbox.ts` re-exports the moved names; its 33 tests pass unchanged.
+- **Contract.** Request `{ repo, commitSha, namespace?, installDirs? (default ['.']), testCommand? (argv, default npm test) }`. Every verdict (pass, fail, error) is 200 `{ success: true, result }`; non-2xx is infrastructure (400 BAD_REQUEST, 422 BAD_NAMESPACE, 503 NOT_CONFIGURED / SANDBOX_UNAVAILABLE, 502 unknown). `clone_failed` and `timeout_overall` come back as `error` verdicts, not HTTP errors. `/sandbox/test` answers 503 NOT_CONFIGURED while `env.TEST_SANDBOX` is unbound (until slice 6).
+- **Unverified on the platform (first thing slice 7a's production run must check).**
+  1. `container.images.test` is the assumed image key (`[containers.images.test]`) and `imageDigest` is parsed from that string only if it contains `@sha256:...`; otherwise it is `null`.
+  2. (Superseded by the review fix below: the wrapper is `bash -c`, because dash, the `sh` of the node image family, rejects `ulimit -u`; seen on this host. bash exists in the node:trixie-slim base but the image was not inspected.) The phase wrapper was `sh -c 'ulimit -u/-t/-f ...; exec "$@" >>log 2>&1'` with argv positional. Whether the image's `sh` accepts `ulimit -u`, and the unit of `-f` (512-byte blocks in POSIX sh, 1 KiB in bash), is not checked; a failing `ulimit` exits 125, which the gate would report as `install_failed`/`tests_failed`.
+  3. Whether `exec({ env })` replaces or merges the container's environment is unknown; the code sets `PATH`, `HOME`, `CI` and the npm config explicitly either way.
+  4. Whether an active long `exec` resets `setInactivityTimeout`; the test sandbox sets 15 minutes so the 600 s deadline always wins.
+  5. The registry intercept relies on npm sending only `GET` over https to `registry.npmjs.org`; the gateway forwards only `FORWARDED_HEADERS`, so a header npm needs but that is not on the list would show as an install failure.
+  6. The install budget (120 s) is shared by all `installDirs`; the multi-package time is still unmeasured (plan section 1).
+- **Exports without a wrangler declaration.** `index.ts` exports `TestSandbox` and `NpmRegistryGateway` now. `wrangler deploy --dry-run` cannot run on this host (Docker needed for the `[[containers]]` image), so a copy of the config without `[[containers]]` was dry-run: the bundle builds. Whether the server accepts an exported Durable Object class with no `[exports.TestSandbox]` entry on the real deploy is not verified; if it does not, move the `export { TestSandbox ... }` line into slice 6.
+- **Review fixes (same day).** `TestSandbox` is no longer exported from `index.ts` (slice 6 adds it; plan item 6); the dry-run bundle with `[[containers]]` removed still builds with only `NpmRegistryGateway` exported. The phase wrapper now applies `ulimit` inside `{ ...; } >>"$log" 2>&1` and exits 125 on failure, which `TestSandbox` throws as `SANDBOX_UNAVAILABLE` (a child that exits 125 is remapped to 1). Only the wrapper's own 124 (or 137 after the KILL with the limit elapsed) is a timeout; any other 137 is the new failure class **`killed`** (an outside SIGKILL, e.g. the OOM killer), which the gate's zod schema and class table (plan section 4) must learn in slice 7a. `.npmrc` removal is `find <clone> -name .npmrc -not -path '*/node_modules/*' -delete`; `testCommand[0]` may not start with `-`.
+- **Not done (optional in the plan):** `peakMemMb` sampling. The verdict omits the field.
+
+
+## 2026-10-28: Real-gate slice 6, TestSandbox container config (`agent/real-gate-slice6`, not merged or deployed)
+
+Config, image and export only; nothing here ran on the platform (no Docker on this host, no deploy).
+- **Files.** `workers/sandbox-runner/wrangler.toml`: second `[[containers]]` (`class_name`, `scheduling_policy = "durable_object"`, `[containers.images.test] dockerfile = "./Dockerfile.test"`), binding `TEST_SANDBOX`, `[exports.TestSandbox]` (new class, sqlite). `index.ts` exports `TestSandbox`. `Dockerfile.test`: same digest-pinned `node:24-trixie-slim` as the build image, plus bash, ca-certificates, findutils, git (clone, the bash phase wrapper, `find`/`test`); no esbuild.
+- **Unverified until the maintainer's push (checks in the slice 6 report).**
+  1. Whether two `[[containers]]` blocks with different `dockerfile` paths in one directory each build with their own context; the build image's `Dockerfile` copies nothing, so a shared context is harmless either way.
+  2. That the key `images.test` is what `ctx.container.images.test` (`test-sandbox.ts:197`) reads; a wrong key makes `start` fail with `SANDBOX_UNAVAILABLE`, not a verdict.
+  3. Whether a new exported Durable Object class plus its container application deploys in the same version as the existing renamed `Sandbox` entry without a lifecycle error (10086 applied only to deleting a bound class).
+  4. `imageDigest` is expected to be `null`: wrangler 4.151.1 tags Dockerfile-built images (`<script>-<class>-<image>:wrangler-<time>`, no digest), as for the build image. The base-image digest pin in `Dockerfile.test` is the reproducibility anchor.
+- **Local checks run:** TOML parse, typecheck, sandbox-runner tests (97 pass), all clean. Independent review: `wrangler deploy --dry-run` on the real config passes validation and stops at the Docker check; with containers stripped the bundle builds. CI's dry-run (Docker available) builds `Dockerfile.test` first.

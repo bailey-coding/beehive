@@ -22,8 +22,19 @@ Spine-adjacent (promotion train, Spec DO schema): **a human approves this plan b
 3. **Schema slot: `m11`** (maintainer decision 2026-10-24, nothing of M11 had started: M3 goes first, M11 renumbers to `m12` or
    later). One table per version step: this migration is never combined with M11's, whose UNIQUE index can throw on duplicates
    and cause a full outage (FOCUS). The rollback floor (push A) is live, so an older Spec DO serves over an `m11` ledger.
-4. **Trigger: a `scheduled` cron on the canary worker**, every minute, using `DeployRefsClient.liveRefs('canary')` to list
+4. **Trigger: a `scheduled` cron on the canary worker (REMOVED 2026-10-24, see item 5; the queue tick is now the only trigger)**, every minute, using `DeployRefsClient.liveRefs('canary')` to list
    live canaries (it already returns `{ref, deployment}` with `autoRollback`). No queue producer.
+
+5. **Event-driven tick (added 2026-10-24, accepted).** The Spec DO arms an alarm (+60 s) when a canary deploy lands (and on
+   the first request after a restart if a canary is already live). `alarm()` sends one message to queue `canary-slo-ticks`
+   and re-arms while `liveRefs('canary')` is non-empty; with none live it does nothing, so the chain stops and an idle
+   ledger costs nothing. The canary worker consumes the queue (`[[queues.consumers]]`) and runs the same cycle as the cron
+   (`runSloCycle`, `workers/canary-worker/index.ts`). **The cron was removed 2026-10-24** (maintainer decision; `[triggers]` and `scheduled()` deleted).
+   Mixed versions: old DO + new worker: no ticks, nothing evaluates until the new DO is live; new DO + old worker: ticks
+   pile up unconsumed until the new worker deploys (all ten deploy at once, so the window is short). The producer
+   binding (`CANARY_SLO_TICKS`) is optional in code: an unbound DO still arms and re-arms, it just sends nothing.
+   **Not live in production yet:** prod canary deploys answer 501 (no Versions client), so no canary ref is ever written
+   and the alarm never arms there until that lands. Until then the SLO loop does not run in production at all (nothing to evaluate).
 
 ## Rules this must keep (AGENTS.md)
 

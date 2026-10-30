@@ -180,7 +180,7 @@ describe('applyCanaryRefs with the cache (rollback visibility)', () => {
 
   // A DO whose answer can be changed between calls (promotion, rollback, outage)
   function fakeDo() {
-    const state: { data: unknown[]; down: boolean } = { data: [live('cand-a', 'https://a.example')], down: false };
+    const state: { data: unknown[]; down: boolean } = { data: [live('cand-a', 'https://a.bz23711.workers.dev')], down: false };
     const fetch = vi.fn(async () =>
       state.down
         ? new Response(JSON.stringify({ success: false, error: 'down' }), { status: 500 })
@@ -197,25 +197,25 @@ describe('applyCanaryRefs with the cache (rollback visibility)', () => {
     const base = getDefaultShadowConfig();
     const targets = async () => (await applyCanaryRefs(base, specDo, cache)).candidatePreviews.get('cand-a');
 
-    expect(await targets()).toBe('https://a.example');
-    expect(await targets()).toBe('https://a.example');
+    expect(await targets()).toBe('https://a.bz23711.workers.dev');
+    expect(await targets()).toBe('https://a.bz23711.workers.dev');
     expect(specDo.fetch).toHaveBeenCalledTimes(1);
 
     // Rollback happens in the DO: cached pointer may live for at most one TTL
     specDo.state.data = [];
     c.advance(TTL - 1);
-    expect(await targets()).toBe('https://a.example'); // still inside the TTL
+    expect(await targets()).toBe('https://a.bz23711.workers.dev'); // still inside the TTL
     c.advance(1);
     expect(await targets()).toBeUndefined(); // visible at the TTL
     expect(specDo.fetch).toHaveBeenCalledTimes(2);
 
     // Promote again, then an outage: old pointer survives one extra TTL, then static config
-    specDo.state.data = [live('cand-a', 'https://a2.example')];
+    specDo.state.data = [live('cand-a', 'https://a2.bz23711.workers.dev')];
     c.advance(TTL);
-    expect(await targets()).toBe('https://a2.example');
+    expect(await targets()).toBe('https://a2.bz23711.workers.dev');
     specDo.state.down = true;
     c.advance(TTL);
-    expect(await targets()).toBe('https://a2.example'); // stale, within 2 x TTL
+    expect(await targets()).toBe('https://a2.bz23711.workers.dev'); // stale, within 2 x TTL
     c.advance(TTL);
     expect(await targets()).toBeUndefined(); // static config: no canary target
   });
@@ -237,7 +237,7 @@ describe('applyCanaryRefs with the cache (rollback visibility)', () => {
     const first = await applyCanaryRefs(base, specDo, cache);
     const second = await applyCanaryRefs(base, specDo, cache);
     expect(base.candidatePreviews.size).toBe(sizeBefore);
-    expect(second.candidatePreviews.get('cand-a')).toBe('https://a.example');
+    expect(second.candidatePreviews.get('cand-a')).toBe('https://a.bz23711.workers.dev');
     expect(second).not.toBe(first);
   });
 });

@@ -60,12 +60,40 @@ export const CanaryDeploymentSchema = z
   })
   .strict();
 
+/**
+ * Mirrored traffic may only go to a Worker on workers.dev over https, without credentials. The shadow router checks this again
+ * before it sends anything (applyCanaryRefs); the Spec DO checks it first, so a bad value never becomes ledger state.
+ */
+export function isAcceptableCanaryUrl(url: string, subdomain?: string): boolean {
+  try {
+    const u = new URL(url);
+    // With the account's workers.dev subdomain configured (WORKERS_SUBDOMAIN) the host must be a Worker of that account;
+    // without it any workers.dev host passes (a worker deployed before its var exists, or a self-hoster, keeps working).
+    if (subdomain && !(/^[A-Za-z0-9-]+$/.test(subdomain) && u.hostname.endsWith(`.${subdomain.toLowerCase()}.workers.dev`))) return false;
+    const label = u.hostname.endsWith('.workers.dev') ? u.hostname.slice(0, -'.workers.dev'.length) : '';
+    return u.protocol === 'https:' && label !== '' && !label.startsWith('.') && u.port === '' && !u.username && !u.password;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A canary candidate id is a plain token (a ledger UUID in practice) and never starts with `beehive-`: the shadow router's
+ * static targets (`beehive-main`, the trusted baseline, and the local-dev ports) use that prefix, and a ref must not take their place.
+ */
+// The `i` flag is deliberate: it makes the `beehive-` lookahead case-insensitive. Do not remove it.
+const CANARY_CANDIDATE_ID_RE = /^(?!beehive-)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/i;
+
+export function isValidCanaryCandidateId(id: unknown): id is string {
+  return typeof id === 'string' && CANARY_CANDIDATE_ID_RE.test(id);
+}
+
 // Body of POST /canary-deployments: record the deployment and move the canary ref
 export const CanaryDeployRequestSchema = z
   .object({
-    candidateId: z.string().min(1),
+    candidateId: z.string().regex(CANARY_CANDIDATE_ID_RE, "candidateId must be letters, digits, '_' or '-' (at most 128) and must not start with 'beehive-'"),
     specId: z.string().min(1),
-    url: z.string().min(1),
+    url: z.string().refine(isAcceptableCanaryUrl, { message: 'url must be an https://*.workers.dev URL without credentials' }),
     workerVersionId: z.string().min(1),
     commitSha: z.string().min(1).nullable().optional(),
     trafficPercentage: z.number().gt(0).max(100),
@@ -216,7 +244,10 @@ export class DeployRefsClient {
   constructor(private readonly specDo: SpecDoFetcher) {}
 
   deployCanary(request: CanaryDeployRequest, actorId: string): Promise<DeployResult<CanaryMoveResult>> {
-    return this.send(DEPLOY_PATHS.canaryDeployments, 'POST', CanaryDeployRequestSchema.parse(request), actorId, CanaryMoveResultSchema);
+    // A request the Spec DO would refuse is a 400 result here, never a throw (the DO's own 400 is relayed the same way)
+    const parsed = CanaryDeployRequestSchema.safeParse(request);
+    if (!parsed.success) return Promise.resolve({ ok: false, status: 400, error: `Invalid canary deployment: ${parsed.error.message}` });
+    return this.send(DEPLOY_PATHS.canaryDeployments, 'POST', parsed.data, actorId, CanaryMoveResultSchema);
   }
 
   getCanaryDeployment(id: string): Promise<DeployResult<CanaryDeployment>> {

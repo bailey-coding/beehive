@@ -10,8 +10,69 @@ Completed items are removed, not struck through; history lives in git.*
 
 **Last updated:** 2026-10-30
 
+## Handoff (2026-10-28, end of session): start here
+
+**State.** Production (the `cf` remote) and `origin/main` are both at `523291b` (pushed and built 2026-10-28 on the maintainer's go-ahead; CI green before the cf push). It carries
+**m13** (slice 5: `gate_runs`, strict routes, `preview_*` columns in the base schema), the backtest harness 2, the gate spike results, real-gate plan rev 3, **slice 4** (`TestSandbox`,
+`NpmRegistryGateway`, `POST /sandbox/test`, `SANDBOX_MODE=stub`; independently reviewed, fixes applied) and **slice 6** (second `[[containers]]` block, `Dockerfile.test`, `TEST_SANDBOX`
+binding, `[exports.TestSandbox]`; independently reviewed). After the push `scripts/prod-health.sh` was green (all ten workers 200, Spec DO 200), `GET /sandbox/probe` still returned node
+v24.22.1, and a bad `POST /sandbox/test` answered 400 `BAD_REQUEST`.
+**Not verified:** `schema_version = m13` (no CLI reads DO SQLite: dashboard SQL editor only; trusted from the green Spec DO call), that the `TestSandbox` image built and the
+container application exists (the wrangler OAuth login returned `Authentication error`: re-run `wrangler login`; the `.env` token cannot read Workers Builds, use the dashboard), that
+`TEST_SANDBOX` is bound (a valid-shaped `POST /sandbox/test` starts a container = the first production run, needs approval), and a candidate preview write.
+Ledger ops use the `beehive-system` agent actor (`9da1f201-89d4-4907-9e86-52426cffcb7d`, maintainer role); `X-Actor-ID` takes an actor UUID; actors cannot be deleted. Competition over: no deadline.
+
+**Next, in order, each needing the maintainer's explicit go-ahead in a normal chat message:**
+1. Verify the slice 6 push: Workers Builds log for `beehive-sandbox-runner` (two images built, elapsed time against the 5.5 min kill precedent), `wrangler containers list` / `images list` after
+   `wrangler login`, no 10086 lifecycle error. If the sandbox-runner build failed, the other nine are unaffected; fix forward (rollback of this worker is probably forward-fix only, OPS).
+2. Real test gate, `docs/REAL-GATE-IMPL-PLAN.md` rev 3. Done: slices 1-6, spike S1-S5. Open: 7a (gate consumer behind the old path: queue + `SANDBOX_RUNNER` binding + `queue()` handler +
+   `POST /gates/runs`; the maintainer creates the queue first; then the approved production run), 7b, 8, 9. The first run must check: `imageDigest` (expected `null`, wrangler tags images),
+   `instance = standard-2`, bash ran the `ulimit` wrapper (no exit 125), `ulimit -u 512` with a multi-threaded test run, container destroyed. Slice 7a must make the gate's class table and zod
+   schema accept the `killed` class, and choose the gate abort (e.g. 630 s) above the runner's 600 s deadline.
+3. MR flow, `docs/MR-FLOW-PLAN.md` rev 2: decisions accepted as recommended; reviewer-agent threat model must be accepted before slice 3; Artifacts non-fast-forward push and branch protection are
+   unprobed (spike before slice 2).
+4. Backtest (`docs/SPEC-BACKTEST-PLAN.md`, `tools/backtest/`, summaries in `docs/backtest/results/`): pilot-1 A1 complete; pilot-2 A4/A5/A11 complete, A2's spec failed (prompt fixed since, not re-run).
+   Pending from the maintainer: answers to the 2-case human sample (`docs/backtest/runs/pilot-2/human-sample.md`, then `npm run backtest -- sample --run pilot-2 --ingest`); release of the Bash canary
+   (`canary --release-pilot --allow-bash`, about 4 calls). Corpus is 10 strict rows (A6-A10 have no issue texts yet); the decision rule needs 11, so results stay inconclusive by construction.
+   Global call ledger `tools/backtest/.ledger.json` (gitignored): 288/850 used. Models: Sonnet 5.5 medium, same-family grader (pilot only).
+5. Housekeeping: `.env` holds an obsolete `SPIKE_TOKEN` and is mode 644; decide the project direction after the competition and update AGENTS.md framing then. Optional: a test tying
+   `workers/sandbox-runner/wrangler.toml` exports to `index.ts` (review N3).
+
+**How to work here (learned).** The permission layer blocks, and you must stop and ask instead of working around: a `cf` push when the approval arrived as a mid-turn notification rather than a chat
+message, writing secrets to a worker, minting registry credentials, installing external binaries, and agent prompts with deploy wording (describe local validation only, never mention deploying). A plain
+chat message from the maintainer works, including "push to origin, and to cf once CI passes". `.env`'s `CLOUDFLARE_API_TOKEN` cannot manage containers or read Workers Builds: use the wrangler OAuth
+login (`env -u CLOUDFLARE_API_TOKEN ...`; it expires). A background shell that itself backgrounds the real work (`( ... ) &`) notifies early: run the real command as the task; no chained `sleep`, use a
+loop in a background task. Paseo subagents: create with `modeId: auto` (acceptEdits asks for every shell command); review agents in `plan` mode try to call ExitPlanMode: tell them to report as their final
+message, and deny the request. Agents hit session limits: have them push `scratch/*` refs after each step. A review agent's temp-dir `rm -rf` is fine once the path is checked. Review every spine or
+deploy-config change with an independent agent before merging. Sonnet 5.5 medium is the subagent default.
+
 ## Where we are
 
+- **Newest (2026-10-27):** production runs `main` at `88e40e1` (deployed 16:53-16:54Z by the maintainer's go-ahead; nine workers redeployed, `beehive-sandbox-runner` unchanged;
+  `scripts/prod-health.sh` green; CI green). It carries **m12**: a partial UNIQUE index on `actors.github_user_id` (NULL and `''` excluded) whose migration step refuses
+  with `DuplicateGithubIdentityError` on duplicates before any DDL. Verified before the push: production duplicate check clean (`scripts/check-actor-duplicates.sh`,
+  4 actors) and the migration run on workerd's SQLite (a local 26-actor ledger went m11 to m12); the first Spec DO call after the deploy returned 200. Not exercised in
+  production: the 409 for a duplicate actor insert. The last two `test-org-e2e-sbx-*` orgs were purged 2026-10-27 (all five test orgs are gone); the `beehive-system` agent
+  actor (id in `docs/OPS.md`) runs ledger operations. Next: MR flow slice 1 (real test gate, `docs/REAL-GATE-IMPL-PLAN.md`; the container spikes need the maintainer to deploy
+  `spikes/gate-spike/`), the backtest pilot re-run for A2, A4, A5, A11 (`tools/backtest`, harness fixes merged; about 250-300 calls), and the About/Roadmap page corrections.
+- Earlier (2026-10-26, later): production runs `main` at `1d79ec8` (nine workers redeployed 09:32Z, `beehive-sandbox-runner` unchanged; `scripts/prod-health.sh` green;
+  CI green). New since `f21024d`: N1 origin check on every non-GET/HEAD issue request; the purge fails closed (a 501, 404, 5xx, a missing `PREVIEW_MANAGER` binding, an
+  older Spec DO or an odd 2xx body aborts a purge that has candidates, nothing deleted; `docs/OPS.md` "Ledger cleanup"); M12 PR-C (CLI user tokens, `docs/M12-PRC-PLAN.md`);
+  the legacy-ledger migration matrix (`workers/spec-do/tests/migration-matrix.test.ts`, plan `docs/MIGRATION-LEGACY-TEST-PLAN.md`). The first real purge ran
+  2026-10-26 ~09:34Z as the `beehive-system` actor: 3 orgs, 4 candidates, 13 rows; the 4 candidate Workers were all `absent`; `test-org-e2e-sbx-1792932243` and
+  `-1792932315` were still under the 24 h age rule and remain to purge (same prefix, `confirm` = the dry-run total). Actors cannot be tombstoned or purged by any route,
+  so `e2e-sbx-probe-actor` and `prodcheck-1792366949` stay. Open: two migration gaps (`docs/OPEN-QUESTIONS.md` 2026-10-26: a fresh ledger lacks the
+  `candidates.preview_*` columns; ledgers stamped m9/m10 on the `d34db95`/`469389b` line never get `user_tokens`; production is probably unaffected, unconfirmed) and the
+  unique index on `actors.github_user_id` (m12, implemented on `agent/m12-actors-unique`, not merged or deployed; see "M12 unique index" below).
+- Earlier (2026-10-26): production ran `main` at `f21024d` (all ten workers except the unchanged `beehive-sandbox-runner` redeployed 2026-10-25 20:55Z,
+  `scripts/prod-health.sh` green; GitHub CI green). Since `ebb5c75` that added: namespace per request for sandbox builds (SF-8; fork-created candidates can be
+  built) with a 400 on new org names that are not valid Artifacts namespaces; the Spec DO validating canary candidate ids and urls (`beehive-` ids refused,
+  https `*.bz23711.workers.dev` only, `WORKERS_SUBDOMAIN` pin; unset = any `*.workers.dev`); a real ledger purge deleting candidate Workers first
+  (`PREVIEW_MANAGER` binding on `beehive`); one CI workflow (`ci.yml`, formerly CI Enhanced; `ci-skip.yml` removed) incl. a root-worker dry-run; the flaky
+  shadow-router timer test fixed. Plans: `docs/SF-8-NAMESPACE-PLAN.md`, `docs/CLEANUP-PLAN-2026-10-25.md`.
+- **Not exercised in production yet (verify next):** a purge that actually deletes a candidate Worker (the first real run found all four `absent`), the 400 for a bad org name
+  and for a bad canary id/url/subdomain, a canary build of a fork-created candidate (needs approval: AGENTS.md forbids e2e against production without it).
+- Earlier (2026-10-25): the canary pipeline is live in production, including real candidate builds in a sandbox container and automatic rollback by the SLO loop (see "Canary pipeline" under Open work).
 - The agent stack is merged and on `origin/main`: spine items 1 and 3 (promotion ledger routes,
   ledger lifecycle), CI-only workflow, service tokens, canary deploy/rollback as Spec DO refs, review
   fixes, Spec DO internal auth, shadow-router ref cache, the ledger compare-and-swap with the tournament
@@ -33,9 +94,6 @@ Completed items are removed, not struck through; history lives in git.*
   maintainer deploy of `main` at `831d9db` (not yet verified by an agent). The independent code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
   `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`. **Note:** schema m9 is now used by M5a idempotency
   (the idempotency keys table), so M12 references have been updated from m9 to m10.
-- Known, unchanged from `main` (code review N1): a cross-origin non-write request to an issue route (e.g. POST to
-  `.../issues/:id`) reads organizations and repositories before answering 405, because the origin check covers only the
-  write routes and `resolveRepoRef` runs first. Harmless (nothing is written); fix by checking the origin on every POST.
 - Local checks on `main` (2026-10-23): typecheck clean, unit tests pass (excluding e2e); `tests/cli-behavior.test.ts` needs
   `npm ci` in `cli/` first. Last e2e run: 70 passed / 5 skipped / 0 failed on `agent/m9-nav` (2026-10-17, `E2E_UI=1`, `docs/SETUP.md`).
 - **Custom request types are merged** (PR #1, 2026-10-23, **deployed** 2026-10-24): branded request types in `workers/shared/principal.ts`
@@ -54,8 +112,8 @@ Completed items are removed, not struck through; history lives in git.*
 
 ## Next session, first (needs the maintainer)
 
-1. Rotate the Artifacts access token embedded in the `meta-notes` repo's git remote URL (it appeared in
-   command output); switch that remote to a credential helper.
+1. The Artifacts access token was rotated by the maintainer (2026-10-26). The `cf` remote URL (and the `meta-notes` one) still embeds a token, so it can
+   appear in command output again (`git remote -v`, `git push` errors): redact it, or switch those remotes to a credential helper.
 2. Fill the remaining `TODO(maintainer)` in `docs/OPS.md`: where `CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys.
 3. Heads-up (promotion-routes-fix, deployed 2026-10-16 22:08 UTC, all ten workers verified): tournament mode now
@@ -85,8 +143,11 @@ cleanups. Confirm, in this order:
 - PR-0 and push A are live (rollback floor `8de5485`, `docs/OPS.md`). PR-B (T2-T6d: user tokens, the
   settings page, the master stage-1 log) is **merged to `main`** (`99fc4e2`; `agent/m12-pr-b` is 0 commits ahead, checked 2026-10-23) and deployed
   2026-10-24 (above). Its user-token table landed as schema `m9` (the idempotency keys moved to `m10`, see above). Deploy steps: `docs/OPS.md` "User tokens" (push B deploy checks) and the plan, section 3.
-- Next: PR-C (T7, CLI token support and the "CLI actor attribution" rewrite), then PR-D1/PR-D2 (T8/T9,
-  `SESSION_SIGNING_KEY`).
+- PR-C (T7, CLI token support, `--token-stdin`, verify-before-save login, 0600 atomic config, "CLI actor attribution" rewrite)
+  is implemented on `agent/m12-prc-impl` (plan `docs/M12-PRC-PLAN.md`; CLI/tests/docs only, no worker change); needs review and merge.
+  Next: PR-D1/PR-D2 (T8/T9, `SESSION_SIGNING_KEY`).
+- Deferred from PR-C (edge = spine, maintainer decision 2026-10-26): token expiry in `/api/whoami` and a machine-readable
+  reason on 403 for user tokens; no GET retry on 503 in the CLI.
 - **Verify assumption A4** (task): open one `beehive` invocation log for an authenticated `/api/*` request and one
   `/app` visit, and the same request's Honeycomb trace including the edge-to-DO subrequest span. Check that
   `Authorization`, `Cookie`, `X-API-Token`, `X-Beehive-Internal` and `X-Beehive-Admin` are redacted; never copy a value
@@ -96,10 +157,13 @@ cleanups. Confirm, in this order:
   `50728bc`, PR `e786f60`); independent review approved by `cc90f6a`. The full PR-B has since merged (above).
 - **Verify 404 differs by token type, on purpose:** a service-token verify 404 is "unknown token" (401); the user-token
   verify route always answers 200 for a well-formed hash, so its 404 means an older DO (503).
-- **M11 handoff:** the M3 canary metrics table took `m11` (2026-10-24), so M11 takes `m12` or later. A UNIQUE index on `actors.github_user_id` goes in its own migration only
-  after the duplicate check is re-run and comes back clean: on a ledger with duplicates it throws, `init()` rethrows,
-  and that is a full outage.
-  Update (2026-10-24): m10 is `idempotency_keys` (M5a) and m11 is `canary_metrics` (M3), so the index migration is m12 or later; older docs that say m10 or m11 are historical.
+- **M12 unique index on `actors.github_user_id` (decided 2026-10-26 and approved 2026-10-27; implemented on `agent/m12-actors-unique`, awaiting review, merge and the human push):**
+  migration `m12` (after m10 `idempotency_keys` and m11 `canary_metrics`) is a partial UNIQUE index
+  (`WHERE github_user_id IS NOT NULL AND github_user_id != ''`, the same predicate the user-token code uses). On a ledger with duplicates the step
+  **refuses** with `DuplicateGithubIdentityError` (names the values and actor ids; never skips, deletes or merges), `init()` rethrows, and that is a
+  **full outage** until a human resolves the duplicate. So `scripts/check-actor-duplicates.sh` (or the SQL in `docs/OPS.md` step 1a) must come back empty
+  immediately before the push; the 2026-10-26 production check found 0 duplicates among 3 actors, and anything older than the push can be stale (a login creates actors).
+  Application side: `createActor` answers 409 for an existing identity (the UI login retries the lookup on a 409 and resolves to the winner). `m13`/`m14` in `docs/MR-FLOW-PLAN.md` follow it.
 - **Prerequisite of master stage 2:** open the lifecycle routes (tombstone, purge, roles, `include_deleted`) to
   `maintainer` user tokens first; in M12 they stay master-only (plan A1). Stage 2 itself waits for the stage-1 evidence
   (`docs/OPS.md`, the AE query).
@@ -107,6 +171,16 @@ cleanups. Confirm, in this order:
 
 ## Cleanup
 
+- 2026-10-26: every sibling worktree is removed (none had uncommitted work except `beehive-recorder-flush`, an unshipped early draft of the recorder tail
+  flush, dropped on purpose), and the local plan/review branches with them. Their final content is on `main`; what they held were earlier drafts of
+  `docs/M12-IMPL-PLAN.md` / `docs/M9-NAV-PLAN.md`, review copies already on `main`, and two stale `test-nits-m11-pointer` commits that point the M11 index at
+  `m11` (taken by `canary_metrics`; the index is `m12`). Recovery within the reflog window: `git branch <name> <tip>` with tips `agent/m12-plan` f1135ae,
+  `m12-pra-review` 0545425, `m12-prb-review` d1a0146, `m12-review` ccb7e57, `m9-codereview` 4bbd33e, `m9-plan` c973334, `m9-review` eb6b8dc,
+  `test-nits-m11-pointer` fb6fa0a. Nine older plan/review branches were deleted the same way (all content on `main`; `feature-parity-audit`, `ui-issues-plan`
+  and `ui-issues-review` held superseded earlier drafts): `agent/cli-actor-review` 3fbcb1a, `feature-parity-audit` 95c5f25, `m8-do-recheck` fa58fb9,
+  `m8-do-review` e850246, `m8-ui-review` 9b95582, `ocap-answers` 6d1ab8f, `ui-issues-plan` cc1ef7e, `ui-issues-plan-v2` cfcc296, `ui-issues-review` 6b88cbe.
+  Local branches now: `main` and `fix/recorder-flush`. The maintainer deleted the last three remote branches (`origin/agent/m3-event-driven`,
+  `agent/versions-spike`, `claude/pr1-review-lmgqik`) on 2026-10-26; the auto-mode classifier blocks agents from `git push origin --delete`.
 - Merged `agent/*` branches: **15 merged agent/* remote branches deleted earlier** (2026-10-19, `2dc02e`, `a78017c`),
   plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). As of 2026-10-23 another 15 `agent/*`/`merge/*` branches are 0 commits ahead of `main` (e.g. `m8-issues-do`, `m8-issues-ui`,
   `m9-nav`, `m12-pr-a`, `m12-pr-b`, `merge/m12-prb`) and can be deleted; the review/plan branches that are still ahead
@@ -122,8 +196,9 @@ cleanups. Confirm, in this order:
   unkeyed; (4) queue follow-ups: dead-letter queue (maintainer creates it), negative cache for repos with no candidate,
   and the `limit=100` lookups (`docs/MILESTONES.md` M5a-2). Details: `docs/M5A-AUDIT.md`, `docs/M5A-2-IMPL-PLAN.md`.
 - **Docs changed 2026-10-30:** RFC is now RFD (`docs/rfds/`); agents may write the spine under plan + review (`AGENTS.md` rule 2).
-
-- **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci-enhanced.yml` now builds
+- **Release the CLI (open, out of scope for PR-C).** There is no publish pipeline: `bin/beehive` runs `dist` or falls back to
+  `src` via tsx, `cli/package.json` is 0.1.0. Decide what a release means (version bump and tag, or nothing) before PR-C ships to users.
+- **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci.yml` (formerly ci-enhanced.yml) now builds
   from a `git archive` copy with no root `node_modules` and installs only in each worker folder (`d3b42ff`, 2026-10-19).
   This prevents the root-level dependency resolution that allowed the zod failure to reach production.
 - **Tournament creation race:** two requests creating a tournament for the same spec at the same moment make
@@ -139,15 +214,25 @@ cleanups. Confirm, in this order:
     binding cycle may need two passes).
 - **README drift — FIXED:** `tests/e2e/README.md` updated to match `docs/SETUP.md` (local e2e makes real HTTP
   calls, no mocks) (`54808ae`, `30eb73`, `bc155e0`, 2026-10-19).
-- **M3 canary SLO loop implemented, not deployed** (2026-10-24, schema `m11`; plan `docs/M3-CANARY-SLO-PLAN.md`, runbook
-  `docs/OPS.md` "Canary SLO loop"): the shadow router posts per-deployment, per-minute samples to the Spec DO; a minute cron on the
-  canary worker evaluates each live canary and rolls back violators. **The input is shadow data** (`source = 'shadow'`), not canary
-  traffic. Deploying it migrates the production ledger `m10 -> m11` (additive, one table).
-- **M3 gaps** (`docs/MILESTONES.md`): no DO facets, capability minting or ArtifactFS; the canary SLO loop now runs from a cron
-  (shadow data only, see above); no producer for `canary-rollback-triggers` (the consumer stays) or
-  `promotion-events`; no speculative projection forks; "Statsig" is a local traffic-split
-  config, not an SDK integration. Production canary deploys answer 501 until a real Workers Versions
-  client exists (OPEN-QUESTIONS 2026-10-16).
+- **Canary pipeline (M3 loop + sandbox build): LIVE in production, verified end to end 2026-10-25.** Details and dated evidence: `docs/OPEN-QUESTIONS.md`
+  (entries from 2026-10-24 on); runbook: `docs/OPS.md` "Canary SLO loop" and "Sandbox build container"; plans: `docs/M3-CANARY-SLO-PLAN.md`,
+  `docs/SANDBOX-BUILD-PLAN.md`. How it works now:
+  - `WORKER_VERSIONS_MODE=api` on `beehive-preview-manager` (a line in its `wrangler.toml`; delete it and push to get 501 again). A canary request
+    (`POST /deploy-canary` on the canary worker) makes preview-manager read the ledger candidate + repository (UUID candidate id, repo namespace must
+    equal the runner's), call `beehive-sandbox-runner` `POST /sandbox/build`, and upload the bundle as Worker `beehive-candidate-<uuid>`.
+  - The sandbox runner builds the exact commit in a no-Internet container (`BuildSandbox`, container DO API, git clone through a credential-injecting
+    gateway, esbuild with no install scripts, 60 s / 150 s / 1 MiB limits, builds of one commit coalesced).
+  - The Spec DO arms a 60 s alarm on a canary deploy and sends ticks to queue `canary-slo-ticks`; the canary worker evaluates each live canary
+    (`canary_slo_cycle`) and rolls back violators; the chain stops when no canary is live. There is no cron (cleared 2026-10-25).
+  - The shadow router mirrors to live canaries (`global_fetch_strictly_public`; candidates get no `Authorization`/cookies) and posts per-minute
+    samples; a failing candidate (error rate 1.0) was rolled back by the loop in about two minutes. `DELETE /api/preview/canary/:id` deletes a
+    candidate Worker (refused while a canary is live).
+  - **Known limits:** SLO data is `source = shadow`, not live canary traffic; only 5xx counts as an error; the default 1% top-level canary split
+    yields few samples; the recorder tail flush is deployed (`ebb5c75`) but its effect on sample counts was not measured separately.
+  - **Pending decisions / work:** (1) DONE and deployed (`f21024d`, untested against real data): the ledger purge deletes candidate Workers first (`docs/CLEANUP-PLAN-2026-10-25.md` C, `docs/OPS.md` "Ledger cleanup"); (2) purge the tombstoned test orgs `test-org-e2e-sbx-*` (three in the doc, four per the maintainer: dry-run first) from 2026-10-26 ~11:00 UTC (24 h age rule; needs the maintainer actor, `docs/OPS.md` "Ledger cleanup")
+    and decide whether to delete actor `e2e-sbx-probe-actor`; (3) DONE: `wrangler deploy --dry-run` runs per worker and for the root worker in `ci.yml` (the former CI Enhanced); (4) the review of the post-review changes ran (no blockers, 8 should-fix); 7 are fixed and **deployed** (`ebb5c75`, 2026-10-25: shadow router: bodies to every target,
+    no baseline replay of writes, canary ref/url validation, 10 s timeout; runner: abandoned-build guard, bounded cleanup; recorder tail flush, ordering fixed) and
+    verified live for the POST-body path (`OPEN-QUESTIONS` "Review fixes deployed and verified"); SF-8 (namespace per request, plus 400 for new org names that are not valid namespaces) is **deployed** (`3bdddd9`/`f21024d`, `docs/SF-8-NAMESPACE-PLAN.md`); (5) DONE 2026-10-26: local `main` reset to `origin/main`; `0dd6edf` (another agent's recorder "fix": the timer never flushes anything) was dropped and its scratch branch deleted.
 - **M1 ledger lifecycle** is deployed with m8; the production purge is untested against real data. Use
   tombstone then purge (`docs/OPS.md` "Ledger cleanup"), never delete the worker.
 - **Cloudflare Flagship:** OPEN-QUESTIONS.md section restored (`c1039e5`, 2026-10-19) with adoption

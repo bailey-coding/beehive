@@ -7,6 +7,13 @@ main = "index.ts"
 compatibility_date = "2026-10-09"
 
 [vars]
+# Real Workers Versions client (workers/preview-manager/versions.ts): canary deploys build the candidate commit in the sandbox
+# runner and upload it as a Worker version of beehive-candidate-<uuid>. Enabled 2026-10-25 by the maintainer. TO TURN IT OFF:
+# delete this line and push; the canary route then answers 501 again (docs/OPS.md "Sandbox build container").
+WORKER_VERSIONS_MODE = "api"
+# Needed by the api client. The subdomain is the account's workers.dev subdomain (docs/OPS.md, scripts/prod-health.sh).
+CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
+WORKERS_SUBDOMAIN = "bz23711"
 
 # Cloudflare API Token for Workers Builds and Artifacts
 # Set via: wrangler secret put CLOUDFLARE_API_TOKEN
@@ -17,6 +24,11 @@ compatibility_date = "2026-10-09"
 name = "SPEC_DO"
 class_name = "SpecDO"
 script_name = "beehive"
+
+# Builds candidate bundles for the api Versions client (workers/preview-manager/bundle-source.ts)
+[[services]]
+binding = "SANDBOX_RUNNER"
+service = "beehive-sandbox-runner"
 
 # Analytics Engine for per-candidate metrics
 [[analytics_engine_datasets]]

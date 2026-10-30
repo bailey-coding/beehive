@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import { generateServiceToken, hashToken, tokenPrefix } from '../../shared/service-tokens';
 import type { PurgeResult, TombstoneResult } from '../../shared/ledger-lifecycle';
@@ -110,13 +111,13 @@ describe('m4 -> m5 migration', () => {
     const restarted = makeSqliteState(raw, fresh.kv);
     await makeSpecDo(restarted).init();
     // m5 -> m6 (service tokens) up to m10 -> m11 (canary metrics) run in the same pass
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(columns(restarted, 'organizations')).toEqual(expect.arrayContaining(['deleted_at', 'deleted_by', 'delete_reason']));
     expect(columns(restarted, 'actors')).toContain('role');
     expect(raw.prepare("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org' AND deleted_at IS NULL").get()).toEqual({ n: 1 });
 
     await makeSpecDo(makeSqliteState(raw, fresh.kv)).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
   });
 
   it('does not touch the entity_history CHECK', () => {
@@ -289,6 +290,17 @@ describe('purge', () => {
     expect((await purge({ orgNamePrefix: 'org-' }, 'unknown')).status).toBe(403);
   });
 
+  it('reports the candidate ids of the plan only when asked (withCandidateIds), so an older edge never sees the field', async () => {
+    const a = seedOrg('org-a');
+    await tombstone(`/api/organizations/${a.org.id}`);
+    ageTombstones();
+    const plain = await data<PurgeResult>(await purge({ orgNamePrefix: 'org-' }));
+    expect(plain.candidateIds).toBeUndefined();
+    const asked = await data<PurgeResult>(await purge({ orgNamePrefix: 'org-', withCandidateIds: true }));
+    expect(asked.candidateIds).toEqual(expect.any(Array));
+    expect(asked.candidateIds).toHaveLength(asked.counts.candidates);
+  });
+
   it('dry-runs by default, counting tombstoned rows and their dependents without deleting', async () => {
     const a = seedOrg('org-a');
     await tombstone(`/api/organizations/${a.org.id}`);
@@ -299,7 +311,7 @@ describe('purge', () => {
     expect(result).toMatchObject({ dryRun: true, orgIds: [a.org.id], skipped: [], batches: 0 });
     expect(result.counts).toEqual({
       issue_comments: 1, issue_candidate_links: 0, issue_spec_links: 0, gate_verdicts: 1, promotions: 1,
-      trials: 1, issues: 1, candidates: 2, repositories: 1, specs: 1, organizations: 1,
+      trials: 1, gate_runs: 0, issues: 1, candidates: 2, repositories: 1, specs: 1, organizations: 1,
     });
     expect(result.total).toBe(10);
     expect(count('SELECT COUNT(*) AS n FROM organizations')).toBe(1);

@@ -4,15 +4,65 @@
 name = "beehive-sandbox-runner"
 main = "index.ts"
 compatibility_date = "2026-10-09"
+compatibility_flags = ["nodejs_compat"]
 
 # Cloudflare Artifacts configuration
 # Set CLOUDFLARE_API_TOKEN as a secret: wrangler secret put CLOUDFLARE_API_TOKEN
 [vars]
+CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
+ARTIFACTS_NAMESPACE = "default"
 
 [[durable_objects.bindings]]
 name = "SPEC_DO"
 class_name = "SpecDO"
 script_name = "beehive"
+
+# Build sandbox (Sandbox SDK 1.0 model: the BuildSandbox Durable Object starts and drives its container through
+# ctx.container; docs/SANDBOX-BUILD-PLAN.md). The Dockerfile image is built by Workers Builds' `wrangler deploy`
+# (verified, docs/OPEN-QUESTIONS.md "U1 result"). The instance size is chosen in code (`lite`); no instance runs until
+# a request starts one, and every build destroys its container.
+[[containers]]
+class_name = "BuildSandbox"
+scheduling_policy = "durable_object"
+
+[containers.images.build]
+dockerfile = "./Dockerfile"
+
+[[durable_objects.bindings]]
+name = "SANDBOX"
+class_name = "BuildSandbox"
+
+# Gate test sandbox (docs/REAL-GATE-IMPL-PLAN.md section 2): its own container application and image (Dockerfile.test,
+# built by Workers Builds on the push). Under the durable_object policy wrangler rejects `instance_type` and
+# `max_instances` (the size, `standard-2`, is chosen in code) and a `docker.io` image, so only these keys are set.
+[[containers]]
+class_name = "TestSandbox"
+scheduling_policy = "durable_object"
+
+[containers.images.test]
+dockerfile = "./Dockerfile.test"
+
+[[durable_objects.bindings]]
+name = "TEST_SANDBOX"
+class_name = "TestSandbox"
+
+# Declarative class lifecycle (replaces the legacy migrations v1 that created the 0.x `Sandbox` class). A tombstone
+# `deleted` fails while the live worker still binds the namespace (error 10086, seen on the first attempt), so the old
+# class (no data) is renamed: the namespace and the SANDBOX binding carry over to BuildSandbox. The 0.x container
+# application was deleted by hand before this deploy.
+[exports.BuildSandbox]
+type = "durable-object"
+storage = "sqlite"
+
+# Additive: a new class with its own namespace; the live worker never binds it before this deploy.
+[exports.TestSandbox]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.Sandbox]
+type = "durable-object"
+state = "renamed"
+renamed_to = "BuildSandbox"
 
 # Analytics Engine for per-candidate metrics
 [[analytics_engine_datasets]]

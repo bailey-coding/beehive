@@ -1,12 +1,13 @@
 /**
  * SpecDO init and runMigrations: a failing step fails init() loudly (no half-migrated
- * schema served, next request retries), a populated m3 ledger reaches m11 with its rows,
- * a rerun is a no-op, a fresh ledger starts at m11, and m8 -> m9 (user_tokens) keeps rows.
+ * schema served, next request retries), a populated m3 ledger reaches the latest version with its rows,
+ * a rerun is a no-op, a fresh ledger starts at the latest version, and m8 -> m9 (user_tokens) keeps rows.
  *
  * Task: review-fixes | Spec: AGENTS.md#state-management
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
 
 const version = (s: SqliteState) =>
   (s.raw.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get() as { value: string }).value;
@@ -15,7 +16,7 @@ const count = (s: SqliteState, table: string) =>
 const tables = (s: SqliteState) =>
   (s.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name);
 
-/** Seed a populated ledger, then strip everything m4..m11 added, leaving an m3 shape */
+/** Seed a populated ledger, then strip everything m4..m13 added, leaving an m3 shape */
 async function populatedM3(): Promise<SqliteState> {
   const fresh = makeSqliteState();
   const spec = makeSpecDo(fresh);
@@ -33,9 +34,10 @@ async function populatedM3(): Promise<SqliteState> {
     .run(org.id, actor);
 
   const raw = fresh.raw;
-  for (const t of ['canary_metrics', 'user_tokens', 'canary_deployments', 'deploy_refs', 'service_tokens', 'promotion_states', 'tournaments', 'merge_trains', 'purge_log']) {
+  for (const t of ['gate_runs', 'canary_metrics', 'user_tokens', 'canary_deployments', 'deploy_refs', 'service_tokens', 'promotion_states', 'tournaments', 'merge_trains', 'purge_log']) {
     raw.exec(`DROP TABLE ${t}`);
   }
+  raw.exec('DROP INDEX idx_actors_github_user_id_unique');
   raw.exec('DROP INDEX idx_service_accounts_actor');
   raw.exec('DROP INDEX idx_service_accounts_name');
   raw.exec('PRAGMA foreign_keys = OFF');
@@ -53,10 +55,10 @@ async function populatedM3(): Promise<SqliteState> {
 afterEach(() => vi.restoreAllMocks());
 
 describe('fresh ledger', () => {
-  it('starts at m11 on the first init, not m3, with user_tokens', async () => {
+  it('starts at the latest version on the first init, not m3, with user_tokens', async () => {
     const s = makeSqliteState();
     await makeSpecDo(s).init();
-    expect(version(s)).toBe('m11');
+    expect(version(s)).toBe(LATEST_VERSION);
     expect(tables(s)).toContain('user_tokens');
   });
 });
@@ -78,7 +80,7 @@ describe('m8 -> m9 (user_tokens)', () => {
 
     const restarted = makeSqliteState(first.raw, first.kv);
     await makeSpecDo(restarted).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('user_tokens');
     const indexes = (first.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'user_tokens'").all() as { name: string }[])
       .map((r) => r.name)
@@ -92,7 +94,7 @@ describe('m8 -> m9 (user_tokens)', () => {
     const snapshot = () => JSON.stringify(first.raw.prepare('SELECT type, name, sql FROM sqlite_master ORDER BY type, name').all());
     const schemaBefore = snapshot();
     await makeSpecDo(makeSqliteState(first.raw, first.kv)).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(snapshot()).toBe(schemaBefore);
   });
 
@@ -131,7 +133,7 @@ describe('service_accounts of another design (seen on the live ledger, 2026-10-1
 
     restarted.raw.exec('DROP TABLE service_accounts');
     await spec.init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('service_tokens');
   });
 });
@@ -161,13 +163,13 @@ describe('failing migration step', () => {
     broken = false;
     await spec.init();
     expect(spec.db).not.toBeNull();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('deploy_refs');
   });
 });
 
-describe('m3 -> m11 on a populated ledger', () => {
-  it('keeps every row, ends at m11, and a rerun is a no-op', async () => {
+describe('m3 -> latest on a populated ledger', () => {
+  it('keeps every row, ends at the latest version, and a rerun is a no-op', async () => {
     const old = await populatedM3();
     const before = Object.fromEntries(
       ['organizations', 'actors', 'specs', 'candidates', 'service_accounts'].map((t) => [t, count(old, t)])
@@ -177,7 +179,7 @@ describe('m3 -> m11 on a populated ledger', () => {
 
     const restarted = makeSqliteState(old.raw, old.kv);
     await makeSpecDo(restarted).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(tables(restarted)).toContain('user_tokens');
     for (const [t, n] of Object.entries(before)) expect(count(restarted, t)).toBe(n);
     expect(old.raw.prepare("SELECT actor_id, token_hash FROM service_accounts WHERE id = 'legacy'").get()).toEqual({
@@ -191,7 +193,7 @@ describe('m3 -> m11 on a populated ledger', () => {
     const updatedAt = () => old.raw.prepare("SELECT updated_at FROM metadata WHERE key = 'schema_version'").get();
     const [schemaBefore, stampBefore] = [snapshot(), updatedAt()];
     await makeSpecDo(makeSqliteState(old.raw, old.kv)).init();
-    expect(version(restarted)).toBe('m11');
+    expect(version(restarted)).toBe(LATEST_VERSION);
     expect(snapshot()).toBe(schemaBefore);
     expect(updatedAt()).toEqual(stampBefore);
     for (const [t, n] of Object.entries(before)) expect(count(restarted, t)).toBe(n);
@@ -202,12 +204,12 @@ describe('m3 -> m11 on a populated ledger', () => {
 // Rollback floor (M12 T1, push A): this code over a ledger a newer deploy migrated
 // ============================================================================
 
-describe('a ledger newer than this code (m<N> above m11)', () => {
+describe('a ledger newer than this code (m<N> above the latest)', () => {
   const FUTURE_TABLE = `CREATE TABLE future_tokens (
     id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL,
     FOREIGN KEY (actor_id) REFERENCES actors(id))`;
 
-  /** An m11 ledger with one actor, then a hypothetical later migration: an extra table that references actors, a higher version. */
+  /** A latest-version ledger with one actor, then a hypothetical later migration: an extra table that references actors, a higher version. */
   async function newerLedger(v: string): Promise<{ s: SqliteState; actorId: string }> {
     const first = makeSqliteState();
     const spec = makeSpecDo(first);
@@ -228,7 +230,7 @@ describe('a ledger newer than this code (m<N> above m11)', () => {
       })
     );
 
-  it.each(['m12', 'm13', 'm99', 'm100', 'm999999'])(
+  it.each(['m14', 'm15', 'm99', 'm100', 'm999999'])(
     'init() at %s warns once, runs no step, and leaves the version and the extra table alone',
     async (v) => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -289,12 +291,12 @@ describe('a ledger newer than this code (m<N> above m11)', () => {
     expect(version(s)).toBe('m99');
   });
 
-  it('an m11 ledger is unchanged: no warning, no step, still m11', async () => {
+  it('a latest-version ledger is unchanged: no warning, no step', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const s = makeSqliteState();
     await makeSpecDo(s).init();
     await makeSpecDo(makeSqliteState(s.raw, s.kv)).init();
-    expect(version(s)).toBe('m11');
+    expect(version(s)).toBe(LATEST_VERSION);
     expect(warn).not.toHaveBeenCalled();
   });
 

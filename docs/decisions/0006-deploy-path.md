@@ -18,8 +18,8 @@ Production is ten Workers, each with its own wrangler config. `docs/OPS.md` ("De
 
 ## Decision
 
-- GitHub `main` is a source repo. `.github/workflows/ci.yml` (typecheck, unit tests) and
-  `ci-enhanced.yml` (clean installs, migration tests, local e2e) run there. Nothing deploys from
+- GitHub `main` is a source repo. `.github/workflows/ci.yml` (clean installs and dry-run builds, typecheck, unit and migration tests, local e2e) runs there
+  (merged from `ci.yml` + `ci-enhanced.yml` + `ci-skip.yml`, 2026-10-25). Nothing deploys from
   GitHub, and CI holds no Cloudflare secrets.
 - Production deploys from the Cloudflare Artifacts repo `default/beehive` (remote `cf`). The
   maintainer runs `git pull origin main && git push cf main` (stated 2026-10-16). Workers' native

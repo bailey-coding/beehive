@@ -4,7 +4,10 @@
  */
 
 import type { TrafficSplitConfig, ShadowConfig } from './types';
-import { DeployRefsClient, type LiveRef, type SpecDoFetcher } from '../shared/deploy-refs';
+import { DeployRefsClient, isAcceptableCanaryUrl, type LiveRef, type SpecDoFetcher } from '../shared/deploy-refs';
+
+// Mirrored traffic may only go to a Worker on workers.dev over https; the check lives in shared/deploy-refs.ts (the Spec DO applies it too)
+export { isAcceptableCanaryUrl };
 import type { LiveRefsCache } from './live-refs-cache';
 
 // ============================================================================
@@ -213,7 +216,8 @@ export function getPresetByName(name: string): TrafficSplitConfig {
 export async function applyCanaryRefs(
   config: ShadowConfig,
   specDo: SpecDoFetcher | null,
-  cache?: LiveRefsCache
+  cache?: LiveRefsCache,
+  workersSubdomain?: string
 ): Promise<ShadowConfig> {
   if (!specDo) return config;
   const load = async (): Promise<LiveRef[] | null> => {
@@ -235,6 +239,16 @@ export async function applyCanaryRefs(
   const splits = { ...config.statsig.splits };
   for (const { ref, deployment } of live) {
     if (!ref.candidateId || !deployment) continue;
+    // A live ref must never replace a statically configured target (the trusted baseline `beehive-main`), and its URL must be a
+    // Worker on workers.dev: the Spec DO accepts any id and url, so this is the last check before mirrored traffic is sent there.
+    if (config.candidatePreviews.has(ref.candidateId)) {
+      console.warn(`[Shadow] ignoring live canary ref ${ref.candidateId}: the id is a static target`);
+      continue;
+    }
+    if (!isAcceptableCanaryUrl(deployment.url, workersSubdomain)) {
+      console.warn(`[Shadow] ignoring live canary ref ${ref.candidateId}: url is not an https workers.dev host`);
+      continue;
+    }
     candidatePreviews.set(ref.candidateId, deployment.url);
     canaryDeployments.set(ref.candidateId, deployment.id);
     splits[ref.candidateId] = normalizeTrafficSplitConfig({

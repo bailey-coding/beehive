@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS candidates (
     'pending', 'passed_premerge', 'passed_shadow', 'passed_train',
     'passed_canary', 'promoted', 'failed', 'rolled_back'
   )),
+  preview_url TEXT,
+  preview_worker_name TEXT,
+  preview_created_at INTEGER,
   FOREIGN KEY (spec_id) REFERENCES specs(id),
   FOREIGN KEY (repository_id) REFERENCES repositories(id),
   FOREIGN KEY (agent_id) REFERENCES actors(id)
@@ -622,7 +625,7 @@ export const USER_TOKENS_SQL = `
 -- the cap of 10 live tokens per actor are enforced in code
 -- (SpecDO.mintUserToken), so either can change without a table rebuild. The
 -- table references actors only, and m9 adds no index on actors (a unique
--- actors.github_user_id index is M11's, now m12). Timestamps are epoch milliseconds.
+-- actors.github_user_id index is m12). Timestamps are epoch milliseconds.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS user_tokens (
@@ -697,4 +700,64 @@ CREATE TABLE IF NOT EXISTS canary_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_canary_metrics_minute ON canary_metrics(minute_bucket);
+`;
+
+// Unique GitHub identity per actor (m11 -> m12, additive). The migration step preflights duplicates before this runs.
+export const ACTORS_GITHUB_UNIQUE_SQL = `
+-- ============================================================================
+-- ACTORS: UNIQUE GITHUB IDENTITY (m11 -> m12, additive)
+-- One actor per GitHub identity. Partial: NULL and '' mean "no GitHub identity" (the code treats them
+-- alike, see SpecDO.mintUserToken / verifyUserTokenHash), so any number of such rows may coexist.
+-- The m12 migration step checks for duplicates BEFORE creating this index and refuses with a named
+-- error that lists them (it never deletes or merges); a fresh ledger has an empty table.
+-- ============================================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_actors_github_user_id_unique
+  ON actors(github_user_id)
+  WHERE github_user_id IS NOT NULL AND github_user_id != '';
+`;
+
+// Gate runs (m12 -> m13, additive). One row per run of a gate on a candidate's commit; gate_verdicts stays the
+// latest-summary table. See docs/REAL-GATE-IMPL-PLAN.md section 3. The m13 step also adds the candidates.preview_*
+// columns (already in the table above) to ledgers created fresh at m11 or m12, which never ran the m2 step.
+export const GATE_RUNS_SQL = `
+-- ============================================================================
+-- GATE RUNS (m12 -> m13, additive)
+-- attempt = MAX+1 per (candidate, gate, commit_sha). A running row older than 15 minutes is reported
+-- abandoned at read time and is never rewritten. checks / timings are JSON. log_tail is capped at 32 KiB
+-- by the route (no R2 in slice 1). candidate_id is a LOGICAL reference: a foreign key to candidates would make an m12-floor
+-- build's purge fail while rolled back (docs/OPS.md rollback floor), so only decided_by -> actors is enforced. The m13 purge
+-- removes a candidate's runs first and sweeps orphans left by a floor-build purge.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS gate_runs (
+  id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL,
+  gate TEXT NOT NULL CHECK(gate IN ('pre-merge', 'shadow', 'train', 'canary', 'full')),
+  commit_sha TEXT NOT NULL,
+  attempt INTEGER NOT NULL CHECK(attempt >= 1),
+  status TEXT NOT NULL CHECK(status IN ('running', 'pass', 'fail', 'error', 'not_run')),
+  failure_class TEXT,
+  exit_code INTEGER,
+  checks TEXT,
+  timings TEXT,
+  runner TEXT,
+  instance TEXT,
+  image_digest TEXT,
+  tests_passed INTEGER,
+  tests_failed INTEGER,
+  duration_ms INTEGER,
+  log_tail TEXT,
+  log_sha256 TEXT,
+  log_truncated INTEGER NOT NULL DEFAULT 0,
+  decided_by TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  FOREIGN KEY (decided_by) REFERENCES actors(id),
+  UNIQUE(candidate_id, gate, commit_sha, attempt)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gate_runs_candidate ON gate_runs(candidate_id, gate, commit_sha);
+CREATE INDEX IF NOT EXISTS idx_gate_runs_status ON gate_runs(status, started_at);
+CREATE INDEX IF NOT EXISTS idx_gate_runs_started ON gate_runs(started_at);
 `;

@@ -45,7 +45,13 @@ export interface CliState {
   verbose: boolean;
   outputFormat: OutputFormat;
   dryRun: boolean;
+  /** Config file this run reads and writes (--config / BEEHIVE_CONFIG / default). */
+  configPath: string;
+  /** Where the effective token came from. */
+  tokenSource: TokenSource;
 }
+
+export type TokenSource = 'flag' | 'env' | 'config' | 'none';
 
 // Global CLI options
 export interface GlobalOptions {
@@ -119,7 +125,7 @@ function createCli(): Command {
 /**
  * Parse global options and create CLI state
  */
-async function createCliState(opts: GlobalOptions): Promise<CliState> {
+async function createCliState(opts: GlobalOptions, tokenOptionSource?: string): Promise<CliState> {
   // Load configuration
   const config = loadConfig({
     configPath: opts.config,
@@ -144,6 +150,10 @@ async function createCliState(opts: GlobalOptions): Promise<CliState> {
     verbose: config.verbose || opts.verbose || false,
     outputFormat,
     dryRun: opts.dryRun || false,
+    configPath: opts.config || getConfigPath(),
+    tokenSource: opts.token
+      ? tokenOptionSource === 'env' ? 'env' : 'flag'
+      : config.apiToken ? 'config' : 'none',
   };
 }
 
@@ -159,7 +169,7 @@ function createActionHandler<T extends unknown[]>(
     try {
       const command = commanderArgs[commanderArgs.length - 1] as Command;
       const args = commanderArgs.slice(0, -1) as T;
-      const state = await createCliState(command.optsWithGlobals<GlobalOptions>());
+      const state = await createCliState(command.optsWithGlobals<GlobalOptions>(), command.getOptionValueSourceWithGlobals('token'));
 
       // Print verbose info if enabled
       if (state.verbose) {

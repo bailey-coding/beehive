@@ -1,11 +1,15 @@
 /**
  * LOCAL E2E ONLY probe worker (see wrangler.toml). Holds SPEC_DO_INTERNAL_TOKEN and never
  * SPEC_DO_ADMIN_TOKEN, like every non-API worker. POST /forward relays one request to the Spec DO:
- *   { method, path, body?, token?: 'tier1' (default) | 'none' | 'wrong' }
- * and answers { status, body } from the DO.
+ *   { method, path, body?, headers?, token?: 'tier1' (default) | 'none' | 'wrong' }
+ * and answers { status, headers, body } from the DO. `headers` is an allow-list object: only Idempotency-Key is relayed,
+ * any other name is a 400; `headers` in the answer carries Idempotent-Replay when the DO set it.
  */
 import { authGate, jsonError, type AuthEnv } from '../../../workers/shared/auth';
 import { INTERNAL_TOKEN_HEADER, getSpecDoStub, type SpecDoCallerEnv } from '../../../workers/shared/spec-do-auth';
+
+/** The only request headers /forward relays (lower case) */
+const RELAYED_HEADERS = new Set(['idempotency-key']);
 
 interface ProbeEnv extends AuthEnv, SpecDoCallerEnv {
   BEEHIVE_LOCAL_DEV?: string;
@@ -16,6 +20,7 @@ interface ForwardRequest {
   path?: string;
   body?: unknown;
   actorId?: string;
+  headers?: Record<string, string>;
   token?: 'tier1' | 'none' | 'wrong';
 }
 
@@ -31,9 +36,14 @@ export default {
 
     const req = (await request.json().catch(() => ({}))) as ForwardRequest;
     if (!req.path || !req.path.startsWith('/')) return jsonError('path required', 400);
+    const relayed: Record<string, string> = {};
+    for (const [name, value] of Object.entries(req.headers ?? {})) {
+      if (!RELAYED_HEADERS.has(name.toLowerCase()) || typeof value !== 'string') return jsonError(`header not allowed: ${name}`, 400);
+      relayed[name] = value;
+    }
     const init: RequestInit = {
       method: req.method ?? 'GET',
-      headers: { 'Content-Type': 'application/json', ...(req.actorId ? { 'X-Actor-ID': req.actorId } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(req.actorId ? { 'X-Actor-ID': req.actorId } : {}), ...relayed },
       body: req.body === undefined ? undefined : JSON.stringify(req.body),
     };
 
@@ -54,6 +64,6 @@ export default {
     } catch {
       // not JSON (e.g. /health answers OK)
     }
-    return Response.json({ status: response.status, body });
+    return Response.json({ status: response.status, headers: { 'idempotent-replay': response.headers.get('Idempotent-Replay') }, body });
   },
 };

@@ -51,7 +51,7 @@ complexity delta; trial UI showing candidate comparison.
 **M3 — Promotion train + Architectural Foundation (2–3 days).** PARTIAL: `promotion-worker`
 (tournament and merge-train modes), `canary-worker` (rollback), and Statsig config in
 `shadow-router` (local traffic-split config, no Statsig SDK) exist. Facets, capability minting,
-and ArtifactFS below are not implemented; canary auto-rollback runs from a minute cron over Spec DO metrics
+and ArtifactFS below are not implemented; canary auto-rollback runs from a Spec DO alarm tick (queue `canary-slo-ticks`) over Spec DO metrics
 (`docs/M3-CANARY-SLO-PLAN.md`, schema m11) but its input is mirrored shadow traffic, not real canary traffic;
 `canary-rollback-triggers` and `promotion-events` have no producers, and speculative projection forks have no code.
 Statsig slicing, speculative projection forks, tournament vs merge-train modes, canary with
@@ -242,7 +242,7 @@ Spine work: an agent plans it (independent agent review before code); start from
   branch and write allow-list, the maintainer cap, admin routes, `/app/settings/tokens`, master stage-1 logging) is on
   `agent/m12-pr-b`, **T2 merged** (`e786f60`, `50728bc`, 2026-10-19: user token helpers generalized to `bh_usr_` prefix
   in `service-tokens.ts`, `user` kind and `userTokenId` added to `Principal`). Remaining PR-B tasks (T3-T6d) still
-  on branch. Left: PR-C (CLI, T7), PR-D1/PR-D2 (`SESSION_SIGNING_KEY`, T8/T9). Master stage 2 is a separate
+  on branch. PR-C (CLI, T7) is implemented on `agent/m12-prc-impl` (awaiting review/merge; `docs/M12-PRC-PLAN.md`). Left: PR-D1/PR-D2 (`SESSION_SIGNING_KEY`, T8/T9). Master stage 2 is a separate
   later decision. **Schema note:** M12 PR-B uses schema m9 for `user_tokens` table; M5a idempotency moved
   idempotency keys from m9 to m10, so M12 references updated accordingly (`3365259`, 2026-10-19).
 - **Exit criteria (from the plan):** (1) a write with a user token is attributed to the token's actor whatever
@@ -250,7 +250,7 @@ Spine work: an agent plans it (independent agent review before code); start from
   revocable from the next request, minted only for human actors with a GitHub id; (3) every failure is fail-closed (401
   for a bad token, 503 when the DO cannot answer, including an older DO); (4) no user-token scope writes oracle outcomes
   (verdicts, trials, promotions, candidate stage, execute) or reaches lifecycle and admin routes; (5) the CLI acts as its
-  user without the master token (PR-C); (6) the master token can no longer forge a UI session (PR-D2).
+  user without the master token (PR-C, implemented on `agent/m12-prc-impl`); (6) the master token can no longer forge a UI session (PR-D2).
 - **Documentation:** `docs/OPS.md` updated with "User tokens" section (mint, rotate, revoke, freshness scope, push B
   checks, stage-1 Workers Logs + AE query) and `docs/FOCUS.md` M12 follow-ups (`c623045`, 2026-10-19). Review docs
   added: `docs/M12-PRB-REVIEW.md` with nits N1-N5 and fixes S1-S2 (`f1595c`, `a7308a2`, 2026-10-19).

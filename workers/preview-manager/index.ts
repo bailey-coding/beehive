@@ -11,9 +11,11 @@
  */
 
 import { authGate } from '../shared/auth';
+import { isValidNamespace } from '../shared/namespace';
 import { WorkersBuildsClient } from './builds';
 import { ArtifactsClient } from './artifacts';
-import { workerVersionsClientFor } from './versions';
+import { sandboxBundleSource, SandboxBuildError } from './bundle-source';
+import { CANDIDATE_WORKER_PREFIX, workerNameError, workerVersionsClientFor } from './versions';
 import { CanaryVersionRequestSchema } from './types';
 import type {
   PreviewManagerEnv,
@@ -25,13 +27,15 @@ import type {
   DeployPreviewRequestBody,
 } from './types';
 import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
+import { DeployRefsClient } from '../shared/deploy-refs';
 
 // ============================================================================
 // Constants
 // ============================================================================
 
 const DEFAULT_SPEC_DO_NAME = 'main';
-const PREVIEW_WORKER_PREFIX = 'beehive-candidate-';
+const PREVIEW_WORKER_PREFIX = CANDIDATE_WORKER_PREFIX;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function previewUrlFor(env: { WORKERS_SUBDOMAIN?: string }, workerName: string): string {
   return env.WORKERS_SUBDOMAIN
@@ -73,6 +77,13 @@ const previewManagerHandler = {
     // here: it is a Spec DO deploy-ref move.
     if (path === '/api/preview/canary' && request.method === 'POST') {
       return await handleCanaryVersionRequest(request, env);
+    }
+
+    // Delete a candidate's Worker (cleanup after purge). api mode only.
+    const canaryDelete = path.match(/^\/api\/preview\/canary\/([^/]+)$/);
+    if (canaryDelete && request.method === 'DELETE') {
+      // No decoding: a candidate id is a UUID, which needs none (an encoded id simply fails the UUID rule).
+      return await handleCanaryDeleteRequest(canaryDelete[1], env);
     }
 
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -274,13 +285,8 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
   if (!parsed.success) return json({ success: false, error: parsed.error.message }, 400);
   const { candidateId, specId } = parsed.data;
 
-  const versions = workerVersionsClientFor(env);
-  if (!versions) {
-    return json({
-      success: false,
-      error: 'Workers Versions client not implemented (unverified API, docs/OPEN-QUESTIONS.md); the local stub needs WORKER_VERSIONS_MODE=stub and BEEHIVE_LOCAL_DEV=1 (scripts/start-e2e-workers.sh)',
-    }, 501);
-  }
+  const versions = workerVersionsClientFor(env, bundleSourceFor(env));
+  if (!versions) return versionsClientUnavailable(json);
 
   try {
     const stub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
@@ -300,8 +306,27 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
     }
 
     const workerName = `${PREVIEW_WORKER_PREFIX}${candidateId}`;
+    let repoName: string | undefined;
+    let repoNamespace: string | undefined;
+    if (versions.kind === 'api') {
+      // The real client creates and uploads a Worker named after the candidate: only a UUID may do that (the name must
+      // never collide with a platform worker such as beehive-candidate-service), and only a ledger candidate has a repo.
+      if (!UUID_RE.test(candidateId)) return json({ success: false, error: 'candidateId must be a UUID for the api Versions client' }, 400);
+      const nameError = workerNameError(workerName);
+      if (nameError) return json({ success: false, error: `Candidate id cannot be a Worker name: ${nameError}` }, 400);
+      if (!candidate) return json({ success: false, error: `Candidate ${candidateId} is not in the ledger, so there is nothing to build` }, 422);
+      const repo = await lookupRepository(stub, candidate.repositoryId);
+      if (!repo.ok) return json({ success: false, error: repo.error }, repo.status);
+      // The runner takes the namespace per request. A name it would refuse (org names are not validated before docs/SF-8-NAMESPACE-PLAN.md)
+      // is the organization's problem, not the candidate's.
+      if (!isValidNamespace(repo.namespace)) {
+        return json({ success: false, code: 'BAD_NAMESPACE', error: `The organization name '${repo.namespace}' is not a valid Artifacts namespace name (letters, digits, '_' and '-', at most 64, starting with a letter or digit), so its repositories cannot be built` }, 422);
+      }
+      repoNamespace = repo.namespace;
+      repoName = repo.name;
+    }
     const commitSha = candidate?.commitSha ?? parsed.data.commitSha ?? null;
-    const version = await versions.createVersion({ workerName, candidateId, commitSha });
+    const version = await versions.createVersion({ workerName, candidateId, commitSha, repoName, repoNamespace });
     return json({
       success: true,
       candidateId,
@@ -312,6 +337,72 @@ async function handleCanaryVersionRequest(request: Request, env: PreviewManagerE
       versionId: version.versionId,
       versionsClient: versions.kind,
     });
+  } catch (error) {
+    if (error instanceof SandboxBuildError) {
+      // 4xx from the build service is the candidate's problem and passes through; anything else is a bad gateway.
+      const status = error.status >= 400 && error.status < 500 ? error.status : error.status === 503 || error.status === 504 ? error.status : 502;
+      return json({ success: false, code: error.code, error: error.message }, status);
+    }
+    return json({ success: false, error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+/** The sandbox-backed bundle source, only when the service binding exists (api mode also needs the mode flag). */
+function bundleSourceFor(env: PreviewManagerEnv) {
+  return env.SANDBOX_RUNNER ? sandboxBundleSource(env.SANDBOX_RUNNER, env.API_AUTH_TOKEN) : undefined;
+}
+
+function versionsClientUnavailable(json: (data: unknown, status?: number) => Response): Response {
+  return json({
+    success: false,
+    error: 'Workers Versions client not enabled (the api client is not wired in production, docs/OPEN-QUESTIONS.md); the local stub needs WORKER_VERSIONS_MODE=stub and BEEHIVE_LOCAL_DEV=1 (scripts/start-e2e-workers.sh)',
+  }, 501);
+}
+
+/** Resolve the Artifacts repository (name and namespace) of a candidate from the ledger. */
+async function lookupRepository(
+  stub: SpecDoStub,
+  repositoryId: string | undefined
+): Promise<{ ok: true; name: string; namespace: string } | { ok: false; status: number; error: string }> {
+  if (!repositoryId) return { ok: false, status: 422, error: 'The candidate has no repository' };
+  const res = await stub.fetch(
+    new Request(`https://spec-do.internal/api/repositories/${encodeURIComponent(repositoryId)}`, { headers: { 'X-Actor-ID': 'preview-manager' } })
+  );
+  if (res.status === 404) return { ok: false, status: 422, error: 'The candidate repository is not in the ledger' };
+  if (!res.ok) return { ok: false, status: 502, error: `Spec DO repository lookup failed: ${res.status}` };
+  const data = ((await res.json().catch(() => ({}))) as { data?: { name?: unknown; namespace?: unknown } }).data;
+  if (typeof data?.name !== 'string' || !data.name) return { ok: false, status: 422, error: 'The candidate repository has no name' };
+  if (typeof data.namespace !== 'string' || !data.namespace) return { ok: false, status: 422, error: 'The candidate repository has no namespace' };
+  return { ok: true, name: data.name, namespace: data.namespace };
+}
+
+/**
+ * Delete the Worker of a candidate (cleanup after a purge). Only the api client can: the stub has nothing to delete, and
+ * with no client the route answers 501. The candidate id must be a UUID so the name can never be a platform worker.
+ */
+async function handleCanaryDeleteRequest(candidateId: string, env: PreviewManagerEnv): Promise<Response> {
+  const json = (data: unknown, status = 200) =>
+    new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+  const versions = workerVersionsClientFor(env, bundleSourceFor(env));
+  if (!versions) return versionsClientUnavailable(json);
+  const workerName = `${PREVIEW_WORKER_PREFIX}${candidateId}`;
+  if (versions.kind === 'api') {
+    if (!UUID_RE.test(candidateId)) return json({ success: false, error: 'candidateId must be a UUID' }, 400);
+    const nameError = workerNameError(workerName);
+    if (nameError) return json({ success: false, error: nameError }, 400);
+  }
+  try {
+    if (versions.kind === 'api') {
+      // Deleting the Worker of a live canary would leave the SLO loop and the shadow router pointing at a dead URL.
+      const stub = getSpecDoStub(env, DEFAULT_SPEC_DO_NAME);
+      const deployments = await new DeployRefsClient({ fetch: (p, init) => stub.fetch(`https://spec-do.internal${p}`, init) }).listCanaryDeployments(candidateId);
+      if (!deployments.ok) return json({ success: false, error: `Could not check the candidate's canary deployments: ${deployments.error}` }, 502);
+      if (deployments.data.some((d) => d.status === 'deployed')) {
+        return json({ success: false, error: 'The candidate has a live canary deployment; roll it back first' }, 409);
+      }
+    }
+    const deleted = await versions.deleteWorker(workerName);
+    return json({ success: true, candidateId, workerName, deleted, versionsClient: versions.kind });
   } catch (error) {
     return json({ success: false, error: error instanceof Error ? error.message : String(error) }, 500);
   }

@@ -24,6 +24,7 @@ import {
   type LifecycleResult,
 } from '../shared/ledger-lifecycle';
 import type { SpecDoStub } from '../shared/spec-do-auth';
+import type { CandidateWorkerCleanup, WorkerCleanupReport } from './purge-cleanup';
 
 const ROLE_ROUTE = /^\/api\/admin\/actors\/([^\/]+)\/role$/;
 const TombstoneBodySchema = TombstoneRequestSchema.pick({ reason: true });
@@ -61,7 +62,8 @@ export async function handleLifecycleRoutes(
   request: Request,
   url: URL,
   principal: Principal,
-  stub: SpecDoStub
+  stub: SpecDoStub,
+  workerCleanup: CandidateWorkerCleanup
 ): Promise<Response | null> {
   const path = url.pathname;
   const method = request.method;
@@ -110,7 +112,52 @@ export async function handleLifecycleRoutes(
     if (body.data.orgIds?.includes(RESERVED_ORGANIZATION_ID)) {
       return err(`organization ${RESERVED_ORGANIZATION_ID} is reserved and cannot be purged`, 403);
     }
-    return relay(await client.purge(body.data, actorId));
+    if (body.data.dryRun) return relay(await client.purge(body.data, actorId));
+
+    // A real purge first deletes the Workers of the candidates it is about to hard-delete (the ledger cannot name them afterwards).
+    // The plan comes from a dry run of the same selector: it also gives every refusal (not a maintainer, active promotion, ...) before
+    // any Worker is touched. Failure of a Worker delete aborts the purge; nothing has been purged and the call can be repeated.
+    let cleanup: WorkerCleanupReport = { status: 'done', deleted: [], absent: [] };
+    const cleaned = new Set<string>();
+    let reportsIds = false;
+    if (workerCleanup) {
+      const { confirm: _confirm, ...selector } = body.data;
+      let plan = await client.purge({ ...selector, dryRun: true, withCandidateIds: true }, actorId);
+      if (!plan.ok && plan.status === 400) {
+        // An older Spec DO does not know withCandidateIds, so the edge cannot name the candidate Workers. Only reachable in the
+        // mixed-version deploy window (one push deploys all ten workers). Purging anyway could orphan them, so refuse and let the
+        // caller repeat after the deploy settles. A 400 that the retry reproduces is a real validation error: relayed below.
+        plan = await client.purge({ ...selector, dryRun: true }, actorId);
+        if (plan.ok) {
+          return err('the Spec DO does not report candidate ids yet (deploy in progress?); nothing was purged, repeat after the deploy settles', 503);
+        }
+      }
+      if (!plan.ok) return relay(plan);
+      // The confirm gate must hold before any Worker is touched (the DO only checks it in the real purge, after the deletes)
+      if (body.data.confirm !== plan.data.total) {
+        return err(`confirm ${body.data.confirm} does not match the current dry-run total ${plan.data.total}; rerun the dry run`, 409);
+      }
+      if (plan.data.candidateIds) {
+        reportsIds = true;
+        const outcome = await workerCleanup.deleteWorkers(plan.data.candidateIds);
+        if (!outcome.ok) return err(outcome.error, outcome.status);
+        cleanup = outcome.report;
+        if (outcome.report.status === 'done') [...outcome.report.deleted, ...outcome.report.absent].forEach((id) => cleaned.add(id));
+      }
+    }
+    const purged = await client.purge({ ...body.data, ...(reportsIds ? { withCandidateIds: true } : {}) }, actorId);
+    if (!purged.ok) return relay(purged);
+    // Candidates that appeared between the dry run and the purge (a tombstone in that window): delete their Workers now, best effort
+    let late: string[] = [];
+    if (workerCleanup && reportsIds && cleanup.status === 'done') {
+      const missed = (purged.data.candidateIds ?? []).filter((id) => !cleaned.has(id));
+      if (missed.length) {
+        const outcome = await workerCleanup.deleteWorkers(missed);
+        late = outcome.ok ? [] : missed;
+      }
+    }
+    const { candidateIds: _ids, ...result } = purged.data;
+    return json({ ...result, workerCleanup: cleanup, ...(late.length ? { workersNotDeleted: late } : {}) }, purged.status);
   }
   const body = SetActorRoleRequestSchema.safeParse(read.body);
   if (!body.success) return err(body.error.message, 400);

@@ -5,78 +5,30 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { createServer, type Server } from 'node:http';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { startCliHarness, type CliHarness, type CliResult } from './helpers/cli-harness';
 
-interface Recorded {
-  method: string;
-  url: string;
-  headers: Record<string, string | string[] | undefined>;
-  body: unknown;
-}
-
-const ROOT = join(__dirname, '..');
-const TSX = join(ROOT, 'cli/node_modules/.bin/tsx');
-const ENTRY = join(ROOT, 'cli/src/index.ts');
-
-let server: Server;
-let port: number;
+let h: CliHarness;
 let home: string;
-let recorded: Recorded[] = [];
+// Same array for the harness's lifetime (reset() empties it in place).
+let recorded: CliHarness['recorded'];
 
 beforeAll(async () => {
-  server = createServer((req, res) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf-8');
-      recorded.push({
-        method: req.method ?? '',
-        url: req.url ?? '',
-        headers: req.headers,
-        body: raw ? JSON.parse(raw) : undefined,
-      });
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ success: true, data: {} }));
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  port = (server.address() as { port: number }).port;
-  home = mkdtempSync(join(tmpdir(), 'beehive-cli-test-'));
+  h = await startCliHarness();
+  home = h.home;
+  recorded = h.recorded;
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  rmSync(home, { recursive: true, force: true });
+  await h.close();
 });
 
 beforeEach(() => {
-  recorded = [];
+  h.reset();
 });
 
-function runCli(args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(TSX, [ENTRY, ...args], {
-      cwd: ROOT,
-      env: {
-        PATH: process.env.PATH,
-        HOME: home,
-        XDG_CONFIG_HOME: join(home, '.config'),
-        BEEHIVE_API_URL: `http://127.0.0.1:${port}`,
-        BEEHIVE_API_TOKEN: 'test',
-        ...extraEnv,
-      },
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d));
-    child.stderr.on('data', (d) => (stderr += d));
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
-  });
-}
+const runCli = (args: string[], extraEnv: Record<string, string> = {}): Promise<CliResult> => h.runCli(args, extraEnv);
 
 async function expectRequest(args: string[], method: string, path: string, body?: unknown) {
   const { code, stderr } = await runCli(args);
@@ -125,7 +77,7 @@ describe('X-Actor-ID attribution', () => {
 
   it('blank or whitespace BEEHIVE_ACTOR sends no header', async () => {
     expect(await actorHeader(issueArgs, { BEEHIVE_ACTOR: '' })).toBeUndefined();
-    recorded = [];
+    h.reset();
     expect(await actorHeader(issueArgs, { BEEHIVE_ACTOR: '   ' })).toBeUndefined();
   });
 
@@ -148,7 +100,7 @@ describe('X-Actor-ID attribution', () => {
     const f = join(home, 'null-config.json');
     writeFileSync(f, JSON.stringify({ defaultActor: null }));
     expect(await actorHeader(['--config', f, ...issueArgs])).toBeUndefined();
-    recorded = [];
+    h.reset();
     writeFileSync(f, JSON.stringify({ defaultActor: '  ' }));
     expect(await actorHeader(['--config', f, ...issueArgs])).toBeUndefined();
   });
@@ -161,7 +113,7 @@ describe('X-Actor-ID attribution', () => {
     ['actor grant-promotion', ['actor', 'grant-promotion', 'a1']],
   ])('%s: --actor beats env and config', async (_n, args) => {
     expect(await actorHeader([...cfgFile(), ...args, '--actor', 'from-flag'], { BEEHIVE_ACTOR: 'from-env' })).toBe('from-flag');
-    recorded = [];
+    h.reset();
     expect(await actorHeader([...cfgFile(), ...args], { BEEHIVE_ACTOR: 'from-env' })).toBe('from-env');
   });
 

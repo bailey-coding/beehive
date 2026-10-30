@@ -366,17 +366,26 @@ async function findSessionActor(stub: SpecDoStub, actorId: string): Promise<Sess
 }
 
 async function ensureActor(stub: SpecDoStub, login: string, githubId: string): Promise<string | null> {
-  // The filter finds the row past the 500-row page; the .find stays for a Spec DO that ignores it.
+  const lookup = async (): Promise<{ ok: boolean; id: string | null }> => {
+    // The filter finds the row past the 500-row page; the .find stays for a Spec DO that ignores it.
+    const list = await callDo(stub, `/api/actors?github_user_id=${encodeURIComponent(githubId)}&limit=500&offset=0`, 'GET');
+    if (!list.success || !Array.isArray(list.data)) return { ok: false, id: null };
+    const existing = (list.data as Row[]).find((a) => a.github_user_id === githubId || a.githubUserId === githubId);
+    return { ok: true, id: existing && typeof existing.id === 'string' ? existing.id : null };
+  };
+
   // A failed lookup must never fall through to creating an actor (it would add a duplicate row).
-  const list = await callDo(stub, `/api/actors?github_user_id=${encodeURIComponent(githubId)}&limit=500&offset=0`, 'GET');
-  if (!list.success || !Array.isArray(list.data)) return null;
-  const rows = list.data as Row[];
-  const existing = rows.find((a) => a.github_user_id === githubId || a.githubUserId === githubId);
-  if (existing && typeof existing.id === 'string') return existing.id;
+  const found = await lookup();
+  if (!found.ok) return null;
+  if (found.id) return found.id;
 
   const created = await callDo(stub, '/api/actors', 'POST', { type: 'human', name: login, githubUserId: githubId });
   const actor = created.data as Row | undefined;
-  return actor && typeof actor.id === 'string' ? actor.id : null;
+  if (actor && typeof actor.id === 'string') return actor.id;
+  // Since m12 the Spec DO answers 409 when the identity exists. A concurrent first login created it between
+  // our lookup and our POST, so find-or-create resolves to that row. Any other failure still fails the login.
+  const again = await lookup();
+  return again.id;
 }
 
 // ============================================================================
@@ -587,8 +596,9 @@ async function handleRepoIssues(
   const isPostKind = POST_KINDS.has(route.kind);
   const method = request.method;
 
-  // One origin check, before any DO read, for every state-changing issue route.
-  if (method === 'POST' && isPostKind && !sameOrigin(request)) return FORBIDDEN_ORIGIN(chrome);
+  // One origin check, before any DO read, for every non-GET/HEAD request on an issue route, so a
+  // cross-origin POST to a read-only route is 403 rather than a 405 that read the ledger first.
+  if (method !== 'GET' && method !== 'HEAD' && !sameOrigin(request)) return FORBIDDEN_ORIGIN(chrome);
 
   let ref: RepoRef | null;
   try {

@@ -8,7 +8,7 @@ audience: human,agent
 
 ## Deploy flow (decided 2026-10-15)
 
-- GitHub `main` is a **source repo**. `.github/workflows/ci.yml` runs typecheck and unit tests on
+- GitHub `main` is a **source repo**. `.github/workflows/ci.yml` runs clean installs and dry-run builds, typecheck and tests on
   pull requests and on pushes to any branch. Nothing deploys from GitHub and CI holds no
   Cloudflare secrets.
 - Production deploys happen from the **Cloudflare Artifacts repo**: once a change is on GitHub,
@@ -48,19 +48,41 @@ retries), so a bad deploy is loud rather than half-migrated.
    Also list what is there, `SELECT type, name FROM sqlite_master ORDER BY type, name`, and
    compare it with `workers/spec-do/schema.sql`: the live ledger once carried a `service_accounts`
    table of another design (`docs/OPEN-QUESTIONS.md` 2026-10-16) that stopped the m6 step.
+   **1a. m12 duplicate check (required, run immediately before the push).** m12 adds a partial UNIQUE index on
+   `actors.github_user_id` (rows where it is neither NULL nor `''`). If two actors share a `github_user_id`, the m12 step
+   **refuses** with `DuplicateGithubIdentityError` (it names the duplicated values and actor ids; it never skips,
+   deletes or merges), `init()` rethrows, the ledger stays at `m11`, and **every request to the Spec DO fails until a
+   human resolves the duplicate: a full outage, not a warning.** So the result of this check must be empty right before
+   you push, not an hour earlier: a login can create an actor in the gap (the 2026-10-17 result predates UI logins).
+   Read-only, through the maintainer's usual access to the ledger (the exact query used 2026-10-26, which found 0
+   duplicates among 3 actors):
+
+   ```sql
+   SELECT github_user_id, COUNT(*) AS n, GROUP_CONCAT(id) AS actor_ids FROM actors WHERE github_user_id IS NOT NULL AND github_user_id != '' GROUP BY github_user_id HAVING n > 1;
+   ```
+
+   The API way (what 2026-10-26 used): page `GET /api/actors?limit=500&offset=<n>` with the master token until a page
+   comes back short, and group the rows by `github_user_id` client-side, ignoring NULL and `''`.
+   `scripts/check-actor-duplicates.sh` does exactly that (read-only, prints only duplicate groups, exits 1 if there are any).
+   Empty result: push. Any row: do not push; decide per group which actor keeps the identity, and clear
+   `github_user_id` on the others (maintainer decision, by hand; check `user_tokens`, `service_accounts.actor_id`, `role`
+   and `promotion_authority` on each first). If the push already happened and the DO answers 5xx with
+   `DuplicateGithubIdentityError` in the `beehive` logs, resolve the named actors the same way; the next request retries
+   the migration and succeeds (nothing was half-applied). Or push the previous commit to `cf` (the ledger is still at `m11`, which the
+   rollback floor tolerates, see below).
 2. Confirm these queues exist, because nothing creates them any more (the old GitHub
    workflow did): `canary-rollback-triggers`, `promotion-events`,
    `preview-scientist-comparisons`, `beehive-scientist-comparisons`. Create any missing one
    by hand (`wrangler queues create <name>`).
-3. Confirm `API_AUTH_TOKEN` is identical on every worker. Keep `WORKER_VERSIONS_MODE` (and
-   `BEEHIVE_LOCAL_DEV`) unset in production.
+3. Confirm `API_AUTH_TOKEN` is identical on every worker. `workers/preview-manager/wrangler.toml` sets
+   `WORKER_VERSIONS_MODE = "api"` (enabled 2026-10-25); keep `BEEHIVE_LOCAL_DEV` and any `stub` mode unset in production.
 4. Push: `git pull origin main && git push cf main` deploys all ten workers at once. The Spec DO
    migrates on its first init after `beehive` deploys, not at deploy time, so make one authenticated
    request that reaches the DO: `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh` (its last check is
    `GET /api/organizations?limit=1`). The edge `/health` also calls the DO and answers 503 `unhealthy` while
    the ledger cannot initialise, but only from the deploy that includes that change; the 2026-10-16 m3 -> m8
    deploy still had a static `/health` that passed with the ledger stuck, so keep the script's DO request. Then check the
-   `beehive` logs for `Migration to m[4-8] failed`; any hit, or a 500 from the script, means the ledger
+   `beehive` logs for `Migration to m[0-9]+ failed` (m12: also `DuplicateGithubIdentityError`, step 1a); any hit, or a 500 from the script, means the ledger
    stopped at the previous version and requests are failing until it is fixed.
    `service_accounts has an unexpected shape`: that table is not this design's; if it is empty,
    `DROP TABLE service_accounts` (the next request recreates it), otherwise migrate its rows first.
@@ -90,9 +112,18 @@ retries), so a bad deploy is loud rather than half-migrated.
      `ORG_PURGE_ORDER` (`workers/spec-do/index.ts`). A table with a foreign key to `organizations`, `repositories`,
      `specs`, `candidates` or `issues` makes the floor's `/internal/purge` stop with a 409 `FOREIGN KEY constraint failed`
      while rolled back. The batch rolls back and nothing is corrupted, but purge is unusable until the newer build returns.
+     First example of the rule followed (m13, 2026-10-28): `gate_runs.candidate_id` is a **logical** reference with no foreign key
+     (only `decided_by` references `actors`). The floor's purge does not know the table, so it deletes the candidates and leaves
+     their runs as orphans; the next purge by an m13+ build sweeps every `gate_runs` row whose candidate no longer exists (only when
+     that purge selects at least one organization), so the orphans do not stay forever. The routes still refuse an unknown or
+     tombstoned candidate; only the database constraint is absent.
    - New columns on old tables are nullable or have a default, so the floor's inserts still succeed.
-   - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. A future unique index on
-     `actors.github_user_id` (M12's `m10`, now `m12` or later: `m10` is idempotency keys and `m11` is canary metrics) would turn a duplicate insert by the floor into a failed login (fail closed, acceptable).
+   - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. The one exception is the
+     m12 partial unique index on `actors.github_user_id` (decided 2026-10-27): the floor's `createActor` has no duplicate
+     check, so a duplicate insert by the floor hits the index and answers 500 (a raw `UNIQUE constraint failed`, not the
+     409 of the current code). The only caller that does that is the UI login (`ensureActor`, lookup then create), and
+     it fails closed: the login page says it could not create the actor record, no session is issued, nothing is
+     corrupted. A rolled-back floor therefore cannot create a second actor for one GitHub identity; accepted.
 6. After deploy: `./scripts/prod-health.sh` passes (`GET /health` answers 200 on each worker with the
    bearer token, and the Spec DO check answers 200);
    `GET /api/service-accounts` answers 410; mint a service token
@@ -102,12 +133,12 @@ retries), so a bad deploy is loud rather than half-migrated.
 7. Read-only verification (changes nothing; an agent may run these with a read-only API token, and
    narrow the output, e.g. `| head -30` or `--json`, since results stay in its context):
    - `wrangler secret list --name <worker>`: the nine tier-1 workers hold `SPEC_DO_INTERNAL_TOKEN`,
-     `beehive` also `SPEC_DO_ADMIN_TOKEN`, `beehive-sandbox-runner` neither (names only, no values).
+     `beehive` also `SPEC_DO_ADMIN_TOKEN`, `beehive-sandbox-runner` neither but holds `CLOUDFLARE_API_TOKEN` (Artifacts read-token minting for builds; names only, no values).
    - `wrangler deployments list --name <worker>` (or `wrangler versions list`): each worker runs the
      commit you meant to deploy; `beehive-promotion-worker` must be the one deployed after `beehive`.
    - `wrangler queues list`: the four queues of step 2 exist.
    - `wrangler tail <worker> --format json` right after the first `beehive` request, to read
-     `Migration to m[4-8] failed` or `service_accounts has an unexpected shape` directly.
+     `Migration to m[0-9]+ failed` (m12: also `DuplicateGithubIdentityError`, step 1a) or `service_accounts has an unexpected shape` directly.
    Never `wrangler deploy` and never write to the Artifacts repo (AGENTS.md).
 
 Moved out of `AGENTS.md` (2026-10-15). The config rules and the fail-closed auth rule stay
@@ -202,6 +233,10 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    The first maintainer grants the role to itself (allowed only while none exists); after
    that, only a maintainer can grant or revoke:
    `POST /api/admin/actors/<actorId>/role {"role":"maintainer"}` (or `{"role":null}`).
+   **Actor ids are UUIDs.** `X-Actor-ID` takes the id, not the name: `bailey-coding` is a name, so using it as the header answers 403. Read ids from
+   `GET /api/actors`. A dedicated `beehive-system` actor (type `agent`, role `maintainer`, created 2026-10-26 by the maintainer) exists for ledger operations such
+   as purges, so they need not run under a person's identity; it works only on the master-token path, since user tokens are for human actors with a GitHub identity.
+   Actors cannot be tombstoned or purged.
 2. **Tombstone** (soft delete, any actor, reversible only by hand in SQL):
    `DELETE /api/{organizations|repositories|specs|candidates}/<id>` with optional
    `{"reason":"..."}`. Cascades down in one transaction (org -> repos, specs, their
@@ -217,17 +252,52 @@ Contract: `workers/shared/ledger-lifecycle.ts`; audit trail: `purge_log` table (
    their dependent rows (comments, links, verdicts, trials, promotions), in batches of at most
    500 rows, one transaction each. Refused (409) if a target candidate has an active
    promotion. `entity_history` and `purge_log` survive.
+   **Candidate Workers:** a real run (not the dry run) first plans with a dry run, then deletes the Worker `beehive-candidate-<uuid>` of every
+   candidate in the plan through the `PREVIEW_MANAGER` service binding (`DELETE /api/preview/canary/:id`, `workers/api/purge-cleanup.ts`), and
+   only then purges. A failed delete (a live canary: 409, or any error: 502) aborts the call with nothing purged; repeat it after fixing the cause
+   (roll the canary back first). More than 40 candidate Workers in one purge is refused (409): narrow the selector. The response carries
+   `workerCleanup` (`done` with `deleted`/`absent`) and `workersNotDeleted` for candidates tombstoned between the plan and the purge whose Worker
+   could not be deleted. Deploy note: the `PREVIEW_MANAGER` binding needs `beehive-preview-manager` to exist (it does in production); a preview
+   manager older than the DELETE route answers 404, which aborts a real purge with 502 until it is deployed. `confirm` is checked against the
+   plan before any Worker is deleted; a candidate that gains an active promotion between the plan and the purge can still lose its Worker (small window).
+   **No bypass:** a purge that has candidates is refused (503 without the `PREVIEW_MANAGER` or `API_AUTH_TOKEN` binding; 502 when the preview
+   manager answers 501 because the Versions client is unavailable, or answers anything but `{success:true,deleted:boolean}` with a 2xx) and
+   nothing is purged; fix the cause and repeat. A purge with no candidates needs neither. An older Spec DO that rejects `withCandidateIds`
+   (reachable only in the mixed-version deploy window) is refused too, with 503: repeat after the deploy has settled.
 
-### CLI actor attribution (stopgap until M12)
+### CLI actor attribution
 
-The CLI authenticates with the master token, whose actor is whatever `X-Actor-ID` the client sends. Set
-`defaultActor` in the CLI config file or `BEEHIVE_ACTOR` in the environment to a real actor id in the ledger
-(usually a maintainer); it is sent on every request, and `--actor <id>` on a create command overrides it
-(precedence: flag, then env, then config; nothing is sent if none is set). This is attribution for admin
-use, not authentication: any master-token holder can name any actor. With no actor set the edge records `'unknown'`, and
-Spec DO issue writes by an unknown actor get 403 once the issue changes deploy; set one before using
-`issue create`. `--actor` is on `gate run`, `org create` and `actor create/trust/grant-promotion` too. M12
-(verified identity and user tokens) replaces it.
+**User token (supported path).** Mint a `bh_usr_` token at `/app/settings/tokens` (see "User tokens" below) and give it
+to the CLI with `printf %s "$TOKEN" | beehive auth login --token-stdin`. `login` calls `GET /api/whoami` with that token
+**before** writing anything: a 401 or an unreachable edge exits 1 and leaves the config file (and any previously saved
+good token) untouched; only a verified token is saved. `--token <t>` still works but puts the token in argv (visible to
+other local users and shell history), so the CLI says so on stderr. `beehive auth whoami` shows kind, actor, scope
+(`read`, `read_write`, `maintainer`), the 12-character token prefix at most, the API URL and where the token came from
+(flag, env or config). With a user token the edge overwrites `X-Actor-ID` with the token's actor, so the CLI sends none;
+`--actor`, `BEEHIVE_ACTOR` and `defaultActor` are ignored with one stderr warning per run (not an error, so scripts that
+export `BEEHIVE_ACTOR` for master use keep working). Routes that are master-only for user tokens answer 403, and the CLI
+adds a hint; a 401 hint covers a revoked or expired token or an edge that predates user tokens; a 503 means the auth
+backend is unavailable (mid-deploy); the CLI does not retry.
+
+**Master token (admin/bootstrap).** The master token's actor is whatever `X-Actor-ID` the client sends. Set
+`defaultActor` in the CLI config file or `BEEHIVE_ACTOR` in the environment to a real actor id in the ledger (usually a
+maintainer); it is sent on every request, and `--actor <id>` on a create command overrides it (precedence: flag, then
+env, then config; nothing is sent if none is set). This is attribution for admin use, not authentication: any
+master-token holder can name any actor. With no actor set the edge records `'unknown'`, and Spec DO issue writes by an
+unknown actor get 403 once the issue changes deploy; set one before using `issue create`. `--actor` is on `gate run`, `org create` and
+`actor create/trust/grant-promotion` too. Stopping the master token from acting as a human is M12 stage 2, a separate
+decision.
+
+**Token precedence:** `--token` > `BEEHIVE_API_TOKEN` > config `apiToken`. A stale `BEEHIVE_API_TOKEN` therefore beats the
+saved token; `auth whoami` names the source, and `login`/`logout` say when the variable is set.
+
+**Secret handling.** The config file is written 0600 from creation (temp file in the same directory, then rename, so an
+older 0644 file is replaced, never chmodded after the fact) in a directory created 0700 (an existing directory keeps its
+mode). `login` and `logout` change only `apiToken` in the file; values from `BEEHIVE_*` or flags are never persisted and
+unknown keys are kept. The CLI never prints a token: `show-token` and `whoami` show at most the first 12 characters,
+and errors, verbose output and config-parse warnings never include a token or file contents. Windows ignores POSIX
+modes; no protection is claimed there. `BEEHIVE_API_TOKEN` in a shell profile is the weakest place for a token; prefer
+`--token-stdin` plus the config file, or a secret manager. Tests: `tests/cli-token.test.ts`.
 
 ### Service tokens: mint, rotate, revoke
 
@@ -353,10 +423,12 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
   `{"candidateId","specId","reason":"manual","timestamp","metrics":{}}`. Automatic triggers
   (`latency`, `error_rate`, `slo_violation`) are refused (409) for a canary whose switch is off:
   `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
-- **Production canary deploys answer 501** until a real Workers Versions client exists:
-  `WORKER_VERSIONS_MODE` is unset on `beehive-preview-manager`, and the stub (`stub`) is for
-  local dev only: it also needs `BEEHIVE_LOCAL_DEV=1`, which only `scripts/start-e2e-workers.sh` sets,
-  so a stray `WORKER_VERSIONS_MODE=stub` in production still answers 501. Keep both unset.
+- **Canary deploys and candidate-Worker deletes answer 501** when the preview manager has no Versions client.
+  The repo's `workers/preview-manager/wrangler.toml` sets `WORKER_VERSIONS_MODE = "api"` (deleting that line and pushing turns it off).
+  What is live in production cannot be determined from the repo (deploys are human-only); check the deployed vars. `api` mode still
+  answers 501 if `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `WORKERS_SUBDOMAIN` or the bundle source is missing, so a 501 does not
+  prove no Worker exists: a purge with candidates aborts on a 501. `stub` is local dev only (it also needs `BEEHIVE_LOCAL_DEV=1`, which
+  only `scripts/start-e2e-workers.sh` sets), so a stray `stub` in production also answers 501.
 - **Deploy dependency:** `beehive-shadow-router` now binds `SpecDO` from `beehive` (`script_name`),
   like canary-worker and preview-manager. All ten deploy at once, so until `beehive` has deployed its
   DO reads fail and the router uses its static config.
@@ -369,11 +441,13 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
 
 ### Canary SLO loop (m11, M3)
 
-A cron on `beehive-canary-worker` (`[triggers] crons = ["* * * * *"]`) evaluates every live canary once a minute and
-rolls back the ones in violation. Plan and reasoning: `docs/M3-CANARY-SLO-PLAN.md`.
+`beehive-canary-worker` evaluates every live canary on each tick from the Spec DO alarm (queue `canary-slo-ticks`, see
+"Event-driven tick" below) and rolls back the ones in violation. There is no cron (removed 2026-10-24). Plan and reasoning:
+`docs/M3-CANARY-SLO-PLAN.md`.
 
 - **Data:** the shadow router aggregates each mirrored candidate result per (deployment, minute) and posts batches to
-  the Spec DO (`POST /canary-metrics`, table `canary_metrics`, migration `m10 -> m11`, additive). Rows older than 24 h are
+  the Spec DO (`POST /canary-metrics`, table `canary_metrics`, migration `m10 -> m11`, additive). A batch is posted at 20 samples or 10 s
+  after the first, and the tail of a burst is posted 10 s later through `ctx.waitUntil` (`scheduleTailFlush`). Rows older than 24 h are
   pruned on every write and read; the table has no org column and no foreign keys, so a purge does not touch it.
 - **It is shadow data, not canary data.** The router mirrors and discards, so every row is `source = 'shadow'`. The loop
   reads `CANARY_SLO_SOURCE` (default `shadow`); set it to `canary` only when real canary traffic records rows with that
@@ -392,10 +466,23 @@ rolls back the ones in violation. Plan and reasoning: `docs/M3-CANARY-SLO-PLAN.m
 - **Logs:** one `canary_slo_cycle` JSON line per tick (`checked`, `rolledBack`, `alreadyHandled`, `skipped`, `errors`).
   A rollback answering 404/409 means it already happened and is not an error.
 - **Mixed versions / rollback of the deploy:** a new router with an older Spec DO logs `canary metrics not recorded ... 404`
-  and carries on; an older router records nothing, so the loop sees `insufficient_data`; a new cron with an older DO sees
+  and carries on; an older router records nothing, so the loop sees `insufficient_data`; a new canary worker with an older DO sees
   `unavailable` and never rolls back. Redeploying the previous commit leaves `canary_metrics` idle (the rollback floor
   skips the newer schema version).
-- **Turn it off:** remove the `[triggers]` section and redeploy, or set a canary's switch with
+- **Event-driven tick:** the Spec DO (in the `beehive` worker) arms an alarm 60 s after a canary deploy; each firing,
+  while a canary head is live, sends one message to queue `canary-slo-ticks` and re-arms (no live canary: no re-arm, the
+  chain stops; the first request after a restart re-arms if one is live). `beehive-canary-worker` consumes the queue and
+  runs one SLO cycle per batch. It is the only trigger: the minute cron was removed 2026-10-24. **Create the queue before the deploy push**
+  (`wrangler queues create canary-slo-ticks`, human step): both the producer binding in the root `wrangler.toml` and the
+  consumer need it to exist. **If it does not, the deploy of the root `beehive` worker (ledger and API) fails, not just this
+  feature.** Because Production canary deploys answer 501 (above), no canary ref is written in prod, so
+  **the alarm will not fire there until a Versions client exists, so the SLO loop does not run in prod until then**
+  (no canary exists to evaluate or roll back). Mixed versions: an old DO sends no ticks, so nothing evaluates until
+  the new DO is live; an old canary worker never reads the queue (messages expire). A
+  failed send is logged and the alarm re-arms anyway; if the alarm itself fails before a live canary is confirmed it does not
+  re-arm. Rolling back to a commit without `alarm()` leaves any pending alarm firing into a class with no handler; the runtime
+  retries then drops it (harmless, noisy). Log line to look for: `canary_slo_cycle` from the queue path.
+- **Turn it off:** remove the `canary-slo-ticks` consumer (canary worker) and producer (root `wrangler.toml`) and redeploy, or set a canary's switch with
   `POST /canary/<candidateId>/auto-rollback {"enabled":false}`.
 
 ### Promotion ledger concurrency (m7 -> m8)
@@ -445,7 +532,7 @@ Builds API from `scripts/builds-watch-paths.json` (maintainer's host only; it ch
   appears, record it in `docs/OPEN-QUESTIONS.md`; do not work around it.
 - Mixed-version window: workers can now sit at different versions for longer, so changes must stay additive.
 - Upstream: if the Terraform provider gains a Workers Builds resource, replace the script with it.
-- GitHub CI has the same filter: `ci.yml` and `ci-enhanced.yml` skip pushes and PRs that touch only `docs/**`
+- GitHub CI has the same filter: `ci.yml` skips pushes and PRs that touch only `docs/**`
   or `*.md` (`.github/workflows/README.md`). A docs-only push to `main` therefore shows no Actions run.
 
 ### Last resort: wipe the whole ledger
@@ -480,3 +567,25 @@ gotchas, deploy learnings).
 - Preview deploys run on the first delivery only and are best effort.
 - A master token can pre-plant the Spec DO key `<queue>:<event id>:gate` as actor `queue-consumer` with another body; the gate then treats its verdict write as already recorded. Master is trusted, so this is accepted.
 - Known load: a push for a repository with no candidate is retried 5 times (about 7.5 minutes). A dead-letter queue or a negative cache is the follow-up.
+
+### Sandbox build container (beehive-sandbox-runner, 2026-10-25)
+
+`POST /sandbox/build {repo, commitSha}` (bearer auth) builds a candidate commit in a container-backed Durable Object (`BuildSandbox`) and
+returns a Worker bundle; `GET /sandbox/probe` returns the image's tool versions (deploy check: node, esbuild, git). Design and limits:
+`docs/SANDBOX-BUILD-PLAN.md`; verification and gotchas: `docs/OPEN-QUESTIONS.md` "Sandbox build on the container DO API works in production".
+- **Secret:** `CLOUDFLARE_API_TOKEN` on `beehive-sandbox-runner` (Artifacts scope) mints 5-minute read tokens inside `ArtifactsGateway`; it never
+  reaches the container. `CLOUDFLARE_ACCOUNT_ID` and `ARTIFACTS_NAMESPACE` are plain vars in its `wrangler.toml`; `ARTIFACTS_NAMESPACE` is only the fallback, `preview-manager` sends the ledger repository's namespace on every build and requires the runner to echo it.
+- **Deploys:** the image is built by Workers Builds' `wrangler deploy` (~2 min). A change to the container class or its binding is a Durable Object
+  lifecycle change: rename rather than delete a class that the live worker binds (error 10086), and delete a superseded container application by hand
+  (`wrangler containers list`, then `wrangler containers delete <id>`).
+- **Cost:** no instance runs until a build or probe starts one (`lite`), and every build destroys its container.
+- **Local e2e / CI:** the worker is not started by `scripts/start-e2e-workers.sh`; `SANDBOX_MODE=stub` with `BEEHIVE_LOCAL_DEV=1` returns a fixed bundle.
+
+### Gate test container (`TestSandbox`, beehive-sandbox-runner, slice 6 of `docs/REAL-GATE-IMPL-PLAN.md`)
+
+`POST /sandbox/test` runs a candidate commit's install and tests in a second container-backed Durable Object (`TestSandbox`, binding `TEST_SANDBOX`, image `workers/sandbox-runner/Dockerfile.test`). Until the binding exists the route answers 503 `NOT_CONFIGURED`.
+- **Deploys:** like the build container, the maintainer's push to the Artifacts repo; Workers Builds builds `Dockerfile.test` as a second container application (the build now makes two images; time it against the 5.5 min Workers Builds kill in OPEN-QUESTIONS Gotcha 4, do not assume 2 min). Do not run `wrangler deploy` by hand. `[exports.TestSandbox]` is a new class (additive); the existing `BuildSandbox` application and namespace are untouched.
+- **No platform cap:** under the `durable_object` policy `instance_type` and `max_instances` cannot be set in wrangler. The size (`standard-2`) is chosen in code; concurrency is bounded by the gate's queue consumer and the Spec DO counter (plan section 2), not by the platform.
+- **Cost:** no instance runs until a gate run starts one; every run destroys its container. No secret is added (`CLOUDFLARE_API_TOKEN` is the one the build container already uses).
+- **Rollback:** container applications are account-level, not part of a worker version, and rolling a worker back across Durable Object lifecycle entries may be refused: treat this worker as forward-fix only. Deleting the `TestSandbox` application is by hand (`wrangler containers list`, `wrangler containers delete <id>`) and only after the worker no longer binds it.
+

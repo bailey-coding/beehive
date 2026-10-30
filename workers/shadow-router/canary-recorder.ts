@@ -33,6 +33,7 @@ export class CanaryMetricsRecorder {
   private pending = new Map<string, Map<number, Bucket>>(); // deploymentId -> minute -> bucket
   private pendingSamples = 0;
   private firstAddAt = 0;
+  private tailFlushScheduled = false;
 
   /** An outcome counts as an error when the candidate answered 5xx (a transport failure is already a synthetic 500). */
   add(deploymentId: string, status: number, latencyMs: number, nowMs = Date.now()): void {
@@ -55,6 +56,26 @@ export class CanaryMetricsRecorder {
 
   shouldFlush(nowMs = Date.now()): boolean {
     return this.pendingSamples > 0 && (this.pendingSamples >= FLUSH_AFTER_SAMPLES || nowMs - this.firstAddAt >= FLUSH_AFTER_MS);
+  }
+
+  /**
+   * Promise for `ctx.waitUntil`: after `waitMs`, flush whatever is still pending. `shouldFlush()` is only asked when another sample
+   * is added, so without this the tail of a burst (fewer than FLUSH_AFTER_SAMPLES samples) stays in the isolate until the next
+   * canary request, and is lost if the isolate recycles first. At most one is outstanding per recorder; returns null when nothing
+   * is pending or one is already scheduled. Resolves after the flush and never rejects. The wait must stay well under the ~30 s
+   * the platform gives `waitUntil` work after the response, which is why it equals FLUSH_AFTER_MS (10 s).
+   */
+  scheduleTailFlush(specDo: SpecDoFetcher | null, waitMs = FLUSH_AFTER_MS): Promise<void> | null {
+    if (this.pendingSamples === 0 || this.tailFlushScheduled) return null;
+    this.tailFlushScheduled = true;
+    return new Promise<void>((resolve) => setTimeout(resolve, waitMs))
+      .then(() => {
+        // Cleared before the flush, not after: flush() takes the pending set first, so samples added while its Spec DO call is in
+        // flight belong to a new batch and must be able to schedule their own tail flush instead of being stranded.
+        this.tailFlushScheduled = false;
+        return this.flush(specDo);
+      })
+      .catch(() => undefined);
   }
 
   /** Send what is pending. The pending set is taken first, so concurrent requests never double-send. Never throws. */

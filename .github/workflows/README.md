@@ -2,29 +2,19 @@
 
 ## `ci.yml` (CI only)
 
-Runs on every `pull_request` and on every push to any branch, except changes that touch only
-`docs/**` or `*.md` files (`paths-ignore`):
+The only workflow. Runs on every `pull_request` and on every push to any branch, except changes that touch only
+`docs/**` or `*.md` files (`paths-ignore`). It needs no secrets and deploys nothing. Jobs:
 
-1. checkout, Node 22
-2. `npm install` in the repo root and in the worker directories that have their own `package.json`
-3. `npm run typecheck`
-4. `npm test`
+1. **Clean install and build verification:** per-worker install from a tree with no root `node_modules`, then
+   `wrangler deploy --dry-run` for each `workers/*` config and for the root worker `beehive` (catches dependency
+   resolution failures like the zod one).
+2. **Typecheck**, **Unit tests**, **Migration and schema tests**, **E2E tests (local mode)**.
 
-It needs no secrets and deploys nothing.
+No check is required on `main` today (no branch protection or ruleset). If one becomes required, a docs-only PR
+would leave it Pending: add a companion workflow with same-named no-op jobs on the inverse paths.
 
-## `ci-enhanced.yml` (CI only)
-
-Same triggers and the same `paths-ignore` as `ci.yml`. Clean per-worker install and `wrangler deploy
---dry-run` for each worker (catches dependency resolution failures like the zod one), then typecheck,
-unit tests, migration/schema tests and local e2e tests. It needs no secrets and deploys nothing.
-
-## `ci-skip.yml` (no-op)
-
-Companion to `ci.yml`: on pull requests that touch only `docs/**` or `*.md` it reports a passing
-`CI` / `Typecheck and unit tests` check, so that check can be made required without blocking docs-only
-PRs. Keep its paths in sync with the `paths-ignore` lists in `ci.yml` and `ci-enhanced.yml`.
-`ci-enhanced.yml` has no companion yet: if any of its jobs becomes a required check, add same-named
-no-op jobs on the inverse paths.
+History: until 2026-10-25 there were `ci.yml` (typecheck + unit tests, which this workflow also runs), `ci-enhanced.yml`
+(this file's content) and `ci-skip.yml` (a no-op companion for a required check that never existed).
 
 ## Deploys do not happen here
 

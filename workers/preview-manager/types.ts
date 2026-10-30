@@ -44,9 +44,12 @@ export interface PreviewManagerEnv {
   PREVIEW_SCIENTIST_QUEUE: Queue;
 
   // 'stub' selects the local Workers Versions stand-in (versions.ts), but only together
-  // with BEEHIVE_LOCAL_DEV=1 (set by scripts/start-e2e-workers.sh, never in production); else 501
+  // with BEEHIVE_LOCAL_DEV=1 (set by scripts/start-e2e-workers.sh, never in production); 'api' selects the
+  // real client and also needs CLOUDFLARE_API_TOKEN, WORKERS_SUBDOMAIN and a bundle source; else 501
   WORKER_VERSIONS_MODE?: string;
   BEEHIVE_LOCAL_DEV?: string;
+  // Service binding to beehive-sandbox-runner: builds the candidate bundle for the api Versions client
+  SANDBOX_RUNNER?: Fetcher;
 }
 
 // ============================================================================

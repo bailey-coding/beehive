@@ -15,6 +15,8 @@ export interface SqliteState {
   raw: DatabaseSyncType;
   kv: Map<string, unknown>;
   transactions: { count: number };
+  /** The pending alarm time (ms), as setAlarm/getAlarm see it */
+  alarm: { at: number | null };
   state: unknown;
 }
 
@@ -24,10 +26,13 @@ export function makeSqliteState(
   kv: Map<string, unknown> = new Map()
 ): SqliteState {
   const transactions = { count: 0 };
+  const alarm: { at: number | null } = { at: null };
   const state = {
     storage: {
       get: async (k: string) => kv.get(k),
       put: async (k: string, v: unknown) => void kv.set(k, v),
+      getAlarm: async () => alarm.at,
+      setAlarm: async (t: number) => void (alarm.at = t),
       transactionSync<T>(fn: () => T): T {
         transactions.count++;
         raw.exec('SAVEPOINT tx');
@@ -62,7 +67,7 @@ export function makeSqliteState(
       },
     },
   };
-  return { raw, kv, transactions, state };
+  return { raw, kv, transactions, alarm, state };
 }
 
 /** A real DO built with the test tokens; `authed` (default) adds them to every fetch, like the API worker */

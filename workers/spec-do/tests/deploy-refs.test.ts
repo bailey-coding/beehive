@@ -9,6 +9,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { LATEST_VERSION } from './legacy-ledger';
+import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import type { CanaryDeployment, CanaryMoveResult, DeployRef, LiveRef } from '../../shared/deploy-refs';
 
 let store: SqliteState;
@@ -93,10 +95,58 @@ describe('canary deploy (promote move)', () => {
     expect((await call('/canary-deployments', 'POST', { candidateId: 'c', specId: 's', url: 'u', workerVersionId: 'v', trafficPercentage: 150, holdoutPercentage: 0 })).status).toBe(400);
     const { candidate } = seedCandidate();
     store.raw.prepare('UPDATE candidates SET deleted_at = 1 WHERE id = ?').run(candidate.id);
-    const res = await call('/canary-deployments', 'POST', { candidateId: candidate.id, specId: 's', url: 'u', workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0 });
+    const res = await call('/canary-deployments', 'POST', { candidateId: candidate.id, specId: 's', url: 'https://u.acct.workers.dev', workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0 });
     expect(res.status).toBe(404);
     expect(count('SELECT COUNT(*) AS n FROM deploy_refs')).toBe(0);
     expect(count('SELECT COUNT(*) AS n FROM canary_deployments')).toBe(0);
+  });
+});
+
+describe('canary deploy request validation (trust boundary for the shadow router)', () => {
+  const body = (over: Record<string, unknown>) => ({
+    candidateId: 'cand-ok', specId: 's', url: 'https://c.acct.workers.dev', workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0, ...over,
+  });
+
+  it('refuses a candidate id that could take the place of a static mirror target or is not a plain token, writing nothing', async () => {
+    for (const candidateId of ['beehive-main', 'beehive-gate', 'Beehive-Main', 'beehive-anything', 'a b', 'a/b', '../x', '-x', 'x'.repeat(129)]) {
+      const res = await call('/canary-deployments', 'POST', body({ candidateId }));
+      expect(res.status, candidateId).toBe(400);
+    }
+    expect(count('SELECT COUNT(*) AS n FROM deploy_refs')).toBe(0);
+    expect(count('SELECT COUNT(*) AS n FROM canary_deployments')).toBe(0);
+  });
+
+  it('refuses a url that is not an https workers.dev Worker without credentials, writing nothing', async () => {
+    for (const url of ['http://c.acct.workers.dev', 'https://evil.example', 'https://workers.dev', 'https://user:pw@c.acct.workers.dev', 'https://c.acct.workers.dev.evil.example', 'ftp://c.acct.workers.dev', 'https://c.acct.workers.dev:8443', 'https://.workers.dev', 'https://..workers.dev', 'u', 'https://localhost:8787']) {
+      const res = await call('/canary-deployments', 'POST', body({ url }));
+      expect(res.status, url).toBe(400);
+    }
+    expect(count('SELECT COUNT(*) AS n FROM deploy_refs')).toBe(0);
+  });
+
+  it('accepts a UUID candidate id with a workers.dev url', async () => {
+    const res = await call('/canary-deployments', 'POST', body({ candidateId: '0f1e2d3c-4b5a-4968-8777-665544332211' }));
+    expect(res.status).toBe(201);
+  });
+});
+
+describe('canary url pinned to the account subdomain (WORKERS_SUBDOMAIN)', () => {
+  const post = (target: SpecDO, url: string) => target.fetch(new Request('https://spec-do.internal/canary-deployments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Actor-ID': 'canary-worker' },
+    body: JSON.stringify({ candidateId: 'cand-pin', specId: 's', url, workerVersionId: 'v', trafficPercentage: 5, holdoutPercentage: 0 }),
+  }));
+
+  it('accepts only Workers of the configured subdomain, and any workers.dev host when it is unset', async () => {
+    const pinnedState = makeSqliteState();
+    const pinned = new SpecDO(pinnedState.state as never, { ...TEST_DO_TOKENS, WORKERS_SUBDOMAIN: 'bz23711' } as never);
+    const authed = authedDo(pinned);
+    await authed.init();
+    for (const url of ['https://x.evil.workers.dev', 'https://bz23711.workers.dev', 'https://x.bz237110.workers.dev', 'https://x.bz23711.workers.dev.evil.example', 'https://x.other.workers.dev']) {
+      expect((await post(authed, url)).status, url).toBe(400);
+    }
+    expect((await post(authed, 'https://aa11-beehive-candidate-x.bz23711.workers.dev')).status).toBe(201);
+    expect((await post(spec, 'https://x.evil.workers.dev')).status).toBe(201); // the default fixture has no pin
   });
 });
 
@@ -223,7 +273,7 @@ describe('m6 -> m7 migration', () => {
       await spec.init();
     }
     const version = store.raw.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get() as { value: string };
-    expect(version.value).toBe('m11');
+    expect(version.value).toBe(LATEST_VERSION);
     expect(count("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('deploy_refs', 'canary_deployments')")).toBe(2);
     expect(count("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'")).toBe(1);
     await deploy('cand-a');

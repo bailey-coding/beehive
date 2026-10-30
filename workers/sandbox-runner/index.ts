@@ -13,12 +13,33 @@
 
 
 import { authGate } from '../shared/auth';
+import { parseBuildError, validateBuildRequest, type BuildErrorCode, type BuildResult, type BuildSandbox } from './build-sandbox';
+import { parseTestError, validateTestRequest, type TestErrorCode, type TestResult, type TestSandbox } from './test-sandbox';
+
+// The Durable Object class (wrangler.toml [[containers]] / [exports]) and the outbound entrypoint it uses
+// (`ctx.exports.ArtifactsGateway`) must be exported from the entry module.
+export { BuildSandbox, ArtifactsGateway } from './build-sandbox';
+// Gate test container (docs/REAL-GATE-IMPL-PLAN.md): declared in wrangler.toml by its own [[containers]] block and [exports.TestSandbox].
+export { TestSandbox, NpmRegistryGateway } from './test-sandbox';
+
+// Not exported: workerd treats every named export of this module as an entrypoint, and a plain object is not one.
+const BUILD_ERROR_STATUS: Record<BuildErrorCode, number> = {
+  BAD_REQUEST: 400, BAD_NAMESPACE: 422, NOT_CONFIGURED: 503, CLONE_FAILED: 502, NO_ENTRY: 422, BUILD_FAILED: 422, TOO_LARGE: 413,
+};
+
+const TEST_ERROR_STATUS: Record<TestErrorCode, number> = {
+  BAD_REQUEST: 400, BAD_NAMESPACE: 422, NOT_CONFIGURED: 503, SANDBOX_UNAVAILABLE: 503,
+};
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
   ARTIFACTS: unknown; // Cloudflare Artifacts binding
-  SANDBOX: unknown; // Sandbox SDK binding (future)
+  SANDBOX: DurableObjectNamespace<BuildSandbox>; // build container (Dockerfile in this directory)
+  TEST_SANDBOX?: DurableObjectNamespace<TestSandbox>; // gate test container (Dockerfile.test); optional so a mixed-version or local run without the binding answers 503
+  BEEHIVE_LOCAL_DEV?: string;
+  SANDBOX_MODE?: string;
   API_AUTH_TOKEN?: string;
+  ARTIFACTS_NAMESPACE?: string;
 }
 
 // Types for sandbox execution
@@ -79,6 +100,91 @@ export default {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
+    }
+
+    // GET /sandbox/probe - Tool versions of the build image (deploy check: proves the Dockerfile image built by
+    // Workers Builds is the one running). Authenticated above.
+    if (path === '/sandbox/probe' && method === 'GET') {
+      try {
+        const r = await env.SANDBOX.getByName('probe').probe();
+        return Response.json({ success: r.exitCode === 0, stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode });
+      } catch (error) {
+        console.error('[Sandbox] probe failed:', error instanceof Error ? error.message : String(error));
+        return Response.json({ success: false, error: 'the build container could not be started' }, { status: 502 });
+      }
+    }
+
+    // POST /sandbox/build { repo, commitSha, namespace? } - Build a candidate commit into a Worker bundle (CandidateBundle shape of
+    // workers/preview-manager/versions.ts). Local e2e: SANDBOX_MODE=stub with BEEHIVE_LOCAL_DEV=1 returns a fixed bundle.
+    if (path === '/sandbox/build' && method === 'POST') {
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+      }
+      try {
+        const input = validateBuildRequest(raw);
+        if (env.SANDBOX_MODE === 'stub' && env.BEEHIVE_LOCAL_DEV === '1') {
+          const stub: BuildResult = {
+            mainModule: 'index.js',
+            modules: [{ name: 'index.js', content: 'export default { fetch: () => new Response("stub candidate") };\n' }],
+            compatibilityDate: '2026-10-01',
+            source: 'prebuilt',
+            namespace: input.namespace ?? env.ARTIFACTS_NAMESPACE ?? 'default',
+          };
+          const { namespace: stubNamespace, ...stubBundle } = stub;
+          return Response.json({ success: true, bundle: stubBundle, namespace: stubNamespace });
+        }
+        // One sandbox per (repo, commit). Calls on the same instance are queued inside the Durable Object (BuildSandbox.serialize).
+        // The namespace is part of the instance name ('/' cannot occur in a namespace or a repo name), so equal repo names in two
+        // namespaces never share a sandbox. Without a namespace in the request the name is the old one, and the DO uses its fallback.
+        const instance = input.namespace ? `build-${input.namespace}/${input.repo}-${input.commitSha.slice(0, 8)}` : `build-${input.repo}-${input.commitSha.slice(0, 8)}`;
+        const { namespace, ...bundle } = await env.SANDBOX.getByName(instance).build(input);
+        return Response.json({ success: true, bundle, namespace });
+      } catch (error) {
+        // Also covers errors thrown inside the Durable Object, which arrive over RPC as plain Errors.
+        const known = parseBuildError(error);
+        if (known) return Response.json({ success: false, code: known.code, error: known.message }, { status: BUILD_ERROR_STATUS[known.code] });
+        console.error('[Sandbox] build failed:', error instanceof Error ? error.message : String(error));
+        return Response.json({ success: false, error: 'the build failed for an internal reason' }, { status: 502 });
+      }
+    }
+
+    // POST /sandbox/test { repo, commitSha, namespace?, installDirs?, testCommand? } - Run a commit's own tests in a clean container
+    // (docs/REAL-GATE-IMPL-PLAN.md section 2). 200 `{ success: true, result }` for every verdict, pass, fail or error alike; a non-2xx is an
+    // infrastructure problem (the gate retries it). Local e2e: SANDBOX_MODE=stub with BEEHIVE_LOCAL_DEV=1 returns a fixed pass.
+    if (path === '/sandbox/test' && method === 'POST') {
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+      }
+      try {
+        const input = validateTestRequest(raw);
+        if (env.SANDBOX_MODE === 'stub' && env.BEEHIVE_LOCAL_DEV === '1') {
+          const logTail = 'stub run: nothing was executed';
+          const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(logTail));
+          const stub: TestResult = {
+            status: 'pass', failureClass: null, exitCode: 0,
+            phases: { install: { ms: 0, exit: 0, timedOut: false }, test: { ms: 0, exit: 0, timedOut: false } },
+            logTail, logSha256: [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join(''), truncated: false,
+            imageDigest: null, instance: 'stub', counts: { passed: 1, failed: 0, skipped: 0 },
+          };
+          return Response.json({ success: true, result: stub });
+        }
+        if (!env.TEST_SANDBOX) return Response.json({ success: false, code: 'NOT_CONFIGURED', error: 'the test container is not configured' }, { status: 503 });
+        // One sandbox per (repo, commit); the namespace is part of the name ('/' cannot occur in either), as for builds.
+        const instance = `test-${input.namespace ?? env.ARTIFACTS_NAMESPACE ?? 'default'}/${input.repo}-${input.commitSha.slice(0, 8)}`;
+        const result = await env.TEST_SANDBOX.getByName(instance).test(input);
+        return Response.json({ success: true, result });
+      } catch (error) {
+        const known = parseTestError(error);
+        if (known) return Response.json({ success: false, code: known.code, error: known.message }, { status: TEST_ERROR_STATUS[known.code] });
+        console.error('[Sandbox] test run failed:', error instanceof Error ? error.message : String(error));
+        return Response.json({ success: false, error: 'the test run failed for an internal reason' }, { status: 502 });
+      }
     }
 
     // ============================================================================

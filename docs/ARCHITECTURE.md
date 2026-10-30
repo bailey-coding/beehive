@@ -121,6 +121,8 @@ Beehive is a **multi-worker Cloudflare application** with a **Durable Object** a
 
 **Purpose:** Execute the **pre-merge oracle** — validate candidates before they advance
 
+> **Status (2026-10-27): simulated.** `workers/gate-workflow/index.ts` returns hard-coded unit-test passes, derives complexity from a hash of the candidate id, adds a conformance warning at random (10%), and the sandbox runner's clone is a logged simulation. The steps below are the design; a real gate is planned in `docs/REAL-GATE-IMPL-PLAN.md`.
+
 **Implementation:** Cloudflare Worker with Workflow-like execution
 
 **Responsibilities:**
@@ -280,7 +282,7 @@ Artifacts Push → Queue → Consumer → Find Candidate → Trigger Gate → Re
 
 **Responsibilities:**
 - Deploy candidates to canary
-- Monitor SLOs via Statsig
+- Monitor SLOs from Analytics Engine samples (no Statsig integration; traffic groups use a local hash split)
 - Trigger auto-rollback on SLO violations
 - Record canary results
 

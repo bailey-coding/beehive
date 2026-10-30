@@ -57,7 +57,7 @@ async function createRepoToken(
   ttl: number = 3600
 ): Promise<{ token: string; expiresAt: number }> {
   assertConfigured(config);
-  const url = `${ARTIFACTS_API_BASE}/${config.accountId}/artifacts/namespaces/${config.namespace}/tokens`;
+  const url = `${ARTIFACTS_API_BASE}/${config.accountId}/artifacts/namespaces/${encodeURIComponent(config.namespace)}/tokens`;
   
   const requestBody = {
     scope,
@@ -117,7 +117,7 @@ async function createFork(
   agentId: string
 ): Promise<ForkResult> {
   assertConfigured(config);
-  const url = `${ARTIFACTS_API_BASE}/${config.accountId}/artifacts/namespaces/${config.namespace}/repos`;
+  const url = `${ARTIFACTS_API_BASE}/${config.accountId}/artifacts/namespaces/${encodeURIComponent(config.namespace)}/repos`;
   
   // Create the repository
   const repoBody = {

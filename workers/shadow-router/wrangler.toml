@@ -5,9 +5,15 @@
 name = "beehive-shadow-router"
 main = "index.ts"
 compatibility_date = "2026-10-09"
+# fetch() to another Worker's workers.dev URL on this account is blocked by default (error 1042, answered as a 404), which
+# made every mirrored candidate request a silent no-op. This flag sends such fetches over the public Internet instead
+# (verified with a probe worker, docs/OPEN-QUESTIONS.md). Candidate requests carry no credentials (candidate-headers.ts).
+compatibility_flags = ["global_fetch_strictly_public"]
 
 # Cloudflare Artifacts configuration
 [vars]
+# Only canary targets on this account's workers.dev subdomain are mirrored to (shared/deploy-refs.ts isAcceptableCanaryUrl)
+WORKERS_SUBDOMAIN = "bz23711"
 
 # Durable Object binding for Spec DO (cross-script): the canary deploy refs
 # (traffic pointer) are read from it on every mirrored request

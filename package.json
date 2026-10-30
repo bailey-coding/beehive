@@ -37,7 +37,10 @@
     "test:e2e:local": "E2E_ENVIRONMENT=local vitest run tests/e2e",
     "test:e2e:staging": "E2E_ENVIRONMENT=staging vitest run tests/e2e",
     "test:e2e:production": "E2E_ENVIRONMENT=production vitest run tests/e2e",
-    "test:e2e:watch": "E2E_ENVIRONMENT=local vitest watch tests/e2e"
+    "test:e2e:watch": "E2E_ENVIRONMENT=local vitest watch tests/e2e",
+    "test:backtest": "vitest run --config tools/backtest/vitest.config.ts",
+    "typecheck:backtest": "tsc -p tools/backtest/tsconfig.json",
+    "backtest": "node --experimental-transform-types --disable-warning=ExperimentalWarning tools/backtest/cli.ts"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^5.20261006.1",

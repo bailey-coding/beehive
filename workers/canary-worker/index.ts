@@ -9,13 +9,27 @@ import { RollbackManager } from './rollback';
 import { SLOMonitor } from './slo';
 import { handleRollbackQueue } from './queues';
 import type { Env, RollbackTrigger, CanaryConfig } from './types';
-import type { ExecutionContext, MessageBatch, ScheduledController } from '@cloudflare/workers-types';
+import type { ExecutionContext, MessageBatch } from '@cloudflare/workers-types';
 
 async function readBody<T>(request: Request): Promise<T | Response> {
   try {
     return (await request.json()) as T;
   } catch {
     return jsonResponse({ error: 'Invalid JSON body' }, 400);
+  }
+}
+
+// Not exported: workerd treats every named export of the entry module as an entrypoint, and a string is not one
+// (local `wrangler dev` fails with "Incorrect type for map entry").
+const SLO_TICK_QUEUE = 'canary-slo-ticks';
+
+/** One SLO pass over every live canary; run for each batch of the tick queue. Never throws. */
+export async function runSloCycle(env: Env): Promise<void> {
+  try {
+    await new SLOMonitor(env).runCycle(new RollbackManager(env));
+  } catch (error) {
+    // No verdict (bad config, live canaries unreadable): never a rollback. The next tick retries.
+    console.error('[Canary] SLO cycle skipped:', error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -114,19 +128,14 @@ export default {
     });
   },
   
-  // Cron (wrangler.toml [triggers]): one SLO pass over every live canary. Fetch auth does not apply
-  // here; the handler is only reachable by the platform's scheduler.
-  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-    try {
-      await new SLOMonitor(env).runCycle(new RollbackManager(env));
-    } catch (error) {
-      // No verdict (bad config, live canaries unreadable): never a rollback. The next tick retries.
-      console.error('[Canary] SLO cycle skipped:', error instanceof Error ? error.message : String(error));
-    }
-  },
-
-  // Queue consumer for rollback triggers
+  // Queue consumer for rollback triggers and SLO ticks
   async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (batch.queue === SLO_TICK_QUEUE) {
+      // One cycle per batch however many ticks piled up; ack all (the next alarm sends a fresh tick)
+      await runSloCycle(env);
+      batch.ackAll();
+      return;
+    }
     // Same rule as fetch: SPEC_DO stays the namespace
     await handleRollbackQueue(batch, env);
   }
@@ -135,5 +144,4 @@ export default {
 type ExportedHandler<E = unknown> = {
   fetch: (request: Request, env: E, ctx: ExecutionContext) => Promise<Response>;
   queue: (batch: MessageBatch, env: E, ctx: ExecutionContext) => Promise<void>;
-  scheduled: (controller: ScheduledController, env: E, ctx: ExecutionContext) => Promise<void>;
 };

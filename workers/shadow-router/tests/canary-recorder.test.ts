@@ -109,7 +109,7 @@ describe('applyCanaryRefs exposes candidate -> deployment id', () => {
   const live = (candidateId: string) => ({
     ref: { id: `ref-${candidateId}`, specId: 'spec-1', rung: 'canary', candidateId, commitSha: null, workerVersionId: 'v', prevRefId: null, action: 'promote', movedBy: 'canary-worker', movedAt: 1 },
     deployment: {
-      id: `dep-${candidateId}`, candidateId, specId: 'spec-1', status: 'deployed', url: `https://${candidateId}.example`, workerVersionId: 'v', commitSha: null,
+      id: `dep-${candidateId}`, candidateId, specId: 'spec-1', status: 'deployed', url: `https://${candidateId}.bz23711.workers.dev`, workerVersionId: 'v', commitSha: null,
       trafficPercentage: 10, holdoutPercentage: 5, autoRollback: true, deployRefId: `ref-${candidateId}`, rollbackReason: null,
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
     },
@@ -127,3 +127,110 @@ describe('applyCanaryRefs exposes candidate -> deployment id', () => {
     expect((await applyCanaryRefs(base, down)).canaryDeployments?.size ?? 0).toBe(0);
   });
 });
+
+describe('scheduleTailFlush (the tail of a burst reaches the Spec DO without another request)', () => {
+  it('flushes what is pending after the wait, once, and nothing is double-sent', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new CanaryMetricsRecorder();
+      const { fetcher, calls } = fakeDo();
+      for (let i = 0; i < 7; i++) r.add('d', 200, 5, NOW); // fewer than FLUSH_AFTER_SAMPLES
+      expect(r.shouldFlush(NOW)).toBe(false);
+      const tail = r.scheduleTailFlush(fetcher)!;
+      expect(tail).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS - 1);
+      expect(calls).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await tail;
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body.samples.reduce((n: number, s: any) => n + s.requests, 0)).toBe(7);
+      await r.flush(fetcher); // nothing left, nothing re-sent
+      expect(calls).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('schedules at most one tail flush at a time, none when empty, and a new one after it completes', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new CanaryMetricsRecorder();
+      const { fetcher, calls } = fakeDo();
+      expect(r.scheduleTailFlush(fetcher)).toBeNull(); // nothing pending
+      r.add('d', 200, 5, NOW);
+      const first = r.scheduleTailFlush(fetcher)!;
+      expect(r.scheduleTailFlush(fetcher)).toBeNull(); // already outstanding
+      r.add('d', 200, 5, NOW); // arrives while the timer runs: goes out with the same flush
+      await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS);
+      await first;
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body.samples[0].requests).toBe(2);
+      r.add('d', 200, 5, NOW);
+      expect(r.scheduleTailFlush(fetcher)).not.toBeNull(); // a later burst gets its own
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is harmless when the count threshold already flushed the samples, when the Spec DO throws, and with no binding', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new CanaryMetricsRecorder();
+      const { fetcher, calls } = fakeDo();
+      r.add('d', 200, 5, NOW);
+      const tail = r.scheduleTailFlush(fetcher)!;
+      await r.flush(fetcher); // flushed early by the count/age path
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS);
+      await tail;
+      expect(calls).toHaveLength(1); // the timer found nothing to send
+
+      const broken: SpecDoFetcher = { fetch: vi.fn(async () => { throw new Error('do down'); }) };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      r.add('d', 200, 5, NOW);
+      const t2 = r.scheduleTailFlush(broken)!;
+      await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS);
+      await expect(t2).resolves.toBeUndefined();
+      r.add('d', 200, 5, NOW);
+      const t3 = r.scheduleTailFlush(null)!;
+      await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS);
+      await expect(t3).resolves.toBeUndefined();
+      warn.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('samples added while a tail flush is in flight get their own tail flush instead of being stranded', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = new CanaryMetricsRecorder();
+      const gate: { release: () => void } = { release: () => {} };
+      const posts: any[] = [];
+      const slow: SpecDoFetcher = {
+        fetch: vi.fn(async (_path: string, init?: RequestInit) => {
+          posts.push(JSON.parse(String(init?.body)));
+          await new Promise<void>((resolve) => { gate.release = resolve; }); // the Spec DO call hangs until released
+          return new Response(JSON.stringify({ success: true, data: { recorded: 1 } }), { status: 201 });
+        }),
+      };
+      r.add('d', 200, 5, NOW);
+      const first = r.scheduleTailFlush(slow)!;
+      await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS); // timer fired: the flush has taken the pending set and is waiting on the Spec DO
+      expect(posts).toHaveLength(1);
+      r.add('d', 200, 5, NOW); // arrives during the in-flight POST
+      const second = r.scheduleTailFlush(slow);
+      expect(second).not.toBeNull(); // not blocked by the flush that is still running
+      gate.release();
+      await first;
+      await vi.advanceTimersByTimeAsync(FLUSH_AFTER_MS);
+      gate.release();
+      await second;
+      expect(posts).toHaveLength(2);
+      expect(posts[1].samples.reduce((n: number, s: any) => n + s.requests, 0)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+

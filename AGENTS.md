@@ -65,6 +65,12 @@ serialization point for promotion decisions.
 - One push deploys all ten workers at once, in no controllable order (`docs/OPS.md`). Every change
   must tolerate a mixed-version window: additive migrations, callers that cope with an old or new
   peer, no "deploy X first" dependency.
+  Strict zod schemas reject unknown fields, so a new response field must be opt-in by the caller, and a
+  new request field must be retried without it when an older peer answers 400 (`withCandidateIds`).
+- Organization names are Artifacts namespaces (fork repos, sandbox builds): the Spec DO route accepts only
+  `workers/shared/namespace.ts` names.
+- Fake-timer tests that wait on real async work (body streams, I/O) must alternate timer advances with a real
+  macrotask turn until the condition holds, never a fixed number of advances (flaked twice).
 - Commit messages: `step: <desc> | task: <id> | spec: <clause> | confidence: <0-1>`.
 
 ---
@@ -119,7 +125,7 @@ See `docs/ARTIFACTS-SETUP.md` for verified setup patterns, CLI commands, authent
 
 ## Deployment Topology & Ops
 
-Ten Workers. GitHub runs CI only (`ci.yml`: typecheck + unit tests); the maintainer deploys by
+Ten Workers. GitHub runs CI only (`ci.yml`: clean installs, dry-run builds, typecheck, tests); the maintainer deploys by
 pushing to the Cloudflare Artifacts repo (human-only). Each has its
 own wrangler config and the worker `name` there is the source of truth for URLs. The web UI
 is served by the `beehive` worker (`workers/api/ui.ts`); the React app in `ui/` is **not**

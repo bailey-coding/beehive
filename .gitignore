@@ -63,3 +63,7 @@ workers/*/node_modules/
 
 # Vitest cache
 .vitest-cache/
+tools/backtest/.ledger.json
+
+# Backtest run directories: bulky and may hold candidate outputs (summaries are published to docs/backtest/results/)
+docs/backtest/runs/

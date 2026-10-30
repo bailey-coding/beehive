@@ -30,12 +30,19 @@ beforeEach(async () => {
 });
 
 describe('GET /api/actors github_user_id filter', () => {
-  it('returns only the rows with that GitHub id, newest first', async () => {
-    const oldest = actorAt('a', '42', 100);
+  it('returns only the rows with that GitHub id', async () => {
+    const a = actorAt('a', '42', 100);
     actorAt('b', '7', 200);
-    const newest = actorAt('a-again', '42', 300);
-    expect((await list('?github_user_id=42')).map((a) => a.id)).toEqual([newest, oldest]);
-    expect((await list('?github_user_id=7')).map((a) => a.github_user_id)).toEqual(['7']);
+    expect((await list('?github_user_id=42')).map((x) => x.id)).toEqual([a]);
+    expect((await list('?github_user_id=7')).map((x) => x.github_user_id)).toEqual(['7']);
+  });
+
+  it('a ledger from before m12 may hold one GitHub id twice: the filter returns both, newest first', async () => {
+    store.raw.exec('DROP INDEX idx_actors_github_user_id_unique');
+    const insert = store.raw.prepare("INSERT INTO actors (id, type, name, github_user_id, created_at) VALUES (?, 'human', 'a', '42', ?)");
+    insert.run('old', 100);
+    insert.run('new', 300);
+    expect((await list('?github_user_id=42')).map((a) => a.id)).toEqual(['new', 'old']);
   });
 
   it('finds a row that is past the first 500 of the unfiltered list', async () => {
@@ -60,9 +67,14 @@ describe('GET /api/actors github_user_id filter', () => {
 
   it('rows created in the same millisecond come back in reverse insertion order, filtered or not', async () => {
     const first = actorAt('a', '42', 500);
-    const second = actorAt('a-again', '42', 500);
-    const third = actorAt('a-third', '42', 500);
-    expect((await list('?github_user_id=42')).map((a) => a.id)).toEqual([third, second, first]);
+    const second = actorAt('a-again', '43', 500);
+    const third = actorAt('a-third', undefined, 500);
     expect((await list('?limit=50&offset=0')).map((a) => a.id)).toEqual([third, second, first]);
+    // The filter keeps the same tie-break: the pre-m12 duplicates (index dropped) come back newest insertion first
+    store.raw.exec('DROP INDEX idx_actors_github_user_id_unique');
+    const insert = store.raw.prepare("INSERT INTO actors (id, type, name, github_user_id, created_at) VALUES (?, 'human', 'x', '42', 500)");
+    insert.run('dup-1');
+    insert.run('dup-2');
+    expect((await list('?github_user_id=42')).map((a) => a.id)).toEqual(['dup-2', 'dup-1', first]);
   });
 });

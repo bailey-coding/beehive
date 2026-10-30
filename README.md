@@ -47,7 +47,7 @@ Candidates progress through these rungs, each with increasing confidence:
 | **Pre-merge** | None | Tests, property/fuzz, spec conformance | Never board the train |
 | **Shadow** | Mirrored, discarded | Scientist diff vs declared delta surface | Hold, iterate |
 | **Train** | Projection slice | Combined-candidate conformance | Drop car, re-project |
-| **Canary** | Small % live | SLOs via Statsig + Analytics Engine | Auto-rollback (ref op) |
+| **Canary** | Small % live | SLOs via Analytics Engine | Auto-rollback (ref op) |
 | **Full** | 100% | Drift, holdouts | Alarm, bisect by diff |
 
 A candidate is promotable only when it clears all rungs.
@@ -60,7 +60,7 @@ More depth: design decisions in [`docs/decisions/`](docs/decisions/README.md) (A
 |-----------|---------|--------|
 | **Edge Router/API** | REST API entry point, routes to DO | `beehive` |
 | **Spec DO** | Durable Object - single source of truth for coordination state | `beehive` (hosted) |
-| **Gate Workflow** | Pre-merge validation (tests, spec conformance, complexity) | `beehive-gate-workflow` |
+| **Gate Workflow** | Pre-merge validation. **Simulated today**: test results, complexity and conformance warnings are placeholders; a real test-running gate is planned (`docs/REAL-GATE-IMPL-PLAN.md`) | `beehive-gate-workflow` |
 | **Sandbox Runner** | Executes agent code in isolated environments | `beehive-sandbox-runner` |
 | **Queue Consumer** | Processes Artifacts push events, triggers gates | `beehive-queue-consumer` |
 | **Shadow Router** | Mirrors production traffic to candidates for Scientist comparison | `beehive-shadow-router` |
@@ -270,7 +270,7 @@ The platform is designed so agents can develop on itself:
 3. Agent implements the spec in the fork
 4. Agent commits and pushes to the fork
 5. Queue Consumer detects push, triggers pre-merge gate
-6. Gate Workflow runs tests, records verdict
+6. Gate Workflow records a verdict (the checks are simulated today; a real test gate is planned)
 7. If pass: candidate advances to next rung
 8. If fail: agent iterates, tries again
 ```

@@ -10,6 +10,7 @@
  * - Writes metrics to Analytics Engine
  */
 
+import { BASELINE_TARGET_ID, headersForTarget, scientistSafeHeaders } from './candidate-headers';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub } from '../shared/spec-do-auth';
 import { MetricsCollector } from '../shared/analytics';
@@ -56,7 +57,7 @@ async function getShadowConfig(env: any): Promise<ShadowConfig> {
   // Production uses production worker URLs; either way the canary targets
   // come from the Spec DO deploy refs (the traffic pointer)
   const base = isLocal ? getLocalDevShadowConfig() : getProductionShadowConfig();
-  return applyCanaryRefs(base, specDoFetcher(env), getLiveRefsCache(env));
+  return applyCanaryRefs(base, specDoFetcher(env), getLiveRefsCache(env), env.WORKERS_SUBDOMAIN);
 }
 
 export function specDoFetcher(env: any): SpecDoFetcher | null {
@@ -181,6 +182,13 @@ async function logTrafficSplit(
   }
 }
 
+/** A candidate that never answers must not hold the router's response, nor hide behind a missing sample (the abort counts as a 5xx). */
+const CANDIDATE_FETCH_TIMEOUT_MS = 10_000;
+/** Largest request body that is copied to the mirror targets. */
+const MAX_MIRROR_BODY_BYTES = 1024 * 1024;
+/** Methods that are safe to replay against the production baseline. Anything else would be a second write with the caller's credentials. */
+const BASELINE_REPLAY_METHODS = new Set(['GET', 'HEAD']);
+
 /**
  * Check if path should be mirrored
  * Enhanced to respect Statsig configuration
@@ -233,6 +241,21 @@ async function fanOutToCandidates(
 
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
+
+  // The body is read once and every target gets its own copy: handing the same stream to each target would lock it after the first,
+  // and the later targets (the canaries) would silently never be called. A body above the cap is not mirrored at all.
+  let bodyBytes: ArrayBuffer | undefined;
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    if (Number(request.headers.get('content-length') ?? 0) > MAX_MIRROR_BODY_BYTES) {
+      console.warn('[Shadow] request body above the mirror cap, not mirrored');
+      return results;
+    }
+    bodyBytes = await request.clone().arrayBuffer();
+    if (bodyBytes.byteLength > MAX_MIRROR_BODY_BYTES) {
+      console.warn('[Shadow] request body above the mirror cap, not mirrored');
+      return results;
+    }
+  }
   
   // Create promises for all candidate fetches
   const promises: Array<Promise<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification }>> = [];
@@ -250,13 +273,19 @@ async function fanOutToCandidates(
     // Holdout: don't send to any candidate (production baseline only)
     // Baseline: don't send to candidates (production only)
     const shouldSendToCandidate = classification.type === 'canary' || classification.type === 'shadow';
+
+    // The baseline is production itself: never replay a write against it (the caller's real request already did that)
+    if (candidateId === BASELINE_TARGET_ID && !BASELINE_REPLAY_METHODS.has(request.method)) {
+      console.log(`[Shadow] Not replaying ${request.method} against the baseline ${candidateId}`);
+      continue;
+    }
     
     if (!shouldSendToCandidate) {
       console.log(`[Shadow] Skipping candidate ${candidateId} - classified as ${classification.type}`);
       continue;
     }
     
-    const promise = fetchCandidate(request, previewUrl, candidateId, requestId)
+    const promise = fetchCandidate(request, previewUrl, candidateId, requestId, bodyBytes)
       .then((result) => {
         // Write metrics for this candidate request (if metrics available)
         if (metrics) {
@@ -302,7 +331,8 @@ async function fetchCandidate(
   request: Request,
   previewUrl: string,
   candidateId: string,
-  requestId: string
+  requestId: string,
+  bodyBytes?: ArrayBuffer
 ): Promise<{ candidateId: string; response: Response; latencyMs: number }> {
   const startTime = Date.now();
   
@@ -310,16 +340,21 @@ async function fetchCandidate(
   const url = new URL(request.url);
   const candidateUrl = `${previewUrl}${url.pathname}${url.search}`;
   
-  // Clone request for candidate with absolute URL
-  const candidateRequest = new Request(candidateUrl, {
-    method: request.method,
-    headers: request.headers,
-    body: request.body,
-  });
-  
+  // The timer is a plain setTimeout (not AbortSignal.timeout) so it can be cleared once the answer headers arrive
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CANDIDATE_FETCH_TIMEOUT_MS);
   try {
+    // Building the request is inside the try on purpose: any failure (a bad URL) must become a recorded synthetic 5xx below,
+    // never a rejected promise that Promise.allSettled drops without a sample.
+    const candidateRequest = new Request(candidateUrl, {
+      method: request.method,
+      headers: headersForTarget(candidateId, request.headers),
+      body: bodyBytes ? bodyBytes.slice(0) : undefined,
+      redirect: 'manual',
+      signal: controller.signal,
+    });
     console.log(`[Shadow] Fetching candidate ${candidateId} at ${candidateUrl}`);
-    const response = await fetch(candidateUrl, candidateRequest);
+    const response = await fetch(candidateRequest);
     const latencyMs = Date.now() - startTime;
     
     return { candidateId, response, latencyMs };
@@ -335,6 +370,8 @@ async function fetchCandidate(
       }),
       latencyMs,
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -427,7 +464,7 @@ async function triggerScientist(
     timestamp,
     path: url.pathname,
     method: request.method,
-    headers: Object.fromEntries(request.headers.entries()),
+    headers: scientistSafeHeaders(request.headers),
     body: requestBody,
     baseline,
     candidates,
@@ -512,7 +549,13 @@ function recordCanaryMetrics(
       const deploymentId = config.canaryDeployments.get(r.candidateId);
       if (deploymentId) recorder.add(deploymentId, r.response.status, r.latencyMs);
     }
-    if (recorder.shouldFlush()) ctx.waitUntil(recorder.flush(specDoFetcher(env)));
+    if (recorder.shouldFlush()) {
+      ctx.waitUntil(recorder.flush(specDoFetcher(env)));
+    } else {
+      // The tail of a burst: send it after FLUSH_AFTER_MS even if no further canary request arrives
+      const tail = recorder.scheduleTailFlush(specDoFetcher(env));
+      if (tail) ctx.waitUntil(tail);
+    }
   } catch (error) {
     console.warn('[Shadow] canary metrics recording failed:', error instanceof Error ? error.message : String(error));
   }
