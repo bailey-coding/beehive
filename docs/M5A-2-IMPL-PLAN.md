@@ -12,7 +12,7 @@ tags:
 
 **Date:** 2026-10-30 | **Tier:** heavy | **Spine:** yes (AGENTS.md rule 2): this plan needs an independent agent review before any code, and the implementation needs another before merge. | **Source:** `docs/M5A-AUDIT.md` findings 1 and 2, `docs/MILESTONES.md` M5a-2.
 
-**Review:** independent agent review 2026-10-30 returned *approve with changes* (2 blockers, 9 should-fixes); every item is folded in below and marked R1-R16. Re-review the revised sections 2 and 3 before code.
+**Review:** two independent agent reviews on 2026-10-30. Pass 1: approve with changes (2 blockers, 9 should-fixes, folded in as R1-R16). Pass 2: approve with changes (no blockers, 8 should-fixes, folded in as S1-S10); the reviewer said no third round is needed if these edits land. Implementation may start.
 
 Scope is only the first two M5a-2 bullets plus the 409 handling. The unkeyed-route wiring and the governance migration are separate plans (see Out of scope).
 
@@ -35,39 +35,41 @@ Scope is only the first two M5a-2 bullets plus the 409 handling. The unkeyed-rou
 
 ### 2. `workers/queue-consumer/index.ts`, retry, classify, bound (R4-R9, R11)
 
-Classification (every exit; `retry({ delaySeconds })` with exponential backoff, capped):
+Classification (every exit; `retry({ delaySeconds })` with `min(30 * 2^(attempts-1), 900)` seconds; `const attempts = message.attempts ?? 1` so the existing mocks, which have only `retryCount`, still run) (S3-S6):
 
 | Exit | Class | Action |
 |---|---|---|
-| Message fails Zod validation | permanent | error log, ack (typed `ValidationError`) |
-| Repos or candidates lookup non-OK | 5xx/408/429 transient; other 4xx permanent | retry / error log, ack |
-| No repository, no candidate | permanent | ack with an **error** log naming the push-before-row race and the `limit=100` truncation |
-| `API_AUTH_TOKEN` unset | transient, long backoff | recoverable config; acking would lose the gate forever |
-| Gate answers 5xx/408/429 or `fetch` throws | transient | retry |
-| Gate answers other 4xx (bad data, missing spec) | permanent | error log, ack (needs section 3 codes) |
+| Message fails Zod validation | permanent | `validateQueueMessage` throws a typed `ValidationError` (today a plain `Error`, `queue-consumer/index.ts:96`); error log, ack |
+| Repos/candidates lookup or gate answers 5xx, 408, 429, **401, 403** | transient | retry (401/403 are bearer or token misconfig, recoverable) |
+| Same, answers 400, 404, 409 (not in-flight), 413, 422 | permanent | error log, ack |
+| No repository, no candidate | **transient to the cap**, then ack with an error log | the push can arrive before the DO row exists; an unrelated repo costs about 5 cheap retries. The `limit=100` truncation is the one case a retry cannot fix: follow-up, logged |
+| `API_AUTH_TOKEN` unset | transient, delay at most 12 h | recoverable config |
+| Gate answers 409 with `{inFlight:true}` | transient, short delay | the first run is still going; do not ack a duplicate while history is unwritten |
+| `reposResp.json()` / `gateResponse.json()` throws, `fetch` throws, any non-`ValidationError` in the catch (including a bug TypeError) | transient | retry, bounded by the cap; safe because a gate replay returns the recorded result. This is a behavior change from today |
+| `triggerPreviewDeployment` throws out of its unguarded `specDoStub.fetch` calls (`:132`, `:155`) | best effort | wrap so a preview failure never reaches `retry()`; log |
 | History write 5xx | transient | retry |
-| History write 400 | permanent | the key can be too long: hash `${queueName}:${event.id}` to a fixed length when it exceeds 200 characters |
+| History write 400 | permanent | keep keys short: hash `${queueName}:${event.id}` only when over 200 characters, as `h1:<sha256 hex>`, then append `:gate` for the gate key; both stay at most 255 |
 | History write 409 | permanent | log "key reused with a different body", ack; replace the wrong comment |
-| Replay (201 + `Idempotent-Replay`) | success | continue |
+| Replay (201 + `Idempotent-Replay`, or gate 200 replay) | success | continue; `.ok` covers both |
 
 - Order stays gate then history (already the current order); both are keyed so a retry converges (R12). The gate request carries `Idempotency-Key: ${queueName}:${event.id}:gate`.
 - Keep the per-message `try/catch`: a throw out of `queue()` would retry the whole batch including handled messages (R9). The catch block now splits `ValidationError` (ack) from everything else (retry).
-- Cap: add `max_retries = 5` for the consumer in `wrangler.toml` (config only, no DLQ resource, additive) and give up at `message.attempts >= 5` with an error log; an exhausted message is dropped, which the doc states. A dead-letter queue stays a follow-up.
+- Cap (S6): set `max_retries = 4` and `retry_delay` on **all three** `[[queues.consumers]]` blocks of `wrangler.toml` (`beehive-artifacts-push`, `preview-artifacts-push`, `preview-artifacts-events`); a message gets 1 + 4 deliveries. The in-code give-up at `attempts >= 5` (error log, ack) and the config agree. The config is the backstop for whole-invocation failures. With no DLQ an exhausted message is deleted; a dead-letter queue stays a follow-up. Additive config.
 - Preview path (R7): `triggerPreviewDeployment` swallows its own failures and has no key, so redelivery would fire duplicate Workers Builds. Run it only when `message.attempts === 1`; document preview as best-effort.
 
 ### 3. `workers/gate-workflow/index.ts`, dedupe without poisoning (R1-R4, R12)
 
 - With an `Idempotency-Key`, derive `verdictId = verdict-premerge-<first 32 hex of SHA-256(key)>`; without it, unchanged. `verdictId` is the workflow handle only, not the DO row id.
-- **Fix the poisoning:** delete the `workflows` entry in the `catch`. Mark an entry `recorded` only after `recordGateVerdict` succeeds. A repeat start with the same key replays (200 + `Idempotent-Replay`) only for a `recorded` entry; a `running` entry answers 409 (in flight), not 200. The map is an optimization; the DO key is the real guard and a new isolate re-runs the gate once (cost stated).
-- **`recordGateVerdict` checks `response.ok` and throws on non-2xx** (AGENTS.md `Response.ok` rule). A replay counts as ok; a 409 surfaces as an error. It forwards the `Idempotency-Key` on `POST /api/gate-verdicts`. The DO replays only for an identical body; `notes` and `score` are deterministic and no timestamps are sent, which a test pins.
-- Error codes: Zod failure returns 400, missing spec 404, everything else 500, so the consumer can classify (section 2).
-- Other callers: `spec-do/index.ts:4349` posts to `/gates/pre-merge` with no key and keeps the random id, intentionally unchanged; `promotion-worker/merge-train.ts:342` uses the gate binding, and the implementer confirms its path before merge.
+- **Fix the poisoning:** delete the `workflows` entry in the `catch`. Mark an entry `recorded` only after `recordGateVerdict` succeeds. A repeat start with the same key replays (200 + `Idempotent-Replay`) only for a `recorded` entry whose request-body hash matches (S2: a different candidate under the same key must not replay another result); a `running` entry answers 409 with `{inFlight:true}`, not 200, and a `running` entry older than 120 s is treated as absent (a hung run never reaches the `catch`). The map is an optimization; the DO key is the real guard and a new isolate re-runs the gate once (cost stated).
+- **`recordGateVerdict` checks `response.ok` and throws on non-2xx** (AGENTS.md `Response.ok` rule). A replay counts as ok; a 409 surfaces as an error. It forwards the `Idempotency-Key` on `POST /api/gate-verdicts`. **The determinism claim was false (S1):** `validateSpecConformance` adds a warning with `Math.random() < 0.1` (`gate-workflow/index.ts:789`), so a re-run can produce a different body and the DO answers 409. Resolution: on a DO 409 for `/api/gate-verdicts`, `recordGateVerdict` treats the verdict as already recorded (the first write is authoritative for the key), marks the entry `recorded`, and logs the body difference; it does not throw. Seeding the simulated warning from `candidateId + commitSha` is optional and out of scope. No determinism-pinning test.
+- Error codes (S8): Zod failure returns 400; a missing spec returns 404 by propagating `specResponse.status` (today a generic `Error`, `:239-241`); everything else 500. A fresh run answers 201, a map replay 200 + `Idempotent-Replay`.
+- Other callers: `spec-do/index.ts:4349` posts to `/gates/pre-merge` with no key and keeps the random id, intentionally unchanged; `promotion-worker/merge-train.ts:342` calls `GATE_WORKFLOW.fetch('/run')` with a relative URL; the gate has no `/run` route, so that call already 404s and is unaffected. Log it in `docs/OPEN-QUESTIONS.md`, do not fix it here (S9).
 
 ### 4. Tests
 
 - Edge: same key twice on a keyed route replays with `Idempotent-Replay`; same key on two different routes does not replay across them; an unkeyed route ignores the header; a 256-character key is 400 with no DO call.
-- Queue consumer: add a `makeMessage()` helper with `retry`, `ack`, `attempts` and migrate the existing literals in `tests/queue.test.ts` (lines 124-706); then: transient 5xx retries, 4xx and validation ack, thrown fetch retries, attempt cap gives up, a redelivery sends the same gate key and history key, a 409 is logged and acked, preview runs only at `attempts === 1`, unset token retries.
-- Gate: gate throws once then succeeds under one key and the second call runs; `recordGateVerdict` fails then succeeds; `recordGateVerdict` non-OK throws; same key yields one DO row via the DO key; no key yields a random id; Zod failure is 400 and missing spec is 404.
+- Queue consumer (S7): add a `makeMessage()` helper (`attempts`, `retry`, `ack` as `vi.fn()`) and migrate the ~15 literals in `workers/queue-consumer/tests/queue.test.ts` (754 lines; they are `{id, body, timestamp, retryCount: 0}`); the invalid-message test at `:253-257` becomes "acks". Then: transient 5xx retries, 4xx and validation ack, thrown fetch retries, attempt cap gives up, a redelivery sends the same gate key and history key, a 409 is logged and acked, an `inFlight` 409 and a 401 retry, no-repo retries to the cap then acks, preview runs only at `attempts === 1` and its throw never retries, unset token retries, and no message gets both `retry` and `ack` called.
+- Gate: gate throws once then succeeds under one key and the second call runs; `recordGateVerdict` fails then succeeds; `recordGateVerdict` non-OK throws; a DO 409 marks the entry `recorded` without throwing; same key yields one DO row via the DO key; a stale `running` entry is ignored; a different body under the same key does not replay; no key yields a random id; Zod failure is 400 and missing spec is 404.
 - Run `npm run typecheck`, the three workers' unit tests and `workers/spec-do/tests/idempotency.test.ts`.
 
 ### 5. Docs
@@ -80,6 +82,7 @@ Classification (every exit; `retry({ delaySeconds })` with exponential backoff, 
 - Queue consumer new / gate old: the gate ignores the header and mints a random id, so retries can re-run the gate. **Bounded duplicate gate runs, at most the retry cap**, until the gate deploys (not "no worse than today": today there is no retry) (R15).
 - Queue consumer old / gate new: no key, random id, as today.
 - `max_retries` in `wrangler.toml` is additive config. Rolling back to the old consumer stops retries, which is safe.
+- New gate / old DO: unaffected, `/api/gate-verdicts` has been keyed since m10 (`spec-do/index.ts:40`).
 - No schema change, so no migration ordering.
 
 ## Risks
@@ -88,7 +91,8 @@ Classification (every exit; `retry({ delaySeconds })` with exponential backoff, 
 2. Behavior change on bad data: messages once silently acked now retry; the classification table is the control.
 3. Gate dedupe is per event key, not per commit: two events for one commit run twice (acceptable).
 4. A client may believe an unkeyed route is protected: the edge test pins the ignore behavior; the unkeyed-route plan resolves it.
-5. Poisoned in-memory entry: fixed by deleting on failure and replaying only `recorded` entries (R1).
+5. The gate now answers 500 where it answered 201 when the DO verdict write fails; the other caller, `spec-do/index.ts:4349`, checks `gateResponse.ok` and will see the failure. Intended (S8).
+6. Poisoned in-memory entry: fixed by deleting on failure and replaying only `recorded` entries (R1).
 
 ## Out of scope (own plans)
 
