@@ -36,16 +36,25 @@ dataset = "beehive-metrics"
 queue = "beehive-artifacts-push"
 max_batch_size = 100
 max_batch_timeout = 30
+# Backstop for whole-invocation failures; the consumer gives up at attempt 5 (MAX_ATTEMPTS), no DLQ
+max_retries = 4
+retry_delay = 30
 
 [[queues.consumers]]
 queue = "preview-artifacts-push"
 max_batch_size = 100
 max_batch_timeout = 30
+# Backstop for whole-invocation failures; the consumer gives up at attempt 5 (MAX_ATTEMPTS), no DLQ
+max_retries = 4
+retry_delay = 30
 
 [[queues.consumers]]
 queue = "preview-artifacts-events"
 max_batch_size = 100
 max_batch_timeout = 30
+# Backstop for whole-invocation failures; the consumer gives up at attempt 5 (MAX_ATTEMPTS), no DLQ
+max_retries = 4
+retry_delay = 30
 
 [observability]
 enabled = true
