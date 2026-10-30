@@ -96,7 +96,7 @@ Classification (every exit; `retry({ delaySeconds })` with `min(30 * 2^(attempts
 
 ## Out of scope (own plans)
 
-Keying the other ~16 mutation routes, the governance migration, change-type classification and the two-person rule; the `limit=100` lookups; a durable gate `workflows` map; a dead-letter queue.
+Keying the other ~16 mutation routes, the governance migration, change-type classification and the two-person rule; the `limit=100` lookups; a durable gate `workflows` map; a dead-letter queue and a negative cache (tracked as queue follow-ups in `docs/MILESTONES.md` M5a-2).
 
 ## Review asks for the second pass
 
