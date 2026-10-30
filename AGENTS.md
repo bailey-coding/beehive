@@ -21,9 +21,11 @@ verdicts, and outcomes as first-class, linked artifacts.
 
 1. **TypeScript everywhere.** Zig→WASM only for profiled CPU-bound kernels — and only
    after a measurement justifies it.
-2. **Orchestration spine is hand-written.** Spec schema, DO ledger, promotion train,
-   Workflow sequencing are load-bearing walls. Code agents write leaf functions, glue,
-   tests, and candidate services.
+2. **Orchestration spine is agent-written under plan + review.** Spec schema, DO ledger,
+   promotion train, Workflow sequencing are load-bearing walls. Agents may implement them,
+   but only with a written plan reviewed by an independent agent before code, and an
+   independent agent review of the implementation before merge (heavy tier; additive,
+   mixed-version-safe changes). Deploys and destructive ops stay human-only.
 3. **Fork, don't contend.** Never design a "many agents push one repo/one branch" flow.
 4. **Coordination state lives in Workers-native stores, never in the repo.**
    - Scores, verdicts, train state → **spec Durable Object (SQLite)**, transactional.
@@ -52,7 +54,7 @@ serialization point for promotion decisions.
 
 ### Working conventions
 
-- Work only on the current phase in `docs/MILESTONES.md`; spine items (rule 2) need a human.
+- Work only on the current phase in `docs/MILESTONES.md`; spine items (rule 2) need the plan + review gates, not a human author.
 - Undocumented Artifacts behavior → write a finding into `docs/OPEN-QUESTIONS.md`, never
   a silent workaround.
 - Candidate services stay small and stateless (price calculator / URL shortener shape).

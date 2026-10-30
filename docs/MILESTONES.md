@@ -205,7 +205,7 @@ Code: `workers/api/ui-layout.ts` (`appPage`, `statusPage`, trail builders, lazy 
 **M11 — Issue links and closed-issue comment setting (proposed 2026-10-17, future; after M9).** Both need a
 Spec DO schema change, so they ship together in one additive migration, in their own two pushes (the first
 makes an old DO tolerate an unknown `schema_version`; see `docs/M8-UI-ISSUES-PLAN.md` "Deferred"). Plan first;
-spine work, a human reviews.
+spine work: plan and implementation each get an independent agent review.
 - **Issue-to-issue links:** a new `issue_issue_links` table, routes and UI ("follow-up of", "see also"),
   limited to issues in the same organisation.
 - **Closed-issue comment setting:** a per-repository setting for whether closed issues accept comments
@@ -219,7 +219,7 @@ spine work, a human reviews.
 Today `authenticate()` (`workers/api/principal.ts`) knows only the master token, whose actor is the client-sent
 `X-Actor-ID`, and read-only service tokens; UI users arrive through a GitHub session. A capability granted to an
 actor that anyone holding the master token can claim proves nothing, so minting needs a verified principal first.
-Spine work: a human designs it; start from the 2026-10-17 proposal in `docs/OPEN-QUESTIONS.md`.
+Spine work: an agent plans it (independent agent review before code); start from the 2026-10-17 proposal in `docs/OPEN-QUESTIONS.md`.
 - **User tokens:** `authenticate()` returns a `kind: 'user'` principal; where tokens are minted, stored (hashed),
   scoped, expired and revoked; how a token maps to an `actors` row.
 - **Master token:** what happens to actor assertion once user tokens exist (keep for break-glass admin only?).
@@ -259,6 +259,7 @@ Spine work: a human designs it; start from the 2026-10-17 proposal in `docs/OPEN
 
 ---
 
-**Sequencing rule:** agents write candidates and glue; you write the orchestration spine.
-If a task touches the spec schema, DO ledger, or train logic, it belongs to a human or a
-single carefully supervised session — not to an autonomous agent run.
+**Sequencing rule:** agents write candidates, glue, and the orchestration spine. If a task
+touches the spec schema, DO ledger, or train logic, it needs a written plan reviewed by an
+independent agent before code, and an independent agent review of the implementation before
+merge. Deploys and destructive ops stay human-only.

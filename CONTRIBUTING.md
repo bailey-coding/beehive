@@ -107,12 +107,12 @@ If you're an AI agent contributing to Beehive, follow these rules:
 
 1. **Follow the sequencing rule:**
    - Agents write candidates and glue
-   - **Humans write the orchestration spine** (Spec schema, DO ledger, promotion train, workflow sequencing)
-   - If a task touches spine code, flag it for human review
+   - **Agents may write the orchestration spine** (Spec schema, DO ledger, promotion train, workflow sequencing) under plan + review: a written plan reviewed by an independent agent before code, and an independent agent review of the implementation before merge
+   - If a task touches spine code, say so in the plan and PR
 
 2. **Follow non-negotiable rules:**
    - TypeScript everywhere
-   - Orchestration spine is hand-written
+   - Orchestration spine is agent-written under plan + review
    - Fork, don't contend (never many agents push one repo/branch)
    - Coordination state in Workers-native stores (not in repo)
    - Always-pushed invariant (every task ends with a push)

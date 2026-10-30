@@ -358,7 +358,7 @@ beehive/
 ## 📝 Non-Negotiable Rules
 
 1. **TypeScript everywhere** - Zig→WASM only for profiled CPU-bound kernels
-2. **Orchestration spine is hand-written** - Spec schema, DO ledger, promotion train, workflow sequencing
+2. **Orchestration spine is agent-written under plan + review** - Spec schema, DO ledger, promotion train, workflow sequencing
 3. **Fork, don't contend** - Never design "many agents push one repo/one branch"
 4. **Coordination state lives in Workers-native stores**
    - Scores, verdicts, train state → Spec DO (SQLite)
