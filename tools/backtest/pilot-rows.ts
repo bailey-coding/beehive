@@ -25,7 +25,7 @@ export const PILOT_ROWS: FreezeInput[] = [
     keyTerms: ['applyCanaryRefs'],
     corpusNote: 'Base flaky: workers/shadow-router/tests/mirror-safety.test.ts has a fake-timer flake (reviewer-observed; did not fire in the 3-run base check). Kept; flaky tests are retried and never counted as red or as regressions.',
     // The agents can read the whole SF-3 paragraph in the tree; it states the router fix, which already exists at base.
-    // Other hits (M3 SLO plan, RFC 0005) only mention the function as a code pointer.
+    // Other hits (M3 SLO plan, RFD 0005) only mention the function as a code pointer.
     acknowledgedDocHits: ['docs/OPEN-QUESTIONS.md', 'docs/M3-CANARY-SLO-PLAN.md', 'docs/rfcs/0005-shadow-router-cache.md'],
   },
   {

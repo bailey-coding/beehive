@@ -55,6 +55,6 @@ The ADR says these are "cheap now, expensive to retrofit". Two further additive 
 
 1. `docs/MILESTONES.md`: change M5a to **PARTIAL (idempotency, migration tests done)**. Create **M5a-2** holding the bootstrap fields, change-type classification and the two-person rule, each with the exit criteria above. Remove the `dfaa8ee` citation.
 2. Add a near-miss record type to M5a-2 (table, write on trial/promotion loss, read route). Nothing else in the plan produces it, and M5b's trust calibration lists near-miss rate as an input.
-3. Schema for M5a-2 should ship in one additive migration (m13 or later; m12 is user tokens and the index migration is m12 or later per FOCUS), covering ADR 0005's initiator/executor/reviewer, outcome link and near-miss table so the retrofit happens once.
+3. Schema for M5a-2 should ship in one additive migration (m14 or later: m12 is user tokens, m13 is `gate_runs`), covering ADR 0005's initiator/executor/reviewer, outcome link and near-miss table so the retrofit happens once.
 4. Fix findings 1 and 2 first; they are small and change real behavior. Both touch spine code, so they need the plan and independent review gates.
 5. Wire the remaining mutation routes, or reword the claim to name the nine.
