@@ -1,6 +1,6 @@
 ---
 category: planning
-status: reviewed-revised
+status: implemented-pending-review
 milestone: m5a-2
 audience: human,agent
 tags:
@@ -103,3 +103,11 @@ Keying the other ~16 mutation routes, the governance migration, change-type clas
 1. Does the revised gate worker (delete on failure, `recorded` only after a confirmed DO write, 409 for in-flight) converge for every failure combination?
 2. Is the classification table complete against the final code?
 3. Is `max_retries = 5` plus the `attempts >= 5` give-up consistent with the queue's delivery counting?
+
+## Implementation notes (2026-10-30)
+
+Implemented on `claude/pr1-review-lmgqik` in three commits (gate, consumer, edge). Deviations from the plan:
+- The consumer does not call `message.ack()`: a normal return acks, and only `retry()` is called explicitly. The existing test literals were left in place and run through a `runQueue()` wrapper that adds `attempts`/`retry`/`ack`; `makeMessage()` is used by the new tests.
+- 404 on a missing spec is the only status propagated from the Spec DO; any other non-OK is a gate 500.
+- A stale in-flight entry (older than 120 s) is rerun; a different request body under a live key is a plain 409.
+- Full unit suite: 55 files, 1182 tests pass, typecheck clean. Not run: e2e.

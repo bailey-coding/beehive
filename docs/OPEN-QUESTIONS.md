@@ -723,3 +723,9 @@ M5a now closes the at-least-once double-write for all nine POST routes in `IDEMP
 - **Zero integration overhead** - Beehive is Workers-native; Flagship integrates via a binding + OpenFeature SDK.
 
 **Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.
+
+## 2026-10-30: promotion worker calls a gate route that does not exist
+
+`workers/promotion-worker/merge-train.ts:342` calls `GATE_WORKFLOW.fetch('/run', ...)` with a relative URL, and the gate worker has no `/run` route (only `/gates/pre-merge`, status and result routes), so the call answers 404. Found while reviewing `docs/M5A-2-IMPL-PLAN.md`; not changed there. Same class as the three nonexistent DO routes of 2026-10-16: check `Response.ok` and decide whether the merge train should call `/gates/pre-merge`.
+
+**Status**: Open.

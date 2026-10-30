@@ -461,3 +461,20 @@ The `KV namespaces ... Authentication error` printed by `wrangler delete` is har
 Symptom lookup for deploy and auth failures: `docs/TROUBLESHOOTING.md`. First-time setup and
 self-hosting: `docs/SETUP.md`. See `docs/OPEN-QUESTIONS.md` for dated findings (Artifacts behavior, wrangler config
 gotchas, deploy learnings).
+
+## Idempotency and queue retries (M5a-2, 2026-10-30)
+
+- **Edge:** `POST` to the eight keyed routes (organizations, actors, repositories, specs, candidates, gate-verdicts,
+  trials, promotions) forwards the client's `Idempotency-Key` to the Spec DO; a key over 255 characters is a 400 at the
+  edge. Other routes ignore the header. Replays answer with the stored status and `Idempotent-Replay: true`; the same key
+  with another body is a 409.
+- **Queue consumer:** a message is retried with `message.retry()` (30 s doubling to 900 s) on 5xx, 408, 429, 401, 403,
+  a missing repository or candidate, a thrown fetch, or an in-flight gate run; it is dropped with an error log on other
+  4xx, validation failures and a history-key 409. After attempt 5 it gives up with an error log; `max_retries = 4` in
+  `workers/queue-consumer/wrangler.toml` is the backstop. There is no dead-letter queue, so a given-up message is gone;
+  search Workers Logs for `Giving up on message` and `Dropping message`.
+- **Gate worker:** `POST /gates/pre-merge` with an `Idempotency-Key` derives its verdict id from the key and replays a
+  run only after the Spec DO confirmed the verdict; the in-memory run map is per isolate, so after a restart the Spec DO
+  key is the guard and the gate re-runs once. Errors: 400 invalid body, 404 unknown spec, 409 `{inFlight:true}` while a
+  run is still going, 500 otherwise (including a failed verdict write).
+- Preview deploys run on the first delivery only and are best effort.

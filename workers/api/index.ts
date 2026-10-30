@@ -457,15 +457,34 @@ function makeErrorResponse(error: string, status = 400): Response {
   );
 }
 
+// Same limit and error shape as the Spec DO (workers/spec-do/index.ts MAX_IDEMPOTENCY_KEY_LENGTH)
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+
+/**
+ * Reads the Idempotency-Key header for a POST whose Spec DO route is keyed (IDEMPOTENT_ROUTES there).
+ * Returns the key, undefined when absent, or a 400 for an unusable key. Only pass the result on to
+ * sendToSpecDo for those routes; the Spec DO ignores the header on any other route.
+ */
+function idemKey(request: Request): string | undefined | Response {
+  const key = request.headers.get('Idempotency-Key');
+  if (!key) return undefined;
+  if (key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    return makeErrorResponse(`Idempotency-Key exceeds ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`, 400);
+  }
+  return key;
+}
+
 async function sendToSpecDo(
   stub: SpecDoStub,
   path: string,
   method: string,
   body?: unknown,
-  actorId?: string
+  actorId?: string,
+  idempotencyKey?: string
 ): Promise<Response> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (actorId) headers['X-Actor-ID'] = actorId;
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 
   const request = new Request(`https://spec-do.internal${path}`, {
     method,
@@ -1456,7 +1475,9 @@ async function handleCreateOrganization(
 ): Promise<Response> {
   const body: import('./types').CreateOrganizationRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/organizations', 'POST', body, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/organizations', 'POST', body, actorId, key);
   return response;
 }
 
@@ -1490,7 +1511,9 @@ async function handleCreateActor(
 ): Promise<Response> {
   const body: import('./types').CreateActorRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/actors', 'POST', body, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/actors', 'POST', body, actorId, key);
   return response;
 }
 
@@ -1545,7 +1568,9 @@ async function handleCreateRepository(
 ): Promise<Response> {
   const body: import('./types').CreateRepositoryRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/repositories', 'POST', body, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/repositories', 'POST', body, actorId, key);
   return response;
 }
 
@@ -1579,7 +1604,9 @@ async function handleCreateSpec(
 ): Promise<Response> {
   const body: import('./types').CreateSpecRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/specs', 'POST', body, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/specs', 'POST', body, actorId, key);
   return response;
 }
 
@@ -1649,7 +1676,9 @@ async function handleCreateCandidate(
 ): Promise<Response> {
   const body: import('./types').CreateCandidateRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/candidates', 'POST', { ...body, agentId: actorId }, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/candidates', 'POST', { ...body, agentId: actorId }, actorId, key);
   return response;
 }
 
@@ -1698,7 +1727,9 @@ async function handleCreateGateVerdict(
 ): Promise<Response> {
   const body: import('./types').CreateGateVerdictRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/gate-verdicts', 'POST', { ...body, decidedBy: actorId }, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/gate-verdicts', 'POST', { ...body, decidedBy: actorId }, actorId, key);
   return response;
 }
 
@@ -1736,7 +1767,9 @@ async function handleCreateTrial(
 ): Promise<Response> {
   const body: import('./types').CreateTrialRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/trials', 'POST', { ...body, decidedBy: actorId }, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/trials', 'POST', { ...body, decidedBy: actorId }, actorId, key);
   return response;
 }
 
@@ -1784,7 +1817,9 @@ async function handleCreatePromotion(
 ): Promise<Response> {
   const body: import('./types').CreatePromotionRequest = await request.json();
   const actorId = request.actorId;
-  const response = await sendToSpecDo(stub, '/api/promotions', 'POST', { ...body, promotedBy: actorId }, actorId);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  const response = await sendToSpecDo(stub, '/api/promotions', 'POST', { ...body, promotedBy: actorId }, actorId, key);
   return response;
 }
 
