@@ -81,7 +81,38 @@ interface SpecContract {
 }
 
 // In-memory state for development
-const workflows = new Map<string, { status: string; result?: GateWorkflowResult }>();
+interface WorkflowEntry {
+  status: string;
+  result?: GateWorkflowResult;
+  // Set only after the Spec DO confirmed the verdict write; only such an entry may be replayed
+  recorded?: boolean;
+  bodyHash?: string;
+  startedMs?: number;
+}
+const workflows = new Map<string, WorkflowEntry>();
+
+const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
+// A run that has not recorded within this window is treated as absent (a hung run never reaches the catch)
+const IN_FLIGHT_STALE_MS = 120_000;
+
+/** A failure with the HTTP status the caller should see (the queue consumer classifies on it). */
+class GateHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function jsonResponse(body: unknown, status: number, extra: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...extra },
+  });
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -197,16 +228,51 @@ async function handleStartPreMergeGate(
   request: Request,
   env: Env
 ): Promise<Response> {
+  // Set once this invocation owns a map entry, so the catch removes only its own
+  let ownedVerdictId: string | null = null;
   try {
     // Validate request body with Zod - prevents field name mismatches
-    const body = GateWorkflowRequestSchema.parse(await request.json());
+    const rawBody = await request.text();
+    const body = GateWorkflowRequestSchema.parse(JSON.parse(rawBody));
     const { candidateId, specId, commitSha, baseCommitSha, actorId } = body;
 
-    const verdictId = `verdict-premerge-${generateId()}`;
+    // With an Idempotency-Key the verdict id is derived from it, so a redelivery maps to the same run
+    const idempotencyKey = request.headers.get(IDEMPOTENCY_KEY_HEADER) ?? undefined;
+    const bodyHash = idempotencyKey ? await sha256Hex(rawBody) : undefined;
+    const verdictId = idempotencyKey
+      ? `verdict-premerge-${(await sha256Hex(idempotencyKey)).slice(0, 32)}`
+      : `verdict-premerge-${generateId()}`;
     const startedAt = now();
 
+    if (idempotencyKey) {
+      const existing = workflows.get(verdictId);
+      if (existing && existing.bodyHash !== bodyHash) {
+        return jsonResponse({
+          success: false,
+          error: 'Idempotency key conflict: same key used with different request',
+          timestamp: now(),
+        }, 409);
+      }
+      if (existing?.recorded && existing.result) {
+        return jsonResponse(
+          { success: true, verdictId, result: existing.result, timestamp: now() },
+          200,
+          { 'Idempotent-Replay': 'true' }
+        );
+      }
+      if (existing && now() - (existing.startedMs ?? 0) < IN_FLIGHT_STALE_MS) {
+        return jsonResponse(
+          { success: false, inFlight: true, error: 'Gate run for this key is in flight', timestamp: now() },
+          409
+        );
+      }
+    }
+
     // Create workflow state
+    ownedVerdictId = verdictId;
     workflows.set(verdictId, {
+      bodyHash,
+      startedMs: startedAt,
       status: 'running',
       result: {
         verdictId,
@@ -237,7 +303,8 @@ async function handleStartPreMergeGate(
     );
     
     if (!specResponse.ok) {
-      throw new Error(`Failed to get spec ${specId}`);
+      // 404 is a permanent bad candidate; anything else is the Spec DO failing and may be retried
+      throw new GateHttpError(`Failed to get spec ${specId}`, specResponse.status === 404 ? 404 : 500);
     }
     
     const specData = await specResponse.json() as { data?: { contract?: string } & Record<string, unknown> };
@@ -256,14 +323,23 @@ async function handleStartPreMergeGate(
       startedAt
     );
 
-    // Update workflow state
+    // Update workflow state (not yet replayable: the verdict is not recorded)
     workflows.set(verdictId, {
+      bodyHash,
+      startedMs: startedAt,
       status: 'complete',
       result,
     });
 
-    // Record verdict in Spec DO
-    await recordGateVerdict(env, result, actorId);
+    // Record verdict in Spec DO; throws unless the Spec DO confirmed it
+    await recordGateVerdict(env, result, actorId, idempotencyKey);
+    workflows.set(verdictId, {
+      bodyHash,
+      startedMs: startedAt,
+      status: 'complete',
+      result,
+      recorded: true,
+    });
 
     return new Response(JSON.stringify({
       success: true,
@@ -275,14 +351,17 @@ async function handleStartPreMergeGate(
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (error: unknown) {
-    return new Response(JSON.stringify({
+    // A failed run must not stay replayable or in flight: the retry has to run again
+    if (ownedVerdictId) workflows.delete(ownedVerdictId);
+    const status =
+      error instanceof GateHttpError ? error.status
+      : error instanceof z.ZodError || error instanceof SyntaxError ? 400
+      : 500;
+    return jsonResponse({
       success: false,
       error: ((error as Error)?.message || String(error)) || String(error),
       timestamp: now(),
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    }, status);
   }
 }
 
@@ -847,7 +926,8 @@ function aggregateResults(
 async function recordGateVerdict(
   env: Env,
   result: GateWorkflowResult,
-  actorId: string
+  actorId: string,
+  idempotencyKey?: string
 ): Promise<void> {
   // Record the verdict in the Spec DO
   const specDoStub = getSpecDoStub(env);
@@ -862,16 +942,26 @@ async function recordGateVerdict(
     decidedBy: actorId,
   };
   
-  await specDoStub.fetch(
+  const response = await specDoStub.fetch(
     new Request('https://spec-do.internal/api/gate-verdicts', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Actor-ID': actorId,
+        ...(idempotencyKey ? { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey } : {}),
       },
       body: JSON.stringify(verdictData),
     })
   );
+  if (response.status === 409 && idempotencyKey) {
+    // The first write under this key is authoritative: a re-run can differ (the simulated conformance
+    // warning is random), and the DO answers 409 for the same key with another body.
+    console.warn(`[Gate] Verdict for key already recorded with a different body (${result.verdictId}); keeping the first`);
+    return;
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to record verdict ${result.verdictId}: Spec DO answered ${response.status}`);
+  }
   
   console.log(`[Gate] Recorded verdict ${result.verdictId} for candidate ${result.candidateId}`);
 }

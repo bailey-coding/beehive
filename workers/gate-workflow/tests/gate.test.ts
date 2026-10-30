@@ -186,7 +186,7 @@ describe('Pre-merge Gate Workflow', () => {
 
     it('should return 400 for invalid request body (missing fields)', async () => {
       const response = await callHandler('/gates/pre-merge', 'POST', {});
-      expect(response.status).toBe(500); // Handler catches the Zod error
+      expect(response.status).toBe(400);
       const data = await readJson(response);
       expect(data.success).toBe(false);
       expect(data.error).toBeDefined();
@@ -202,12 +202,12 @@ describe('Pre-merge Gate Workflow', () => {
       };
 
       const response = await callHandler('/gates/pre-merge', 'POST', requestBody);
-      expect(response.status).toBe(500); // Zod validation fails
+      expect(response.status).toBe(400);
       const data = await readJson(response);
       expect(data.success).toBe(false);
     });
 
-    it('should return 500 if spec not found', async () => {
+    it('should return 404 if spec not found', async () => {
       // Mock Spec DO to return 404 for spec
       mockInvalidSpec();
 
@@ -220,7 +220,7 @@ describe('Pre-merge Gate Workflow', () => {
       };
 
       const response = await callHandler('/gates/pre-merge', 'POST', requestBody);
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(404);
       const data = await readJson(response);
       expect(data.success).toBe(false);
       expect(data.error).toContain('Failed to get spec');
@@ -493,7 +493,7 @@ describe('Error Handling', () => {
     };
 
     const response = await callHandler('/gates/pre-merge', 'POST', requestBody);
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(400);
     const data = await readJson(response);
     expect(data.success).toBe(false);
   });
@@ -504,5 +504,167 @@ describe('Error Handling', () => {
     expect(response.status).toBe(404);
     const data = await readJson(response);
     expect(data.error).toBe('Not found');
+  });
+});
+
+describe('Gate start idempotency', () => {
+  const body = {
+    candidateId: TEST_CANDIDATE_ID,
+    specId: TEST_SPEC_ID,
+    commitSha: TEST_COMMIT_SHA,
+    baseCommitSha: TEST_BASE_COMMIT_SHA,
+    actorId: TEST_ACTOR_ID,
+  };
+  let verdictPosts: Request[];
+  let verdictStatuses: number[];
+
+  // Spec DO stub: serves the spec, and answers each verdict POST with the next queued status (default 201)
+  function stubSpecDo() {
+    verdictPosts = [];
+    verdictStatuses = [];
+    const spec = { data: { id: TEST_SPEC_ID, contract: JSON.stringify({ endpoints: [], models: {} }) } };
+    mockEnv.SPEC_DO.get.mockReturnValue({
+      fetch: vi.fn().mockImplementation(async (req: Request) => {
+        const url = new URL(req.url);
+        if (url.pathname === `/api/specs/${TEST_SPEC_ID}`) return Response.json(spec);
+        if (url.pathname === '/api/gate-verdicts') {
+          verdictPosts.push(req.clone());
+          return Response.json({ success: true }, { status: verdictStatuses.shift() ?? 201 });
+        }
+        return Response.json({ error: 'Not found' }, { status: 404 });
+      }),
+    });
+  }
+
+  // Each test uses its own key: the gate keeps its run map for the life of the isolate
+  let keyCounter = 0;
+  const nextKey = () => `queue:event-${Date.now()}-${keyCounter++}:gate`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    specDoRoutes.clear();
+    mockEnv.SPEC_DO.idFromName.mockReturnValue('do-id');
+    stubSpecDo();
+  });
+
+  it('derives the same verdict id from the same key and replays a recorded run', async () => {
+    const key = nextKey();
+    const first = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(first.status).toBe(201);
+    const second = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(second.status).toBe(200);
+    expect(second.headers.get('Idempotent-Replay')).toBe('true');
+    expect((await readJson(second)).verdictId).toBe((await readJson(first)).verdictId);
+    expect(verdictPosts).toHaveLength(1);
+  });
+
+  it('forwards the key on the verdict write', async () => {
+    const key = nextKey();
+    await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(verdictPosts[0].headers.get('Idempotency-Key')).toBe(key);
+  });
+
+  it('without a key mints a random verdict id and sends no key', async () => {
+    const a = await readJson(await callHandler('/gates/pre-merge', 'POST', body));
+    const b = await readJson(await callHandler('/gates/pre-merge', 'POST', body));
+    expect(a.verdictId).not.toBe(b.verdictId);
+    expect(verdictPosts[0].headers.get('Idempotency-Key')).toBeNull();
+  });
+
+  it('throws on a failed verdict write, then runs again under the same key', async () => {
+    const key = nextKey();
+    verdictStatuses.push(503);
+    const failed = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(failed.status).toBe(500);
+    const retried = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(retried.status).toBe(201);
+    expect(retried.headers.get('Idempotent-Replay')).toBeNull();
+    expect(verdictPosts).toHaveLength(2);
+  });
+
+  it('runs again after the spec fetch failed under the same key', async () => {
+    const key = nextKey();
+    mockSpecDoResponse(`/api/specs/${TEST_SPEC_ID}`, { error: 'down' }, 503);
+    const failed = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(failed.status).toBe(500);
+    stubSpecDo();
+    const retried = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(retried.status).toBe(201);
+  });
+
+  it('treats a Spec DO 409 on the verdict write as already recorded', async () => {
+    const key = nextKey();
+    verdictStatuses.push(409);
+    const response = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(response.status).toBe(201);
+    const replay = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(replay.status).toBe(200);
+  });
+
+  it('answers 409 inFlight for a duplicate while the first run has not recorded', async () => {
+    const key = nextKey();
+    let release!: () => void;
+    const gateOpen = new Promise<void>((r) => { release = r; });
+    const base = mockEnv.SPEC_DO.get();
+    mockEnv.SPEC_DO.get.mockReturnValue({
+      fetch: vi.fn().mockImplementation(async (req: Request) => {
+        if (new URL(req.url).pathname === '/api/gate-verdicts') await gateOpen;
+        return base.fetch(req);
+      }),
+    });
+    const first = callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    await new Promise((r) => setTimeout(r, 10));
+    const duplicate = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    expect(duplicate.status).toBe(409);
+    expect((await readJson(duplicate)).inFlight).toBe(true);
+    release();
+    expect((await first).status).toBe(201);
+  });
+
+  it('ignores a run that has been in flight longer than two minutes', async () => {
+    const key = nextKey();
+    let hold = true;
+    let release!: () => void;
+    const gateOpen = new Promise<void>((r) => { release = r; });
+    const base = mockEnv.SPEC_DO.get();
+    mockEnv.SPEC_DO.get.mockReturnValue({
+      fetch: vi.fn().mockImplementation(async (req: Request) => {
+        if (hold && new URL(req.url).pathname === '/api/gate-verdicts') {
+          hold = false;
+          await gateOpen;
+        }
+        return base.fetch(req);
+      }),
+    });
+    const first = callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    await new Promise((r) => setTimeout(r, 10));
+    const realNow = Date.now;
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 121_000);
+    try {
+      const rerun = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+      expect(rerun.status).toBe(201);
+    } finally {
+      vi.restoreAllMocks();
+      release();
+      await first;
+    }
+  });
+
+  it('answers 409 (not inFlight) for the same key with a different body', async () => {
+    const key = nextKey();
+    await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
+    const other = await callHandler('/gates/pre-merge', 'POST', { ...body, commitSha: 'fff000' }, { 'Idempotency-Key': key });
+    expect(other.status).toBe(409);
+    expect((await readJson(other)).inFlight).toBeUndefined();
+  });
+
+  it('answers 400 for malformed JSON', async () => {
+    const request = new Request('http://localhost/gates/pre-merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-auth-token' },
+      body: '{not json',
+    });
+    // @ts-ignore - mock environment
+    expect((await handler.fetch(request, mockEnv, mockCtx)).status).toBe(400);
   });
 });
