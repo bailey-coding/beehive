@@ -8,7 +8,7 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-23
+**Last updated:** 2026-10-30
 
 ## Where we are
 
@@ -24,6 +24,7 @@ Completed items are removed, not struck through; history lives in git.*
 - M8 is on `main` and **deployed** (maintainer deploy of `main` at `831d9db`, 2026-10-24, not yet verified by an agent): the Spec DO issue changes (atomic numbering, comment
   rules, close/reopen, actor validation), the repo issue pages UI, and the CLI default actor
   (`BEEHIVE_ACTOR` / `defaultActor` / `--actor`, an admin stopgap until M12). Plan and reviews: `docs/M8-*.md`.
+- **M5a is PARTIAL** (`docs/M5A-AUDIT.md`, 2026-10-30): only idempotency and the migration tests are built; the bootstrap fields, change-type classification and two-person rule are not, and the near-miss record type has no owner. Next work is M5a-2 (`docs/MILESTONES.md`).
 - **M5a idempotency is merged and on `main`** (2026-10-19): queue-consumer idempotency fix implemented, idempotency
   keys moved from schema m9 to m10, legacy-shape migration tests added (production dump simulation for
   `service_accounts`, `actors`, `entity`, `promotion` tables), and the `agent/m5a-idempotency-fix` branch
@@ -115,6 +116,12 @@ cleanups. Confirm, in this order:
 
 ## Open work
 
+- **M5a idempotency gaps (spine; plan + independent review before code):** (1) the edge helper `workers/api/index.ts:467`
+  drops `Idempotency-Key`, so `/api` callers get no protection; (2) the queue consumer triggers the gate workflow before its
+  keyed history write (a redelivery re-runs the gate) and never calls `retry()`/`ack()`, so failures are dropped; (3) only 9 of the
+  mutation routes are keyed. Details: `docs/M5A-AUDIT.md`.
+- **Docs changed 2026-10-30:** RFC is now RFD (`docs/rfds/`); agents may write the spine under plan + review (`AGENTS.md` rule 2).
+
 - **The clean per-worker install CI step may not catch the zod failure — FIXED.** `ci-enhanced.yml` now builds
   from a `git archive` copy with no root `node_modules` and installs only in each worker folder (`d3b42ff`, 2026-10-19).
   This prevents the root-level dependency resolution that allowed the zod failure to reach production.
@@ -164,9 +171,9 @@ agent-autonomy items (agent-created issues/specs, change-type classification).
 ## Queued milestones
 
 **Recommended order (per Opus agent):**
-1. **M5a (idempotency partially complete on `agent/m5a-idempotency-fix`)** — Idempotency keys schema m10
-   and queue-consumer fix are done (closes at-least-once double-write for all nine POST routes); remaining:
-   bootstrap schema fields, change-type classification, two-person merge rule.
+1. **M5a-2** (M5a is partial; idempotency is on `main` for nine Spec DO routes) — edge key forwarding, queue-consumer
+   retry and gate dedupe, remaining routes, then the governance migration (bootstrap fields, near-miss table),
+   change-type classification and the two-person rule.
 2. M7 (session provenance)
 3. Capability minting (M3 core + M6.2 merged)
 4. M5b (trust registry calibration)

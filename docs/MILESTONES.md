@@ -76,17 +76,25 @@ repo; treat as open unless a commit says otherwise. Demo video (one spec, three 
 - **Demo script:** Show concurrent agent work, issue creation, candidate spawning, and lazy file access
 **Exit criteria:** Competition submission complete with video demonstrating multi-agent coordination, autonomous issue/spec generation, and ArtifactFS lazy-loading benefits (startup time <1s, minimal bandwidth usage).
 
-**M5a — Trust & Governance Layer: Core Schema (COMPLETE 2026-10-19).** 
+**M5a — Trust & Governance Layer: Core Schema (PARTIAL: idempotency and migration tests done 2026-10-19; the rest moved to M5a-2; audit: `docs/M5A-AUDIT.md`).** 
 Bootstrap governance with minimal viable ledger changes and change-type classification:
 
 **Architecture of distrust principle:** "The agent cannot be trusted, so build so that its mistakes cannot matter." Every agent starts with zero capabilities; authority flows only through explicit capability grants.
 
-- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees. **FIXED:** Queue-consumer idempotency implementation merged (`c421d63`, `dfaa8ee`, 2026-10-19), preventing double-writes.
+- **Idempotent operations** — All Spec DO mutations include idempotency keys; handle at-least-once Queue delivery without ordering guarantees. **FIXED:** Queue-consumer idempotency implementation merged (`c421d63`, 2026-10-19; covers 9 Spec DO routes, see M5a-2), preventing double-writes.
 - **Bootstrap schema fields.** Ledger fields that ship from day one: change-type classification, approval records, self-approval markers, cost attribution. This stops later governance work from needing a migration. Idempotency keys table moved to schema m10 (`469389b`, 2026-10-19).
 - **Change-type classification** with confidence (typo-fix / refactor / behavior-change / security-sensitive / dependency-change / infra). Change type drives the gate policy: which oracles are mandatory, which can be skipped. **Note: Also an open M4 agent-autonomy item; do once and count for both.**
 - **Two-person merge rule enforced at Spec DO promotion step.** Starting in bootstrap mode (self-approvals marked as such) so governance is retrofittable by policy change, not schema migration.
 - **Legacy-shape migration tests:** Added production dump simulation tests for `service_accounts`, `actors`, `entity`, and `promotion` tables, asserting schema m10 (`e55ce32`, 2026-10-19).
-**Exit criteria:** Idempotency keys prevent double-writes; bootstrap fields added to ledger; change-type classification operational; two-person rule logic in place (even if only self-approvals for now).
+**Exit criteria:** Idempotency keys prevent double-writes; bootstrap fields added to ledger; change-type classification operational; two-person rule logic in place (even if only self-approvals for now). **Met so far: idempotency on 9 routes only. The other three are M5a-2.**
+
+**M5a-2 — Governance schema and idempotency completion (next; spine work, plan + independent review first).** From `docs/M5A-AUDIT.md`:
+- **Edge forwards `Idempotency-Key`** to the Spec DO (the helper at `workers/api/index.ts:467` drops it today), with an edge-level test.
+- **Queue consumer:** key the gate-workflow trigger, not just the history write; call `message.retry()` on failure; treat a 409 as "same key, different body" and log it.
+- **Wire the remaining mutation routes** (issues, comments, links, stage changes, claim, decide, execute, gate/pre-merge, promotion/tournament/merge-train/canary/deploy-ref), or document each as intentionally unkeyed.
+- **One additive migration (m13 or later)** carrying ADR 0005's retrofit-once fields: change type + confidence, approval records with self-approval marker, cost attribution, initiator/executor/reviewer, outcome link, and the **near-miss table** (written when a candidate loses a trial or promotion; read route).
+- **Change-type classifier** and the **two-person rule** at the promotion step (bootstrap mode: self-approvals marked as such). Maintainer approval stays human-only (`docs/M5-PLAN.md`); agents write the code, not the approvals.
+**Exit criteria:** a retried `/api` POST with the same key replays; a redelivered push event runs the gate once; the migration is additive and passes the legacy-shape tests; a lost trial writes a near-miss row; a promotion of a security-sensitive change needs two approvals or is marked self-approved.
 
 - **Compile-time auth safety:** Custom request types (`AuthedRequest`, `ActorRequest`, `ReadRequest`, `WriteRequest`, `MaintainerRequest`) added with branded types. All 43 API handlers in `workers/api/index.ts` migrated to use typed requests. Wrapper functions (`withAuth`, `withActor`, scope checkers) added to `workers/shared/principal.ts`. Redundant runtime `actorId` lookups removed from handlers. Type-level tests in `principal.test-d.ts`. Implementation on `vibe/custom-request-types-1a468a`.
 ---
