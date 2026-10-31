@@ -80,6 +80,7 @@ The new POST routes (`classifications`, `approvals`) join `IDEMPOTENT_ROUTES` in
 3. **PR-C, classifier.** Pure function with a table-driven test per rule and the fail-stricter cases, the two routes, issue-creation and gate callers (best effort), edge routes. Exit: classification stored for a new issue and a gate run; an old DO (404) does not fail the gate.
 4. **PR-D, approvals and the rule in bootstrap mode.** Policy keys, `assertPromotionApprovals` on every path from step 0, approvals routes, `self_approval` marking. Exit: the promotion worker's flow is unchanged in bootstrap mode but records approvals; an agent approver is rejected; two distinct humans satisfy the rule.
 5. **PR-E (separate plan, optional).** Keying the remaining ~16 mutation routes.
+6. **PR-F, maintainer continuity.** Headcount check on `enforced`, automatic fallback to `bootstrap` with `governance_degraded`, role-change approvals, active-window tracking, `break_glass` logging on master-token overrides.
 
 ## Mixed-version window (one push deploys all ten workers)
 
@@ -88,12 +89,24 @@ The new POST routes (`classifications`, `approvals`) join `IDEMPOTENT_ROUTES` in
 - Strict zod schemas reject unknown fields: no existing request or response shape gains a field in this plan. All new data flows through new routes and tables.
 - Rollback to a pre-m14 DO leaves the tables in place and ignores them (rollback floor).
 
-## Decisions needed from the maintainer
+## Decisions (maintainer, 2026-10-31)
 
-1. **Subject of an approval.** This plan approves `(candidate, rung)`. Alternative: approve the `promotion_states` row. The candidate form survives retries and a restarted promotion; the row form is closer to the train.
-2. **Self-approval in bootstrap.** Plan proceeds and marks it. Say if a single maintainer should instead be blocked from approving their own agent's work even in bootstrap.
-3. **Low-trust threshold.** Every actor is at 50, so `< 90` makes every promotion "two-person". Plan keeps it in the policy row and does not flip `enforced` until trust is calibrated (M5b). Say if you want it disabled until then.
-4. **Who may flip the policy.** Plan: maintainer user token only, never an agent token or the master token.
+1. **Approval subject: `(candidate, rung)`.** Accepted.
+2. **Self-approval in bootstrap: allowed** while there is a single human maintainer, always marked `self_approval = 1`. Accepted, with the continuity design below.
+3. **Low-trust threshold:** not answered; the plan keeps the default (stored in the policy row, not enforced before trust is calibrated).
+4. **Policy changes: maintainer user token only** (never an agent token or the master token for routine changes). Accepted. The master token remains a break-glass path (see below).
+
+## Governance continuity: a departing or malicious maintainer
+
+The maintainer asked how to avoid (a) progress blocking when a maintainer leaves and (b) a malicious maintainer exploiting the rule. The two pull in opposite directions (more approvers resist abuse and block more easily), so the design makes the strictness depend on how many active human maintainers exist, and keeps a logged break-glass path.
+
+- **Quorum depends on headcount, and the policy refuses to lock itself.** The policy route rejects `governance.two_person_mode = 'enforced'` unless at least **3 active human maintainers** exist (so losing one still leaves two who can approve). With 1 or 2 maintainers the mode stays `bootstrap`: approvals are recorded, a missing one never blocks. A maintainer is *active* when their human actor has the maintainer role and a live user token or an approval/commit within a configurable window (`governance.active_window_days`, default 90).
+- **Departure.** Removing a maintainer (role change, already audited in `purge_log`) is itself an approval-gated action once there are 3 or more: two other maintainers must approve it. If `enforced` is on and the active count drops below 3 (a maintainer leaves, goes inactive, or is removed), the DO automatically falls back to `bootstrap` for new promotions and writes a `governance_degraded` history row, so a single departure cannot freeze delivery. Falling back is loud (history, a log line, the OPS check) and requires a deliberate maintainer action to re-enable.
+- **Malicious maintainer.** Separation of duties in `enforced` mode: the approver may not be the initiator of the change (`outcome_links.initiator_actor_id`) or the actor who promoted it. Approvals are append-only and unique per (candidate, rung, approver), so one maintainer cannot approve twice or rewrite them; revoking a role or changing policy needs the same two-approver quorum; and policy changes, role changes and approvals all write `entity_history` rows with the actor id. A single malicious maintainer in a 3-maintainer ledger cannot promote a critical change alone, cannot remove the others alone, and cannot silently relax the policy alone.
+- **Break-glass (human-only).** The master token (held by the Cloudflare account owner) can set `bootstrap`, add a maintainer role, or finish a stuck promotion, but every such call writes a `break_glass` row (`entity_history` + `purge_log`) with the reason, and `docs/OPS.md` documents it as the recovery path for a lone or locked-out maintainer. It is deliberately outside the two-person rule because the Cloudflare account owner is the root of trust anyway.
+- **Not solved here (documented as residual risk):** the account owner can always override; collusion of two maintainers in a 3-maintainer ledger; stolen maintainer tokens (mitigation: user tokens are revocable and the audit trail names them). A time-delayed (cooling-off) approval and an alert on `break_glass` / `governance_degraded` are follow-ups.
+
+Implementation lands in PR-D (the headcount check and fallback) and a small PR-F (role-change approvals and active-window tracking), after the rule exists in bootstrap mode. Until then there is one maintainer, so bootstrap applies and nothing blocks.
 
 ## Risks
 
@@ -114,3 +127,4 @@ Trust score calibration and the full capability model (M5b / M6.2), cost billing
 3. Does bootstrap mode truly never block, including a promotion by the `beehive-system` agent actor?
 4. Do any of the new tables or checks break the mixed-version, rollback-floor or strict-zod rules?
 5. Is the approver rule (`type = human` and `role = maintainer`, two distinct ids, unique constraint) sufficient against self-approval by an agent that holds a maintainer-role actor?
+6. Attack the continuity design: can one departing maintainer freeze delivery, can one malicious maintainer promote, remove others or relax policy alone, can the automatic fallback to `bootstrap` be triggered on purpose to bypass the rule (e.g. by deactivating maintainers), and is the 3-maintainer threshold and the active window sound?
