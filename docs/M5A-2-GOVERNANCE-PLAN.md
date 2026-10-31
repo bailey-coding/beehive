@@ -1,6 +1,6 @@
 ---
 category: planning
-status: revised-after-review-1
+status: revised-after-review-2
 milestone: m5a-2
 audience: human,agent
 tags:
@@ -10,9 +10,11 @@ tags:
 
 # M5a-2 plan, part 2: governance schema, near-misses, change types, two-person rule
 
-**Date:** 2026-10-31 (rev 2) | **Tier:** heavy | **Spine:** yes (Spec DO schema, promotion step): this plan needs an independent re-review of the changed sections before code, and each PR needs an independent implementation review before merge (AGENTS.md rule 2). | **Sources:** `docs/MILESTONES.md` M5a-2, `docs/M5A-AUDIT.md`, `docs/decisions/0005-org-memory.md`, `docs/M5-PLAN.md` sections A, C, D.
+**Date:** 2026-10-31 (rev 3) | **Tier:** heavy | **Spine:** yes (Spec DO schema, promotion step): this plan needs an independent re-review of the changed sections before code, and each PR needs an independent implementation review before merge (AGENTS.md rule 2). | **Sources:** `docs/MILESTONES.md` M5a-2, `docs/M5A-AUDIT.md`, `docs/decisions/0005-org-memory.md`, `docs/M5-PLAN.md` sections A, C, D.
 
-**Review history.** Rev 1 was reviewed by an independent agent on 2026-10-31: approve with changes, 4 blockers (B1-B4), 6 should-fixes (S1-S6), 3 nits (N1-N3). Every item is folded in below and tagged. Two resolutions change what the maintainer accepted in rev 1 and are marked **[decision needed]**.
+**Review history.** Rev 1 was reviewed by an independent agent on 2026-10-31: approve with changes, 4 blockers (B1-B4), 6 should-fixes (S1-S6), 3 nits (N1-N3). Every item is folded in below and tagged. Two resolutions changed what the maintainer accepted in rev 1; the maintainer accepted both on 2026-10-31 (two approvals with the initiator allowed; no automatic fallback) along with the reject veto and the `enforced` gate.
+
+**Rev 3 (review 2, 2026-10-31): approve with changes, 3 blockers (B1-B3), 9 should-fixes (S1-S9), 3 nits.** The amendments in "Rev 3 amendments" below **supersede any conflicting text above them**. The state machines (approvals, policy mode, candidate stage, promotion-state status) are in `docs/GOVERNANCE-STATE-MACHINES.md` and are normative for PR-S and PR-D.
 
 Part 1 (`docs/M5A-2-IMPL-PLAN.md`) is merged. This part ships **additive** (new tables, no `ALTER` on existing ones) behind a policy row that starts in **bootstrap mode**, so tightening governance later is a policy change, not a migration (M5-PLAN section D).
 
@@ -45,8 +47,8 @@ Part 1 (`docs/M5A-2-IMPL-PLAN.md`) is merged. This part ships **additive** (new 
 
 ### Migration `m14` (`GOVERNANCE_SQL`, one section, new tables only, `REFERENCES actors` at most)
 
-- `change_classifications(id, entity_type CHECK IN ('issue','spec','candidate'), entity_id, change_type CHECK IN (typo-fix, refactor, behavior-change, security-sensitive, dependency-change, infra, unclassified), confidence REAL CHECK 0..1, classifier, inputs_hash, created_at)`; index `(entity_type, entity_id, created_at)`. Append-only; the newest row wins, ties broken by `created_at` then `rowid` (S6).
-- `approvals(id, candidate_id, rung, commit_sha, approver_actor_id REFERENCES actors, decision CHECK IN ('approve','reject'), self_approval INTEGER, reason, created_at)`, `UNIQUE(candidate_id, rung, commit_sha, approver_actor_id, decision)`. `commit_sha` is the candidate head at approval time; the check requires it to equal `candidates.commit_sha` now, so an approval does not survive a new commit (B2). `rung` is `'full'` in this plan; earlier rungs are not approvable (S6). A reject or approval is superseded only by a new append-only row.
+- `change_classifications(id, entity_type CHECK IN ('issue','spec','candidate'), entity_id, commit_sha TEXT /*candidate rows: the head sha classified*/, change_type CHECK IN (typo-fix, refactor, behavior-change, security-sensitive, dependency-change, infra, unclassified), confidence REAL CHECK 0..1, classifier, inputs_hash, created_at)`; index `(entity_type, entity_id, created_at)`. Append-only; the newest row wins, ties broken by `created_at` then `rowid` (S6).
+- `approvals(id, subject_type CHECK IN ('candidate','role_change','policy_change'), subject_id, rung, commit_sha, approver_actor_id REFERENCES actors, decision CHECK IN ('approve','reject'), self_approval INTEGER, reason, created_at)`, with **no unique key on `decision`**: an approver's effective decision is their latest row (rowid), so approve, reject, approve by one approver is legal; redelivery is deduplicated by the Idempotency-Key. For `role_change` / `policy_change`, `subject_id` is the sha256 of the canonical request body. `commit_sha` is the candidate head at approval time; the check requires it to equal `candidates.commit_sha` now, so an approval does not survive a new commit (B2). `rung` is `'full'` in this plan; earlier rungs are not approvable (S6). A reject or approval is superseded only by a new append-only row.
 - `near_misses(id, spec_id, candidate_id, reason CHECK IN ('trial_loss','gate_fail','train_drop','slo_rollback','tournament_loss'), rung, lost_to_candidate_id, trial_id, source_ref, evidence TEXT /*JSON*/, complexity_delta REAL, created_at)`, `UNIQUE(candidate_id, reason, source_ref)` with `INSERT OR IGNORE`, where `source_ref` is the trial id, verdict run id, tournament/train id or deployment id. A re-delivered write therefore cannot duplicate a row (S3). Indexes on `(spec_id, created_at)` and `(candidate_id)`.
 - `governance_events(id, event TEXT /*policy_change, role_change, governance_degraded, break_glass, approval_missing*/, actor_id, asserted_actor_id, subject TEXT, reason TEXT, detail TEXT /*JSON*/, created_at)`, no foreign keys, never purged (like `purge_log`). All system events go here; `entity_history` keeps only per-candidate facts (`approval_missing` on a candidate, type 'candidate') (S2).
 - **Dropped from rev 1:** `cost_attributions` and `outcome_links`. Nothing in this plan writes them, so they would violate "every module must be reachable"; adding them later is cheap and additive. The ADR 0005 initiator/executor/reviewer and cost fields move to a later plan (with M5b) (S6).
@@ -127,6 +129,39 @@ An agent approver is rejected; a sock-puppet human without a `github_user_id` is
 3. **Transaction scope.** Hooks wrap formerly bare writers (`transitionCandidate`, `decideTrial`) in `transactionSync`: a behavior change covered by rollback tests.
 4. **Agent-authored governance.** This code governs agents; the code review must test that no agent actor can approve, change policy or change a role.
 5. **Master-token gap.** Until OPS master stage 2, `enforced` is not safe; the plan blocks it rather than documenting around it.
+
+
+## Rev 3 amendments (supersede conflicting text above)
+
+**B1, classification cannot be downgraded or stale.** `change_classifications` carries `commit_sha`. The effective criticality at check time is the **maximum strictness** over all rows for (candidate, current head sha), the spec row and the linked issue row; with no row for the head sha the result is `unclassified`. `classifyChange` returns `unclassified` (not `behavior-change`) when it has no `paths`. Writing a less strict row than one already present for the same entity is a maintainer-only route; the gate worker's tier-1 token can only add rows at equal or greater strictness. A **changed-file source for the gate** is an `enforced` precondition (step 0 item 2), because the gate receives shas only.
+
+**B2, eligible approver is provable from stored data.** In addition to the rules above, an approver needs a `user_tokens` row with `created_via = 'session'` (GitHub OAuth login) for that actor, and the request's token must be one such token (the edge forwards `X-Beehive-Token-Id`). Master-minted (`created_via = 'admin'`) tokens never count for approvals or quorum. A break-glass role grant is stamped `role_origin = break_glass` in `governance_events`; approvals from such an actor count only after a quorum of non-break-glass maintainers ratifies the role. "Master stage 2" is defined in OPS as: master cannot create human actors, grant the role or mint user tokens except under break-glass. Its "done" state is a **deployed `wrangler.toml` var** (`GOVERNANCE_MASTER_STAGE2`, human deploy only), not a runtime setting master could write (which would be circular).
+
+**B3, supersession and quorum storage.** Fixed in the `approvals` definition above (no unique key on `decision`; `subject_type`/`subject_id`). A role or policy change applies when at least 2 distinct eligible approvers hold a row for its request hash created within 7 days.
+
+**S1, the DO must see the principal kind.** On the three admin routes (approvals, policy, role change) the edge sets `X-Beehive-Principal: user` and `X-Beehive-Token-Id`; trust is valid because only the edge holds the admin token. In `enforced` the DO fails closed (403) when the header is absent (old edge, new DO); in `bootstrap` it proceeds and records `unverified`. Today the role route is master-only (`workers/api/lifecycle.ts:73`) and `authorize()` blocks user tokens on `/api/admin/*`, so this reverses the current rule: add **PR-D0**, opening the role, policy and approvals routes to maintainer-scope user tokens (`USER_MAINTAINER_ROUTES`). Master stays allowed only under break-glass with a mandatory reason, which also prevents a first-maintainer deadlock.
+
+**S2, `self_approval` and the satisfied predicate** are defined from stored data only: `self_approval = 1` iff exactly one eligible human maintainer exists at insert time; `required = 2` in `enforced`; in `bootstrap` the hook writes `approval_missing` iff effective approvals < min(2, eligible count). The initiator clause is dropped (there is no data source). Marker text: `two_person: bootstrap_single_maintainer`.
+
+**S3, hook and transaction conditions.** (i) Gate only on **entering** `promoted` or completing at `full`; never gate rollback, `rolled_back`, `failed` or same-state writes; `patchPromotionState` is gated only when the merged row is `completed` at `full` and the prior row differs. (ii) Wrapping `transitionCandidate` in `transactionSync` turns today's no-op for an unknown id (history row, then a handler 404) into a thrown `NotFoundError`; map `NotFoundError` and `ApprovalRequiredError` in the main catch (`index.ts:4557`) so a 404 does not become a 500. (iii) The `decideTrial` guards (winner is a participant, trial undecided) change today's behavior (re-deciding is allowed); check `cli/src/utils/api-client.ts:537` and the e2e before enforcing. (iv) `ApprovalRequiredError` carries `code`, `need` and `have`; a bare `extends ConflictError` loses them.
+
+**S4, canary exposure.** Approval gates `full` only. A critical change still reaches live users at the canary rung without approval. This is **accepted exposure** in this plan (gating `canary` would block the SLO loop); the `rung` column allows adding it later. Maintainer to confirm (open item 5).
+
+**S5, reject veto limits.** A reject counts only while the rejecter is still eligible; it follows the candidate across shas until withdrawn; it lapses to recorded dissent after `governance.veto_ttl_days` (default 14); break-glass still overrides. A departed maintainer's reject therefore cannot stand forever, and a trivial re-push cannot evade a live veto.
+
+**S6, "active" and the approval window.** Activity is computed from `governance_events` rows named `approval_recorded` (never purged), not from `approvals` (swept with purged candidates). The window defines "active maintainer" only; approval validity is the sha match. `approvals` accepts non-critical candidates in `bootstrap` (otherwise the `enforced` precondition can never be met), validating that the candidate exists and the sha equals its head and is non-empty.
+
+**S7, DO rollback below the hook.** While `enforced`, rolling the Spec DO back below the PR-D build silently disables the rule. OPS documents this as a governance event; the DO writes a `hook_rollback` row on init when `schema_version >= m14` but the hook version is lower.
+
+**S8, enabling `enforced` needs a second person.** Two distinct approvals on the enable proposal (the setter counts as one), in addition to the stored-data precondition, so one maintainer cannot enforce unilaterally.
+
+**S9, migration shape frozen before PR-A.** `governance_events` event names: `policy_change`, `role_change`, `break_glass`, `approval_missing`, `approval_recorded`, `invalid_transition`, `hook_rollback` (the rev 2 name `governance_degraded` is stale: no fallback exists). `commit_sha` on `change_classifications` and `subject_type`/`subject_id` on `approvals` must be in the m14 definition, because changing them after m14 ships needs a table rebuild the rollback floor forbids. System events never go in `entity_history`.
+
+**Nits taken.** Facts line numbers drift: re-verify at PR time (N1). `GET /api/governance/status` lists candidates that would block at flip time (N2). `rollbackHead` does not set the candidate to `rolled_back`; only the merge train does: document who writes demotion in tournament mode (N3).
+
+**PR slicing (replaces the earlier list).** PR-A schema (PR-A may start now). PR-B near-misses. PR-S shared pure `governance-state-machine.ts` with tests, plus log-only candidate-stage validation (`invalid_transition` rows). PR-C classifier. PR-D0 open the admin routes to maintainer user tokens. PR-D approvals, policy and the rule in bootstrap mode. PR-F continuity (quorum on role and policy changes, `enforced` precondition, break-glass logging, veto TTL). PR-E remaining idempotency keys. PR-D and PR-F must not start until B1-B3 are implemented in their designs; `enforced` is not enabled before PR-F, master stage 2 and a changed-file source.
+
+**Open items (maintainer):** 1-4 from rev 2 were accepted on 2026-10-31. New: 5. approval gates `full` only and canary is accepted exposure (S4). 6. the reject veto lapses to dissent after 14 days (S5).
 
 ## Out of scope
 
