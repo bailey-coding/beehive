@@ -101,6 +101,21 @@ Roll out in two steps: first **log-only** (`invalid_transition` rows in `governa
 
 `pending -> in_progress | cancelled`; `in_progress -> completed | failed | rolled_back | cancelled`; `failed -> in_progress | pending`; `completed`, `rolled_back` and `cancelled` are terminal. Enforce in the same module as the tournament machine. The hook fires only on the transition **into** `completed` with `currentRung = 'full'` and a differing prior row, so a PATCH re-sending `completed` is not re-checked. (The `cancelled` status does not exist in the zod enum today; confirm against `promotion-ledger.ts:32` before adding it.)
 
+## (e) Intent approval and real-data eligibility (untrusted origin)
+
+Origin comes from `intent_provenance` (`maintainer`, `known_agent`, `external`, `unknown`; `unknown` is treated as `external`; legacy rows count as `maintainer`). Approver eligibility `E` is as in (a). Spec content changes are detected by `content_hash`.
+
+| State | Event | Guard | Next |
+|---|---|---|---|
+| spec.draft (origin not `maintainer`) | approve spec | approver in E; `content_hash` = sha256 of the current spec content | spec.approved |
+| spec.draft | create candidate | | refuse 409 `spec_not_approved` |
+| spec.approved | spec content changes | new hash differs from the approved hash | spec.draft (existing candidates become ineligible) |
+| spec.approved | reject / withdraw | approver in E | spec.draft |
+| spec (origin `maintainer`) | create candidate | | allowed; candidate eligible |
+| any | origin recomputed | derived spec origin is the lower of the spec's and its source issue's | stored once at creation; never raised later without a maintainer action recorded in `governance_events` |
+
+Real-data eligibility of a candidate (computed, not stored): `eligible = spec.origin == maintainer OR spec.approved(content_hash matches the spec now)`. An ineligible candidate may run only in the build and test sandboxes and in preview with synthetic or redacted traffic. It may not receive real mirrored traffic or enter `passed_shadow`+ (log-only first), nor be the target of a `canary` or `full` deploy-ref move. Enforced in bootstrap and enforced modes alike.
+
 ## Not covered here (follow-ups)
 
 Merge train, trial, spec and issue stage machines have no table and are out of M5a-2; `decideTrial` gets only the participant and already-decided guards. Add them to this module when they become load-bearing.
