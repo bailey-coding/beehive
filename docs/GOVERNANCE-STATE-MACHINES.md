@@ -101,20 +101,29 @@ Roll out in two steps: first **log-only** (`invalid_transition` rows in `governa
 
 `pending -> in_progress | cancelled`; `in_progress -> completed | failed | rolled_back | cancelled`; `failed -> in_progress | pending`; `completed`, `rolled_back` and `cancelled` are terminal. Enforce in the same module as the tournament machine. The hook fires only on the transition **into** `completed` with `currentRung = 'full'` and a differing prior row, so a PATCH re-sending `completed` is not re-checked. (The `cancelled` status does not exist in the zod enum today; confirm against `promotion-ledger.ts:32` before adding it.)
 
-## (e) Intent approval and real-data eligibility (untrusted origin)
+## (e) Intent approval and real-data eligibility (untrusted origin; rev 5)
 
-Origin comes from `intent_provenance` (`maintainer`, `known_agent`, `external`, `unknown`; `unknown` is treated as `external`; legacy rows count as `maintainer`). Approver eligibility `E` is as in (a). Spec content changes are detected by `content_hash`.
+Origin comes from `intent_provenance` (`maintainer`, `known_agent`, `external`, `unknown`; `unknown` and `known_agent` need intent approval like `external`; a row-less entity older than `governance.m14_epoch` is `legacy` = `maintainer`, a row-less newer one is `unknown`). The derived state is named **`intent_status`** (`needs_approval` | `approved`); it is **not** `specs.stage`, which is unvalidated and user-writable, and nothing gates on `specs.stage`. Approver eligibility E is as in (a) (non-revoked, unexpired session-created token or a UI session through the signed envelope). The approved hash is computed by the DO from `name`, `description`, `contract` and `declared_delta_surface`.
 
-| State | Event | Guard | Next |
+| intent_status | Event | Guard | Next |
 |---|---|---|---|
-| spec.draft (origin not `maintainer`) | approve spec | approver in E; `content_hash` = sha256 of the current spec content | spec.approved |
-| spec.draft | create candidate | | refuse 409 `spec_not_approved` |
-| spec.approved | spec content changes | new hash differs from the approved hash | spec.draft (existing candidates become ineligible) |
-| spec.approved | reject / withdraw | approver in E | spec.draft |
-| spec (origin `maintainer`) | create candidate | | allowed; candidate eligible |
-| any | origin recomputed | derived spec origin is the lower of the spec's and its source issue's | stored once at creation; never raised later without a maintainer action recorded in `governance_events` |
+| needs_approval (origin not `maintainer`) | approve spec | approver in E; `approver_eligible` snapshotted at insert; hash = current DO-computed hash | approved |
+| needs_approval | create candidate or claim | | refuse 409 `spec_not_approved` (no contract or token in the body) |
+| approved | spec content changes (no such route today; any future one must reset) | hash differs from the approved hash | needs_approval; existing candidates become ineligible |
+| approved | withdraw or reject | any current member of E | needs_approval |
+| (origin `maintainer`) | create candidate | | allowed; candidate eligible |
 
-Real-data eligibility of a candidate (computed, not stored): `eligible = spec.origin == maintainer OR spec.approved(content_hash matches the spec now)`. An ineligible candidate may run only in the build and test sandboxes and in preview with synthetic or redacted traffic. It may not receive real mirrored traffic or enter `passed_shadow`+ (log-only first), nor be the target of a `canary` or `full` deploy-ref move. Enforced in bootstrap and enforced modes alike.
+Candidate real-data eligibility (computed in `candidateExposure(candidateId, specIdFromRequest, commitSha)`, not stored): `eligible = candidate row exists AND request spec id == candidate.spec_id AND (spec.origin == maintainer OR intent_status == approved) AND a pre-merge pass exists at the deployed sha AND (approval for the required rung exists per the requirements table, when the type needs it)`. Enforced, in `bootstrap` and `enforced` alike, at: `deployCanary` (refuse 409), `rollbackHead` (an ineligible `prev` is replaced by the empty ref), `liveRefs` (ineligible entries are omitted unless `includeIneligible=1`). An ineligible candidate may run only in the build and test sandboxes and in preview with no real traffic. Consumers of `GET /api/candidates/:id/exposure` treat any non-2xx as ineligible.
+
+Requirements by origin and type (rung = `canary` is the first real-data rung, because the router's only targets are live canary refs):
+
+| Origin / type | Spec intent approval | Candidate approval at `canary` | Candidate approval at `full` |
+|---|---|---|---|
+| `maintainer`, non-critical | none | none | none |
+| `maintainer`, critical (security-sensitive, dependency-change, infra, schema-migration) | none | none | required (2 in `enforced`) |
+| `maintainer`, `oracle-change` | none | required | required |
+| non-`maintainer`, non-critical | required | none | none |
+| non-`maintainer`, critical or `oracle-change` | required | required | required |
 
 ## Not covered here (follow-ups)
 
