@@ -161,7 +161,7 @@ An agent approver is rejected; a sock-puppet human without a `github_user_id` is
 
 **PR slicing (replaces the earlier list).** PR-A schema (PR-A may start now). PR-B near-misses. PR-S shared pure `governance-state-machine.ts` with tests, plus log-only candidate-stage validation (`invalid_transition` rows). PR-C classifier. PR-D0 open the admin routes to maintainer user tokens. PR-D approvals, policy and the rule in bootstrap mode. PR-F continuity (quorum on role and policy changes, `enforced` precondition, break-glass logging, veto TTL). PR-E remaining idempotency keys. PR-D and PR-F must not start until B1-B3 are implemented in their designs; `enforced` is not enabled before PR-F, master stage 2 and a changed-file source.
 
-**Open items (maintainer):** 1-4 from rev 2 were accepted on 2026-10-31. New: 5. approval gates `full` only and canary is accepted exposure (S4). 6. the reject veto lapses to dissent after 14 days (S5).
+**Open items (maintainer):** 1-4 from rev 2 were accepted on 2026-10-31. 5. Approval gates `full` only and canary is accepted exposure (S4): **accepted 2026-10-31**, on the reasoning that the canary rung is protected by SLO auto-rollback and the human approval (or none, in bootstrap) is required before `full`. 6. The reject veto lapses to recorded dissent after 14 days (S5): **accepted 2026-10-31**.
 
 ## Out of scope
 
