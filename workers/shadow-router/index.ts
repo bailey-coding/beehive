@@ -230,8 +230,8 @@ async function fanOutToCandidates(
   config: ShadowConfig,
   metrics: MetricsCollector | null,
   env: any
-): Promise<Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification }>> {
-  const results: Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification }> = [];
+): Promise<Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }>> {
+  const results: Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }> = [];
   
   if (config.candidatePreviews.size === 0) {
     console.log('[Shadow] No candidates configured for mirroring');
@@ -261,7 +261,7 @@ async function fanOutToCandidates(
   }
   
   // Create promises for all candidate fetches
-  const promises: Array<Promise<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification }>> = [];
+  const promises: Array<Promise<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }>> = [];
   
   for (const [candidateId, previewUrl] of config.candidatePreviews) {
     // Classify this request for this candidate
@@ -311,7 +311,7 @@ async function fanOutToCandidates(
           // Log to console in local dev
           console.log(`[Shadow] Candidate ${candidateId}: status=${result.response.status}, latency=${result.latencyMs}ms, classification=${classification.type}`);
         }
-        return { ...result, classification };
+        return { ...result, classification, requestId };
       });
     promises.push(promise);
   }
@@ -426,7 +426,7 @@ interface ScientistQueueMessage {
  */
 async function triggerScientist(
   request: Request,
-  candidateResponses: Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification }>,
+  candidateResponses: Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }>,
   metrics: MetricsCollector | null,
   env: any
 ): Promise<void> {
@@ -434,7 +434,8 @@ async function triggerScientist(
     return;
   }
 
-  const requestId = crypto.randomUUID();
+  // The id the candidates saw as x-request-id when it is known, so candidate logs correlate with the queue message
+  const requestId = candidateResponses[0].requestId ?? crypto.randomUUID();
   const timestamp = Date.now();
   const url = new URL(request.url);
   

@@ -83,7 +83,7 @@ describe('scientistSafeHeaders', () => {
 
 describe('mirror fan-out through the handler', () => {
   const live = liveRef('cand-a', 'https://cand-a.bz23711.workers.dev');
-  const calls: Array<{ url: string; method: string; body: string | null; redirect: string; aborted: () => boolean }> = [];
+  const calls: Array<{ url: string; method: string; body: string | null; redirect: string; xRequestId: string | null; aborted: () => boolean }> = [];
   let hang = false;
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
@@ -120,7 +120,7 @@ describe('mirror fan-out through the handler', () => {
       const req = typeof input === 'string' ? new Request(input, init) : input;
       const body = req.body ? await req.clone().text() : null;
       const signal = req.signal;
-      calls.push({ url: req.url, method: req.method, body, redirect: req.redirect, aborted: () => signal.aborted });
+      calls.push({ url: req.url, method: req.method, body, redirect: req.redirect, xRequestId: req.headers.get('x-request-id'), aborted: () => signal.aborted });
       if (hang && req.url.startsWith('https://cand-a')) {
         // like a real fetch: never answers, but rejects when the router aborts it
         return new Promise<Response>((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
@@ -207,6 +207,21 @@ describe('mirror fan-out through the handler', () => {
     expect(message.path).toBe('/:id/:id'); // /m/<n> with no configured route words
     expect(JSON.stringify(message)).not.toContain(secret);
     expect(logged.join('\n')).not.toContain(secret);
+  });
+
+  it('the Analytics Engine write carries the route template, never the raw path', async () => {
+    const writes: string[] = [];
+    const ANALYTICS = { writeDataPoint: vi.fn((point: unknown) => { writes.push(JSON.stringify(point)); }) };
+    const queue = { send: vi.fn(async () => {}) };
+    const url = urlFor('GET');
+    await handler.fetch(new Request(url, { headers: { Authorization: 'Bearer tok' } }), { ...env(), ANALYTICS, SCIENTIST_QUEUE: queue }, ctx);
+    await settleUntil(() => writes.some((w) => w.includes(':id')) && queue.send.mock.calls.length > 0);
+    // mode none: the candidate saw the router's id as x-request-id, and the queue message carries the same id
+    const message = (queue.send.mock.calls[0] as unknown[])[0] as { requestId: string };
+    expect(message.requestId).toBe(candidateCalls()[0].xRequestId);
+    const raw = new URL(url).pathname; // /m/<number>
+    expect(writes.some((w) => w.includes(':id'))).toBe(true);
+    expect(writes.every((w) => !w.includes(raw))).toBe(true);
   });
 
   it('wrangler.toml keeps the safe defaults: mode none, query strings redacted from logs', async () => {
