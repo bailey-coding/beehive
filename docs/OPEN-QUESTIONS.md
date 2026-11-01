@@ -1131,3 +1131,10 @@ Config, image and export only; nothing here ran on the platform (no Docker on th
   3. Whether a new exported Durable Object class plus its container application deploys in the same version as the existing renamed `Sandbox` entry without a lifecycle error (10086 applied only to deleting a bound class).
   4. `imageDigest` is expected to be `null`: wrangler 4.151.1 tags Dockerfile-built images (`<script>-<class>-<image>:wrangler-<time>`, no digest), as for the build image. The base-image digest pin in `Dockerfile.test` is the reproducibility anchor.
 - **Local checks run:** TOML parse, typecheck, sandbox-runner tests (97 pass), all clean. Independent review: `wrangler deploy --dry-run` on the real config passes validation and stops at the Docker check; with containers stripped the bundle builds. CI's dry-run (Docker available) builds `Dockerfile.test` first.
+
+## 2026-11-01: deploy-ref rollback toggles, and a repeated rollback now records a false near-miss
+
+`rollbackHead` (`workers/spec-do/index.ts`) moves a ref to `head.prevRefId`'s target. After one rollback the new head's `prev` is the head that was just rolled back, so a second (or redelivered) `POST /deploy-refs/rollback` moves the ref **back** to it ("rolling back twice toggles back", `docs/OPS.md`). Pre-existing behavior; since PR-B the second call also writes an `slo_rollback` near-miss for the candidate that was live in between, which did not lose anything. Found in the PR-B review. Options: make the rollback route idempotent per request (Idempotency-Key, the deploy-ref routes are not keyed today), or define rollback as "move to the last ref whose candidate is not the current head's". Not changed in PR-B.
+
+**Status**: Open.
+

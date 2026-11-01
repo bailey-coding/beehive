@@ -12,8 +12,8 @@ export const NEAR_MISS_REASONS = ['trial_loss', 'gate_fail', 'train_drop', 'slo_
 export const NearMissReasonSchema = z.enum(NEAR_MISS_REASONS);
 export type NearMissReason = z.infer<typeof NearMissReasonSchema>;
 
-/** Evidence above this many characters (serialised) is replaced by a marker, never stored truncated mid-JSON. */
-export const MAX_NEAR_MISS_EVIDENCE_CHARS = 8192;
+/** Evidence above this many UTF-8 bytes (serialised) is replaced by a marker, never stored truncated mid-JSON. */
+export const MAX_NEAR_MISS_EVIDENCE_BYTES = 8192;
 
 export interface NearMiss {
   id: string;

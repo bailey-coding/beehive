@@ -44,6 +44,20 @@ beforeEach(async () => {
   actor = spec.createActor('human', 'maint').id;
 });
 
+describe('evidence', () => {
+  it('evidence over 8192 UTF-8 bytes is replaced by a marker; a malformed stored value does not break the list', async () => {
+    const { spec: s, c1, c2 } = seed('ev-org');
+    const trial = spec.createTrial(s.id, c1.id, c2.id, actor);
+    // 3000 three-byte characters: under 8192 characters, over 8192 bytes
+    await call(`/api/trials/${trial.id}/decide`, 'POST', { winnerId: c1.id, comparisonMetrics: { note: '\u20ac'.repeat(3000) } });
+    expect(JSON.parse(rows()[0].evidence as string)).toMatchObject({ truncated: true });
+    store.raw.exec("UPDATE near_misses SET evidence = '{not json'");
+    const list = await call('/api/near-misses');
+    expect(list.status).toBe(200);
+    expect(list.json.data[0].evidence).toEqual({ unparsed: '{not json' });
+  });
+});
+
 describe('NEAR_MISS_REASONS', () => {
   it('is the closed set the writer accepts (the column is free text)', () => {
     expect([...NEAR_MISS_REASONS].sort()).toEqual(['gate_fail', 'slo_rollback', 'tournament_loss', 'train_drop', 'trial_loss']);
@@ -113,6 +127,22 @@ describe('tournament: newly eliminated or disqualified candidates are tournament
     ]);
     await call('/tournament-status/t1', 'PATCH', { candidates: [cand('a', 'winner'), cand('b', 'eliminated'), cand('c', 'disqualified')] });
     expect(rows()).toHaveLength(2);
+    // eliminated -> disqualified is a new status for the same loss: it reaches the unique key, is ignored, and the PATCH succeeds
+    const flip = await call('/tournament-status/t1', 'PATCH', { candidates: [cand('a', 'winner'), cand('b', 'disqualified'), cand('c', 'disqualified')] });
+    expect(flip.status).toBe(200);
+    expect(rows()).toHaveLength(2);
+  });
+
+  it('is atomic: if the near-miss write fails, the tournament write is rolled back', async () => {
+    await call('/tournament-status', 'POST', tournament([cand('a', 'competing'), cand('b', 'competing')]));
+    await call('/tournament-status/t1', 'PATCH', { status: 'in_progress' });
+    const version = () => (store.raw.prepare("SELECT version FROM tournaments WHERE id = 't1'").get() as { version: number }).version;
+    const v = version();
+    vi.spyOn(spec as unknown as { recordNearMiss: () => void }, 'recordNearMiss').mockImplementation(() => { throw new Error('boom'); });
+    const res = await call('/tournament-status/t1', 'PATCH', { candidates: [cand('a', 'winner'), cand('b', 'eliminated')] });
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(version()).toBe(v);
+    vi.restoreAllMocks();
   });
 });
 
@@ -120,15 +150,45 @@ describe('merge train: a car that fails, is rolled back or is removed is a train
   const car = (candidateId: string, position: number, status = 'waiting', extra: object = {}) => ({ candidateId, specId: 'spec-1', position, status, ...extra });
   const train = (candidates: unknown[]) => ({ id: 'm1', mode: 'merge-train', specId: 'spec-1', candidates, currentPosition: 0, nextMerge: null, status: 'processing' });
 
-  it('records failed and removed cars once', async () => {
+  it('records failed and removed (still waiting) cars once each, per car', async () => {
     await call('/merge-train-status', 'POST', train([car('a', 0), car('b', 1), car('c', 2)]));
     await call('/merge-train-status/m1', 'PATCH', { candidates: [car('a', 0, 'merged'), car('b', 1, 'failed', { failureReason: 'conformance' })] });
     expect(rows().map((r) => [r.candidate_id, r.reason, r.source_ref, JSON.parse(r.evidence as string).status])).toEqual([
-      ['b', 'train_drop', 'm1', 'failed'],
-      ['c', 'train_drop', 'm1', 'removed'],
+      ['b', 'train_drop', 'm1#1', 'failed'],
+      ['c', 'train_drop', 'm1#2', 'removed'],
     ]);
     await call('/merge-train-status/m1', 'PATCH', { candidates: [car('a', 0, 'merged'), car('b', 1, 'failed', { failureReason: 'conformance' })] });
     expect(rows()).toHaveLength(2);
+  });
+
+  it('a re-added car that fails again is a second fact (the promotion worker re-adds a candidate as a new car)', async () => {
+    await call('/merge-train-status', 'POST', train([car('b', 0, 'failed')]));
+    expect(rows()).toHaveLength(1); // a car created already failed counts, like a tournament POST
+    await call('/merge-train-status/m1', 'PATCH', { candidates: [car('b', 0, 'failed'), car('b', 1, 'waiting')] });
+    await call('/merge-train-status/m1', 'PATCH', { candidates: [car('b', 0, 'failed'), car('b', 1, 'failed')] });
+    expect(rows().map((r) => r.source_ref)).toEqual(['m1#0', 'm1#1']);
+  });
+
+  it('removing a merged car is not a loss', async () => {
+    await call('/merge-train-status', 'POST', train([car('a', 0, 'merged'), car('b', 1, 'merging')]));
+    await call('/merge-train-status/m1', 'PATCH', { candidates: [car('b', 1, 'merging')] });
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('a failed car that is then removed reaches the unique key and is ignored, not a 500 (INSERT OR IGNORE)', async () => {
+    await call('/merge-train-status', 'POST', train([car('a', 0)]));
+    await call('/merge-train-status/m1', 'PATCH', { candidates: [car('a', 0, 'failed')] });
+    // same car reported failed again under a different status path: rolled_back after failed hits the same (candidate, reason, source_ref)
+    const res = await call('/merge-train-status/m1', 'PATCH', { candidates: [car('a', 0, 'rolled_back')] });
+    expect(res.status).toBe(200);
+    expect(rows()).toHaveLength(1);
+  });
+
+  it('files the near-miss under the candidate\'s real spec when the candidate exists', async () => {
+    const x = seed('train-spec');
+    await call('/merge-train-status', 'POST', train([{ ...car(x.c1.id, 0), specId: 'spec-1' }]));
+    await call('/merge-train-status/m1', 'PATCH', { candidates: [{ ...car(x.c1.id, 0, 'failed'), specId: 'spec-1' }] });
+    expect(rows()[0].spec_id).toBe(x.spec.id);
   });
 });
 
@@ -164,6 +224,11 @@ describe('gate run failed: a gate_fail near-miss per failed run', () => {
     const failed = await run(c1.id, sha(3), 'fail');
     expect(rows().map((r) => [r.candidate_id, r.reason, r.source_ref, r.rung, r.spec_id])).toEqual([[c1.id, 'gate_fail', failed, 'pre-merge', s.id]]);
     await run(c1.id, sha(4), 'pass');
+    expect(rows()).toHaveLength(1);
+    // error and not_run are not losses: a run finished with error, and a run started already terminal (error)
+    const e = await call('/api/gate-runs', 'POST', { candidateId: c1.id, gate: 'pre-merge', commitSha: sha(5), decidedBy: actor });
+    expect((await call(`/api/gate-runs/${e.json.data.runId}/result`, 'POST', { ...finishBody('pass'), status: 'error', failureClass: 'sandbox_unavailable', exitCode: null, counts: null })).status).toBe(200);
+    expect((await call('/api/gate-runs', 'POST', { candidateId: c1.id, gate: 'pre-merge', commitSha: sha(6), decidedBy: actor, terminal: { status: 'error', failureClass: 'busy_timeout' } })).status).toBe(200);
     expect(rows()).toHaveLength(1);
     expect(JSON.parse(rows()[0].evidence as string)).toMatchObject({ attempt: 1, commitSha: sha(3), failureClass: 'tests_failed' });
   });

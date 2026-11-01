@@ -293,7 +293,17 @@ type Service = { fetch: (request: Request) => Promise<Response> };
 
 // Seed data for local development
 import { seedDatabase, isSeeded } from './seed';
-import { NearMissQuerySchema, NearMissReasonSchema, MAX_NEAR_MISS_EVIDENCE_CHARS, type NearMiss, type NearMissReason } from '../shared/near-miss';
+import { NearMissQuerySchema, NearMissReasonSchema, MAX_NEAR_MISS_EVIDENCE_BYTES, type NearMiss, type NearMissReason } from '../shared/near-miss';
+
+/** A malformed evidence value (written by hand or by a future build) is returned raw, never a 500 for the whole list */
+function parseEvidence(raw: unknown): unknown {
+  if (raw === null || raw === undefined) return null;
+  try {
+    return JSON.parse(raw as string);
+  } catch {
+    return { unparsed: String(raw) };
+  }
+}
 
 // Artifacts client
 import { createFork, createRepoToken, type ArtifactsConfig } from '../shared/artifacts';
@@ -1841,13 +1851,23 @@ export class SpecDO {
    * (candidate_id, reason, source_ref): a redelivered write cannot add a second row. `reason` is validated here because the
    * column is free text (shared/near-miss.ts).
    */
+  /**
+   * The spec a near-miss is filed under: the candidate's own spec when the row exists. Ledger records (tournaments, merge trains,
+   * deploy refs) carry free-string spec ids that can disagree with it; the record's value is the fallback for unknown candidates.
+   */
+  private specOfCandidate(candidateId: string, fallback: string): string {
+    const [row] = this.queryAll('SELECT spec_id FROM candidates WHERE id = ?', candidateId);
+    return (row?.spec_id as string | undefined) ?? fallback;
+  }
+
   private recordNearMiss(n: {
     specId: string; candidateId: string; reason: NearMissReason; sourceRef: string;
     rung?: string | null; lostToCandidateId?: string | null; trialId?: string | null; evidence?: unknown; complexityDelta?: number | null;
   }): void {
     const reason = NearMissReasonSchema.parse(n.reason);
     let evidence = JSON.stringify(n.evidence ?? null);
-    if (evidence.length > MAX_NEAR_MISS_EVIDENCE_CHARS) evidence = JSON.stringify({ truncated: true, chars: evidence.length });
+    const bytes = new TextEncoder().encode(evidence).length;
+    if (bytes > MAX_NEAR_MISS_EVIDENCE_BYTES) evidence = JSON.stringify({ truncated: true, bytes });
     this.run(
       `INSERT OR IGNORE INTO near_misses (id, spec_id, candidate_id, reason, rung, lost_to_candidate_id, trial_id, source_ref, evidence, complexity_delta, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1875,7 +1895,7 @@ export class SpecDO {
       lostToCandidateId: (r.lost_to_candidate_id as string | null) ?? null,
       trialId: (r.trial_id as string | null) ?? null,
       sourceRef: r.source_ref as string,
-      evidence: r.evidence === null || r.evidence === undefined ? null : JSON.parse(r.evidence as string),
+      evidence: parseEvidence(r.evidence),
       complexityDelta: (r.complexity_delta as number | null) ?? null,
       createdAt: r.created_at as number,
     }));
@@ -3093,7 +3113,7 @@ export class SpecDO {
     for (const c of next.candidates) {
       if ((c.status === 'eliminated' || c.status === 'disqualified') && before.get(c.candidateId) !== c.status) {
         this.recordNearMiss({
-          specId: next.specId, candidateId: c.candidateId, reason: 'tournament_loss', sourceRef: next.id, lostToCandidateId: next.winner ?? null,
+          specId: this.specOfCandidate(c.candidateId, next.specId), candidateId: c.candidateId, reason: 'tournament_loss', sourceRef: next.id, lostToCandidateId: next.winner ?? null,
           evidence: { status: c.status, score: c.score }, complexityDelta: c.metrics?.complexityDelta ?? null,
         });
       }
@@ -3187,19 +3207,24 @@ export class SpecDO {
     if (stale) return { refused: stale };
 
     const next = build(current);
-    // A car that newly fails, is rolled back, or is removed from a train is a near-miss (train_drop), in this transaction
-    if (current) {
-      const after = new Map(next.candidates.map((c) => [c.candidateId, c]));
-      for (const c of current.candidates) {
-        const now_ = after.get(c.candidateId);
-        const dropped = !now_ || ((now_.status === 'failed' || now_.status === 'rolled_back') && now_.status !== c.status);
-        if (dropped) {
-          this.recordNearMiss({
-            specId: c.specId, candidateId: c.candidateId, reason: 'train_drop', sourceRef: id,
-            evidence: { status: now_?.status ?? 'removed', position: c.position, failureReason: now_?.failureReason ?? null },
-          });
-        }
-      }
+    // train_drop near-misses, in this transaction. A car is (position, candidate): the promotion worker re-adds a candidate as a new
+    // car after a failure, so each car is its own fact (sourceRef `<train>#<position>`). A car drops when it newly becomes failed or
+    // rolled_back (also a car created already failed, like a tournament POST), or when it is removed while still waiting or merging;
+    // removing a merged car is not a loss.
+    const carKey = (c: { position: number; candidateId: string }) => `${c.position}:${c.candidateId}`;
+    const before = new Map((current?.candidates ?? []).map((c) => [carKey(c), c]));
+    const after = new Map(next.candidates.map((c) => [carKey(c), c]));
+    const drop = (c: (typeof next.candidates)[number], status: string, failureReason: string | null) =>
+      this.recordNearMiss({
+        specId: this.specOfCandidate(c.candidateId, c.specId), candidateId: c.candidateId, reason: 'train_drop', sourceRef: `${id}#${c.position}`,
+        evidence: { status, position: c.position, failureReason },
+      });
+    for (const c of next.candidates) {
+      const prev = before.get(carKey(c));
+      if ((c.status === 'failed' || c.status === 'rolled_back') && prev?.status !== c.status) drop(c, c.status, c.failureReason ?? null);
+    }
+    for (const c of current?.candidates ?? []) {
+      if (!after.has(carKey(c)) && (c.status === 'waiting' || c.status === 'merging')) drop(c, 'removed', null);
     }
     this.writeMergeTrain(next, current ? (row.version as number) + 1 : 1);
     return { record: this.getMergeTrain(id)!, created: !current };
@@ -3651,7 +3676,7 @@ export class SpecDO {
       // The candidate that was live loses its rung: a near-miss (named slo_rollback; the evidence carries the actual reason,
       // since a manual rollback goes through here too). Runs in the caller's transaction.
       this.recordNearMiss({
-        specId, candidateId: head.candidateId, reason: 'slo_rollback', sourceRef: head.id, rung,
+        specId: this.specOfCandidate(head.candidateId, specId), candidateId: head.candidateId, reason: 'slo_rollback', sourceRef: head.id, rung,
         evidence: { reason, commitSha: head.commitSha ?? null, workerVersionId: head.workerVersionId ?? null, rolledBackBy: actorId },
       });
       this.run(
