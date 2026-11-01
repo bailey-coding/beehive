@@ -18,6 +18,9 @@ WORKERS_SUBDOMAIN = "bz23711"
 # "redacted" (JSON body with string/number leaves replaced), or "full". "full" also needs GOVERNANCE_EGRESS_CONTROLLED = "true",
 # a human-set var (docs/M5A-2-GOVERNANCE-PLAN.md Rev 5); without it the router falls back to "none".
 MIRROR_BODY_MODE = "none"
+# Route words kept in mirrored paths and in persisted paths (mirror-mode.ts routeTemplate); every other path segment becomes ":id".
+# Add the mirrored service's own route names; usernames, slugs and ids must never be listed.
+MIRROR_ROUTE_WORDS = "organizations,actors,repositories,specs,candidates,gate-verdicts,trials,promotions,issues,entities,history,stage,claim,decide,comments,app"
 
 # Durable Object binding for Spec DO (cross-script): the canary deploy refs
 # (traffic pointer) are read from it on every mirrored request

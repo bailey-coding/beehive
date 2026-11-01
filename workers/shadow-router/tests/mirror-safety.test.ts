@@ -154,7 +154,7 @@ describe('mirror fan-out through the handler', () => {
   const candidateCalls = () => calls.filter((c) => c.url.startsWith('https://cand-a.bz23711.workers.dev'));
 
   it('by default (mode none) a candidate gets no body, no query string and no path ids, only the method and a route template', async () => {
-    const res = await send('POST', '{"email":"a@b.c"}', {}, { 'Content-Type': 'application/json' }, '?token=secret&email=a@b.c');
+    const res = await send('POST', '{"email":"a@b.c"}', { MIRROR_ROUTE_WORDS: 'm' }, { 'Content-Type': 'application/json' }, '?token=secret&email=a@b.c');
     expect(res.status).toBe(200);
     const [call] = candidateCalls();
     expect(call.method).toBe('POST');
@@ -178,11 +178,43 @@ describe('mirror fan-out through the handler', () => {
   it('mode redacted sends a JSON body with string and number leaves replaced, and drops a non-JSON body', async () => {
     await send('POST', '{"email":"a@b.c","age":41,"ok":true,"items":["x"]}', { MIRROR_BODY_MODE: 'redacted' }, { 'Content-Type': 'application/json' }, '?token=secret');
     const [json] = candidateCalls();
-    expect(JSON.parse(json.body as string)).toEqual({ email: '<string>', age: 0, ok: true, items: ['<string>'] });
+    expect(JSON.parse(json.body as string)).toEqual({ k0: '<string>', k1: 0, k2: true, k3: ['<string>'] }); // keys are positional, never the client's
     expect(json.url).not.toContain('secret');
     calls.length = 0;
     await send('POST', 'plain text with a@b.c', { MIRROR_BODY_MODE: 'redacted' });
     expect(candidateCalls()[0].body).toBeNull();
+  });
+
+  it('the Scientist queue message carries no body, only allowlisted headers and a templated path, and nothing logs data', async () => {
+    const queue = { send: vi.fn(async () => {}) };
+    const logged: string[] = [];
+    for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { logged.push(a.map(String).join(' ')); });
+    const secret = 'sk_live_TOPSECRET';
+    await handler.fetch(
+      new Request(urlFor('POST', `?token=${secret}`), {
+        method: 'POST',
+        body: `{"card":"${secret}"}`,
+        headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json', 'X-Csrf-Token': secret, Cookie: `s=${secret}`, 'X-Forwarded-For': '9.9.9.9' },
+      }),
+      { ...env({ MIRROR_BODY_MODE: 'full', GOVERNANCE_EGRESS_CONTROLLED: 'true' }), SCIENTIST_QUEUE: queue },
+      ctx
+    );
+    await settleUntil(() => queue.send.mock.calls.length > 0);
+    expect(queue.send).toHaveBeenCalledTimes(1);
+    const message = (queue.send.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect('body' in message && message.body !== undefined).toBe(false);
+    expect(message.headers).toEqual({ 'content-type': 'application/json' });
+    expect(message.path).toBe('/:id/:id'); // /m/<n> with no configured route words
+    expect(JSON.stringify(message)).not.toContain(secret);
+    expect(logged.join('\n')).not.toContain(secret);
+  });
+
+  it('wrangler.toml keeps the safe defaults: mode none, query strings redacted from logs', async () => {
+    const { readFileSync } = await import('node:fs');
+    const toml = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
+    expect(toml).toMatch(/^MIRROR_BODY_MODE = "none"$/m);
+    expect(toml).toMatch(/^redact_query_string = true$/m);
+    expect(toml).not.toMatch(/^GOVERNANCE_EGRESS_CONTROLLED/m);
   });
 
   it('the trusted baseline always gets the original request, even in mode none', async () => {

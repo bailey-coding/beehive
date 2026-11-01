@@ -33,29 +33,49 @@ export function resolveMirrorMode(env: MirrorModeEnv): MirrorBodyMode {
   return 'none';
 }
 
-// A segment survives only if it looks like a fixed word of a route (lowercase letters, digits and dashes, starting with a
-// letter, no longer than 32). Ids, emails, tokens, dates and encoded values become ':id'.
+// A path segment survives only if it is a known route word. Slugs, usernames, short tokens and ids are customer data, and no
+// pattern separates them from route words, so the rule is an allowlist (inverted after review): a small fixed list plus the words
+// the deploy configures in MIRROR_ROUTE_WORDS (comma separated, the mirrored service's own route names).
 const ROUTE_WORD = /^[a-z][a-z0-9_-]{0,31}$/;
-const LOOKS_LIKE_ID = /^(?:[a-z]+-)?[0-9a-f]{8,}(?:-[0-9a-f]+)*$/i;
+const DEFAULT_ROUTE_WORDS = ['api', 'health', 'healthz', 'v1', 'v2', 'v3', 'static', 'assets'];
+const MAX_TEMPLATE_SEGMENTS = 8;
+const MAX_TEMPLATE_CHARS = 128;
 
-export function routeTemplate(pathname: string): string {
-  const segments = pathname.split('/').map((segment) => {
-    if (segment === '') return segment;
-    return ROUTE_WORD.test(segment) && !LOOKS_LIKE_ID.test(segment) ? segment : ':id';
-  });
-  return segments.join('/') || '/';
+export function routeWords(env: { MIRROR_ROUTE_WORDS?: string }): ReadonlySet<string> {
+  const words = new Set(DEFAULT_ROUTE_WORDS);
+  for (const raw of (env.MIRROR_ROUTE_WORDS ?? '').split(',')) {
+    const word = raw.trim().toLowerCase();
+    if (ROUTE_WORD.test(word)) words.add(word);
+  }
+  return words;
 }
 
-/** JSON string and number leaves become typed placeholders; keys, booleans and null stay. */
-export function redactJsonValue(value: unknown, depth = 0): unknown {
+/**
+ * The path with every segment that is not a known route word replaced by ':id'. Bounded in segment count and length (a path of
+ * many segments is a covert channel), with empty segments collapsed. Always starts with '/'.
+ */
+export function routeTemplate(pathname: string, words: ReadonlySet<string> = new Set(DEFAULT_ROUTE_WORDS)): string {
+  const kept = pathname.split('/').filter((segment) => segment !== '').slice(0, MAX_TEMPLATE_SEGMENTS);
+  const template = '/' + kept.map((segment) => (words.has(segment) ? segment : ':id')).join('/');
+  return template.slice(0, MAX_TEMPLATE_CHARS);
+}
+
+const MAX_REDACTED_NODES = 2000;
+
+/**
+ * JSON string and number leaves become typed placeholders, and object keys become positional names (`k0`, `k1`, ...): a key can be
+ * data (`{"alice@x.com": 1}`). Booleans, null and the shape of arrays and objects still show, so `redacted` leaks structure and is
+ * never for untrusted-origin candidates. Returns undefined when the value has more than MAX_REDACTED_NODES nodes.
+ */
+export function redactJsonValue(value: unknown, depth = 0, budget = { nodes: 0 }): unknown {
+  if (++budget.nodes > MAX_REDACTED_NODES) return undefined;
   if (depth > 20) return '<deep>';
   if (typeof value === 'string') return '<string>';
   if (typeof value === 'number') return 0;
-  if (Array.isArray(value)) return value.slice(0, 50).map((v) => redactJsonValue(v, depth + 1));
+  if (Array.isArray(value)) return value.slice(0, 50).map((v) => redactJsonValue(v, depth + 1, budget));
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>).slice(0, 50)) out[k] = redactJsonValue(v, depth + 1);
-    return out;
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 50);
+    return Object.fromEntries(entries.map(([, v], i) => [`k${i}`, redactJsonValue(v, depth + 1, budget)]));
   }
   return value;
 }
@@ -63,10 +83,13 @@ export function redactJsonValue(value: unknown, depth = 0): unknown {
 /** A redacted JSON body, or undefined when the body is not JSON (dropped, never passed through). */
 export function redactBody(bodyBytes: ArrayBuffer | undefined, contentType: string | null): ArrayBuffer | undefined {
   if (!bodyBytes || bodyBytes.byteLength === 0) return undefined;
-  if (!contentType || !/^application\/(?:[a-z0-9.+-]+\+)?json\b/i.test(contentType)) return undefined;
+  if (!contentType || !/^application\/(?:[a-z0-9.+-]+\+)?json\s*(?:;|$)/i.test(contentType)) return undefined;
   try {
-    const parsed = JSON.parse(new TextDecoder().decode(bodyBytes));
-    return new TextEncoder().encode(JSON.stringify(redactJsonValue(parsed))).buffer as ArrayBuffer;
+    const parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bodyBytes));
+    const budget = { nodes: 0 };
+    const redacted = redactJsonValue(parsed, 0, budget);
+    if (budget.nodes > MAX_REDACTED_NODES) return undefined;
+    return new TextEncoder().encode(JSON.stringify(redacted)).buffer as ArrayBuffer;
   } catch {
     return undefined;
   }
@@ -86,7 +109,8 @@ export function mirrorRequestFor(
   source: Headers,
   bodyBytes: ArrayBuffer | undefined,
   requestId: string,
-  fullHeaders: Headers
+  fullHeaders: Headers,
+  words: ReadonlySet<string> = new Set(DEFAULT_ROUTE_WORDS)
 ): MirrorTarget {
   if (mode === 'full') {
     return { pathAndQuery: `${url.pathname}${url.search}`, headers: fullHeaders, body: bodyBytes ? bodyBytes.slice(0) : undefined };
@@ -94,12 +118,13 @@ export function mirrorRequestFor(
   const headers = new Headers();
   const accept = source.get('accept');
   if (accept !== null) headers.set('accept', accept);
-  // The router's own id, so candidate logs still correlate with the Scientist queue without echoing the client's header
+  // The router's own id for this fan-out, never the client's header (it is not the Scientist queue's id)
   headers.set('x-request-id', requestId);
   if (mode === 'redacted') {
     const body = redactBody(bodyBytes, source.get('content-type'));
-    if (body) headers.set('content-type', source.get('content-type') as string);
-    return { pathAndQuery: routeTemplate(url.pathname), headers, body };
+    // A constant: the source value can carry parameters or duplicated headers with data in them
+    if (body) headers.set('content-type', 'application/json');
+    return { pathAndQuery: routeTemplate(url.pathname, words), headers, body };
   }
-  return { pathAndQuery: routeTemplate(url.pathname), headers, body: undefined };
+  return { pathAndQuery: routeTemplate(url.pathname, words), headers, body: undefined };
 }

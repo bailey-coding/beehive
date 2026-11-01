@@ -11,7 +11,7 @@
  */
 
 import { BASELINE_TARGET_ID, headersForTarget, scientistSafeHeaders, scientistSafeResponseHeaders } from './candidate-headers';
-import { mirrorRequestFor, resolveMirrorMode, type MirrorBodyMode } from './mirror-mode';
+import { mirrorRequestFor, resolveMirrorMode, routeTemplate, routeWords, type MirrorBodyMode } from './mirror-mode';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub } from '../shared/spec-do-auth';
 import { MetricsCollector } from '../shared/analytics';
@@ -240,6 +240,7 @@ async function fanOutToCandidates(
   
   console.log(`[Shadow] Mirroring to ${config.candidatePreviews.size} candidates with Statsig classification`);
   const mirrorMode = resolveMirrorMode(env ?? {});
+  const words = routeWords(env ?? {});
 
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
@@ -287,7 +288,7 @@ async function fanOutToCandidates(
       continue;
     }
     
-    const promise = fetchCandidate(request, previewUrl, candidateId, requestId, bodyBytes, mirrorMode)
+    const promise = fetchCandidate(request, previewUrl, candidateId, requestId, bodyBytes, mirrorMode, words)
       .then((result) => {
         // Write metrics for this candidate request (if metrics available)
         if (metrics) {
@@ -295,7 +296,8 @@ async function fanOutToCandidates(
             candidateId,
             specId: '', // TODO: Get from config
             requestId,
-            path: new URL(request.url).pathname,
+            // The raw path can carry ids and slugs (customer data) and this is persisted: use the route template
+            path: routeTemplate(new URL(request.url).pathname, words),
             method: request.method,
             baselineStatus: 0, // Will be updated by Scientist
             candidateStatus: result.response.status,
@@ -335,7 +337,8 @@ async function fetchCandidate(
   candidateId: string,
   requestId: string,
   bodyBytes?: ArrayBuffer,
-  mirrorMode: MirrorBodyMode = 'none'
+  mirrorMode: MirrorBodyMode = 'none',
+  words?: ReadonlySet<string>
 ): Promise<{ candidateId: string; response: Response; latencyMs: number }> {
   const startTime = Date.now();
   
@@ -345,7 +348,7 @@ async function fetchCandidate(
   const isBaseline = candidateId === BASELINE_TARGET_ID;
   const target = isBaseline
     ? { pathAndQuery: `${url.pathname}${url.search}`, headers: request.headers, body: bodyBytes ? bodyBytes.slice(0) : undefined }
-    : mirrorRequestFor(mirrorMode, url, request.headers, bodyBytes, requestId, headersForTarget(candidateId, request.headers));
+    : mirrorRequestFor(mirrorMode, url, request.headers, bodyBytes, requestId, headersForTarget(candidateId, request.headers), words);
   const candidateUrl = `${previewUrl}${target.pathAndQuery}`;
   
   // The timer is a plain setTimeout (not AbortSignal.timeout) so it can be cleared once the answer headers arrive
@@ -369,7 +372,8 @@ async function fetchCandidate(
     return { candidateId, response, latencyMs };
   } catch (error) {
     const latencyMs = Date.now() - startTime;
-    console.error(`[Shadow] Candidate fetch failed for ${candidateId}:`, error);
+    // Name only: an Invalid URL message would print the URL with its query
+    console.error(`[Shadow] Candidate fetch failed for ${candidateId}: ${error instanceof Error ? error.name : 'error'}`);
     // Return error response
     return {
       candidateId,
@@ -466,7 +470,8 @@ async function triggerScientist(
   const queueMessage: ScientistQueueMessage = {
     requestId,
     timestamp,
-    path: url.pathname,
+    // The route template, not the raw path: this message is persisted and the path can carry ids and slugs
+    path: routeTemplate(url.pathname, routeWords(env ?? {})),
     method: request.method,
     headers: scientistSafeHeaders(request.headers),
     baseline,
