@@ -1,6 +1,8 @@
 # Plan: merge-train cars matched by (position, candidateId)
 
-Status: plan, reviewed once (approve with changes, dispositions in section 9); AGENTS.md spine rule 2, heavy tier.
+Status: reviewed once (approve with changes, dispositions in section 9); implemented in `1079234`, awaiting the
+implementation review (AGENTS.md spine rule 2, heavy tier). Tests are in `workers/promotion-worker/tests/promotion.test.ts`
+("Merge train: a car is (position, candidateId)"); 7b (claim exhausts CAS) and a removed-car position test were added.
 Finding: `docs/OPEN-QUESTIONS.md` "2026-11-01: merge train matches cars by candidate only, so a re-added
 candidate's old car is updated too". Line numbers are against `4cbb0e3`.
 
