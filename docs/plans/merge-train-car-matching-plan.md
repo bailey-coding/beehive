@@ -1,6 +1,6 @@
 # Plan: merge-train cars matched by (position, candidateId)
 
-Status: plan, awaiting independent review (AGENTS.md spine rule 2: promotion-train logic, heavy tier).
+Status: plan, reviewed once (approve with changes, dispositions in section 9); AGENTS.md spine rule 2, heavy tier.
 Finding: `docs/OPEN-QUESTIONS.md` "2026-11-01: merge train matches cars by candidate only, so a re-added
 candidate's old car is updated too". Line numbers are against `4cbb0e3`.
 
@@ -64,6 +64,11 @@ the two bugs above that are not about near-misses: rollback refusing, and the lo
 - `workers/spec-do/tests/near-misses.test.ts:149-192`: already asserts the (position, candidate) model, including
   "a re-added car that fails again is a second fact". No DO change, so these stay as they are.
 - `workers/spec-do/tests/promotion-ledger.test.ts:262-315`: route CRUD; unaffected.
+- `tests/unit/promotion-candidate-routes.test.ts:99-127`: rollback with a hand-built car that has **no `position`**
+  and a spied `modifyMergeTrain`; `latestCar` must cope with an undefined position (keep the first match).
+- In production every merge-train car fails today: the gate worker has no `/run` route (`docs/OPEN-QUESTIONS.md`
+  2026-10-30, ~:770). So real trains hold failed+failed cars; tests seed the other shapes directly through the DO.
+
 
 ## 2. Design
 
@@ -74,32 +79,52 @@ cars; the key with candidateId also tolerates a non-worker writer that repeats a
 All changes are in `workers/promotion-worker/merge-train.ts`:
 
 1. Helpers (module-private):
-   - `carKey(c)` = `` `${c.position}:${c.candidateId}` ``; `sameCar(a, b)`.
+   - `isCar(c, key)`: same position and candidateId.
    - `updateCar(cars, key, fn)`: applies `fn` to the **first** car whose key matches, leaves all others untouched
      (exact-key duplicates can only exist from a non-worker write; the DO's Map collapses them too).
-   - `latestCar(cars, candidateId)`: the candidate's car with the highest position (ties: last in array).
-2. Position for a new car: `Math.max(cars.length, ...cars.map(c => c.position)) + 1` (in the existing CAS mutate,
-   `:64`). Same value as today for every worker-written train; stays unique if a car was ever removed or positions
-   repeat. (Reviewer may cut this; it is hardening, not the fix.)
-3. `processMergeTrain(train)` becomes three CAS writes through `modifyMergeTrain(train.specId, mutate)`:
-   - **Claim**: pick the first `waiting` car of the *current* record; set only that key to `merging`. If the
-     current record's `id !== train.id`, or there is no waiting car, return `null` (no write) and do not run the gate.
-     The claimed key is taken from the saved result (the car at that key is `merging` and was `waiting` before);
-     implementation: `mutate` records the chosen key in a closure variable each attempt, the last attempt is the saved one.
-   - **Success**: `updateCar(key, merged + mergedAt)` only if that car is still `merging`; `currentPosition = key.position`;
-     `nextMerge` and `idle/completedAt` computed from the current record. If the car is no longer `merging`
-     (retried/rolled back concurrently), write nothing and log.
-   - **Failure**: same guard, `failed + failedAt + failureReason`, `status: 'idle'`.
-   Each status change is one CAS write; a concurrent add is re-read, not overwritten.
-   `updateMergeTrain` (the blind PATCH wrapper, `:241-246`) is then unused in this file and is deleted from the
-   manager (the client method stays; other callers/tests may use it).
-4. `executeMergeTrain` response (`:83-85`): find the car by key `(updatedTrain.currentPosition, request.candidateId)`,
-   which is the car this call added. Status in the message is still the pre-processing snapshot (pre-existing; see
-   "Out of scope").
-5. `retryFailedMerge` / `rollbackMergedCandidate`: target `latestCar(train.candidates, candidateId)`; require
-   `failed` / `merged` respectively (same error messages); update only that key. Retry with an older failed car and a
-   newer car in any other state refuses ("not in a failed state (current: …)") instead of re-running a superseded car.
-   No `position` field is added to `/merge/retry` or `/merge/rollback` (see open decision D1).
+   - `latestCar(cars, candidateId)`: the candidate's car with the highest position (ties: last in array). A car with
+     an undefined position (hand-built test fixtures) never replaces an earlier match, so with no positions the first
+     match is kept.
+   - `nextPosition(cars)`: `Math.max(cars.length, ...integer positions) + 1` (kept, per decision). Same value as today
+     for every worker-written train; stays unique if a car was ever removed or positions repeat.
+2. **No I/O inside any `mutate`.** Timestamps are taken before the CAS call; `mutate` only reads its argument and
+   writes the outer `claim` holder.
+3. `processMergeTrain(train)` (FIFO; one gate call per run):
+   - **Claim** (one CAS write via `modifyMergeTrain(train.specId, ...)`): every `mutate` call starts with
+     `claim = null`. If the current record's `id !== train.id`, or it has no `waiting` car, return `null` (no write).
+     Otherwise set `claim` to the first waiting car and return the record with only that key set to `merging`. The
+     gate runs only if `claim !== null` after the call. The returned record is never used to infer the claim:
+     `casLoop` returns the current record when `mutate` returns `null` (`workers/shared/promotion-ledger.ts:369`).
+     The claim does not require that no car is `merging` (a stuck car must not block the train), so different cars
+     may run their gates concurrently, as today (maintainer default: unchanged; see review ask 4).
+   - **Claim write fails** (e.g. `VersionConflictError` after `MAX_CAS_ATTEMPTS`): logged, no gate call,
+     `processMergeTrain` returns normally. `executeMergeTrain` still returns success (the car was added and stays
+     `waiting` for the next run), so the promotion is not marked failed and a re-promote does not create a second
+     live car.
+   - **Gate**: `try` wraps only `executeMerge(claim)`. The outcome is `merged` or `failed` with the error message.
+   - **Finish** (one CAS write, after the `try`): `updateCar(key, merged + mergedAt | failed + failedAt +
+     failureReason)` only if that car is still `merging` in the current record; success sets `currentPosition =
+     key.position`, `nextMerge` and `idle/completedAt` from the current record (as today); failure sets `status:
+     'idle'` (as today). If the car is no longer `merging`, write nothing and log: no worker path moves a car out of
+     `merging`, so this guard is defensive against non-worker and old-worker writes. A finish write error is logged
+     and rethrown and leaves the car `merging`; a car whose gate passed is never marked failed. The rethrow reaches
+     the caller (`executeMergeTrain` / `retryFailedMerge` report `success: false` with the message).
+   - The blind-PATCH wrapper `updateMergeTrain` (`:241-246`) is deleted from the manager (the client method stays).
+4. `executeMergeTrain` add (`:59-78`): `position = nextPosition(current.candidates)`. Response (`:83-85`): the car
+   with key `(updatedTrain.currentPosition, request.candidateId)`, which is the car this call added. The status in the
+   message is still the pre-processing snapshot (pre-existing; out of scope).
+5. `retryFailedMerge`: target `latestCar(candidateId)`; require `failed` (same error messages); reset only that key.
+   An older failed car with a newer car in another state refuses ("not in a failed state (current: ...)").
+6. `rollbackMergedCandidate` (decision D2): `latestCar(candidateId)` must be `merged` (same error message); then mark
+   **every** `merged` car of the candidate `rolled_back` (today's candidate-level behavior, restricted to merged cars;
+   one `train_drop` near-miss per car). Failed/waiting cars of the candidate are untouched. The candidate stage write
+   (`:470`) is unchanged.
+
+### Known limitation (not fixed here)
+A car stuck in `merging` (worker crash/eviction between the claim and the finish write, or a finish write that
+exhausted CAS) has no recovery and counts against `MAX_CONCURRENT_CANDIDATES`. A lease (claim time + expiry) needs a
+schema field; follow-up recorded as a dated `docs/OPEN-QUESTIONS.md` entry. Test 9 pins that a stuck car does not stop
+the next car from being processed.
 
 ### Trains that already hold duplicate-candidate cars
 No migration, no repair. Past wrong statuses cannot be told apart from real ones (an old car showing `merged` may have
@@ -117,49 +142,54 @@ change and the write method (CAS POST instead of blind PATCH; CAS POST is alread
 |---|---|
 | New worker / old DO | Old DO = current DO (no DO change in this plan). Works. |
 | Old worker / new DO | Same as today; new DO is identical. |
-| Old and new worker instances during the push window | An old instance's blind PATCH can still overwrite a new instance's CAS write (as today between two old instances). A new instance's CAS write after an old PATCH just sees a newer version and re-reads. No new failure mode; window ends when old instances drain. |
+| Old and new worker instances during the push window | An old instance's blind PATCH can still overwrite a new instance's CAS write (as today between two old instances). A new instance's CAS write after an old PATCH sees a newer version and re-reads; if the old PATCH moved the claimed car out of `merging`, the finish guard skips the write. No new failure mode. |
 | Rollback to old worker | Old matching returns; records written by the new worker are valid for the old one (same schema). |
 
 No new request or response field, so the "retry without the field on 400" rule does not apply.
 
-## 4. Tests to add (`workers/promotion-worker/tests/promotion.test.ts`, "Spec DO ledger wiring", real SpecDO)
+## 4. Tests to add (`workers/promotion-worker/tests/promotion.test.ts`, real SpecDO)
 
-Gate outcome per call via `mockGateWorkflow.fetch.mockResolvedValueOnce(...)`. Near-misses read with
-`spec.listNearMisses({ candidateId, reason: 'train_drop', limit: 50, offset: 0 })`.
+Gate outcome per call via `mockGateWorkflow.fetch.mockImplementation(...)` (set in each test). Near-misses read with
+`spec.listNearMisses({ candidateId, reason: 'train_drop', limit: 50, offset: 0 })`. Trains in the old-code shapes
+(failed+failed, failed+merged, merged+merged) are seeded directly through the DO (`POST /merge-train-status`), since in
+production every car fails (no gate `/run` route, `docs/OPEN-QUESTIONS.md` 2026-10-30).
 
 1. Re-added after a failure, then merges: car 1 stays `failed` with its original `failedAt` and `failureReason`, car 2
    `merged`; exactly one `train_drop` (`<train>#1`).
 2. Re-added after a failure, fails again: car 1's `failedAt`/`failureReason` unchanged, car 2 `failed` with the new
    reason; exactly two near-misses `#1`, `#2`.
-3. Promoted twice, both merge (shadow->train, then train->canary): car 1's `mergedAt` unchanged; both `merged`; zero
-   near-misses; response `details.position === 2`.
-4. Retry: cars `failed`(1) and `failed`(2): `/merge/retry` resets only car 2. Cars `failed`(1), `merged`(2): retry refuses.
-5. Rollback: cars `failed`(1), `merged`(2): rollback succeeds (fails today), only car 2 `rolled_back`, near-misses
-   `#1` failed and `#2` rolled_back.
-6. Lost update: the gate mock, before answering, adds a waiting car for another candidate through the DO
-   (`modifyMergeTrain`); after processing that car is still in the record and there is no `removed` near-miss.
-7. Claim guard: a train whose only waiting car is changed to `merging` before the claim write (CAS conflict on the
-   first save, via a one-shot wrapped fetch) does not call the gate a second time.
+3. Promoted twice, both merge: car 1's `mergedAt` unchanged; both `merged`; zero near-misses; response
+   `details.position === 2`.
+4. Retry (seeded): `failed`(1)+`failed`(2): only car 2 is reset and re-run. `failed`(1)+`merged`(2): refuses.
+5. Rollback (seeded): `failed`(1)+`merged`(2): succeeds (fails today), car 1 stays `failed`, car 2 `rolled_back`.
+   `merged`(1)+`merged`(2): both `rolled_back`, near-misses `#1` and `#2`.
+6. Lost update: the gate mock, before answering, adds a waiting car for another candidate through the DO; after
+   processing that car is still in the record and there is no `removed` near-miss.
+7. Claim race: a DO wrapper performs a real DO write between the claim's GET and POST that sets the only waiting car
+   to `merging` (another claimer). Asserts: gate called 0 times; the car is left exactly as the other claimer wrote it;
+   `executeMergeTrain` still returns success. (Old code ignores the version and runs the gate.)
+8. Finish write exhausts CAS: gate passes; every finish POST answers a version conflict (`MAX_CAS_ATTEMPTS` times).
+   Asserts: the car is `merging`, not `failed`; no near-miss.
+9. Stuck car: a seeded train with a car stuck `merging`; a new add is claimed and merged; the stuck car is unchanged.
 
-Kill checks (state in the PR): reverting the claim/success/failure match to candidateId-only fails 1-3; reverting
-`latestCar` fails 4-5; reverting to the blind PATCH fails 6.
+Kill checks (temporarily revert, confirm the named test fails, restore): candidateId-only matching fails 1-3;
+`latestCar` -> first match fails 4-5; blind PATCH finish fails 6; blind PATCH claim fails 7; `try` covering the
+finish write fails 8.
 
 ## 5. Docs to update
-- `docs/OPEN-QUESTIONS.md` 2026-11-01 entry: status -> "Fixed in <sha> (worker-only, matches the DO's car key);
-  historic records not repaired", and note the broader cause (every merge-train promotion of a candidate adds a car)
-  and the lost-update PATCH found here.
+- `docs/OPEN-QUESTIONS.md` 2026-11-01 car-matching entry: status -> fixed with the commit (worker-only, matches the
+  DO's car key; historic records not repaired); note the broader cause (every merge-train promotion of a candidate adds
+  a car) and the lost-update PATCH found here.
+- New dated `docs/OPEN-QUESTIONS.md` entry: stuck `merging` car, no recovery, blocks capacity; a lease needs a schema
+  field.
 - No ARCHITECTURE/OPS change (no route, schema or deploy change).
 
 ## 6. Risks
 - Behavior change for `/merge/retry`: an older failed car is no longer retried when the candidate has a newer car.
   No in-repo caller; external callers unknown.
-- `rollbackMergedCandidate` now rolls back one car, not all merged cars of the candidate; the candidate stage write
-  (`merge-train.ts:470`) is unchanged, so the candidate is still `rolled_back`. Fewer `train_drop` rows per rollback
-  (one, not one per merged car). See D2.
-- Three CAS writes instead of three blind PATCHes: under contention up to `MAX_CAS_ATTEMPTS` re-reads each, and a
-  `VersionConflictError` after the limit now surfaces as an error. On the success/failure write that leaves the car
-  `merging` (today the same happens when a PATCH fails). Pre-existing: there is no sweeper for stuck `merging` cars.
-- Closure-captured claimed key: must be the value from the attempt that saved; test 7 covers it.
+- Three CAS writes instead of blind PATCHes: under contention up to `MAX_CAS_ATTEMPTS` re-reads each. A failed claim
+  leaves the car `waiting`; a failed finish leaves it `merging` (known limitation above).
+- Closure-held claim: reset at the start of every `mutate` call; test 7 covers the "mutate returned null" path.
 
 ## 7. Out of scope (pre-existing, noted for the OPEN-QUESTIONS entry)
 - No check against adding a car for a candidate that already has a `waiting`/`merging` car (`:59-78`); `canPromote` is
@@ -167,12 +197,27 @@ Kill checks (state in the PR): reverting the claim/success/failure match to cand
 - `getOrCreateMergeTrain` (`:181-202`) can create two trains for one spec under a race (create without version).
 - The add response reports the pre-processing status (`waiting`) even when the car merged in the same call.
 
-## 8. Review asks
+## 8. Decisions (maintainer defaults; the maintainer may still change them)
+- D1: no optional `position` on `/merge/retry` or `/merge/rollback` (route bodies are cast, not strictly parsed, so an
+  old worker would silently ignore it and act on a different car).
+- D2: rollback checks the latest car's state, then marks every merged car of the candidate `rolled_back`.
+- `nextPosition` hardening (`max(...)+1`) kept.
+- Concurrency unchanged: different cars may run their gates concurrently.
+
+## 9. Review 1 dispositions (approve with changes, no blockers)
+1. Claim detection via the returned record is unsafe (`casLoop` returns current on `null`): adopted, section 2.3.
+2. `try` wraps only the gate; finish write errors logged + rethrown, car stays `merging`: adopted; test 8.
+3. Claim exhausting CAS: logged, add still succeeds, car stays `waiting`: adopted; test 7 asserts success.
+4. No "no car merging" claim precondition; concurrent gates for different cars as today: adopted; review ask 4.
+5. Stuck merging car: guard documented as defensive; known limitation + OPEN-QUESTIONS follow-up; test 9: adopted.
+6. Test 7 must fail on old code (0 gate calls, real DO write between GET and POST); kill checks extended: adopted.
+7. Seed old-shape trains through the DO for tests 4-5; cite the no-`/run` finding: adopted.
+8. `tests/unit/promotion-candidate-routes.test.ts` fixtures lack `position`: `latestCar` keeps the first match.
+
+## 10. Review asks (for the implementation review)
 1. Is `(position, candidateId)` enough, or should a stable car id be added (rejected here: needs an optional schema
    field on a `.strict()` schema read by every peer, for no case the worker can produce)?
-2. D1 (maintainer): should `/merge/retry` and `/merge/rollback` accept an optional `position`? Not proposed: the route
-   bodies are cast, not parsed strictly, so an old worker would silently ignore the field and act on a different car;
-   it would need a capability check, not a 400 retry.
-3. D2 (maintainer): rollback of a candidate with several merged cars: latest car only (proposed) or every merged car?
-4. Keep or cut the `max(...)+1` position hardening.
-5. Is guarding success/failure on "still `merging`" right, or should the result always be written?
+2. Is the finish guard ("still `merging`") right, or should the outcome always be written?
+3. Is rethrowing a finish write error (promotion reported failed while the car stays `merging`) the right surface?
+4. Alternative to keep in mind: strictly sequential trains (claim only when no car is `merging`), which needs the
+   stuck-car lease first.
