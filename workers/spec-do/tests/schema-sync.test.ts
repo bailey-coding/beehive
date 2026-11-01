@@ -71,7 +71,7 @@ describe('schema.sql vs schema-inline.ts', () => {
       'CREATE TABLE IF NOT EXISTS intent_provenance',
       'CREATE TABLE IF NOT EXISTS governance_events',
     ]);
-    expect(sql.match(/CREATE INDEX IF NOT EXISTS \w+/g)).toHaveLength(7);
+    expect(sql.match(/CREATE INDEX IF NOT EXISTS \w+/g)).toHaveLength(6);
     // docs/OPS.md rollback floor: only actors; every candidate, spec, issue and trial id is a logical reference
     expect(sql.match(/REFERENCES\s+\w+/g)).toEqual(['REFERENCES actors', 'REFERENCES actors']);
     expect(sql).not.toMatch(/\b(DROP|ALTER|DELETE|UPDATE|INSERT)\b/i);

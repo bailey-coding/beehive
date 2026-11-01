@@ -48,8 +48,12 @@ describe('migration m14: governance tables and the epoch', () => {
   it('replaying the m14 step from m13 changes no schema object and no row, and the epoch does not move', async () => {
     const f = legacyFixtures().find((x) => x.name.startsWith('m13-'))!;
     const s = loadLegacyLedger({ ddl: f.ddl, seed: f.seed, version: f.startVersion });
+    const started = Date.now();
     await makeSpecDo(s).init();
     const before = epoch(s)[0].value;
+    // milliseconds, the unit of created_at, and stamped by this migration (not copied from elsewhere)
+    expect(Number(before)).toBeGreaterThanOrEqual(started);
+    expect(Number(before)).toBeLessThanOrEqual(Date.now());
     s.raw.exec("INSERT INTO governance_events (id, event, created_at) VALUES ('e1', 'policy_change', 1)");
     s.raw.exec("INSERT INTO near_misses (id, spec_id, candidate_id, reason, source_ref, created_at) VALUES ('n1', 'sp', 'c', 'trial_loss', 't1', 1)");
     const master = () => JSON.stringify(all(s, 'SELECT type, name, sql FROM sqlite_master ORDER BY type, name'));
@@ -107,16 +111,17 @@ describe('migration m14: governance tables and the epoch', () => {
       expect(() => s.raw.prepare("INSERT INTO approvals (id, subject_type, subject_id, approver_actor_id, decision, created_at) VALUES ('p8', 'candidate', 'c1', 'ghost', 'approve', 1)").run()).toThrow(/FOREIGN KEY/);
     });
 
-    it('near_misses: a redelivery is deduplicated by (candidate, reason, source_ref); reasons are checked', async () => {
+    it('near_misses: a redelivery is deduplicated by (candidate, reason, source_ref); reason is free text', async () => {
       const s = await freshLedger();
       const ins = (id: string, reason: string, ref: string) =>
         s.raw.prepare("INSERT INTO near_misses (id, spec_id, candidate_id, reason, source_ref, created_at) VALUES (?, 'sp', 'c1', ?, ?, 1)").run(id, reason, ref);
+      // reason is free text on purpose (a CHECK could not be widened later); the writer validates it
+      expect(() => ins('n0', 'a_reason_added_later', 'x0')).not.toThrow();
       ins('n1', 'trial_loss', 't1');
       expect(() => ins('n2', 'trial_loss', 't1')).toThrow(/UNIQUE/);
       expect(() => s.raw.prepare("INSERT OR IGNORE INTO near_misses (id, spec_id, candidate_id, reason, source_ref, created_at) VALUES ('n3', 'sp', 'c1', 'trial_loss', 't1', 1)").run()).not.toThrow();
-      expect(all(s, 'SELECT COUNT(*) AS n FROM near_misses')[0].n).toBe(1);
+      expect(all(s, "SELECT COUNT(*) AS n FROM near_misses WHERE reason = 'trial_loss'")[0].n).toBe(1);
       expect(() => ins('n4', 'gate_fail', 't1')).not.toThrow(); // a different reason is a different fact
-      expect(() => ins('n5', 'bad_reason', 'x')).toThrow(/CHECK/);
     });
 
     it('change_classifications: the new types are accepted, confidence is 0..1, entity types are checked', async () => {
@@ -141,6 +146,23 @@ describe('migration m14: governance tables and the epoch', () => {
       expect(() => ins('i3', 'sp2', 'root')).toThrow(/CHECK/);
       expect(() => ins('i4', 'sp3', 'unknown', null)).not.toThrow();
       expect(all(s, "SELECT origin_actor_id FROM intent_provenance WHERE id = 'i1'")[0].origin_actor_id).toBeNull();
+    });
+
+    it('indexes, defaults and the one CHECK not exercised elsewhere', async () => {
+      const s = await freshLedger();
+      const idx = (t: string) => all(s, `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = '${t}' AND name NOT LIKE 'sqlite_%' ORDER BY name`).map((r) => r.name);
+      expect(idx('change_classifications')).toEqual(['idx_change_classifications_entity']);
+      expect(all(s, 'PRAGMA index_info(idx_change_classifications_entity)').map((c) => c.name)).toEqual(['entity_type', 'entity_id', 'commit_sha', 'created_at']);
+      expect(idx('approvals')).toEqual(['idx_approvals_approver', 'idx_approvals_subject']);
+      expect(idx('near_misses')).toEqual(['idx_near_misses_spec']); // lookups by candidate use the UNIQUE autoindex
+      expect(idx('intent_provenance')).toEqual([]);
+      expect(idx('governance_events')).toEqual(['idx_governance_events_created', 'idx_governance_events_event']);
+      // fail-closed defaults: a row that does not say otherwise is not eligible and not a self-approval
+      s.raw.exec("INSERT INTO actors (id, type, name, created_at) VALUES ('a1', 'human', 'h', 1)");
+      s.raw.exec("INSERT INTO approvals (id, subject_type, subject_id, approver_actor_id, decision, created_at) VALUES ('d1', 'spec', 's1', 'a1', 'approve', 1)");
+      expect(all(s, "SELECT approver_eligible, self_approval FROM approvals WHERE id = 'd1'")[0]).toEqual({ approver_eligible: 0, self_approval: 0 });
+      // intent_provenance.entity_type is only issue or spec
+      expect(() => s.raw.exec("INSERT INTO intent_provenance (id, entity_type, entity_id, origin, created_at) VALUES ('x', 'organization', 'o1', 'external', 1)")).toThrow(/CHECK/);
     });
 
     it('governance_events takes any event name (free text) and has no foreign keys', async () => {

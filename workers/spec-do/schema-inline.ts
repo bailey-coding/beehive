@@ -775,7 +775,9 @@ export const GOVERNANCE_SQL = `
 --     approve by one approver is legal; redelivery is deduplicated by the Idempotency-Key. rung is NULL for spec, role_change and
 --     policy_change rows; for role/policy changes subject_id is the sha256 of the canonical request body.
 --   near_misses: facts at a point in time; UNIQUE(candidate_id, reason, source_ref) with INSERT OR IGNORE keeps a redelivery from
---     duplicating a row. source_ref is the trial, verdict run, tournament/train or deployment id.
+--     duplicating a row (its autoindex also serves lookups by candidate). source_ref is the trial, verdict run, tournament/train or
+--     deployment id. reason is free text, validated by the writer (trial_loss, gate_fail, train_drop, slo_rollback, tournament_loss, ...):
+--     a CHECK could not be widened later without a rebuild.
 --   intent_provenance: origin of an issue or spec, derived by the DO from the authenticated principal; origin_actor_id is nullable.
 --   governance_events: system events (policy_change, role_change, break_glass, approval_missing, approval_recorded,
 --     invalid_transition, hook_rollback), never purged. entity_history cannot hold them (its entity_type CHECK).
@@ -798,7 +800,7 @@ CREATE TABLE IF NOT EXISTS change_classifications (
   created_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_change_classifications_entity ON change_classifications(entity_type, entity_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_change_classifications_entity ON change_classifications(entity_type, entity_id, commit_sha, created_at);
 
 CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY,
@@ -823,7 +825,7 @@ CREATE TABLE IF NOT EXISTS near_misses (
   id TEXT PRIMARY KEY,
   spec_id TEXT NOT NULL,
   candidate_id TEXT NOT NULL,
-  reason TEXT NOT NULL CHECK(reason IN ('trial_loss', 'gate_fail', 'train_drop', 'slo_rollback', 'tournament_loss')),
+  reason TEXT NOT NULL,
   rung TEXT,
   lost_to_candidate_id TEXT,
   trial_id TEXT,
@@ -835,7 +837,6 @@ CREATE TABLE IF NOT EXISTS near_misses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_near_misses_spec ON near_misses(spec_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_near_misses_candidate ON near_misses(candidate_id);
 
 CREATE TABLE IF NOT EXISTS intent_provenance (
   id TEXT PRIMARY KEY,

@@ -1228,7 +1228,8 @@ export class SpecDO {
     if (!this.db) throw new Error('Database not initialized');
     this.db.exec(GOVERNANCE_SQL);
     const stmt = this.db.prepare('INSERT OR IGNORE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)');
-    stmt.bind('governance.m14_epoch', String(now()), now());
+    const at = now();
+    stmt.bind('governance.m14_epoch', String(at), at);
     stmt.step();
     stmt.free();
   }
