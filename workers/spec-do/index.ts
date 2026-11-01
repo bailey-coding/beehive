@@ -168,6 +168,8 @@ const ORG_PURGE_ORDER: [table: string, where: string][] = [
   ],
   // gate_runs is deleted before its candidates although nothing enforces it (no FK, see the orphan sweep in the purge plan); after trials per docs/REAL-GATE-IMPL-PLAN.md section 3
   ['gate_runs', `candidate_id IN (${ORG_CANDIDATES})`],
+  // near_misses: logical references only (m14, docs/OPS.md rollback floor); the orphan sweep below removes rows an older build left
+  ['near_misses', `candidate_id IN (${ORG_CANDIDATES}) OR spec_id IN (${ORG_SPECS})`],
   ['issues', `id IN (${ORG_ISSUES})`],
   ['candidates', `id IN (${ORG_CANDIDATES})`],
   ['repositories', 'organization_id = ?'],
@@ -291,6 +293,7 @@ type Service = { fetch: (request: Request) => Promise<Response> };
 
 // Seed data for local development
 import { seedDatabase, isSeeded } from './seed';
+import { NearMissQuerySchema, NearMissReasonSchema, MAX_NEAR_MISS_EVIDENCE_CHARS, type NearMiss, type NearMissReason } from '../shared/near-miss';
 
 // Artifacts client
 import { createFork, createRepoToken, type ArtifactsConfig } from '../shared/artifacts';
@@ -1800,6 +1803,11 @@ export class SpecDO {
     };
   }
 
+  /**
+   * Decide a trial and record the loser as a near-miss, in one transaction. Refuses an unknown trial (404), a winner that is not
+   * one of the two candidates (400) and a trial that is already decided (409): a re-decide would rewrite the winner and record a
+   * second, contradictory near-miss.
+   */
   decideTrial(
     trialId: string,
     winnerId: string,
@@ -1807,18 +1815,70 @@ export class SpecDO {
     decidedBy: string
   ): void {
     if (!this.db) throw new Error('Database not initialized');
-    
-    const metricsJson = JSON.stringify(comparisonMetrics);
-    
-    const stmt = this.db.prepare(
-      `UPDATE trials SET winner_id = ?, comparison_metrics = ?, decided_at = ?, decided_by = ?, stage = ? 
-       WHERE id = ?`
+    const metricsJson = JSON.stringify(comparisonMetrics ?? {});
+    this.state.storage.transactionSync(() => {
+      const trial = this.getTrial(trialId);
+      if (!trial) throw new NotFoundError(`Trial ${trialId} not found`);
+      if (trial.stage === 'decided') throw new ConflictError(`Trial ${trialId} is already decided`);
+      if (winnerId !== trial.candidate_a_id && winnerId !== trial.candidate_b_id) {
+        throw new BadRequestError(`winnerId must be one of the trial's candidates (${trial.candidate_a_id}, ${trial.candidate_b_id})`);
+      }
+      this.run(
+        `UPDATE trials SET winner_id = ?, comparison_metrics = ?, decided_at = ?, decided_by = ?, stage = ? WHERE id = ?`,
+        winnerId, metricsJson, now(), decidedBy, 'decided', trialId
+      );
+      this.recordHistory('trial', trialId, 'decided', decidedBy, 'Trial decided');
+      const loser = winnerId === trial.candidate_a_id ? trial.candidate_b_id : trial.candidate_a_id;
+      this.recordNearMiss({
+        specId: trial.spec_id, candidateId: loser, reason: 'trial_loss', sourceRef: trialId,
+        trialId, lostToCandidateId: winnerId, evidence: { comparisonMetrics: comparisonMetrics ?? {} },
+      });
+    });
+  }
+
+  /**
+   * Record a near-miss (ADR 0005). Must run inside the transaction of the write that records the loss. INSERT OR IGNORE on
+   * (candidate_id, reason, source_ref): a redelivered write cannot add a second row. `reason` is validated here because the
+   * column is free text (shared/near-miss.ts).
+   */
+  private recordNearMiss(n: {
+    specId: string; candidateId: string; reason: NearMissReason; sourceRef: string;
+    rung?: string | null; lostToCandidateId?: string | null; trialId?: string | null; evidence?: unknown; complexityDelta?: number | null;
+  }): void {
+    const reason = NearMissReasonSchema.parse(n.reason);
+    let evidence = JSON.stringify(n.evidence ?? null);
+    if (evidence.length > MAX_NEAR_MISS_EVIDENCE_CHARS) evidence = JSON.stringify({ truncated: true, chars: evidence.length });
+    this.run(
+      `INSERT OR IGNORE INTO near_misses (id, spec_id, candidate_id, reason, rung, lost_to_candidate_id, trial_id, source_ref, evidence, complexity_delta, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      generateId(), n.specId, n.candidateId, reason, n.rung ?? null, n.lostToCandidateId ?? null, n.trialId ?? null, n.sourceRef,
+      evidence, n.complexityDelta ?? null, now()
     );
-    stmt.bind(winnerId, metricsJson, now(), decidedBy, 'decided', trialId);
-    stmt.step();
-    stmt.free();
-    
-    this.recordHistory('trial', trialId, 'decided', decidedBy, 'Trial decided');
+  }
+
+  listNearMisses(q: { specId?: string; candidateId?: string; reason?: NearMissReason; limit: number; offset: number }): NearMiss[] {
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (q.specId) { where.push('spec_id = ?'); args.push(q.specId); }
+    if (q.candidateId) { where.push('candidate_id = ?'); args.push(q.candidateId); }
+    if (q.reason) { where.push('reason = ?'); args.push(q.reason); }
+    const rows = this.queryAll(
+      `SELECT * FROM near_misses${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`,
+      ...args, q.limit, q.offset
+    );
+    return rows.map((r) => ({
+      id: r.id as string,
+      specId: r.spec_id as string,
+      candidateId: r.candidate_id as string,
+      reason: r.reason as NearMissReason,
+      rung: (r.rung as string | null) ?? null,
+      lostToCandidateId: (r.lost_to_candidate_id as string | null) ?? null,
+      trialId: (r.trial_id as string | null) ?? null,
+      sourceRef: r.source_ref as string,
+      evidence: r.evidence === null || r.evidence === undefined ? null : JSON.parse(r.evidence as string),
+      complexityDelta: (r.complexity_delta as number | null) ?? null,
+      createdAt: r.created_at as number,
+    }));
   }
 
   getTrial(id: string): TrialRow | null {
@@ -2593,6 +2653,8 @@ export class SpecDO {
     // and leaves their runs. Their candidate is gone, so the owning org cannot be told; they are junk, swept by any real purge plan.
     if (orgIds.length) {
       for (const r of this.queryAll('SELECT id FROM gate_runs WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('gate_runs')!.add(r.id as string);
+      // near_misses likewise (m14): a build older than m14 purges candidates without knowing the table
+      for (const r of this.queryAll('SELECT id FROM near_misses WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('near_misses')!.add(r.id as string);
     }
     const rows: [string, string][] = ORG_PURGE_ORDER.flatMap(([table]) => [...ids.get(table)!].map((id): [string, string] => [table, id]));
     const counts = Object.fromEntries(ORG_PURGE_ORDER.map(([table]) => [table, ids.get(table)!.size]));
@@ -3026,6 +3088,16 @@ export class SpecDO {
 
     const entersFailed = next.status === 'failed' && current?.status !== 'failed';
     const resets = next.status === 'pending' && current?.status === 'failed';
+    // Candidates that newly become eliminated or disqualified are near-misses (tournament_loss), in this transaction
+    const before = new Map((current?.candidates ?? []).map((c) => [c.candidateId, c.status]));
+    for (const c of next.candidates) {
+      if ((c.status === 'eliminated' || c.status === 'disqualified') && before.get(c.candidateId) !== c.status) {
+        this.recordNearMiss({
+          specId: next.specId, candidateId: c.candidateId, reason: 'tournament_loss', sourceRef: next.id, lostToCandidateId: next.winner ?? null,
+          evidence: { status: c.status, score: c.score }, complexityDelta: c.metrics?.complexityDelta ?? null,
+        });
+      }
+    }
     this.writeTournament(next, {
       version: current ? (row.version as number) + 1 : 1,
       attempts: resets ? 0 : attempts + (entersFailed ? 1 : 0),
@@ -3114,7 +3186,22 @@ export class SpecDO {
     const stale = checkExpectedVersion(current ? (row.version as number) : null, expected, patch);
     if (stale) return { refused: stale };
 
-    this.writeMergeTrain(build(current), current ? (row.version as number) + 1 : 1);
+    const next = build(current);
+    // A car that newly fails, is rolled back, or is removed from a train is a near-miss (train_drop), in this transaction
+    if (current) {
+      const after = new Map(next.candidates.map((c) => [c.candidateId, c]));
+      for (const c of current.candidates) {
+        const now_ = after.get(c.candidateId);
+        const dropped = !now_ || ((now_.status === 'failed' || now_.status === 'rolled_back') && now_.status !== c.status);
+        if (dropped) {
+          this.recordNearMiss({
+            specId: c.specId, candidateId: c.candidateId, reason: 'train_drop', sourceRef: id,
+            evidence: { status: now_?.status ?? 'removed', position: c.position, failureReason: now_?.failureReason ?? null },
+          });
+        }
+      }
+    }
+    this.writeMergeTrain(next, current ? (row.version as number) + 1 : 1);
     return { record: this.getMergeTrain(id)!, created: !current };
   }
 
@@ -3561,6 +3648,12 @@ export class SpecDO {
       actorId
     );
     if (head.candidateId) {
+      // The candidate that was live loses its rung: a near-miss (named slo_rollback; the evidence carries the actual reason,
+      // since a manual rollback goes through here too). Runs in the caller's transaction.
+      this.recordNearMiss({
+        specId, candidateId: head.candidateId, reason: 'slo_rollback', sourceRef: head.id, rung,
+        evidence: { reason, commitSha: head.commitSha ?? null, workerVersionId: head.workerVersionId ?? null, rolledBackBy: actorId },
+      });
       this.run(
         `UPDATE promotions SET stage = 'rolled_back', rollback_reason = ? WHERE candidate_id = ? AND to_rung = ? AND stage = 'active'`,
         reason,
@@ -4227,7 +4320,15 @@ export class SpecDO {
       if (path.match(/^\/api\/trials\/[^\/]+\/decide$/) && method === 'POST') {
         const id = this.extractParentId(path);
         const body: DecideTrialRequest = await request.json();
-        this.decideTrial(id, body.winnerId, body.comparisonMetrics, body.decidedBy || actorId);
+        try {
+          this.decideTrial(id, body.winnerId, body.comparisonMetrics, body.decidedBy || actorId);
+        } catch (e) {
+          const status = e instanceof NotFoundError ? 404 : e instanceof BadRequestError ? 400 : e instanceof ConflictError ? 409 : 0;
+          if (!status) throw e;
+          return new Response(JSON.stringify({ success: false, error: (e as Error).message, timestamp: Date.now() }), {
+            status, headers: { 'Content-Type': 'application/json' },
+          });
+        }
         const trial = this.getTrial(id);
         return new Response(JSON.stringify({ success: true, data: trial, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
@@ -4251,6 +4352,18 @@ export class SpecDO {
         });
       }
       
+      if (path === '/api/near-misses' && method === 'GET') {
+        const q = NearMissQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+        if (!q.success) {
+          return new Response(JSON.stringify({ success: false, error: `invalid query: ${q.error.issues.map((i) => i.path.join('.') || i.message).join(', ')}`, timestamp: Date.now() }), {
+            status: 400, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ success: true, data: this.listNearMisses(q.data), timestamp: Date.now() }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
       if (path === '/api/promotions' && method === 'GET') {
         const limit = parseInt(url.searchParams.get('limit') || '50');
         const offset = parseInt(url.searchParams.get('offset') || '0');
@@ -4818,6 +4931,17 @@ export class SpecDO {
    */
   private upsertGateVerdictSummary(runId: string): void {
     const [r] = this.queryAll('SELECT rowid AS rid, * FROM gate_runs WHERE id = ?', runId);
+    // A failed run is a near-miss whether or not a later run supersedes the summary: near-misses are facts at a point in time.
+    // gate_runs.candidate_id is a logical reference, so a run whose candidate is gone records nothing. Caller's transaction.
+    if (r.status === 'fail') {
+      const [cand] = this.queryAll('SELECT spec_id FROM candidates WHERE id = ?', r.candidate_id as string);
+      if (cand) {
+        this.recordNearMiss({
+          specId: cand.spec_id as string, candidateId: r.candidate_id as string, reason: 'gate_fail', sourceRef: runId, rung: r.gate as string,
+          evidence: { attempt: r.attempt, commitSha: r.commit_sha, failureClass: r.failure_class ?? null, exitCode: r.exit_code ?? null },
+        });
+      }
+    }
     const [later] = this.queryAll(
       `SELECT 1 AS x FROM gate_runs WHERE candidate_id = ? AND gate = ? AND id != ? AND (started_at > ? OR (started_at = ? AND rowid > ?)) LIMIT 1`,
       r.candidate_id as string, r.gate as string, runId, r.started_at as number, r.started_at as number, r.rid as number

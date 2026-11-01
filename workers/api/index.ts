@@ -283,6 +283,9 @@ export default {
     if (path === '/api/promotions' && method === 'GET') {
       return handleListPromotions(actorRequest, specDoStub);
     }
+    if (path === '/api/near-misses' && method === 'GET') {
+      return handleListNearMisses(actorRequest, specDoStub);
+    }
 
     // ============================================================================
     // ISSUES
@@ -1859,6 +1862,26 @@ async function handleCreatePromotion(
   const key = idemKey(request);
   if (key instanceof Response) return key;
   const response = await sendToSpecDo(stub, '/api/promotions', 'POST', { ...body, promotedBy: actorId }, actorId, key);
+  return response;
+}
+
+/**
+ * Near-misses (ADR 0005): losing candidates kept with their evidence. Read scope. An older Spec DO answers its generic 404 for
+ * this route, which is "not available yet", never an empty list (AGENTS.md Response.ok rule): 503.
+ */
+async function handleListNearMisses(
+  request: ActorRequest,
+  stub: SpecDoStub
+): Promise<Response> {
+  const url = new URL(request.url);
+  const params = new URLSearchParams();
+  for (const key of ['specId', 'candidateId', 'reason', 'limit', 'offset']) {
+    const value = url.searchParams.get(key);
+    if (value !== null) params.set(key, value);
+  }
+  const query = params.toString();
+  const response = await sendToSpecDo(stub, `/api/near-misses${query ? `?${query}` : ''}`, 'GET');
+  if (response.status === 404) return makeErrorResponse('Near-miss history is not available yet (the Spec DO is older than this edge)', 503);
   return response;
 }
 
