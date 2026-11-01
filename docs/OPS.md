@@ -589,3 +589,12 @@ returns a Worker bundle; `GET /sandbox/probe` returns the image's tool versions 
 - **Cost:** no instance runs until a gate run starts one; every run destroys its container. No secret is added (`CLOUDFLARE_API_TOKEN` is the one the build container already uses).
 - **Rollback:** container applications are account-level, not part of a worker version, and rolling a worker back across Durable Object lifecycle entries may be refused: treat this worker as forward-fix only. Deleting the `TestSandbox` application is by hand (`wrangler containers list`, `wrangler containers delete <id>`) and only after the worker no longer binds it.
 
+## Mirror body mode (PR-H, 2026-11-01)
+
+The shadow router decides what a mirrored request carries to a candidate (`workers/shadow-router/mirror-mode.ts`), because candidates run unreviewed agent-written code, are publicly reachable on `workers.dev` and have open outbound network access. Everything in a mirrored request except the HTTP method and a route template counts as customer data (body, query string, path segments, `x-request-id`, `user-agent`, `accept-language`).
+
+- `MIRROR_BODY_MODE` (var in `workers/shadow-router/wrangler.toml`): `none` (default) sends the method, a route template (ids become `:id`) and `Accept` only; `redacted` also sends the content type and a JSON body whose string and number leaves are replaced; `full` sends the original request minus credentials and needs `GOVERNANCE_EGRESS_CONTROLLED = "true"`, a var only a human sets, otherwise the router falls back to `none` and logs a warning. Anything unknown is `none`.
+- The trusted baseline (`beehive-main`) always gets the original request.
+- The Scientist queue message no longer carries the request body, request headers are an allowlist (`accept`, `content-type`), candidate response headers are a bounded allowlist, the whole-message log is gone, and candidate URLs are not logged with their query. `redact_query_string = true` on the router.
+- **Deploy effect:** after this deploy candidates receive less than before. Comparison fidelity drops until a candidate is eligible for `full` (PR-G). Nothing in the repo sends real traffic to the router yet, so no live behavior changes today. To restore the old behavior deliberately, set both vars; do not do that for untrusted-origin work.
+

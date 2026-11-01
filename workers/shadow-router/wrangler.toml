@@ -14,6 +14,10 @@ compatibility_flags = ["global_fetch_strictly_public"]
 [vars]
 # Only canary targets on this account's workers.dev subdomain are mirrored to (shared/deploy-refs.ts isAcceptableCanaryUrl)
 WORKERS_SUBDOMAIN = "bz23711"
+# What a mirrored request may carry to a candidate (mirror-mode.ts): "none" (default: method, route template, Accept only),
+# "redacted" (JSON body with string/number leaves replaced), or "full". "full" also needs GOVERNANCE_EGRESS_CONTROLLED = "true",
+# a human-set var (docs/M5A-2-GOVERNANCE-PLAN.md Rev 5); without it the router falls back to "none".
+MIRROR_BODY_MODE = "none"
 
 # Durable Object binding for Spec DO (cross-script): the canary deploy refs
 # (traffic pointer) are read from it on every mirrored request
@@ -39,7 +43,7 @@ queue = "preview-scientist-comparisons"
 [observability]
 enabled = true
 head_sampling_rate = 1
-redact_query_string = false
+redact_query_string = true
 
 [observability.logs]
 enabled = true

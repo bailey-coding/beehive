@@ -8,7 +8,6 @@
  */
 export const BASELINE_TARGET_ID = 'beehive-main';
 
-const SECRET_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization', 'x-actor-id', 'x-api-key']);
 const CANDIDATE_HEADER_ALLOWLIST = ['accept', 'accept-language', 'content-type', 'user-agent', 'x-request-id'];
 
 export function headersForTarget(targetId: string, source: Headers): Headers {
@@ -21,11 +20,27 @@ export function headersForTarget(targetId: string, source: Headers): Headers {
   return out;
 }
 
-/** Headers worth keeping in a Scientist queue message: the caller's credentials must not be persisted in queue messages. */
-export function scientistSafeHeaders(source: Headers): Record<string, string> {
+// An allowlist, not a denylist: a denylist of five names let x-csrf-token, x-auth-token, cf-access-jwt-assertion, x-forwarded-for and
+// similar land in queue messages. The comparator never reads request headers.
+const QUEUE_REQUEST_HEADER_ALLOWLIST = ['accept', 'content-type'];
+const QUEUE_RESPONSE_HEADER_ALLOWLIST = ['content-type', 'content-length', 'cache-control', 'etag'];
+const MAX_QUEUE_HEADER_VALUE_CHARS = 200;
+
+function pickHeaders(source: Headers, allow: readonly string[]): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [name, value] of source.entries()) {
-    if (!SECRET_HEADERS.has(name.toLowerCase())) out[name] = value;
+  for (const name of allow) {
+    const value = source.get(name);
+    if (value !== null) out[name] = value.slice(0, MAX_QUEUE_HEADER_VALUE_CHARS);
   }
   return out;
+}
+
+/** Request headers kept in a Scientist queue message: an allowlist, so credentials and unknown headers are never persisted. */
+export function scientistSafeHeaders(source: Headers): Record<string, string> {
+  return pickHeaders(source, QUEUE_REQUEST_HEADER_ALLOWLIST);
+}
+
+/** Candidate response headers kept in a Scientist queue message: a short allowlist with bounded values (the candidate is untrusted). */
+export function scientistSafeResponseHeaders(source: Headers): Record<string, string> {
+  return pickHeaders(source, QUEUE_RESPONSE_HEADER_ALLOWLIST);
 }

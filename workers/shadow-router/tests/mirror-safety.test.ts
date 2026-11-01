@@ -95,11 +95,13 @@ describe('mirror fan-out through the handler', () => {
     for (let i = 0; i < id.length; i++) { hash = (hash << 5) - hash + id.charCodeAt(i); hash = hash & hash; }
     return (Math.abs(hash) % 10000) / 10000 < 0.01;
   }
-  const urlFor = (method: string) => {
-    for (let i = 0; i < 200_000; i++) if (inCanary(method, `http://localhost/m/${i}`)) return `http://localhost/m/${i}`;
+  // The split hashes the full URL, so a query string must be part of the search for a URL inside the canary range
+  const urlFor = (method: string, search = '') => {
+    for (let i = 0; i < 400_000; i++) if (inCanary(method, `http://localhost/m/${i}${search}`)) return `http://localhost/m/${i}${search}`;
     throw new Error('no url in the canary range');
   };
-  const env = () => ({
+  const env = (extra: Record<string, string> = {}) => ({
+    ...extra,
     API_AUTH_TOKEN: 'tok',
     LIVE_REFS_CACHE_TTL_MS: '0',
     SPEC_DO: { idFromName: () => 'id', get: () => ({ fetch: vi.fn(async (input: Request | string) => {
@@ -145,11 +147,53 @@ describe('mirror fan-out through the handler', () => {
     vi.restoreAllMocks();
   });
 
-  const send = (method: string, body?: string) =>
-    handler.fetch(new Request(urlFor(method), { method, body, headers: { Authorization: 'Bearer tok', 'Content-Type': 'text/plain' } }), env(), ctx);
+  const send = (method: string, body?: string, extraEnv: Record<string, string> = {}, headers: Record<string, string> = {}, search = '') =>
+    handler.fetch(new Request(urlFor(method, search), { method, body, headers: { Authorization: 'Bearer tok', 'Content-Type': 'text/plain', ...headers } }), env(extraEnv), ctx);
 
-  it('a POST body reaches the candidate, and the production baseline is not replayed', async () => {
-    const res = await send('POST', 'payload-123');
+  const FULL = { MIRROR_BODY_MODE: 'full', GOVERNANCE_EGRESS_CONTROLLED: 'true' };
+  const candidateCalls = () => calls.filter((c) => c.url.startsWith('https://cand-a.bz23711.workers.dev'));
+
+  it('by default (mode none) a candidate gets no body, no query string and no path ids, only the method and a route template', async () => {
+    const res = await send('POST', '{"email":"a@b.c"}', {}, { 'Content-Type': 'application/json' }, '?token=secret&email=a@b.c');
+    expect(res.status).toBe(200);
+    const [call] = candidateCalls();
+    expect(call.method).toBe('POST');
+    expect(call.body).toBeNull();
+    expect(call.url).not.toContain('token=');
+    expect(call.url).not.toContain('secret');
+    expect(call.url).not.toContain('?');
+    expect(new URL(call.url).pathname).toBe('/m/:id'); // urlFor() is /m/<number>
+  });
+
+  it('MIRROR_BODY_MODE=full without GOVERNANCE_EGRESS_CONTROLLED falls back to none', async () => {
+    await send('POST', 'payload-123', { MIRROR_BODY_MODE: 'full' });
+    expect(candidateCalls()[0].body).toBeNull();
+  });
+
+  it('an unknown MIRROR_BODY_MODE fails closed to none', async () => {
+    await send('POST', 'payload-123', { MIRROR_BODY_MODE: 'everything', GOVERNANCE_EGRESS_CONTROLLED: 'true' });
+    expect(candidateCalls()[0].body).toBeNull();
+  });
+
+  it('mode redacted sends a JSON body with string and number leaves replaced, and drops a non-JSON body', async () => {
+    await send('POST', '{"email":"a@b.c","age":41,"ok":true,"items":["x"]}', { MIRROR_BODY_MODE: 'redacted' }, { 'Content-Type': 'application/json' }, '?token=secret');
+    const [json] = candidateCalls();
+    expect(JSON.parse(json.body as string)).toEqual({ email: '<string>', age: 0, ok: true, items: ['<string>'] });
+    expect(json.url).not.toContain('secret');
+    calls.length = 0;
+    await send('POST', 'plain text with a@b.c', { MIRROR_BODY_MODE: 'redacted' });
+    expect(candidateCalls()[0].body).toBeNull();
+  });
+
+  it('the trusted baseline always gets the original request, even in mode none', async () => {
+    await send('GET', undefined, {}, {}, '?q=1');
+    const base = calls.find((c) => c.url.startsWith(BASELINE_URL));
+    expect(base).toBeDefined();
+    expect(base!.url).toContain('?q=1');
+  });
+
+  it('a POST body reaches the candidate in mode full (with the egress var), and the production baseline is not replayed', async () => {
+    const res = await send('POST', 'payload-123', FULL);
     expect(res.status).toBe(200);
     const toCandidate = calls.filter((c) => c.url.startsWith('https://cand-a.bz23711.workers.dev'));
     expect(toCandidate).toHaveLength(1);

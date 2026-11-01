@@ -10,7 +10,8 @@
  * - Writes metrics to Analytics Engine
  */
 
-import { BASELINE_TARGET_ID, headersForTarget, scientistSafeHeaders } from './candidate-headers';
+import { BASELINE_TARGET_ID, headersForTarget, scientistSafeHeaders, scientistSafeResponseHeaders } from './candidate-headers';
+import { mirrorRequestFor, resolveMirrorMode, type MirrorBodyMode } from './mirror-mode';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub } from '../shared/spec-do-auth';
 import { MetricsCollector } from '../shared/analytics';
@@ -238,6 +239,7 @@ async function fanOutToCandidates(
   }
   
   console.log(`[Shadow] Mirroring to ${config.candidatePreviews.size} candidates with Statsig classification`);
+  const mirrorMode = resolveMirrorMode(env ?? {});
 
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
@@ -285,7 +287,7 @@ async function fanOutToCandidates(
       continue;
     }
     
-    const promise = fetchCandidate(request, previewUrl, candidateId, requestId, bodyBytes)
+    const promise = fetchCandidate(request, previewUrl, candidateId, requestId, bodyBytes, mirrorMode)
       .then((result) => {
         // Write metrics for this candidate request (if metrics available)
         if (metrics) {
@@ -332,13 +334,19 @@ async function fetchCandidate(
   previewUrl: string,
   candidateId: string,
   requestId: string,
-  bodyBytes?: ArrayBuffer
+  bodyBytes?: ArrayBuffer,
+  mirrorMode: MirrorBodyMode = 'none'
 ): Promise<{ candidateId: string; response: Response; latencyMs: number }> {
   const startTime = Date.now();
   
-  // Build the candidate URL
+  // Build the candidate request. The trusted baseline gets the original; any other target gets what the mirror mode allows
+  // (mirror-mode.ts): by default no body, no query string and no path ids.
   const url = new URL(request.url);
-  const candidateUrl = `${previewUrl}${url.pathname}${url.search}`;
+  const isBaseline = candidateId === BASELINE_TARGET_ID;
+  const target = isBaseline
+    ? { pathAndQuery: `${url.pathname}${url.search}`, headers: request.headers, body: bodyBytes ? bodyBytes.slice(0) : undefined }
+    : mirrorRequestFor(mirrorMode, url, request.headers, bodyBytes, requestId, headersForTarget(candidateId, request.headers));
+  const candidateUrl = `${previewUrl}${target.pathAndQuery}`;
   
   // The timer is a plain setTimeout (not AbortSignal.timeout) so it can be cleared once the answer headers arrive
   const controller = new AbortController();
@@ -348,12 +356,13 @@ async function fetchCandidate(
     // never a rejected promise that Promise.allSettled drops without a sample.
     const candidateRequest = new Request(candidateUrl, {
       method: request.method,
-      headers: headersForTarget(candidateId, request.headers),
-      body: bodyBytes ? bodyBytes.slice(0) : undefined,
+      headers: target.headers,
+      body: target.body,
       redirect: 'manual',
       signal: controller.signal,
     });
-    console.log(`[Shadow] Fetching candidate ${candidateId} at ${candidateUrl}`);
+    // Never log the query string or the full path: they can carry tokens and customer data
+    console.log(`[Shadow] Fetching candidate ${candidateId} (${isBaseline ? 'baseline' : mirrorMode} mode)`);
     const response = await fetch(candidateRequest);
     const latencyMs = Date.now() - startTime;
     
@@ -425,15 +434,7 @@ async function triggerScientist(
   const timestamp = Date.now();
   const url = new URL(request.url);
   
-  // Extract request body if present
-  let requestBody: string | undefined;
-  try {
-    if (request.body) {
-      requestBody = await request.clone().text();
-    }
-  } catch {
-    requestBody = undefined;
-  }
+  // The request body is deliberately not enqueued: the comparator never reads it, and queue messages are persisted.
 
   // Get baseline response from production
   // For now, we'll use a stub - in production this would be the actual production response
@@ -451,8 +452,11 @@ async function triggerScientist(
     candidateId: r.candidateId,
     specId: '', // TODO: Get from Spec DO or config
     status: r.response.status,
-    headers: Object.fromEntries(r.response.headers.entries()),
-    body: undefined, // TODO: Read response body
+    // An allowlist with bounded values: the candidate is untrusted and its headers were stored unbounded
+    headers: scientistSafeResponseHeaders(r.response.headers),
+    // TODO: Read response body. Before filling this in, cap and redact it: candidate output is attacker-controlled and the
+    // comparator writes diffs to Analytics Engine (docs/M5A-2-GOVERNANCE-PLAN.md Rev 5, data path h)
+    body: undefined,
     latencyMs: r.latencyMs,
     classification: r.classification.type,
     classificationWeight: r.classification.weight,
@@ -465,7 +469,6 @@ async function triggerScientist(
     path: url.pathname,
     method: request.method,
     headers: scientistSafeHeaders(request.headers),
-    body: requestBody,
     baseline,
     candidates,
   };
@@ -511,7 +514,6 @@ async function triggerScientist(
     } else {
       // Queue binding not available - log for debugging
       console.log(`[Shadow] Scientist Queue binding for ${queueName} not available - comparison skipped`);
-      console.log('[Shadow] Queue message would have been:', JSON.stringify(finalQueueMessage, null, 2));
     }
   } catch (error) {
     const queueName = 'unknown';
