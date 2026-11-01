@@ -272,3 +272,28 @@ Existing suites must stay green unchanged (`promotion-ledger.test.ts`, `ledger-c
 - R5: read route now or with PR-D.
 - R6: deferring (a), (b), (e) entirely (no pure helpers) under the reachability rule.
 - General: verify section 1.1 is the complete writer inventory (`grep -rn "candidates SET\|INTO candidates\|promotion_states SET\|INTO promotion_states" workers`).
+
+---
+
+## Review 1 dispositions (2026-11-01; approve with changes, no blockers; supersede conflicting text above)
+
+Maintainer-default decisions:
+- **R1 accepted:** (d) lives in `ledger-state-machine.ts` beside the tournament machine.
+- **R2 accepted:** all four readings, with S2 and N1 below.
+- **R3 accepted:** `actor_id` NULL, the asserted id in `asserted_actor_id`.
+- **R4:** 1 h window and 100-row cap kept (with S3); `invalid_transition` rows are **not** exempt from "never purged".
+- **R5:** read route deferred to PR-D.
+- **R6 accepted:** (a), (b), (e) deferred entirely.
+
+Findings applied:
+- **S1, the check runs inside the try.** Signature `logTransitionViolation(check: () => GovernanceViolation | null, subject, assertedActorId, extra)`. The prior-stage `SELECT` is done inside the same try; if it fails, prev is null and nothing is logged. Test: an injected throwing check leaves the PATCH at 200 with stage and history written.
+- **S2, `enforceable` per rule.** Each rule in the module's data carries `enforceable: boolean`; false for every edge into `rolled_back` or `failed` (rule 7: rollback and failure are never refused) and for same-state writes (which are never violations). `rollback_before_train` is therefore permanently log-only, and so is `promoted -> failed` (rule `promoted_exit` with `to = failed`): `enforceable` is computed per (rule, to), see `isEnforceable`. The fix for an execute on a `promoted` candidate is an **execute pre-check** (refuse before calling the sandbox) in a later PR, not a stage refusal. Stated in `docs/GOVERNANCE-STATE-MACHINES.md` (c).
+- **S3, e2e exclusion and the cap marker.** `detail.orgName` carries the validated organization name (namespace) of the candidate's spec; measurement excludes `orgName LIKE 'test-org-e2e-%'` (`asserted_actor_id` is `promotion-worker` for ledger writes, and "candidate no longer exists" also matches purged real candidates). `suppressedSince` is dropped; the row that reaches the cap carries `detail.capReached: true`. The enforce criterion requires no window with a `capReached` row in the 14 days, and a cross-check of row counts against the `console.warn` count.
+- **S4, statement-level rollback is qualified.** It holds for constraint and schema errors (including `RAISE(ABORT)`); `SQLITE_FULL`, `SQLITE_NOMEM` and `SQLITE_IOERR` may roll back the whole transaction, and then the write fails exactly as any storage failure does today. Test: `CREATE TRIGGER ... BEFORE INSERT ON governance_events BEGIN SELECT RAISE(ABORT,'x'); END` -> 200, stage and history committed, one `console.error`.
+- **S5:** `docs/MILESTONES.md` (M5a-2) names the promotion-worker prerequisites as blocking for the enforce PR and for PR-D's "`promoted` only from `passed_canary`" assumption: one stage per rung (tournament), merge-train success writes `passed_train`, execute refuses on `promoted`.
+- **S6 tests added:** a throw in `recordHistory` rolls back the stage UPDATE; a tombstoned candidate writes no event (log only for a live row); `failed -> passed_premerge` via PATCH gives `reset_needs_execute`, via execute zero events; promotion-state PATCH changing only non-status fields, PATCH on an unknown id (404) and duplicate create (409) write no event; time is faked with `vi.useFakeTimers({ toFake: ['Date'] })` / `vi.setSystemTime` only.
+- **N1:** catch-all rule `not_allowed`, so every cell of the 8x8 matrix has a defined value.
+- **N2:** `entersPromoted` dropped (unused in PR-S; PR-D adds what it needs).
+- **N3:** `unknown_stage` is for the enforce PR, which must check before the UPDATE; in PR-S an unknown `to` fails the CHECK and nothing is logged.
+- **N4:** `GovernanceViolation` is a superset of `TransitionViolation` (`{code, message}` plus `machine, rule, from, to, enforceable`). For promotion-state PATCH the asserted actor is `current.actorId` (the PATCH carries no header).
+- **N5 applied:** dedupe and cap in one query (`SELECT COUNT(*), SUM(subject = ? AND reason = ?)` over the window).
