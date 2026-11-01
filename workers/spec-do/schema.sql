@@ -627,3 +627,105 @@ CREATE TABLE IF NOT EXISTS gate_runs (
 CREATE INDEX IF NOT EXISTS idx_gate_runs_candidate ON gate_runs(candidate_id, gate, commit_sha);
 CREATE INDEX IF NOT EXISTS idx_gate_runs_status ON gate_runs(status, started_at);
 CREATE INDEX IF NOT EXISTS idx_gate_runs_started ON gate_runs(started_at);
+
+-- ============================================================================
+-- GOVERNANCE (m13 -> m14, additive; docs/M5A-2-GOVERNANCE-PLAN.md, docs/GOVERNANCE-STATE-MACHINES.md)
+-- Five new tables and no writers yet (PR-A is schema only). Docs/OPS.md rollback floor: a new table may reference only
+-- actors, so every id of a candidate, spec, issue or trial below is a LOGICAL reference with no foreign key (a purge by an
+-- older build must not fail on these rows; the next m14+ purge sweeps orphans). source, created_via and event are free
+-- text on purpose: widening a CHECK later needs a table rebuild, which the rollback floor forbids.
+--   change_classifications: append-only; the newest row per entity (and candidate head sha) wins, ties by created_at then rowid.
+--   approvals: append-only, NO unique key on decision: an approver's effective decision is their latest row, so approve, reject,
+--     approve by one approver is legal; redelivery is deduplicated by the Idempotency-Key. rung is NULL for spec, role_change and
+--     policy_change rows; for role/policy changes subject_id is the sha256 of the canonical request body.
+--   near_misses: facts at a point in time; UNIQUE(candidate_id, reason, source_ref) with INSERT OR IGNORE keeps a redelivery from
+--     duplicating a row. source_ref is the trial, verdict run, tournament/train or deployment id.
+--   intent_provenance: origin of an issue or spec, derived by the DO from the authenticated principal; origin_actor_id is nullable.
+--   governance_events: system events (policy_change, role_change, break_glass, approval_missing, approval_recorded,
+--     invalid_transition, hook_rollback), never purged. entity_history cannot hold them (its entity_type CHECK).
+-- The m14 step also stores metadata 'governance.m14_epoch': an issue or spec with no intent_provenance row created before it is
+-- legacy (maintainer origin); one created at or after it is unknown (treated as external).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS change_classifications (
+  id TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('issue', 'spec', 'candidate')),
+  entity_id TEXT NOT NULL,
+  commit_sha TEXT,
+  change_type TEXT NOT NULL CHECK(change_type IN (
+    'typo-fix', 'refactor', 'behavior-change', 'security-sensitive', 'dependency-change',
+    'infra', 'schema-migration', 'oracle-change', 'unclassified'
+  )),
+  confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+  classifier TEXT,
+  inputs_hash TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_change_classifications_entity ON change_classifications(entity_type, entity_id, created_at);
+
+CREATE TABLE IF NOT EXISTS approvals (
+  id TEXT PRIMARY KEY,
+  subject_type TEXT NOT NULL CHECK(subject_type IN ('candidate', 'role_change', 'policy_change', 'spec')),
+  subject_id TEXT NOT NULL,
+  rung TEXT CHECK(rung IS NULL OR rung IN ('canary', 'full')),
+  commit_sha TEXT,
+  content_hash TEXT,
+  approver_actor_id TEXT NOT NULL,
+  approver_eligible INTEGER NOT NULL DEFAULT 0,
+  decision TEXT NOT NULL CHECK(decision IN ('approve', 'reject')),
+  self_approval INTEGER NOT NULL DEFAULT 0,
+  reason TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (approver_actor_id) REFERENCES actors(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_approvals_subject ON approvals(subject_type, subject_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_approvals_approver ON approvals(approver_actor_id, created_at);
+
+CREATE TABLE IF NOT EXISTS near_misses (
+  id TEXT PRIMARY KEY,
+  spec_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK(reason IN ('trial_loss', 'gate_fail', 'train_drop', 'slo_rollback', 'tournament_loss')),
+  rung TEXT,
+  lost_to_candidate_id TEXT,
+  trial_id TEXT,
+  source_ref TEXT NOT NULL,
+  evidence TEXT,
+  complexity_delta REAL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(candidate_id, reason, source_ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_near_misses_spec ON near_misses(spec_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_near_misses_candidate ON near_misses(candidate_id);
+
+CREATE TABLE IF NOT EXISTS intent_provenance (
+  id TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('issue', 'spec')),
+  entity_id TEXT NOT NULL,
+  origin TEXT NOT NULL CHECK(origin IN ('maintainer', 'known_agent', 'external', 'unknown')),
+  origin_actor_id TEXT,
+  source TEXT,
+  created_via TEXT,
+  source_issue_id TEXT,
+  basis TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (origin_actor_id) REFERENCES actors(id),
+  UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS governance_events (
+  id TEXT PRIMARY KEY,
+  event TEXT NOT NULL,
+  actor_id TEXT,
+  asserted_actor_id TEXT,
+  subject TEXT,
+  reason TEXT,
+  detail TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_governance_events_event ON governance_events(event, created_at);
+CREATE INDEX IF NOT EXISTS idx_governance_events_created ON governance_events(created_at);

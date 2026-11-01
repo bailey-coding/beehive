@@ -27,7 +27,7 @@ const indexNames = (s: SqliteState, t: string) =>
 function rowsDump(s: SqliteState): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const t of userTables(s)) {
-    const where = t === 'metadata' ? " WHERE key != 'schema_version'" : '';
+    const where = t === 'metadata' ? " WHERE key NOT IN ('schema_version', 'governance.m14_epoch')" : '';
     out[t] = all(s, `SELECT * FROM ${t}${where}`).map((r) => JSON.stringify(r)).sort();
   }
   return out;
@@ -37,7 +37,7 @@ function rowsDump(s: SqliteState): Record<string, string[]> {
 function originalColumnRows(s: SqliteState, before: { table: string; cols: string[] }[]): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const { table, cols } of before) {
-    const where = table === 'metadata' ? " WHERE key != 'schema_version'" : '';
+    const where = table === 'metadata' ? " WHERE key NOT IN ('schema_version', 'governance.m14_epoch')" : '';
     out[table] = all(s, `SELECT ${cols.join(', ')} FROM ${table}${where}`).map((r) => JSON.stringify(r)).sort();
   }
   return out;

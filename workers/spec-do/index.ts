@@ -27,10 +27,11 @@ import {
   CANARY_METRICS_SQL,
   ACTORS_GITHUB_UNIQUE_SQL,
   GATE_RUNS_SQL,
+  GOVERNANCE_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm13';
+const LATEST_SCHEMA_VERSION = 'm14';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -677,6 +678,9 @@ export class SpecDO {
       // gate_runs: likewise (candidates.preview_* are in the base table above)
       this.db.exec(GATE_RUNS_SQL);
 
+      // governance tables and the m14 epoch: likewise
+      this.applyGovernance();
+
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
       // Fresh statement per write: the adapter does not re-execute a reused
@@ -1134,6 +1138,9 @@ export class SpecDO {
       // m12 -> m13: gate_runs, plus the candidates.preview_* columns. A ledger created fresh at m11 or m12 has them only
       // if its base table did; the m2 step above ran on migrated ledgers alone and never re-runs once a version is stamped
       ['m13', () => this.applyGateRuns()],
+      // m13 -> m14: governance tables (change classifications, approvals, near-misses, intent provenance, governance events) and the
+      // m14 epoch. New tables only, no writers yet (docs/M5A-2-GOVERNANCE-PLAN.md PR-A)
+      ['m14', () => this.applyGovernance()],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -1210,6 +1217,20 @@ export class SpecDO {
     if (!this.db) throw new Error('Database not initialized');
     this.addColumnsIfMissing('candidates', ['preview_url TEXT', 'preview_worker_name TEXT', 'preview_created_at INTEGER']);
     this.db.exec(GATE_RUNS_SQL);
+  }
+
+  /**
+   * m14. Additive and idempotent: IF NOT EXISTS tables and indexes, then the epoch. The epoch is written once (INSERT OR IGNORE) and
+   * never moves: an issue or spec with no intent_provenance row created before it is legacy (maintainer origin), one created at or
+   * after it is unknown (treated as external), so a rollback below m14 or a skipped provenance write fails closed.
+   */
+  private applyGovernance(): void {
+    if (!this.db) throw new Error('Database not initialized');
+    this.db.exec(GOVERNANCE_SQL);
+    const stmt = this.db.prepare('INSERT OR IGNORE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)');
+    stmt.bind('governance.m14_epoch', String(now()), now());
+    stmt.step();
+    stmt.free();
   }
 
   private addColumnsIfMissing(table: string, columns: string[]): void {

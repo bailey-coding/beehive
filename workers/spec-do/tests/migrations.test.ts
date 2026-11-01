@@ -16,7 +16,7 @@ const count = (s: SqliteState, table: string) =>
 const tables = (s: SqliteState) =>
   (s.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name);
 
-/** Seed a populated ledger, then strip everything m4..m13 added, leaving an m3 shape */
+/** Seed a populated ledger, then strip everything m4..m14 added, leaving an m3 shape */
 async function populatedM3(): Promise<SqliteState> {
   const fresh = makeSqliteState();
   const spec = makeSpecDo(fresh);
@@ -34,7 +34,7 @@ async function populatedM3(): Promise<SqliteState> {
     .run(org.id, actor);
 
   const raw = fresh.raw;
-  for (const t of ['gate_runs', 'canary_metrics', 'user_tokens', 'canary_deployments', 'deploy_refs', 'service_tokens', 'promotion_states', 'tournaments', 'merge_trains', 'purge_log']) {
+  for (const t of ['change_classifications', 'approvals', 'near_misses', 'intent_provenance', 'governance_events', 'gate_runs', 'canary_metrics', 'user_tokens', 'canary_deployments', 'deploy_refs', 'service_tokens', 'promotion_states', 'tournaments', 'merge_trains', 'purge_log']) {
     raw.exec(`DROP TABLE ${t}`);
   }
   raw.exec('DROP INDEX idx_actors_github_user_id_unique');
@@ -230,7 +230,7 @@ describe('a ledger newer than this code (m<N> above the latest)', () => {
       })
     );
 
-  it.each(['m14', 'm15', 'm99', 'm100', 'm999999'])(
+  it.each(['m15', 'm16', 'm99', 'm100', 'm999999'])(
     'init() at %s warns once, runs no step, and leaves the version and the extra table alone',
     async (v) => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

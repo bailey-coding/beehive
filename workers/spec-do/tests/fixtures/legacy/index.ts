@@ -57,7 +57,9 @@ function historicalDdl(file: string, version: number): string[] {
   const lines = read(file).split('\n');
   const deferred = lines.filter((l) => DEFERRED_INDEX.test(l));
   const base = lines.filter((l) => !DEFERRED_INDEX.test(l)).join('\n');
-  return [base, ...ALTERS.filter(([since]) => since <= version).map(([, sql]) => sql), ...deferred];
+  // A later snapshot's base table may already carry a column an earlier ALTER adds (m13 moved the preview columns into candidates)
+  const needed = ALTERS.filter(([since, sql]) => since <= version && !(sql.startsWith('ALTER TABLE candidates ADD COLUMN preview_') && base.includes(sql.split(' ADD COLUMN ')[1].split(' ')[0] + ' ')));
+  return [base, ...needed.map(([, sql]) => sql), ...deferred];
 }
 
 // m9 meant idempotency_keys at d34db95 and user_tokens at af1165f and 98d43df; neither schema.sql nor the code at

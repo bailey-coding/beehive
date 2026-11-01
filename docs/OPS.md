@@ -117,6 +117,10 @@ retries), so a bad deploy is loud rather than half-migrated.
      their runs as orphans; the next purge by an m13+ build sweeps every `gate_runs` row whose candidate no longer exists (only when
      that purge selects at least one organization), so the orphans do not stay forever. The routes still refuse an unknown or
      tombstoned candidate; only the database constraint is absent.
+     Second example (m14, 2026-11-01, `docs/M5A-2-GOVERNANCE-PLAN.md` PR-A): `change_classifications`, `near_misses`, `intent_provenance`
+     (`origin_actor_id`, nullable, references `actors`), `approvals` (`approver_actor_id` references `actors`) and `governance_events`
+     hold candidate, spec, issue and trial ids as logical references. The tables have no writers until PR-B and later, so they are empty
+     after the m14 deploy; the orphan sweep for them arrives with the PR that first writes rows (PR-B).
    - New columns on old tables are nullable or have a default, so the floor's inserts still succeed.
    - No new CHECK, UNIQUE or trigger on an old table may reject a write the floor makes. The one exception is the
      m12 partial unique index on `actors.github_user_id` (decided 2026-10-27): the floor's `createActor` has no duplicate
@@ -604,4 +608,10 @@ The shadow router decides what a mirrored request carries to a candidate (`worke
 - **Not verified (open):** the baseline fetch to `beehive-main` still carries the full URL, query and credentials (by design), and `[observability.traces]` persists spans to Honeycomb at 100% sampling; whether `redact_query_string` applies to trace span URLs is unconfirmed. Check one trace before opening real traffic.
 - **Deploy checklist:** add the mirrored service's own route names to `MIRROR_ROUTE_WORDS` in the router's `wrangler.toml`; if forgotten, candidates receive `/:id/:id` (the safe failure). Delta-surface path rules in specs must be written as `{param}` or wildcard patterns, never with real ids, or the comparator can no longer match them.
 - Candidate fetch failures now log only the error name (an `Invalid URL` message would print the URL with its query).
+
+## Governance schema m14 (PR-A, 2026-11-01)
+
+- The Spec DO migrates `m13 -> m14` on its first request after the deploy: five new tables (`change_classifications`, `approvals`, `near_misses`, `intent_provenance`, `governance_events`) and one metadata row, `governance.m14_epoch` (the ledger time of the migration, written once, never moved). No writer exists yet, so the tables stay empty, and nothing in the routes changes.
+- Deploy check: `schema_version` is `m14`, the five tables exist and are empty, `governance.m14_epoch` exists (dashboard SQL editor: `SELECT key, value FROM metadata WHERE key IN ('schema_version','governance.m14_epoch')`). A failed migration rethrows and is a full outage, like any step; every statement is `IF NOT EXISTS` and replays safely.
+- Rollback: a build older than m14 over an m14 ledger serves normally and ignores the tables (rollback floor). The epoch is what lets a later build tell legacy entities from ones created while rolled back.
 

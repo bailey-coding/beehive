@@ -20,6 +20,7 @@ import {
   CANARY_METRICS_SQL,
   ACTORS_GITHUB_UNIQUE_SQL,
   GATE_RUNS_SQL,
+  GOVERNANCE_SQL,
 } from '../schema-inline';
 
 const file = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
@@ -28,7 +29,7 @@ describe('schema.sql vs schema-inline.ts', () => {
   it('schema.sql is the inline sections concatenated, byte for byte', () => {
     // Base schema (which already holds the m3 service_accounts and m4 promotion ledger
     // sections), then the sections later migrations appended, in migration order
-    expect(file).toBe(SCHEMA_SQL + LEDGER_LIFECYCLE_SQL + SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL + USER_TOKENS_SQL + IDEMPOTENCY_KEYS_SQL + CANARY_METRICS_SQL + ACTORS_GITHUB_UNIQUE_SQL + GATE_RUNS_SQL);
+    expect(file).toBe(SCHEMA_SQL + LEDGER_LIFECYCLE_SQL + SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL + USER_TOKENS_SQL + IDEMPOTENCY_KEYS_SQL + CANARY_METRICS_SQL + ACTORS_GITHUB_UNIQUE_SQL + GATE_RUNS_SQL + GOVERNANCE_SQL);
   });
 
   it('m9 references actors only and adds no index on actors (a unique github_user_id index is m12)', () => {
@@ -59,6 +60,25 @@ describe('schema.sql vs schema-inline.ts', () => {
     // docs/OPS.md rollback floor: only actors (never a table in ORG_PURGE_ORDER); candidate_id is a logical reference
     expect(sql.match(/REFERENCES\s+\w+/g)).toEqual(['REFERENCES actors']);
     expect(sql).not.toMatch(/\b(DROP|ALTER|DELETE|UPDATE|INSERT)\b/i);
+  });
+
+  it('m14 is five additive governance tables with their indexes, foreign keys to actors only, and nothing destructive', () => {
+    const sql = GOVERNANCE_SQL.replace(/--.*$/gm, '');
+    expect(sql.match(/CREATE TABLE IF NOT EXISTS \w+/g)).toEqual([
+      'CREATE TABLE IF NOT EXISTS change_classifications',
+      'CREATE TABLE IF NOT EXISTS approvals',
+      'CREATE TABLE IF NOT EXISTS near_misses',
+      'CREATE TABLE IF NOT EXISTS intent_provenance',
+      'CREATE TABLE IF NOT EXISTS governance_events',
+    ]);
+    expect(sql.match(/CREATE INDEX IF NOT EXISTS \w+/g)).toHaveLength(7);
+    // docs/OPS.md rollback floor: only actors; every candidate, spec, issue and trial id is a logical reference
+    expect(sql.match(/REFERENCES\s+\w+/g)).toEqual(['REFERENCES actors', 'REFERENCES actors']);
+    expect(sql).not.toMatch(/\b(DROP|ALTER|DELETE|UPDATE|INSERT)\b/i);
+    // no unique key on an approval's decision: approve, reject, approve by one approver must stay legal
+    expect(sql.slice(sql.indexOf('CREATE TABLE IF NOT EXISTS approvals'), sql.indexOf('CREATE TABLE IF NOT EXISTS near_misses'))).not.toMatch(/UNIQUE/);
+    // backticks would end the template literal in schema-inline.ts
+    expect(GOVERNANCE_SQL).not.toContain('`');
   });
 
   it('the base candidates table carries the preview columns that the m2 step adds to migrated ledgers', () => {
