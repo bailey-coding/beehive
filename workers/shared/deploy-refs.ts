@@ -217,12 +217,17 @@ export const DEPLOY_PATHS = {
   canaryRollback: (id: string) => `/canary-deployments/${encodeURIComponent(id)}/rollback`,
   deployRefs: '/deploy-refs',
   deployRefHead: '/deploy-refs/head',
+  // Optional Idempotency-Key (a redelivery replays, never toggles back) and EXPECTED_HEAD_HEADER (409 version_conflict
+  // when the head moved). Two distinct rollbacks still toggle: docs/OPEN-QUESTIONS.md 2026-11-01 (D2).
   deployRefRollback: '/deploy-refs/rollback',
   liveRefs: '/deploy-refs/live',
   canaryMetrics: '/canary-metrics',
 } as const;
 
-export const DEPLOY_ROUTE = /^\/(canary-deployments|deploy-refs|canary-metrics)(?:\/([^\/]+))?(?:\/(rollback))?$/;
+/** POST /deploy-refs/rollback only: the head ref id the caller decided on. A header, so an older Spec DO ignores it. */
+export const EXPECTED_HEAD_HEADER = 'X-Expected-Head';
+
+export const DEPLOY_ROUTE =/^\/(canary-deployments|deploy-refs|canary-metrics)(?:\/([^\/]+))?(?:\/(rollback))?$/;
 
 // ============================================================================
 // CLIENT

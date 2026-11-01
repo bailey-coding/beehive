@@ -203,6 +203,35 @@ describe('deploy ref rollback: the candidate that was live is an slo_rollback ne
     expect(nm).toMatchObject({ spec_id: 'spec-a', candidate_id: 'cand-b', reason: 'slo_rollback', rung: 'canary' });
     expect(JSON.parse(nm.evidence as string)).toMatchObject({ reason: 'latency_p95', rolledBackBy: 'operator', workerVersionId: 'ver-cand-b' });
   });
+
+  const deployAB = async () => {
+    const body = (c: string) => ({ candidateId: c, specId: 'spec-a', url: `https://${c}.example.workers.dev`, workerVersionId: `ver-${c}`, commitSha: `sha-${c}`, trafficPercentage: 10, holdoutPercentage: 5 });
+    expect((await call('/canary-deployments', 'POST', body('cand-a'), { 'X-Actor-ID': 'canary-worker' })).status).toBe(201);
+    expect((await call('/canary-deployments', 'POST', body('cand-b'), { 'X-Actor-ID': 'canary-worker' })).status).toBe(201);
+  };
+  const rollback = (headers: Record<string, string> = {}) =>
+    call('/deploy-refs/rollback', 'POST', { specId: 'spec-a', rung: 'canary', reason: 'latency_p95' }, { 'X-Actor-ID': 'operator', ...headers });
+
+  it('a redelivered rollback (same Idempotency-Key) writes one near-miss', async () => {
+    await deployAB();
+    expect((await rollback({ 'Idempotency-Key': 'rb-1' })).status).toBe(200);
+    expect((await rollback({ 'Idempotency-Key': 'rb-1' })).status).toBe(200);
+    expect(rows().map((r) => r.candidate_id)).toEqual(['cand-b']);
+  });
+
+  // Known hazard pending D2 (docs/OPEN-QUESTIONS.md 2026-11-01): pins today's behavior, not a design choice
+  it('two distinct unkeyed rollbacks write two near-misses: known hazard pending D2', async () => {
+    await deployAB();
+    expect((await rollback()).status).toBe(200);
+    expect((await rollback()).status).toBe(200);
+    expect(rows().map((r) => r.candidate_id)).toEqual(['cand-b', 'cand-a']);
+  });
+
+  it('a stale X-Expected-Head writes no near-miss', async () => {
+    await deployAB();
+    expect((await rollback({ 'X-Expected-Head': 'stale' })).status).toBe(409);
+    expect(rows()).toEqual([]);
+  });
 });
 
 describe('gate run failed: a gate_fail near-miss per failed run', () => {

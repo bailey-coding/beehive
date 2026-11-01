@@ -163,7 +163,8 @@ describe('rollback (pointer move to prev_ref_id)', () => {
     expect((await deployment(a.deployment.id)).status).toBe('deployed');
   });
 
-  it('rolling back twice toggles the pointer back (promotion and demotion are the same move)', async () => {
+  // Known hazard pending D2 (docs/OPEN-QUESTIONS.md 2026-11-01): pins today's behavior, not a design choice
+  it('two distinct rollbacks (no key) toggle back: known hazard pending D2', async () => {
     await deploy('cand-a');
     const b = await deploy('cand-b');
     expect((await rollbackRef()).status).toBe(200);
@@ -203,6 +204,8 @@ describe('rollback (pointer move to prev_ref_id)', () => {
     await deploy('cand-b');
     const res = await call(`/canary-deployments/${a.deployment.id}/rollback`, 'POST', { reason: 'manual' });
     expect(res.status).toBe(409);
+    // Only the deploy-ref CAS carries a code; this 409 stays code-less
+    expect(((await res.json()) as { code?: string }).code).toBeUndefined();
     expect((await head()).candidateId).toBe('cand-b');
     expect(count('SELECT COUNT(*) AS n FROM deploy_refs')).toBe(2);
   });
@@ -277,5 +280,171 @@ describe('m6 -> m7 migration', () => {
     expect(count("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('deploy_refs', 'canary_deployments')")).toBe(2);
     expect(count("SELECT COUNT(*) AS n FROM organizations WHERE name = 'existing-org'")).toBe(1);
     await deploy('cand-a');
+  });
+});
+
+describe('ref rollback idempotency (Idempotency-Key) and X-Expected-Head', () => {
+  // docs/plans/rollback-idempotency-plan.md section 5
+  const post = (path: string, body: unknown, headers: Record<string, string> = {}, actorId = 'operator') =>
+    spec.fetch(
+      new Request(`https://spec-do.internal${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Actor-ID': actorId, ...headers },
+        body: JSON.stringify(body),
+      })
+    );
+  const rb = (headers: Record<string, string> = {}, reason = 'manual', specId = 'spec-a', actorId = 'operator') =>
+    post('/deploy-refs/rollback', { specId, rung: 'canary', reason }, headers, actorId);
+  const refs = () => count('SELECT COUNT(*) AS n FROM deploy_refs');
+  const nearMisses = () => count('SELECT COUNT(*) AS n FROM near_misses');
+  const keys = () => count('SELECT COUNT(*) AS n FROM idempotency_keys');
+
+  it('a redelivered rollback with the same key replays and does not toggle back', async () => {
+    await deploy('cand-a');
+    await deploy('cand-b');
+    const first = await rb({ 'Idempotency-Key': 'k1' });
+    expect(first.status).toBe(200);
+    expect(first.headers.get('Idempotent-Replay')).toBeNull();
+    const again = await rb({ 'Idempotency-Key': 'k1' });
+    expect(again.status).toBe(200);
+    expect(again.headers.get('Idempotent-Replay')).toBe('true');
+    expect((await data<DeployRef>(again)).id).toBe((await data<DeployRef>(first)).id);
+    expect((await head()).candidateId).toBe('cand-a');
+    expect(refs()).toBe(3);
+    expect(nearMisses()).toBe(1);
+  });
+
+  it('the same key with a different body is a 409 and moves nothing', async () => {
+    await deploy('cand-a');
+    await deploy('cand-b');
+    expect((await rb({ 'Idempotency-Key': 'k1' }, 'manual')).status).toBe(200);
+    expect((await rb({ 'Idempotency-Key': 'k1' }, 'latency')).status).toBe(409);
+    expect((await head()).candidateId).toBe('cand-a');
+    expect(refs()).toBe(3);
+  });
+
+  it('a failed keyed rollback stores no key: the same key later runs once, then replays', async () => {
+    expect((await rb({ 'Idempotency-Key': 'k2' })).status).toBe(404);
+    expect(keys()).toBe(0);
+    await deploy('cand-a');
+    await deploy('cand-b');
+    const ran = await rb({ 'Idempotency-Key': 'k2' });
+    expect(ran.status).toBe(200);
+    expect(ran.headers.get('Idempotent-Replay')).toBeNull();
+    expect((await head()).candidateId).toBe('cand-a');
+    const replay = await rb({ 'Idempotency-Key': 'k2' });
+    expect(replay.headers.get('Idempotent-Replay')).toBe('true');
+    expect((await head()).candidateId).toBe('cand-a');
+    expect(refs()).toBe(3);
+  });
+
+  it('a key over 255 characters is a 400 and moves nothing', async () => {
+    await deploy('cand-a');
+    expect((await rb({ 'Idempotency-Key': 'k'.repeat(256) })).status).toBe(400);
+    expect(refs()).toBe(1);
+  });
+
+  it('a replay after the head moved returns the original answer and moves nothing', async () => {
+    await deploy('cand-a');
+    await deploy('cand-b');
+    const first = await data<DeployRef>(await rb({ 'Idempotency-Key': 'k1' }));
+    await deploy('cand-c');
+    const replay = await rb({ 'Idempotency-Key': 'k1' });
+    expect(replay.status).toBe(200);
+    expect(replay.headers.get('Idempotent-Replay')).toBe('true');
+    expect((await data<DeployRef>(replay)).id).toBe(first.id);
+    expect((await head()).candidateId).toBe('cand-c');
+    expect(refs()).toBe(4);
+    expect(nearMisses()).toBe(1);
+  });
+
+  // A key is not a compare-and-set: distinct decisions still toggle (docs/OPEN-QUESTIONS.md 2026-11-01, D2)
+  it('two different fresh keys still toggle back: known hazard pending D2', async () => {
+    await deploy('cand-a');
+    await deploy('cand-b');
+    expect((await rb({ 'Idempotency-Key': 'k1' })).status).toBe(200);
+    expect((await rb({ 'Idempotency-Key': 'k2' })).status).toBe(200);
+    expect((await head()).candidateId).toBe('cand-b');
+  });
+
+  it('a keyed and an unkeyed rollback are each one transaction', async () => {
+    await deploy('cand-a');
+    await deploy('cand-b');
+    let before = store.transactions.count;
+    expect((await rb({ 'Idempotency-Key': 'k1' })).status).toBe(200);
+    expect(store.transactions.count - before).toBe(1);
+    before = store.transactions.count;
+    expect((await rb()).status).toBe(200);
+    expect(store.transactions.count - before).toBe(1);
+  });
+
+  it('the key is scoped by actor: the same key from another actor is a new request', async () => {
+    await deploy('cand-a');
+    await deploy('cand-b');
+    expect((await rb({ 'Idempotency-Key': 'k1' }, 'manual', 'spec-a', 'operator')).status).toBe(200);
+    const other = await rb({ 'Idempotency-Key': 'k1' }, 'manual', 'spec-a', 'someone-else');
+    expect(other.headers.get('Idempotent-Replay')).toBeNull();
+    expect((await head()).candidateId).toBe('cand-b');
+  });
+
+  it('other deploy routes ignore the key', async () => {
+    const body = (c: string) => ({ candidateId: c, specId: 'spec-a', url: `https://${c}.example.workers.dev`, workerVersionId: `ver-${c}`, trafficPercentage: 10, holdoutPercentage: 5 });
+    expect((await post('/canary-deployments', body('cand-a'), { 'Idempotency-Key': 'k1' })).status).toBe(201);
+    expect((await post('/canary-deployments', body('cand-a'), { 'Idempotency-Key': 'k1' })).status).toBe(201);
+    expect(count('SELECT COUNT(*) AS n FROM canary_deployments')).toBe(2);
+    expect(keys()).toBe(0);
+  });
+
+  it('the canary route is not keyed: a keyed then unkeyed repeat is a 409 and stores no key', async () => {
+    await deploy('cand-a');
+    const b = await deploy('cand-b');
+    const path = `/canary-deployments/${b.deployment.id}/rollback`;
+    expect((await post(path, { reason: 'manual' }, { 'Idempotency-Key': 'k1' })).status).toBe(200);
+    expect((await post(path, { reason: 'manual' }, { 'Idempotency-Key': 'k1' })).status).toBe(409);
+    expect((await post(path, { reason: 'manual' })).status).toBe(409);
+    expect(keys()).toBe(0);
+    expect((await head()).candidateId).toBe('cand-a');
+  });
+
+  it('the canary route ignores X-Expected-Head (its liveness check is its CAS)', async () => {
+    await deploy('cand-a');
+    const b = await deploy('cand-b');
+    const res = await post(`/canary-deployments/${b.deployment.id}/rollback`, { reason: 'manual' }, { 'X-Expected-Head': 'stale' });
+    expect(res.status).toBe(200);
+    expect((await head()).candidateId).toBe('cand-a');
+  });
+
+  it('X-Expected-Head: the current head moves; a stale one is a 409 version_conflict that writes nothing', async () => {
+    await deploy('cand-a');
+    const b = await deploy('cand-b');
+    const stale = await rb({ 'X-Expected-Head': 'not-the-head' });
+    expect(stale.status).toBe(409);
+    const err = (await stale.json()) as { code?: string; error: string };
+    expect(err.code).toBe('version_conflict');
+    expect(err.error).toContain(b.ref.id);
+    expect((await head()).candidateId).toBe('cand-b');
+    expect(refs()).toBe(2);
+    expect(nearMisses()).toBe(0);
+
+    const ok = await rb({ 'X-Expected-Head': b.ref.id, 'Idempotency-Key': 'k1' });
+    expect(ok.status).toBe(200);
+    expect((await head()).candidateId).toBe('cand-a');
+    // b's ref is no longer the head, so the header alone is now a 409; with the key the replay comes first
+    const replay = await rb({ 'X-Expected-Head': b.ref.id, 'Idempotency-Key': 'k1' });
+    expect(replay.status).toBe(200);
+    expect(replay.headers.get('Idempotent-Replay')).toBe('true');
+    expect((await rb({ 'X-Expected-Head': b.ref.id })).status).toBe(409);
+    expect((await head()).candidateId).toBe('cand-a');
+    expect(refs()).toBe(3);
+    expect(nearMisses()).toBe(1);
+  });
+
+  it('an empty X-Expected-Head is a 400, never fail open', async () => {
+    await deploy('cand-a');
+    await deploy('cand-b');
+    const res = await rb({ 'X-Expected-Head': '' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('Invalid X-Expected-Head');
+    expect(refs()).toBe(2);
   });
 });
