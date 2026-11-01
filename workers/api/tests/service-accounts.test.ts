@@ -283,7 +283,8 @@ describe('SQL adapter statement reuse', () => {
     // init runs lazily on the first DO request; a fresh ledger starts at the latest version
     await call('/api/organizations', 'GET', { token: MASTER });
     const keys = (db.prepare('SELECT key, value FROM metadata').all() as any[]).map((r) => r.key).sort();
-    expect(keys).toEqual(['initialized_at', 'schema_version']);
+    // governance.m14_epoch: written once by the m14 step (also on a fresh ledger), never moved
+    expect(keys).toEqual(['governance.m14_epoch', 'initialized_at', 'schema_version']);
     const v = db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get() as any;
     expect(v.value).toBe(LATEST_VERSION);
   });
