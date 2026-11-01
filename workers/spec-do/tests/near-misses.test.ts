@@ -175,7 +175,7 @@ describe('merge train: a car that fails, is rolled back or is removed is a train
     expect(rows()).toHaveLength(0);
   });
 
-  it('a failed car that is then removed reaches the unique key and is ignored, not a 500 (INSERT OR IGNORE)', async () => {
+  it('a failed car later reported rolled_back reaches the unique key and is ignored, not a 500 (INSERT OR IGNORE)', async () => {
     await call('/merge-train-status', 'POST', train([car('a', 0)]));
     await call('/merge-train-status/m1', 'PATCH', { candidates: [car('a', 0, 'failed')] });
     // same car reported failed again under a different status path: rolled_back after failed hits the same (candidate, reason, source_ref)

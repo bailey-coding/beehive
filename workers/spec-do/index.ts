@@ -1847,11 +1847,6 @@ export class SpecDO {
   }
 
   /**
-   * Record a near-miss (ADR 0005). Must run inside the transaction of the write that records the loss. INSERT OR IGNORE on
-   * (candidate_id, reason, source_ref): a redelivered write cannot add a second row. `reason` is validated here because the
-   * column is free text (shared/near-miss.ts).
-   */
-  /**
    * The spec a near-miss is filed under: the candidate's own spec when the row exists. Ledger records (tournaments, merge trains,
    * deploy refs) carry free-string spec ids that can disagree with it; the record's value is the fallback for unknown candidates.
    */
@@ -1860,6 +1855,11 @@ export class SpecDO {
     return (row?.spec_id as string | undefined) ?? fallback;
   }
 
+  /**
+   * Record a near-miss (ADR 0005). Must run inside the transaction of the write that records the loss. INSERT OR IGNORE on
+   * (candidate_id, reason, source_ref): a redelivered write cannot add a second row. `reason` is validated here because the
+   * column is free text (shared/near-miss.ts).
+   */
   private recordNearMiss(n: {
     specId: string; candidateId: string; reason: NearMissReason; sourceRef: string;
     rung?: string | null; lostToCandidateId?: string | null; trialId?: string | null; evidence?: unknown; complexityDelta?: number | null;

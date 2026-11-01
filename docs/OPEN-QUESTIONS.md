@@ -1138,3 +1138,9 @@ Config, image and export only; nothing here ran on the platform (no Docker on th
 
 **Status**: Open.
 
+## 2026-11-01: merge train matches cars by candidate only, so a re-added candidate's old car is updated too
+
+`processMergeTrain` (`workers/promotion-worker/merge-train.ts:261, 283, 316`) finds the car to update by `candidateId`. After a failure the worker re-adds the candidate as a new car (`:63-74`), so both cars match: the old failed car is also set to `merging` and then `merged` or `failed`. Near-miss records are unaffected (each car is its own fact and the dedupe holds), but the train record itself is wrong. Pre-existing; found in the PR-B verification. Fix: match on position as well as candidate id. Not changed in PR-B (promotion-train logic, needs its own plan and review).
+
+**Status**: Open.
+
