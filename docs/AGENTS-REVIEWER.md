@@ -171,6 +171,22 @@ npm run test:e2e:local     # Local e2e (start workers first)
 
 **Merge-readiness**: All blockers fixed, should-fix addressed or acknowledged, tests pass
 
+### Handling "approve with changes"
+
+An "approve with changes" verdict is not approval of the fixes. The author fixes, then:
+
+| Finding | Before merge |
+|---|---|
+| Blocker | The same reviewer re-reviews the fix (resume the reviewer with the fix diff). |
+| Should-fix that changes security or design behavior (an allowlist, redaction semantics, an enforcement point, a state machine) | The original reviewer verifies the fix diff. A small targeted pass; they already have the context. |
+| Should-fix that is mechanical (test gap, log line, doc) | Fix, cite the finding in the commit message, merge without re-review. |
+| Nit | Fix or decline. Never ignore silently. |
+
+- **Record a disposition for every finding** in the commit message or the plan: `fixed`, `deferred` (and where it is tracked: a milestone line or `docs/OPEN-QUESTIONS.md`, never prose alone) or `declined` with the reason.
+- **Two review rounds at most.** If the reviewer and the author still disagree, bring the question to the maintainer.
+- **Every security fix gets a test that fails if the fix is reverted.** Mentally mutate the code: restore the old behavior and check a test notices (a restored log line, a re-enqueued body and a restored denylist each went unnoticed until a test was added).
+- The reviewer verifies from code, not from the author's description of the fix.
+
 ---
 
 ## 6. Examples from Archived Reviews
