@@ -18,14 +18,14 @@ tags:
 |---|---|---|
 | Tournament `status` | **Yes**, with an attempts cap and version CAS | `workers/shared/ledger-state-machine.ts` (`ALLOWED`, `checkTournamentTransition`), applied in the DO write transaction (`index.ts:3002`) |
 | Merge train `status`, car statuses | No: zod enum only, version CAS | `applyMergeTrainWrite`, `index.ts:3083` |
-| `promotion_states.status` | No: zod enum only | `PromotionStateSchema` (`promotion-ledger.ts:32`); `patchPromotionState` merges any patch |
-| Candidate `stage` | No: CHECK enum only | `transitionCandidate`, `index.ts:1559`; also written by sandbox execute (`:5440-5460`) and the promotion worker |
+| `promotion_states.status` | **Log-only** since PR-S (table (d)): a violation writes an `invalid_transition` row, never a refusal | `checkPromotionStateTransition` (`workers/shared/ledger-state-machine.ts`), computed in `createPromotionState`/`patchPromotionState` (`index.ts:~3079-3140`) |
+| Candidate `stage` | **Log-only** since PR-S (table (c)): a violation writes an `invalid_transition` row, never a refusal | `checkCandidateTransition` (`workers/shared/governance-state-machine.ts`), computed in `transitionCandidate` (`index.ts:~1605`) and both sandbox-execute writes (`executeCandidateInSandbox`), each now one `transactionSync`; the promotion worker writes through `PATCH /api/candidates/:id/stage` |
 | Spec `stage`, issue `stage`, trial `stage` | No: CHECK enum only; `decideTrial` checks neither participant nor undecided | `index.ts:1486, 1941, 1781` |
 | Issue `status` | two values, idempotent | `setIssueStatus`, `:5287` |
 | `canary_deployments.status` | derived from the deploy-ref head inside the move transaction | `syncCanaryStatuses`, `:3562` |
 | `deploy_refs` | append-only chain, unique `prev_ref_id` | `schema.sql:~451-460` |
 
-Only tournaments have a table. The governance hook makes candidate `stage` load-bearing, so table (c) below is new enforcement.
+Only tournaments have an enforced table; (c) and (d) are log-only (`docs/plans/pr-s-state-machine-plan.md`). The governance hook makes candidate `stage` load-bearing, so table (c) below is new enforcement.
 
 ## (a) Approvals, per (subject, rung, commit sha)
 
@@ -95,11 +95,15 @@ Roll out in two steps: first **log-only** (`invalid_transition` rows in `governa
 | promoted | anything else | | rejected |
 | rolled_back, failed | promote directly | | rejected (must re-pass the rungs) |
 
-`promoted` is reachable only from `passed_canary`, and the only exits from `promoted` are `rolled_back` and same-state. That is the part the hook needs; the other edges ship log-only first. The hook is gated only on **entering** `promoted` (or completing at `full`); rollback, `failed`, `rolled_back` and same-state writes are never gated.
+`promoted` is reachable only from `passed_canary`, and the only exits from `promoted` are `rolled_back` and same-state. That is the part the hook needs; the other edges ship log-only first.
+
+**Permanently log-only (PR-S review S2).** Every edge into `rolled_back` or `failed` is `enforceable: false` in the module's data and is never refused, in log-only or after enforce (rule 7: rollbacks and failures always land); same-state writes are never violations. `promoted -> failed` (a sandbox error on a promoted candidate) is therefore logged only; the fix is an **execute pre-check** that refuses before calling the sandbox (later PR), not a stage refusal.
+
+**Readings applied in PR-S (review 1, R2).** A stage PATCH carries no `toRung` and no skip policy is recorded, so any forward jump of more than one ladder step is `skip_ahead`; `rolled_back -> failed` is allowed; re-execute from `passed_shadow..passed_canary` is `backward`; a re-execute is not required to change the sha (the detail records `commitChanged`). Every other cell has a rule, the catch-all being `not_allowed`. The hook is gated only on **entering** `promoted` (or completing at `full`); rollback, `failed`, `rolled_back` and same-state writes are never gated.
 
 ## (d) Promotion-state status (hook sites 3 and 4)
 
-`pending -> in_progress | cancelled`; `in_progress -> completed | failed | rolled_back | cancelled`; `failed -> in_progress | pending`; `completed`, `rolled_back` and `cancelled` are terminal. Enforce in the same module as the tournament machine. The hook fires only on the transition **into** `completed` with `currentRung = 'full'` and a differing prior row, so a PATCH re-sending `completed` is not re-checked. (The `cancelled` status does not exist in the zod enum today; confirm against `promotion-ledger.ts:32` before adding it.)
+`pending -> in_progress | cancelled`; `in_progress -> completed | failed | rolled_back | cancelled`; `failed -> in_progress | pending`; `completed`, `rolled_back` and `cancelled` are terminal. Enforce in the same module as the tournament machine. The hook fires only on the transition **into** `completed` with `currentRung = 'full'` and a differing prior row, so a PATCH re-sending `completed` is not re-checked. (`cancelled` is in the zod enum, `promotion-ledger.ts:32`, and `cancelPromotion` writes it; checked in PR-S.) Log-only since PR-S; the function lives in `ledger-state-machine.ts` beside the tournament machine. A new record must start `pending`.
 
 ## (e) Intent approval and real-data eligibility (untrusted origin; rev 5)
 

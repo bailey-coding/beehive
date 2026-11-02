@@ -297,3 +297,11 @@ Findings applied:
 - **N3:** `unknown_stage` is for the enforce PR, which must check before the UPDATE; in PR-S an unknown `to` fails the CHECK and nothing is logged.
 - **N4:** `GovernanceViolation` is a superset of `TransitionViolation` (`{code, message}` plus `machine, rule, from, to, enforceable`). For promotion-state PATCH the asserted actor is `current.actorId` (the PATCH carries no header).
 - **N5 applied:** dedupe and cap in one query (`SELECT COUNT(*), SUM(subject = ? AND reason = ?)` over the window).
+
+## Implementation notes (2026-11-02)
+
+- S1: the prior-stage read has its own try (`readCandidatePrior`, before the UPDATE); the check and the event write share the try in `logTransitionViolation`. A failed read yields null and nothing is logged.
+- Promotion-state `enforceable` follows the same rule as (c): false for edges into `rolled_back` or `failed`.
+- `createPromotionState` takes the asserted actor from `X-Actor-ID`, falling back to the row's `actorId`.
+- Real-flow characterization: the tournament winner test (`workers/promotion-worker/tests/promotion.test.ts`) asserts one `skip_ahead` row. The merge-train rollback edge (`pending -> rolled_back`) is covered by the pure matrix, not by a worker-level test (building a merged car through the worker harness was out of proportion).
+- Found while testing: `pollForResult` calls `response.json()` and `executeCandidateInSandbox` calls it again on the same Response, so a real sandbox success throws "body used" and lands as `failed`. Execute tests stub the poll result as a plain object. Recorded in `docs/MILESTONES.md` (M5a-2) with the execute pre-check; not fixed here (out of scope).

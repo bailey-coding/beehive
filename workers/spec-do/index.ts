@@ -331,6 +331,17 @@ import {
   VERSION_REQUIRED,
   checkTournamentTransition,
 } from '../shared/ledger-state-machine';
+// Governance transition tables, log-only in PR-S (docs/plans/pr-s-state-machine-plan.md)
+import {
+  checkCandidateTransition,
+  checkPromotionStateTransition,
+  INVALID_TRANSITION_EVENT,
+  INVALID_TRANSITION_WINDOW_MS,
+  INVALID_TRANSITION_CAP_PER_WINDOW,
+  MAX_GOVERNANCE_DETAIL_BYTES,
+  type CandidateWriteSource,
+  type GovernanceViolation,
+} from '../shared/governance-state-machine';
 
 // Ledger lifecycle contract (tombstones, maintainer role, purge; shared with the edge)
 import {
@@ -1591,17 +1602,105 @@ export class SpecDO {
     return row;
   }
 
+  /**
+   * Stage write + history row in one transaction. The table (c) check is LOG-ONLY (PR-S): a violation
+   * becomes an invalid_transition row in governance_events and the write still lands. An unknown id
+   * keeps its old behavior (no-op UPDATE, history row; the route answers 404).
+   */
   transitionCandidate(id: string, newStage: CandidateRow['stage'], changedBy: string, notes?: string): void {
     if (!this.db) throw new Error('Database not initialized');
-    
-    const updateStmt = this.db.prepare(
-      `UPDATE candidates SET stage = ? WHERE id = ?`
+    this.state.storage.transactionSync(() => {
+      const prior = this.readCandidatePrior(id);
+      this.run(`UPDATE candidates SET stage = ? WHERE id = ?`, newStage, id);
+      this.recordHistory('candidate', id, newStage, changedBy, notes);
+      this.logCandidateTransition(prior, id, newStage, 'stage_patch', changedBy);
+    });
+  }
+
+  /**
+   * The live candidate's stage, commit and organization name, read before a stage write, or null
+   * (unknown or tombstoned id, or the read failed). Null means "do not log"; never throws.
+   */
+  private readCandidatePrior(id: string): { stage: string; commitSha: string; specId: string; orgName: string | null } | null {
+    try {
+      const r = this.queryAll(
+        `SELECT c.stage, c.commit_sha, c.spec_id, o.name AS org_name FROM candidates c
+           LEFT JOIN specs s ON s.id = c.spec_id LEFT JOIN organizations o ON o.id = s.organization_id
+         WHERE c.id = ? AND c.deleted_at IS NULL`,
+        id
+      )[0];
+      if (!r) return null;
+      return { stage: String(r.stage), commitSha: String(r.commit_sha ?? ''), specId: String(r.spec_id), orgName: (r.org_name as string | null) ?? null };
+    } catch (e) {
+      console.error('[SpecDO] invalid_transition prior read failed', id, e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }
+
+  /** Log-only table (c) check for a candidate stage write; runs inside the write's transaction. */
+  private logCandidateTransition(
+    prior: { stage: string; commitSha: string; specId: string; orgName: string | null } | null,
+    id: string,
+    to: string,
+    source: CandidateWriteSource,
+    assertedActorId: string | null,
+    commitSha?: string
+  ): void {
+    if (!prior) return;
+    this.logTransitionViolation(
+      () => checkCandidateTransition(prior.stage, to, { source }),
+      `candidate:${id}`,
+      assertedActorId,
+      () => ({
+        source,
+        candidateId: id,
+        specId: prior.specId,
+        orgName: prior.orgName,
+        ...(commitSha === undefined ? {} : { commitChanged: commitSha !== prior.commitSha }),
+      })
     );
-    updateStmt.bind(newStage, id);
-    updateStmt.step();
-    updateStmt.free();
-    
-    this.recordHistory('candidate', id, newStage, changedBy, notes);
+  }
+
+  /**
+   * Write one invalid_transition row in governance_events for a violation (docs/plans/pr-s-state-machine-plan.md
+   * section 5). LOG-ONLY: never throws, never refuses. The check itself runs inside the try, so a bug in it
+   * cannot break the write. Flood control: one row per (subject, reason) per window and at most
+   * INVALID_TRANSITION_CAP_PER_WINDOW rows per window; the row that reaches the cap says so.
+   * Runs inside the caller's transactionSync; a failed single INSERT is rolled back by SQLite at statement
+   * level (constraint and schema errors), so the enclosing write still commits.
+   */
+  private logTransitionViolation(
+    check: () => GovernanceViolation | null,
+    subject: string,
+    assertedActorId: string | null,
+    extra: () => Record<string, unknown>
+  ): void {
+    try {
+      const v = check();
+      if (!v) return;
+      console.warn('[SpecDO] invalid_transition', { machine: v.machine, rule: v.rule, from: v.from, to: v.to, subject });
+      const reason = `${v.machine}:${v.from ?? 'none'}->${v.to}`;
+      const at = now();
+      const w = this.queryAll(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN subject = ? AND reason = ? THEN 1 ELSE 0 END), 0) AS same
+           FROM governance_events WHERE event = ? AND created_at >= ?`,
+        subject, reason, INVALID_TRANSITION_EVENT, at - INVALID_TRANSITION_WINDOW_MS
+      )[0];
+      const total = Number(w?.total ?? 0);
+      if (Number(w?.same ?? 0) > 0 || total >= INVALID_TRANSITION_CAP_PER_WINDOW) return;
+      let detail = JSON.stringify({
+        v: 1, machine: v.machine, rule: v.rule, from: v.from, to: v.to, enforceable: v.enforceable, ...extra(),
+        ...(total + 1 === INVALID_TRANSITION_CAP_PER_WINDOW ? { capReached: true } : {}),
+      });
+      const bytes = new TextEncoder().encode(detail).length;
+      if (bytes > MAX_GOVERNANCE_DETAIL_BYTES) detail = JSON.stringify({ v: 1, truncated: true, bytes });
+      this.run(
+        `INSERT INTO governance_events (id, event, actor_id, asserted_actor_id, subject, reason, detail, created_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        generateId(), INVALID_TRANSITION_EVENT, assertedActorId, subject, reason, detail, at
+      );
+    } catch (e) {
+      console.error('[SpecDO] invalid_transition log failed', subject, e instanceof Error ? e.message : String(e));    }
   }
 
   updateCandidatePreview(
@@ -2880,7 +2979,7 @@ export class SpecDO {
       if (id === undefined && method === 'POST') {
         const p = parse(PromotionStateSchema, 'promotion state');
         if ('error' in p) return p.error;
-        return json(this.createPromotionState(p.data), 201);
+        return json(this.createPromotionState(p.data, request.headers.get('X-Actor-ID')), 201);
       }
       if (id !== undefined && method === 'PATCH') {
         const p = parse(PromotionStatePatchSchema, 'promotion state patch');
@@ -2976,7 +3075,7 @@ export class SpecDO {
     return rows.map((r) => this.rowToPromotionState(r));
   }
 
-  createPromotionState(state: PromotionState): PromotionState {
+  createPromotionState(state: PromotionState, assertedActorId?: string | null): PromotionState {
     return this.state.storage.transactionSync(() => {
       if (this.getPromotionState(state.id)) {
         throw new ConflictError(`Promotion state '${state.id}' already exists`);
@@ -2991,8 +3090,25 @@ export class SpecDO {
         ts,
         ts
       );
+      this.logPromotionStateTransition(null, state, assertedActorId ?? state.actorId ?? null);
       return this.getPromotionState(state.id)!;
     });
+  }
+
+  /** Log-only table (d) check (PR-S); runs inside the write's transaction, never throws. */
+  private logPromotionStateTransition(prev: string | null, next: PromotionState, assertedActorId: string | null): void {
+    this.logTransitionViolation(
+      () => checkPromotionStateTransition(prev, next.status),
+      `promotion_state:${next.id}`,
+      assertedActorId,
+      () => {
+        const org = this.queryAll(
+          `SELECT o.name FROM specs s JOIN organizations o ON o.id = s.organization_id WHERE s.id = ?`,
+          next.specId
+        )[0];
+        return { candidateId: next.candidateId, specId: next.specId, orgName: (org?.name as string | undefined) ?? null };
+      }
+    );
   }
 
   /** Null when the id is unknown. A null field in the patch clears that field. */
@@ -3019,6 +3135,8 @@ export class SpecDO {
         now(),
         id
       );
+      // The PATCH carries no X-Actor-ID; the row's actor is the asserted one (PR-S plan, review N4)
+      this.logPromotionStateTransition(current.status, next, current.actorId ?? null);
       return this.getPromotionState(id);
     });
   }
@@ -5606,16 +5724,13 @@ export class SpecDO {
 
       const commitSha = resultData.commitSha;
 
-      // Update candidate with the commit SHA
-      const updateStmt = this.db.prepare(
-        `UPDATE candidates SET commit_sha = ?, stage = ? WHERE id = ?`
-      );
-      updateStmt.bind(commitSha ?? '', 'passed_premerge', candidateId);
-      updateStmt.step();
-      updateStmt.free();
-
-      // Record history
-      this.recordHistory('candidate', candidateId, 'passed_premerge', agentId, 'Executed in sandbox');
+      // Commit SHA, stage and history in one transaction; the table (c) check is log-only (PR-S)
+      this.state.storage.transactionSync(() => {
+        const prior = this.readCandidatePrior(candidateId);
+        this.run(`UPDATE candidates SET commit_sha = ?, stage = ? WHERE id = ?`, commitSha ?? '', 'passed_premerge', candidateId);
+        this.recordHistory('candidate', candidateId, 'passed_premerge', agentId, 'Executed in sandbox');
+        this.logCandidateTransition(prior, candidateId, 'passed_premerge', 'execute_pass', agentId, commitSha ?? '');
+      });
 
       return {
         success: true,
@@ -5624,15 +5739,13 @@ export class SpecDO {
       };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      // Update candidate with failure
-      const updateStmt = this.db.prepare(
-        `UPDATE candidates SET stage = ? WHERE id = ?`
-      );
-      updateStmt.bind('failed', candidateId);
-      updateStmt.step();
-      updateStmt.free();
-
-      this.recordHistory('candidate', candidateId, 'failed', agentId, `Sandbox error: ${message}`);
+      // Failure stage and history in one transaction; the table (c) check is log-only (PR-S)
+      this.state.storage.transactionSync(() => {
+        const prior = this.readCandidatePrior(candidateId);
+        this.run(`UPDATE candidates SET stage = ? WHERE id = ?`, 'failed', candidateId);
+        this.recordHistory('candidate', candidateId, 'failed', agentId, `Sandbox error: ${message}`);
+        this.logCandidateTransition(prior, candidateId, 'failed', 'execute_error', agentId);
+      });
 
       return {
         success: false,

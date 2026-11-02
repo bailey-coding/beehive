@@ -15,7 +15,7 @@
  * Spec: AGENTS.md#state-management (train state lives in the Spec DO)
  */
 
-import type { TournamentRecord } from './promotion-ledger';
+import type { PromotionState, TournamentRecord } from './promotion-ledger';
 
 export const MAX_TOURNAMENT_ATTEMPTS = 3;
 
@@ -84,4 +84,69 @@ export function checkTournamentTransition(
     default:
       return null;
   }
+}
+
+// ============================================================================
+// Promotion-state status (docs/GOVERNANCE-STATE-MACHINES.md table (d)). Log-only since PR-S:
+// the Spec DO computes this on every promotion-state write and records a violation in
+// governance_events instead of refusing (docs/plans/pr-s-state-machine-plan.md).
+//
+//   pending -> in_progress | cancelled
+//   in_progress -> completed | failed | rolled_back | cancelled
+//   failed -> in_progress | pending
+//   completed, rolled_back, cancelled  terminal
+// A new record starts 'pending'. Writing the current status again is always allowed.
+// ============================================================================
+
+/**
+ * A transition-table violation: a superset of TransitionViolation, so a later enforce step can
+ * answer it as the same coded 409. `enforceable` is false for edges that must never be refused
+ * (into rolled_back or failed: AGENTS.md rule 7, failures and rollbacks always land).
+ */
+export interface GovernanceViolation extends TransitionViolation {
+  code: typeof INVALID_TRANSITION;
+  machine: 'candidate_stage' | 'promotion_state';
+  rule: string;
+  /** null = the record is being created */
+  from: string | null;
+  to: string;
+  enforceable: boolean;
+}
+
+type PromotionStatus = PromotionState['status'];
+
+export const PROMOTION_STATUSES: readonly PromotionStatus[] = ['pending', 'in_progress', 'completed', 'failed', 'rolled_back', 'cancelled'];
+
+const PROMOTION_ALLOWED: Record<PromotionStatus, readonly PromotionStatus[]> = {
+  pending: ['pending', 'in_progress', 'cancelled'],
+  in_progress: ['in_progress', 'completed', 'failed', 'rolled_back', 'cancelled'],
+  failed: ['failed', 'in_progress', 'pending'],
+  completed: ['completed'],
+  rolled_back: ['rolled_back'],
+  cancelled: ['cancelled'],
+};
+
+const PROMOTION_TERMINAL: readonly string[] = ['completed', 'rolled_back', 'cancelled'];
+
+export type PromotionStateRule = 'initial_not_pending' | 'terminal' | 'not_allowed';
+
+/** Null when `next` may be written over `prev` (null = create). Never throws. */
+export function checkPromotionStateTransition(prev: string | null, next: string): GovernanceViolation | null {
+  const violation = (rule: PromotionStateRule, message: string): GovernanceViolation => ({
+    code: INVALID_TRANSITION,
+    machine: 'promotion_state',
+    rule,
+    from: prev,
+    to: next,
+    enforceable: next !== 'rolled_back' && next !== 'failed',
+    message,
+  });
+  if (prev === null) {
+    return next === 'pending' ? null : violation('initial_not_pending', `a new promotion state starts 'pending', not '${next}'`);
+  }
+  if (prev === next) return null;
+  const allowed = (PROMOTION_ALLOWED as Record<string, readonly string[] | undefined>)[prev];
+  if (allowed?.includes(next)) return null;
+  if (PROMOTION_TERMINAL.includes(prev)) return violation('terminal', `promotion state '${prev}' is terminal; cannot go to '${next}'`);
+  return violation('not_allowed', `promotion state cannot go from '${prev}' to '${next}'`);
 }
