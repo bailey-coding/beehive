@@ -1164,5 +1164,40 @@ it still appends exactly one ref. Rule 7 territory (rollback semantics): needs i
 
 `processMergeTrain` (`workers/promotion-worker/merge-train.ts:261, 283, 316`) finds the car to update by `candidateId`. After a failure the worker re-adds the candidate as a new car (`:63-74`), so both cars match: the old failed car is also set to `merging` and then `merged` or `failed`. Near-miss records are unaffected (each car is its own fact and the dedupe holds), but the train record itself is wrong. Pre-existing; found in the PR-B verification. Fix: match on position as well as candidate id. Not changed in PR-B (promotion-train logic, needs its own plan and review).
 
+The cause is wider than failures: every merge-train `POST /promote` of a candidate adds a car (`canPromote` allows a new
+promotion once the last one completed), so a candidate that climbs rungs has several cars. Retry and rollback had the
+same candidate-only matching, and the three `processMergeTrain` writes were blind PATCHes from a stale snapshot, so a
+car added during a gate run was dropped from the record (with a false `removed` near-miss).
+
+**Status**: Fixed in `1079234` (plan `docs/plans/merge-train-car-matching-plan.md`). Worker-only: a car is
+`(position, candidateId)`, the DO's near-miss key; claim and outcome are each one CAS write touching only the claimed
+car; retry and rollback check the candidate's latest car. No schema or DO change. Records already written with the
+wrong car statuses are not repaired.
+
+## 2026-11-01: a merge-train car stuck in `merging` is never recovered
+
+A car stays `merging` if the promotion worker dies between claiming it and recording the outcome, or if the outcome
+write exhausts its CAS attempts (`workers/promotion-worker/merge-train.ts`, `processMergeTrain`). Nothing moves it out
+of `merging`, and it counts against `MAX_CONCURRENT_CANDIDATES`. The claim does not wait for merging cars, so the
+train keeps running, but enough stuck cars block new adds. A recovery needs a lease (claim time and expiry) on the
+car, which is a new optional field on the strict `MergeTrainCandidateSchema` (mixed-version rules apply). Found in
+the review of `docs/plans/merge-train-car-matching-plan.md`; pinned by the "a car stuck merging does not stop the
+next car" test.
+
+A car also stays `merging` in the older train when a newer train for the same spec appears during its gate: the
+outcome write targets the spec's newest train, sees another id and writes nothing (test 11). Two trains for one spec
+come from the `getOrCreateMergeTrain` race (`merge-train.ts`, get then create without a version).
+
+Since the fix, an outcome-write error is rethrown: `POST /promote` answers 500 `success: false` and the promotion is
+marked failed (before, the blind PATCH usually succeeded and `/promote` answered 200). `canPromote` then allows a
+re-promote, which adds a second live car while the first stays `merging`. Kept (decision); an extra
+`modifyMergeTrain` pass before the rethrow was declined for now.
+
+**Waiting car with no driver after a failed claim.** The claim's `catch` in `processMergeTrain` swallows every error,
+a DO 5xx or 404 included. `POST /promote` still answers 200 and `markAsCompleted` runs although no gate ran. Only the
+next add or retry on that spec processes the car, and until then it counts against `MAX_CONCURRENT_CANDIDATES`.
+Catching everything is the decision (the add itself succeeded); a driver for waiting cars (a sweep or a queue
+message) is part of this follow-up.
+
 **Status**: Open.
 

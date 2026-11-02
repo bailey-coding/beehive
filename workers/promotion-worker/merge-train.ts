@@ -19,6 +19,39 @@ import { setCandidateStage, getPromotionLedger } from './spec-do';
 type MergeTrainWithId = MergeTrainStatus & { id: string };
 
 /**
+ * A car is (position, candidateId), the same key the Spec DO's near-miss diff uses: a candidate gets a new car on every
+ * merge-train promotion and after a failure, so candidateId alone matches older cars too.
+ */
+type CarKey = Pick<MergeTrainCandidate, 'position' | 'candidateId'>;
+
+const isCar = (c: CarKey, key: CarKey) => c.position === key.position && c.candidateId === key.candidateId;
+
+/** Applies fn to the first car with this key only */
+function updateCar(
+  cars: MergeTrainCandidate[],
+  key: CarKey,
+  fn: (c: MergeTrainCandidate) => MergeTrainCandidate
+): MergeTrainCandidate[] {
+  const i = cars.findIndex((c) => isCar(c, key));
+  return i < 0 ? cars : cars.map((c, j) => (j === i ? fn(c) : c));
+}
+
+/** The candidate's car with the highest position (ties: the later one); a car without a position never replaces an earlier match */
+function latestCar(cars: MergeTrainCandidate[], candidateId: string): MergeTrainCandidate | undefined {
+  let latest: MergeTrainCandidate | undefined;
+  for (const c of cars) {
+    if (c.candidateId !== candidateId) continue;
+    if (!latest || c.position >= latest.position) latest = c;
+  }
+  return latest;
+}
+
+/** Unique even if a car was removed or a position repeats; equals length + 1 for every worker-written train */
+function nextPosition(cars: MergeTrainCandidate[]): number {
+  return Math.max(cars.length, ...cars.map((c) => c.position).filter((p) => Number.isInteger(p))) + 1;
+}
+
+/**
  * Manages merge-train-style promotion where candidates are merged sequentially
  */
 export class MergeTrainManager {
@@ -61,7 +94,7 @@ export class MergeTrainManager {
         if (active >= maxConcurrent) {
           throw new Error(`Maximum concurrent candidates (${maxConcurrent}) reached. Please wait.`);
         }
-        const position = current.candidates.length + 1;
+        const position = nextPosition(current.candidates);
         const newCandidate: MergeTrainCandidate = {
           candidateId: request.candidateId,
           specId: request.specId,
@@ -80,8 +113,9 @@ export class MergeTrainManager {
 
       await this.processMergeTrain(updatedTrain);
 
-      const candidateInTrain = updatedTrain.candidates.find(
-        c => c.candidateId === request.candidateId
+      // The car this call added: the add set currentPosition to its position
+      const candidateInTrain = updatedTrain.candidates.find(c =>
+        isCar(c, { position: updatedTrain.currentPosition, candidateId: request.candidateId })
       );
 
       if (!candidateInTrain) {
@@ -224,11 +258,11 @@ export class MergeTrainManager {
 
   /**
    * Read-modify-write against the train's current version (re-applied on a conflict).
-   * Throws when the spec has no train.
+   * Throws when the spec has no train. A null from mutate writes nothing and resolves to the current record.
    */
   private async modifyMergeTrain(
     specId: string,
-    mutate: (current: MergeTrainWithId) => MergeTrainWithId
+    mutate: (current: MergeTrainWithId) => MergeTrainWithId | null
   ): Promise<MergeTrainWithId> {
     const saved = await getPromotionLedger(this.env).modifyMergeTrain(specId, mutate);
     if (!saved) throw new Error(`No merge train found for spec ${specId}`);
@@ -236,100 +270,97 @@ export class MergeTrainManager {
   }
 
   /**
-   * Update merge train
-   */
-  private async updateMergeTrain(
-    trainId: string,
-    updates: Partial<MergeTrainStatus>
-  ): Promise<void> {
-    await getPromotionLedger(this.env).updateMergeTrain(trainId, updates);
-  }
-
-  /**
-   * Process merge train - handle pending merges
+   * Process merge train: claim the first waiting car, run its gate, record the outcome. The claim and the outcome are
+   * each one CAS write (re-read on a conflict, so a car added meanwhile is kept), and both touch only the claimed car.
+   * No I/O happens inside a mutate.
    */
   private async processMergeTrain(train: MergeTrainWithId): Promise<void> {
     console.log(`[MergeTrain] Processing train ${train.id} with ${train.candidates.length} candidates`);
 
-    const nextCandidate = train.candidates.find(c => c.status === 'waiting');
+    // Set only by the mutate attempt that returns a write: casLoop returns the current record when mutate returns
+    // null, so the saved record cannot tell whether this call claimed a car
+    const claim: { car: MergeTrainCandidate | null } = { car: null };
+    try {
+      await this.modifyMergeTrain(train.specId, (current) => {
+        claim.car = null;
+        if (current.id !== train.id) return null;
+        const next = current.candidates.find(c => c.status === 'waiting');
+        if (!next) return null;
+        claim.car = next;
+        return {
+          ...current,
+          candidates: updateCar(current.candidates, next, c => ({ ...c, status: 'merging' as const })),
+          status: 'processing',
+        };
+      });
+    } catch (error) {
+      // The car stays waiting for the next run; the add itself succeeded
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[MergeTrain] Could not claim a car in train ${train.id}: ${errorMessage}`);
+      return;
+    }
 
-    if (!nextCandidate) {
+    const car = claim.car;
+    if (!car) {
       console.log(`[MergeTrain] No waiting candidates in train ${train.id}`);
       return;
     }
 
-    const updatedCandidates = train.candidates.map(c => 
-      c.candidateId === nextCandidate.candidateId 
-        ? { ...c, status: 'merging' as const }
-        : c
-    );
+    console.log(`[MergeTrain] Starting merge for candidate ${car.candidateId} (position ${car.position})`);
 
-    const trainWithMerging: MergeTrainWithId = {
-      ...train,
-      candidates: updatedCandidates,
-      status: 'processing',
-    };
-
-    await this.updateMergeTrain(train.id, {
-      candidates: updatedCandidates,
-      status: 'processing',
-    });
-
-    console.log(`[MergeTrain] Starting merge for candidate ${nextCandidate.candidateId}`);
-
+    // Only the gate call is guarded: a failed outcome write must never mark a car failed whose gate passed
+    let failureReason: string | null = null;
     try {
-      await this.executeMerge(nextCandidate);
+      await this.executeMerge(car);
+    } catch (error) {
+      failureReason = error instanceof Error ? error.message : String(error);
+    }
 
-      const mergedCandidates = updatedCandidates.map(c => 
-        c.candidateId === nextCandidate.candidateId 
-          ? { 
-              ...c, 
-              status: 'merged' as const,
-              mergedAt: new Date().toISOString()
-            }
-          : c
-      );
-
-      const stillWaiting = mergedCandidates.some(c => c.status === 'waiting');
-      
-      const updateData: Partial<MergeTrainStatus> = {
-        candidates: mergedCandidates,
-        currentPosition: nextCandidate.position,
-        nextMerge: this.getNextCandidateId(mergedCandidates),
-      };
-
-      if (!stillWaiting) {
-        updateData.status = 'idle';
-        updateData.completedAt = new Date().toISOString();
-      }
-
-      await this.updateMergeTrain(train.id, updateData);
-
-      console.log(`[MergeTrain] Successfully merged candidate ${nextCandidate.candidateId}`);
-
-      if (!stillWaiting) {
-        console.log(`[MergeTrain] Completed processing train ${train.id}`);
-      }
+    const at = new Date().toISOString();
+    let written = false;
+    try {
+      await this.modifyMergeTrain(train.specId, (current) => {
+        written = false;
+        if (current.id !== train.id) return null;
+        // Defensive: no worker path moves a car out of merging; a non-worker or old-worker write may have
+        if (current.candidates.find(c => isCar(c, car))?.status !== 'merging') return null;
+        written = true;
+        if (failureReason !== null) {
+          return {
+            ...current,
+            candidates: updateCar(current.candidates, car, c => ({
+              ...c,
+              status: 'failed' as const,
+              failedAt: at,
+              failureReason: failureReason!,
+            })),
+            status: 'idle',
+          };
+        }
+        const candidates = updateCar(current.candidates, car, c => ({ ...c, status: 'merged' as const, mergedAt: at }));
+        const stillWaiting = candidates.some(c => c.status === 'waiting');
+        return {
+          ...current,
+          candidates,
+          currentPosition: car.position,
+          nextMerge: this.getNextCandidateId(candidates),
+          ...(stillWaiting ? {} : { status: 'idle' as const, completedAt: at }),
+        };
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      const failedCandidates = updatedCandidates.map(c => 
-        c.candidateId === nextCandidate.candidateId 
-          ? { 
-              ...c, 
-              status: 'failed' as const,
-              failedAt: new Date().toISOString(),
-              failureReason: errorMessage
-            }
-          : c
+      console.error(
+        `[MergeTrain] Could not record the outcome for candidate ${car.candidateId} (position ${car.position}); the car stays merging: ${errorMessage}`
       );
+      throw error;
+    }
 
-      await this.updateMergeTrain(train.id, {
-        candidates: failedCandidates,
-        status: 'idle',
-      });
-
-      console.error(`[MergeTrain] Failed to merge candidate ${nextCandidate.candidateId}: ${errorMessage}`);
+    if (!written) {
+      console.warn(`[MergeTrain] Car ${car.candidateId} (position ${car.position}) is no longer merging; outcome not recorded`);
+    } else if (failureReason !== null) {
+      console.error(`[MergeTrain] Failed to merge candidate ${car.candidateId}: ${failureReason}`);
+    } else {
+      console.log(`[MergeTrain] Successfully merged candidate ${car.candidateId}`);
     }
   }
 
@@ -382,7 +413,8 @@ export class MergeTrainManager {
   async retryFailedMerge(candidateId: string, specId: string): Promise<PromotionResult> {
     try {
       const updatedTrain = await this.modifyMergeTrain(specId, (train) => {
-        const candidate = train.candidates.find(c => c.candidateId === candidateId);
+        // Only the candidate's latest car: an older failed car was superseded by a re-add
+        const candidate = latestCar(train.candidates, candidateId);
 
         if (!candidate) {
           throw new Error(`Candidate ${candidateId} not found in merge train`);
@@ -394,11 +426,12 @@ export class MergeTrainManager {
 
         return {
           ...train,
-          candidates: train.candidates.map(c =>
-            c.candidateId === candidateId
-              ? { ...c, status: 'waiting' as const, failedAt: undefined, failureReason: undefined }
-              : c
-          ),
+          candidates: updateCar(train.candidates, candidate, c => ({
+            ...c,
+            status: 'waiting' as const,
+            failedAt: undefined,
+            failureReason: undefined,
+          })),
           status: 'processing',
         };
       });
@@ -439,8 +472,11 @@ export class MergeTrainManager {
     reason: string
   ): Promise<PromotionResult> {
     try {
+      const at = new Date().toISOString();
       await this.modifyMergeTrain(specId, (train) => {
-        const candidate = train.candidates.find(c => c.candidateId === candidateId);
+        // The state check is on the candidate's latest car; the rollback is candidate-level, so every merged car
+        // of the candidate is rolled back (one train_drop near-miss per car). Its failed or waiting cars stay as they are.
+        const candidate = latestCar(train.candidates, candidateId);
 
         if (!candidate) {
           throw new Error(`Candidate ${candidateId} not found in merge train`);
@@ -453,11 +489,11 @@ export class MergeTrainManager {
         return {
           ...train,
           candidates: train.candidates.map(c =>
-            c.candidateId === candidateId
+            c.candidateId === candidateId && c.status === 'merged'
               ? {
                   ...c,
                   status: 'rolled_back' as const,
-                  failedAt: new Date().toISOString(),
+                  failedAt: at,
                   failureReason: `Rolled back: ${reason}`
                 }
               : c
