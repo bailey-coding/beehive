@@ -950,6 +950,75 @@ describe('Merge train: a car is (position, candidateId)', () => {
     expect(trainOf(spec).candidates).toEqual([stuck, expect.objectContaining({ candidateId: 'cand-a', position: 2, status: 'merged' })]);
   });
 
+  it('10. a car moved out of merging by another writer during its gate keeps that state; no merged is written', async () => {
+    const { spec, env, box, direct } = await trainEnv();
+    const manager = new MergeTrainManager(env);
+    let other: MergeTrainRecord | undefined;
+    mockGateWorkflow.fetch.mockReset();
+    mockGateWorkflow.fetch.mockImplementationOnce(async () => {
+      // An old worker's blind PATCH marks the claimed car failed while this gate runs
+      const t = (await direct.getMergeTrainBySpec(SPEC))!;
+      other = await direct.updateMergeTrain(t.id, {
+        candidates: t.candidates.map((c) => ({ ...c, status: 'failed' as const, failureReason: 'old worker' })),
+      });
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    });
+    let mergedWrites = 0;
+    box.hook = async (req) => {
+      if (await writesCar(req, 'merged')) mergedWrites++;
+      return undefined;
+    };
+
+    await manager.executeMergeTrain(request('cand-a'));
+    expect(mockGateWorkflow.fetch).toHaveBeenCalledTimes(1);
+    expect(mergedWrites).toBe(0);
+    expect(trainOf(spec)).toEqual(other);
+    expect(trainOf(spec).candidates).toEqual([expect.objectContaining({ position: 1, status: 'failed', failureReason: 'old worker' })]);
+  });
+
+  // Holds a car with the same key as the one being processed, so only the train-id check keeps writes out of it
+  const newerTrain = (direct: PromotionLedgerClient, status: Car['status'] = 'waiting') =>
+    direct.saveMergeTrain({
+      id: 'mt-newer', mode: 'merge-train', specId: SPEC, candidates: [car('cand-a', 1, status)],
+      currentPosition: 1, nextMerge: 'cand-z', status: 'processing',
+    });
+
+  it('11. a newer train for the spec that appears during the gate gets no outcome write; the car stays merging in its train', async () => {
+    const { spec, env, direct } = await trainEnv();
+    const manager = new MergeTrainManager(env);
+    let newer: MergeTrainRecord | undefined;
+    mockGateWorkflow.fetch.mockReset();
+    mockGateWorkflow.fetch.mockImplementationOnce(async () => {
+      newer = await newerTrain(direct, 'merging');
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    });
+
+    await manager.executeMergeTrain(request('cand-a'));
+    const [latest, older] = spec.listMergeTrains(SPEC);
+    expect(latest).toEqual(newer);
+    expect(older.candidates).toEqual([car('cand-a', 1, 'merging')]);
+  });
+
+  it('11b. a newer train for the spec that appears before the claim gets no claim and no gate runs', async () => {
+    const { spec, env, box, direct } = await trainEnv();
+    const manager = new MergeTrainManager(env);
+    gate('pass');
+    let newer: MergeTrainRecord | undefined;
+    box.hook = async (req) => {
+      if (newer || req.method !== 'POST' || !(await writesCar(req.clone(), 'waiting'))) return undefined;
+      // The add lands, then a newer train is created before the claim reads the spec's train
+      const res = await spec.fetch(req);
+      newer = await newerTrain(direct);
+      return res;
+    };
+
+    expect((await manager.executeMergeTrain(request('cand-a'))).success).toBe(true);
+    expect(mockGateWorkflow.fetch).toHaveBeenCalledTimes(0);
+    const [latest, older] = spec.listMergeTrains(SPEC);
+    expect(latest).toEqual(newer);
+    expect(older.candidates).toEqual([car('cand-a', 1, 'waiting')]);
+  });
+
   it('positions stay unique when a car was removed', async () => {
     const { spec, env, direct } = await trainEnv();
     gate('pass');

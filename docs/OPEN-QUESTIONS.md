@@ -1162,5 +1162,20 @@ car, which is a new optional field on the strict `MergeTrainCandidateSchema` (mi
 the review of `docs/plans/merge-train-car-matching-plan.md`; pinned by the "a car stuck merging does not stop the
 next car" test.
 
+A car also stays `merging` in the older train when a newer train for the same spec appears during its gate: the
+outcome write targets the spec's newest train, sees another id and writes nothing (test 11). Two trains for one spec
+come from the `getOrCreateMergeTrain` race (`merge-train.ts`, get then create without a version).
+
+Since the fix, an outcome-write error is rethrown: `POST /promote` answers 500 `success: false` and the promotion is
+marked failed (before, the blind PATCH usually succeeded and `/promote` answered 200). `canPromote` then allows a
+re-promote, which adds a second live car while the first stays `merging`. Kept (decision); an extra
+`modifyMergeTrain` pass before the rethrow was declined for now.
+
+**Waiting car with no driver after a failed claim.** The claim's `catch` in `processMergeTrain` swallows every error,
+a DO 5xx or 404 included. `POST /promote` still answers 200 and `markAsCompleted` runs although no gate ran. Only the
+next add or retry on that spec processes the car, and until then it counts against `MAX_CONCURRENT_CANDIDATES`.
+Catching everything is the decision (the add itself succeeded); a driver for waiting cars (a sweep or a queue
+message) is part of this follow-up.
+
 **Status**: Open.
 

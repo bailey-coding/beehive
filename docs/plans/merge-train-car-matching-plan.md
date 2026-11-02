@@ -178,6 +178,11 @@ Kill checks (temporarily revert, confirm the named test fails, restore): candida
 `latestCar` -> first match fails 4-5; blind PATCH finish fails 6; blind PATCH claim fails 7; `try` covering the
 finish write fails 8.
 
+Added after review 2: test 10 (another writer moves the claimed car to `failed` during the gate; the car keeps that
+state, no `merged` write) and tests 11/11b (a newer train for the spec appears during the gate / before the claim; no
+outcome or claim is written into it). Kill checks run: removing the still-`merging` guard fails 10; removing both
+train-id checks fails 11 and 11b.
+
 ## 5. Docs to update
 - `docs/OPEN-QUESTIONS.md` 2026-11-01 car-matching entry: status -> fixed with the commit (worker-only, matches the
   DO's car key; historic records not repaired); note the broader cause (every merge-train promotion of a candidate adds
@@ -191,6 +196,11 @@ finish write fails 8.
   No in-repo caller; external callers unknown.
 - Three CAS writes instead of blind PATCHes: under contention up to `MAX_CAS_ATTEMPTS` re-reads each. A failed claim
   leaves the car `waiting`; a failed finish leaves it `merging` (known limitation above).
+- A failed claim (any error, DO 5xx/404 included) is swallowed: `/promote` answers 200 and the promotion is marked
+  completed although no gate ran; the car waits for the next add or retry on that spec (OPEN-QUESTIONS stuck-car entry).
+- Rethrowing a finish write error makes `/promote` answer 500 `success: false` and marks the promotion failed (before:
+  usually 200), so `canPromote` allows a re-promote that adds a second live car while the first stays `merging`.
+  Rethrow kept (decision, review 2); an extra `modifyMergeTrain` pass before the rethrow is declined for now.
 - Closure-held claim: reset at the start of every `mutate` call; test 7 covers the "mutate returned null" path.
 
 ## 7. Out of scope (pre-existing, noted for the OPEN-QUESTIONS entry)
