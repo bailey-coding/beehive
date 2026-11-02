@@ -361,8 +361,8 @@ live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 fail
   Promotion appends a row with the new target; rollback appends a row with the target of
   `head.prev_ref_id` (superseded 2026-11-02: the nearest earlier target not rolled back since, see D2 below). So rows are never updated, history is a reflog, promotion and demotion are
   the same insert, and rolling back twice toggled back (the plan's unit test, inverted by D2). Rolling back the
-  first canary moves to the empty ref (`candidate_id` NULL: no canary). Going back more than one
-  step needs a new promotion; there is no "rollback to ref X" route.
+  first canary moves to the empty ref (`candidate_id` NULL: no canary). Rolling back repeatedly walks
+  further down the chain (D2); there is no "rollback to ref X" route.
 - **Schema beyond the approved column list:** `deploy_refs.action` (`promote`|`rollback`, audit),
   `rung` CHECK limited to `canary`/`full` (the rungs with traffic), nullable target columns (the
   empty ref). `canary_deployments` columns are mine (url, version, split, `auto_rollback`,
@@ -1139,7 +1139,7 @@ Config, image and export only; nothing here ran on the platform (no Docker on th
 **Status**: Partly resolved (task `rollback-idempotency`, `docs/plans/rollback-idempotency-plan.md`). A redelivered
 `POST /deploy-refs/rollback` with the same `Idempotency-Key` now replays the first answer (no toggle, one near-miss),
 and `X-Expected-Head` refuses a stale decision (409 `version_conflict`). The canary route was already guarded (409 for
-a deployment that is not live). Two distinct rollbacks still toggle: see the next entry (D2). The "last ref whose
+a deployment that is not live). Two distinct rollbacks still toggled at that point: fixed by the next entry (D2). The "last ref whose
 candidate is not the current head's" alternative above does not fix that.
 
 ## 2026-11-01: rolling back the restored canary re-promotes the rolled-back one (D2)
@@ -1158,7 +1158,7 @@ Minimal fix idea (reviewer): `rollbackHead` walks the prev chain from `head.prev
 has an `slo_rollback` near-miss on this rung (or whose `canaryForRef` is `rolled_back`), falling back to the empty ref;
 it still appends exactly one ref. Rule 7 territory (rollback semantics): needs its own plan and review.
 
-**Status**: Fixed (task `d2-canary-ping-pong`, plan `docs/plans/d2-canary-ping-pong-plan.md`, two independent plan
+**Status**: Fixed on `main` (git log, task `d2-canary-ping-pong`, plan `docs/plans/d2-canary-ping-pong-plan.md`, two independent plan
 reviews). The reviewer's idea above (skip refs whose candidate has an `slo_rollback` near-miss) was not used: near-misses
 are per candidate and best-effort, and a ref-id variant of the chain walk still looped from three refs on. `rollbackHead`
 now picks the nearest earlier `promote` ref whose identity (worker version, else candidate) was not rolled back after it
@@ -1233,3 +1233,11 @@ partial-clone filtering (else blobs download eagerly); (2) does the Sandbox imag
 credentials and need a credential helper.
 
 **Status**: Open.
+
+## 2026-11-02: a repeated rollback can walk to a tombstoned or purged candidate (found in the D2 code review)
+
+`rollbackTarget` (`workers/spec-do/index.ts`) and `liveRefs` do not check `candidates.deleted_at`; only a *head* is protected from tombstone (lifecycle guard). On A, B, C, tombstoning A answers 200 (A is not a head); repeated rollbacks then go b, a, empty, so the tombstoned A becomes the head and the shadow router targets it. `deployCanary` refuses a tombstoned candidate, rollback does not. Pre-existing one step back (A, B, tombstone A, roll back); D2 makes any depth reachable, including from the SLO loop, because the walk no longer toggles between the top two. A purged candidate keeps its non-head ref rows, so it is reachable too (by reading, not run).
+
+Not fixed in D2 (plan rev 3 scope: target selection by chain identity). Planned home: `candidateExposure()` in M5a-2 PR-G, whose `rollbackHead` rule is "ineligible target -> empty ref" (`docs/M5A-2-GOVERNANCE-PLAN.md`); a smaller fix is a `deleted_at` check in `rollbackTarget` that treats such a ref as withdrawn.
+
+**Status**: Open (owner: PR-G).

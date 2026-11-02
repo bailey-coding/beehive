@@ -468,12 +468,23 @@ describe('ref rollback idempotency (Idempotency-Key) and X-Expected-Head', () =>
 describe('rollback never re-promotes a rolled-back identity (D2, docs/plans/d2-canary-ping-pong-plan.md)', () => {
   const rungRb = (rung = 'canary', specId = 'spec-a') => call('/deploy-refs/rollback', 'POST', { specId, rung, reason: 'manual' }, 'operator');
   const headOf = async (rung = 'canary', specId = 'spec-a') => data<DeployRef>(await call(`/deploy-refs/head?specId=${specId}&rung=${rung}`));
-  /** Roll back n times, returning the head candidate after each (null = the empty ref) */
+  /** After every rollback: liveRefs agrees with the head, and (canary) exactly the head's deployment is `deployed` */
+  async function expectConsistent(rung: string) {
+    const h = await headOf(rung);
+    const live = await data<LiveRef[]>(await call(`/deploy-refs/live?rung=${rung}`));
+    expect(live.map((l) => l.ref.id)).toEqual(h.candidateId ? [h.id] : []);
+    // seeded chains have no deployment rows to compare
+    if (rung !== 'canary' || count('SELECT COUNT(*) AS n FROM canary_deployments') === 0) return;
+    const deployed = store.raw.prepare("SELECT worker_version_id FROM canary_deployments WHERE spec_id = 'spec-a' AND status = 'deployed'").all() as { worker_version_id: string }[];
+    expect(deployed.map((d) => d.worker_version_id)).toEqual(h.workerVersionId ? [h.workerVersionId] : []);
+  }
+  /** Roll back n times, returning the head candidate after each (null = the empty ref); invariants hold after every step */
   async function rollBack(n: number, rung = 'canary'): Promise<(string | null)[]> {
     const seen: (string | null)[] = [];
     for (let i = 0; i < n; i++) {
       expect((await rungRb(rung)).status).toBe(200);
       seen.push((await headOf(rung)).candidateId);
+      await expectConsistent(rung);
     }
     return seen;
   }
@@ -500,11 +511,13 @@ describe('rollback never re-promotes a rolled-back identity (D2, docs/plans/d2-c
   it('A,B,A (redeploy of the first version): a->b, b->empty', async () => {
     await deploy('cand-a'); await deploy('cand-b'); await deploy('cand-a');
     expect(await rollBack(3)).toEqual(['cand-b', null, null]);
+    expect(count("SELECT COUNT(*) AS n FROM canary_deployments WHERE status = 'deployed'")).toBe(0);
   });
 
   it('the same version deployed twice (Z,A,A): a->z, z->empty', async () => {
     await deploy('cand-z'); await deploy('cand-a'); await deploy('cand-a');
     expect(await rollBack(3)).toEqual(['cand-z', null, null]);
+    expect(count("SELECT COUNT(*) AS n FROM canary_deployments WHERE status = 'deployed'")).toBe(0);
   });
 
   it('a redeploy after a rollback stays eligible: A,B,roll back,B,C: c->b, b->a, a->empty', async () => {
@@ -512,6 +525,7 @@ describe('rollback never re-promotes a rolled-back identity (D2, docs/plans/d2-c
     expect(await rollBack(1)).toEqual(['cand-a']);
     await deploy('cand-b'); await deploy('cand-c');
     expect(await rollBack(4)).toEqual(['cand-b', 'cand-a', null, null]);
+    expect(count("SELECT COUNT(*) AS n FROM canary_deployments WHERE status = 'deployed'")).toBe(0);
   });
 
   it('near-misses: one per rolled-back head, none for the empty head', async () => {
@@ -521,7 +535,7 @@ describe('rollback never re-promotes a rolled-back identity (D2, docs/plans/d2-c
     expect(rows.map((r) => r.candidate_id)).toEqual(['cand-c', 'cand-b', 'cand-a']);
   });
 
-  it('exactly one deployed canary matches the head throughout, and a rolled_back row never returns', async () => {
+  it('every deployment ends rolled_back after draining the chain, and none comes back', async () => {
     const a = await deploy('cand-a'); const b = await deploy('cand-b');
     await rollBack(3);
     const statuses = [a, b].map((d) => store.raw.prepare('SELECT status FROM canary_deployments WHERE id = ?').get(d.deployment.id));
@@ -574,7 +588,7 @@ describe('rollback never re-promotes a rolled-back identity (D2, docs/plans/d2-c
     expect(await rollBack(1)).toEqual([null]);
   });
 
-  it('two candidates on one version: rollback goes to the empty ref, liveRefs agrees with the head', async () => {
+  it('two candidates on one version: rollback goes to the empty ref (liveRefs checked after every step)', async () => {
     const r1 = seedRef('canary', 'cand-a', 'shared', 'promote', null);
     seedRef('canary', 'cand-b', 'shared', 'promote', r1);
     expect(await rollBack(1)).toEqual([null]);

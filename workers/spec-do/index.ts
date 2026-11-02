@@ -3644,7 +3644,7 @@ export class SpecDO {
     }
   }
 
-  /** Roll back a live canary: its spec's canary ref moves to the previous target. */
+  /** Roll back a live canary: its spec's canary ref moves to the nearest earlier target not rolled back since (rollbackTarget). */
   rollbackCanary(id: string, reason: string, actorId: string): CanaryMoveResult {
     return this.state.storage.transactionSync(() => {
       const deployment = this.getCanaryDeployment(id);
@@ -3846,10 +3846,10 @@ export class SpecDO {
 
   /**
    * Where a rollback of `head` lands: the nearest earlier `promote` ref whose identity (worker version, else candidate)
-   * was not rolled back after it was written, else null (the empty ref). A rollback ref's successor in the chain is what
-   * it undid, so a rollback withdraws the identities below it; a later redeploy is a newer row and stays eligible.
-   * Rollback copies are never targets (their promote row is below them). Each rollback withdraws the head's identity,
-   * so repeated rollbacks end at the empty ref instead of toggling (docs/plans/d2-canary-ping-pong-plan.md).
+   * was not rolled back after it was written, else null (the empty ref). A rollback row undid the row directly below it
+   * (the older one), so it withdraws that one identity from everything older still; a later redeploy is a newer row and
+   * stays eligible. Rollback copies are never targets (their promote row is below them). Each rollback withdraws the
+   * head's identity, so repeated rollbacks end at the empty ref instead of toggling (docs/plans/d2-canary-ping-pong-plan.md).
    */
   private rollbackTarget(specId: string, rung: DeployRung, head: DeployRef): DeployRef | null {
     const key = (r: DeployRef) => (r.workerVersionId ? `v:${r.workerVersionId}` : r.candidateId ? `c:${r.candidateId}` : 'empty');
@@ -3858,7 +3858,7 @@ export class SpecDO {
     for (let i = 0; i < chain.length; i++) {
       const ref = chain[i];
       if (ref.action === 'rollback') {
-        const undone = chain[i + 1];
+        const undone = chain[i + 1]; // the older row this rollback undid
         if (undone) withdrawn.add(key(undone));
         continue;
       }

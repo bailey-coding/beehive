@@ -423,7 +423,7 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
   nearest earlier target that was not rolled back since (identity: worker version, else candidate; the
   empty ref if there is none). Rollbacks never toggle: rolling back repeatedly walks down the chain and
   stops at the empty ref, so two failing canaries cannot ping-pong (D2, `docs/plans/d2-canary-ping-pong-plan.md`).
-  A rolled-back version returns only by a new deploy. A chain that already toggled before this fix may
+  A rolled-back version returns only by a new deploy. A rollback does not check whether the target candidate was tombstoned since (OPEN-QUESTIONS 2026-11-02; PR-G). A chain that already toggled before this fix may
   roll back to the empty ref where it used to restore an earlier canary. The shadow router reads the live canary heads on every
   mirrored request, so a rollback takes effect on the next request with no redeploy. History is
   never rewritten.
