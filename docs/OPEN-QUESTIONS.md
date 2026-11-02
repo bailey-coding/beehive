@@ -1143,10 +1143,24 @@ per-namespace control-plane budget, so a large trial fan-out under one organizat
 **ArtifactFS.** A FUSE daemon (blobless clone, blobs hydrate on read, writable copy-on-write overlay; `git commit/push`
 supported, nothing is pushed automatically, so the always-pushed invariant still needs an explicit push). Cloudflare
 recommends it for large repos; for small repos a plain `git clone` is simpler. Candidate services are small and new
-repos are capped at 1 GB, so M3 item 9 should be conditional on measured repo size. Open: (1) does Artifacts advertise
-partial-clone filtering (else blobs download eagerly); (2) does the Sandbox image provide `/dev/fuse` and `fuse3`;
-(3) token-in-URL (`https://x:<token>@...`, strip `?expires=`) works for sync `add-repo`; async mounts reject inline
-credentials and need a credential helper.
+repos are capped at 1 GB, so M3 item 9 should be conditional on measured repo size.
+
+**Checked against the docs 2026-11-02** (limits page updated 2026-10-28; ArtifactFS guide and
+`/artifacts/api/git-protocol/` updated 2026-04-25):
+- Limits unchanged from the figures above. Also: 1 TB per account (raisable), unlimited repos and namespaces, 100,000 entries
+  per folder. Repo names follow the same character rule as namespaces. **Answered.**
+- Token in the URL: **answered for sync `add-repo`.** The guide builds `https://x:<token secret>@<remote>` with `?expires=`
+  stripped; Artifacts ignores the Basic-auth username; the git-protocol page prefers
+  `http.extraHeader="Authorization: Bearer <full token>"` for local use and calls the URL form for short-lived commands only.
+  Token format `art_v1_<40 hex>?expires=<unix seconds>`. The docs are silent on async mounts and on a credential helper.
+- Partial clone: **docs conflict, unconfirmed.** The git-protocol page lists protocol v2 as `ls-refs` and `fetch` only and says
+  optional v1 capabilities such as `filter` are not supported; the ArtifactFS guide says it "starts with a blobless clone"
+  against Artifacts remotes. Needs a direct probe (`git clone --filter=blob:none` against a throwaway Artifacts repo; a real
+  Artifacts call, so the maintainer's go-ahead).
+- `/dev/fuse` and `fuse3` in the Sandbox image: **docs silent** (the guide assumes "a working FUSE implementation on the host" and
+  needs Go for `go install`). Check with `ls /dev/fuse` in a Sandbox (the existing `GET /sandbox/probe` is the place).
+
+Still open: partial-clone support, FUSE in the Sandbox image, async-mount credentials. M3 item 9 stays conditional on measured repo size.
 
 **Status**: Open.
 
