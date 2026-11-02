@@ -2,13 +2,13 @@
 
 Task: `d2-canary-ping-pong` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-01: rolling back the restored canary re-promotes the
 rolled-back one (D2)" | Tier: heavy (AGENTS.md rule 2 spine: DO ledger; rule 7: rollback is a ref operation).
-Status: **rev 2 after Review 1 (reject as written, approve once B1 fixed); section 2 awaits a verification pass (section 8). Nothing implemented.**
+Status: **rev 3: approved with changes by the verification pass (2026-11-02), changes applied; ready to implement on the maintainer's go-ahead. Nothing implemented.**
 
 ## 1. Facts (line numbers at `2fe3c3b`)
 
 - `rollbackHead` (`workers/spec-do/index.ts:3803-3846`) moves the head to the target of `head.prevRefId` only. Both
-  rollback routes end here: `POST /deploy-refs/rollback` (`:3520-3528`) and `rollbackCanary` (`:3648-3660`, guarded: 409
-  unless that deployment is the live head). `moveDeployRef` (`:3770`) always sets `prev_ref_id = old head`, so after a
+  rollback routes end here: `POST /deploy-refs/rollback` (`:3518-3529`) and `rollbackCanary` (`:3648-3659`, guarded: 409
+  unless that deployment is the live head). `moveDeployRef` (`:3771`) always sets `prev_ref_id = old head`, so after a
   rollback the new head's `prev` is the ref that was just rolled back.
 - `syncCanaryStatuses` (`:3849`) sets the head's newest canary deployment `deployed`, even when it was `rolled_back`
   (`live.status !== 'deployed'`), and supersedes the other `deployed` ones.
@@ -18,8 +18,8 @@ Status: **rev 2 after Review 1 (reject as written, approve once B1 fixed); secti
   points at (`index.ts:144`, `schema-inline.ts:560-575`). Chains are per (spec, rung); `rung` is `canary` or `full`.
 - Merged: Idempotency-Key and `X-Expected-Head` on `/deploy-refs/rollback` (`docs/plans/rollback-idempotency-plan.md`).
   They make a *redelivery* safe; each flip below is a new decision, so they do not help.
-- Tests that pin today's behavior: `workers/spec-do/tests/deploy-refs.test.ts:168-179` ("two distinct rollbacks toggle
-  back: known hazard pending D2"); also check `near-misses.test.ts:~200`, `canary-alarm.test.ts:~130`,
+- Tests that pin today's behavior: `workers/spec-do/tests/deploy-refs.test.ts:167-179` ("two distinct rollbacks toggle
+  back: known hazard pending D2"); also check `near-misses.test.ts:222-223`, `canary-alarm.test.ts:~130`,
   `canary-metrics.test.ts:~125`, `tests/e2e/cross-worker-flows.test.ts:114-124, 420` for chains that roll back twice.
   Docs: `docs/OPS.md:416-432` states the toggle.
 
@@ -83,24 +83,26 @@ Consequences to accept:
 Spec DO only; no route, request, response or schema change (`DeployRefSchema` already allows null targets,
 `deploy-refs.ts:34`). Old DO + new callers or new DO + old callers: identical traffic. Old rows written during the window
 are valid chain rows for the walk. Rollback floor: nothing to tolerate. Reverting this deploy brings back the toggle,
-including empty -> last candidate; nothing is stored, so redeploying fixes it. Chains already toggled need no repair.
+including empty -> last candidate; nothing is stored, so redeploying fixes it. Chains already toggled need no repair, but they behave differently: V, W and three old rollback rows leave V live; deploy X and roll it back and the head goes to the empty ref, not V, because V was rolled back earlier in the chain. That is the safe direction; OPS says so (test 1).
 
 ## 4. Tests to add (real SQL through the real router, `deploy-refs.test.ts` style)
 
 1. The traces in section 2: A,B; A,B,C; A,B,C,D; A,B,A; Z,A,A; A,B,roll back,B,C (roll back C -> B); a legacy toggled
-   chain (A,B + four rollback rows -> e). Each asserts the head after every rollback, no further live canary at the end,
+   chain (A,B + four rollback rows -> e) and V,W + three rollback rows, deploy X, roll back X -> e (the only test that pins
+   "a rollback copy is never a target"). Each asserts the head after every rollback, no further live canary at the end,
    one `slo_rollback` near-miss per rolled-back head, deployment statuses.
 2. Empty head stays empty: A,B then five rollbacks ends `e,e,e` (kills "empty head re-promotes").
 3. `full` rung with distinct candidates and null versions, five rollbacks (kills "identity = version only"); refs seeded
    by `INSERT` (only `deployCanary` moves refs today; no FKs on `deploy_refs`).
+3b. Namespacing: `full` rung rows `(candidate x, no version)` and `(candidate y, version "x")`, roll back expecting x.
 4. Same candidate, two versions (a,v1),(a,v2): rollback -> v1 (kills "identity = candidate only").
 5. Shared version, two candidates: rollback goes to the empty ref, `liveRefs` agrees with the head (S1).
 6. Redeploy eligibility: A,B,roll back,B,C: rollback C -> B (kills an order-blind identity set).
 7. Dangling `prev_ref_id`: ends at the empty ref, no throw (no FKs-off needed).
-8. Single rollback unchanged (restores A, A `deployed`, `deploy-refs.test.ts:151`); `store.transactions.count` delta 1;
+8. Single rollback unchanged (restores A, A `deployed`, `deploy-refs.test.ts:154`); `store.transactions.count` delta 1;
    `X-Expected-Head` and Idempotency-Key tests still pass.
 9. **Loop level (mandatory, S2):** point the `slo-loop.test.ts` env at a real SQLite `SpecDO`, seed violating metrics
-   through `/canary-metrics` for A and B, run `runCycle` until quiet: assert `rolledBack` per cycle (cycle 1 B, cycle 2 A)
+   through `/canary-metrics` for A **before B deploys** (a superseded deployment answers 409) and for B, run `runCycle` until quiet: assert `rolledBack` per cycle (cycle 1 B, cycle 2 A)
    and `checked: 0` at the end, bounded at 3 cycles. The mock at `slo-loop.test.ts:33-66` never moves refs and cannot catch D2.
 10. Invert the pinned tests: `deploy-refs.test.ts:167` (two distinct rollbacks end at empty), `:362` (comment `:361`,
     "two different fresh keys still toggle"), `:381-388` (`:387` expects `cand-b` today); retitle `near-misses.test.ts:222-223`
@@ -108,18 +110,17 @@ including empty -> last candidate; nothing is stored, so redeploying fixes it. C
 
 ## 5. Docs and comments to update
 
-`docs/OPS.md:416-432` (nearest earlier non-withdrawn promote ref, else empty; no toggle; `Idempotency-Key` required for
-unkeyed retries; a rolled-back version returns only by a new deploy); `docs/OPEN-QUESTIONS.md` D2 -> Fixed (task, commit),
+`docs/OPS.md:416-432` (nearest earlier non-withdrawn promote ref, else empty; no toggle; `Idempotency-Key` required on every retry; a rolled-back version returns only by a new deploy); `docs/OPEN-QUESTIONS.md` D2 -> Fixed (task, commit),
 plus a pointer under `:362-365`; `docs/FOCUS.md:33, 38, 263`; `docs/rfds/0004-canary-deploy-rollback.md:60-61`;
 `workers/shared/deploy-refs.ts:9-11, 220-221`; `workers/spec-do/index.ts:46` and the `rollbackHead` docstring (`:3798`);
-`schema.sql:441` and `schema-inline.ts:553` comments, edited together (`schema-sync.test.ts` compares them byte for byte; no
+`workers/spec-do/schema.sql:441` and `schema-inline.ts:553` comments, edited together (`schema-sync.test.ts` compares them byte for byte; no
 migration); test header comments `deploy-refs.test.ts:2-4, 153`. `docs/plans/rollback-idempotency-plan.md` is history: leave.
 
 ## 6. Files touched
 
 `workers/spec-do/index.ts`, `workers/spec-do/tests/deploy-refs.test.ts`, `workers/spec-do/tests/near-misses.test.ts`
 (title), `workers/canary-worker/tests/slo-loop.test.ts` (or a new loop test beside it), `workers/shared/deploy-refs.ts`
-(comments), `schema.sql` + `workers/spec-do/schema-inline.ts` (comments), and the docs in section 5. One function changes.
+(comments), `workers/spec-do/schema.sql` + `schema-inline.ts` (comments), and the docs in section 5. One function changes.
 
 ## 7. Risks
 
@@ -128,7 +129,8 @@ migration); test header comments `deploy-refs.test.ts:2-4, 153`. `docs/plans/rol
 2. **Identity key.** `workerVersionId ?? candidateId`: tests 3-5 pin it. Hand-seeded rows are the only exposure.
 3. **Chain size.** O(refs per spec and rung), as `listDeployRefs`, only on rollback.
 4. **Stale metrics for a restored canary.** A restored A is judged on a window that includes its earlier life; with this
-   fix that costs at most one more rollback to empty, not a loop.
+   fix that costs at most one more rollback per stale canary (a chain of N stale canaries can cascade to empty over N
+   ticks), bounded, not a loop.
 5. **Empty ref as terminal state.** Same as rolling back the first canary today.
 6. `autoRollback = false` on a failing canary stays live by design (`slo.ts:166`).
 
@@ -143,7 +145,10 @@ migration); test header comments `deploy-refs.test.ts:2-4, 153`. `docs/plans/rol
 
 - **D2a (accepted 2026-11-02):** manual rollback also stops toggling; one rule for both routes.
 
-## 10. Review 1 dispositions (independent agent, 2026-11-02: reject as written; approve once B1 fixed)
+## 10. Review dispositions (independent agent, 2026-11-02)
+
+Review 1: reject as written; approve once B1 fixed and the should-fix items folded in. Verification pass on rev 2: approve with
+changes (V1-V5 below, all applied); fuzz of 400 random sequences and 1,500 seeded chains found no loop or wrong target.
 
 | # | Finding | Disposition |
 |---|---|---|
@@ -159,3 +164,9 @@ migration); test header comments `deploy-refs.test.ts:2-4, 153`. `docs/plans/rol
 | N2 | Line numbers slightly off | Accepted: refreshed where cited (`:3518-3529`, `listDeployRefs :3548-3560`, `moveDeployRef :3771`) |
 | N3 | `seed.ts` does not write `deploy_refs` | Accepted: risk dropped |
 | Q6 | Add revert note to mixed-version section | Accepted: section 3 |
+| V1 | Toggled chains behave differently (V,W + rollbacks, deploy X, roll back -> empty); add test | Accepted: section 3, test 1 |
+| V2 | Test 9 seeding order (A metrics before B deploys, 409 otherwise) | Accepted: test 9 |
+| V3 | Section 1 line numbers still stale | Accepted: refreshed |
+| V4 | Wording: test 8 line, "required on every retry", `workers/spec-do/schema.sql` prefix; add namespacing test | Accepted: sections 4-6 |
+| V5 | Risk 4 cascade wording | Accepted: risk 4 |
+| V6 | Seeded A, empty promote, B: empty head restores A | Noted, no change: no production writer of an empty promote; revisit if a "disable canary" route is added |
