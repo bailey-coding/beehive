@@ -4,7 +4,7 @@ import type { Message } from '@cloudflare/workers-types';
 
 /**
  * Rollback is a ref operation (AGENTS.md rule 7): the Spec DO moves the spec's
- * canary deploy ref back to its previous target, in one transaction with the
+ * canary deploy ref back to the nearest earlier target not rolled back since, in one transaction with the
  * deployment and promotion status updates. Nothing is redeployed; the shadow
  * router follows the ref.
  */

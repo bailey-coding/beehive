@@ -438,7 +438,7 @@ CREATE INDEX IF NOT EXISTS idx_service_accounts_name ON service_accounts(name);
 -- truth for rollback. Rows are append-only: every move inserts a row whose
 -- prev_ref_id is the head it replaces (the unique index keeps the chain
 -- linear), and the head is the row no other row points back to. Promotion
--- moves the head to a new target, rollback to the target of head.prev_ref_id;
+-- moves the head to a new target, rollback to the nearest earlier target not rolled back since;
 -- candidate_id NULL is the empty ref (no candidate on that rung). The Artifacts
 -- production ref is a provenance mirror, never read here. canary_deployments
 -- records each canary and the ref row it created. Ids are not foreign keys,

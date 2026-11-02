@@ -43,7 +43,7 @@ const IDEMPOTENT_ROUTES: Set<string | RegExp> = new Set([
   'POST /api/organizations', 'POST /api/actors', 'POST /api/repositories', 'POST /api/specs',
   'POST /api/candidates', 'POST /api/gate-verdicts', 'POST /api/trials', 'POST /api/promotions',
   'POST /api/gate-runs', // start only; the result route is a compare-and-set and replays on its own
-  'POST /deploy-refs/rollback', // internal DO route: a redelivered rollback must not toggle back (resolved in handleDeployRefs)
+  'POST /deploy-refs/rollback', // internal DO route: a redelivered rollback must not roll back twice (resolved in handleDeployRefs)
   /^POST \/api\/entities\/[^\/]+\/[^\/]+\/history$/, // Dynamic entity history POST
 ]);
 
@@ -3644,7 +3644,7 @@ export class SpecDO {
     }
   }
 
-  /** Roll back a live canary: its spec's canary ref moves to the previous target. */
+  /** Roll back a live canary: its spec's canary ref moves to the nearest earlier target not rolled back since (rollbackTarget). */
   rollbackCanary(id: string, reason: string, actorId: string): CanaryMoveResult {
     return this.state.storage.transactionSync(() => {
       const deployment = this.getCanaryDeployment(id);
@@ -3795,7 +3795,7 @@ export class SpecDO {
   }
 
   /**
-   * Move the head to the target of head.prev_ref_id (the empty ref when there is
+   * Move the head to rollbackTarget (the nearest earlier ref not rolled back since; the empty ref when there is
    * none), mark the candidate's active promotion to this rung rolled back, and
    * re-derive canary statuses from the new head. Runs inside transactionSync.
    * `expectedHeadId` (X-Expected-Head): a 409 version_conflict before any write when the head is another ref.
@@ -3806,8 +3806,7 @@ export class SpecDO {
     if (expectedHeadId !== undefined && head.id !== expectedHeadId) {
       throw new ConflictError(`deploy ref head is ${head.id}, not ${expectedHeadId}; re-read and retry`, VERSION_CONFLICT);
     }
-    const prevRow = head.prevRefId ? this.queryAll('SELECT * FROM deploy_refs WHERE id = ?', head.prevRefId)[0] : undefined;
-    const prev = prevRow ? this.rowToDeployRef(prevRow) : null;
+    const prev = this.rollbackTarget(specId, rung, head);
     const ref = this.moveDeployRef(
       specId,
       rung,
@@ -3843,6 +3842,29 @@ export class SpecDO {
       this.syncCanaryStatuses(specId);
     }
     return ref;
+  }
+
+  /**
+   * Where a rollback of `head` lands: the nearest earlier `promote` ref whose identity (worker version, else candidate)
+   * was not rolled back after it was written, else null (the empty ref). A rollback row undid the row directly below it
+   * (the older one), so it withdraws that one identity from everything older still; a later redeploy is a newer row and
+   * stays eligible. Rollback copies are never targets (their promote row is below them). Each rollback withdraws the
+   * head's identity, so repeated rollbacks end at the empty ref instead of toggling (docs/plans/d2-canary-ping-pong-plan.md).
+   */
+  private rollbackTarget(specId: string, rung: DeployRung, head: DeployRef): DeployRef | null {
+    const key = (r: DeployRef) => (r.workerVersionId ? `v:${r.workerVersionId}` : r.candidateId ? `c:${r.candidateId}` : 'empty');
+    const chain = this.listDeployRefs(specId, rung); // head first
+    const withdrawn = new Set([key(head)]);
+    for (let i = 0; i < chain.length; i++) {
+      const ref = chain[i];
+      if (ref.action === 'rollback') {
+        const undone = chain[i + 1]; // the older row this rollback undid
+        if (undone) withdrawn.add(key(undone));
+        continue;
+      }
+      if (!withdrawn.has(key(ref))) return ref;
+    }
+    return null;
   }
 
   /** The canary the head points at is 'deployed'; any other 'deployed' one is superseded. */

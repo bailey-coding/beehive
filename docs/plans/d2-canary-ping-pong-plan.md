@@ -2,7 +2,7 @@
 
 Task: `d2-canary-ping-pong` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-01: rolling back the restored canary re-promotes the
 rolled-back one (D2)" | Tier: heavy (AGENTS.md rule 2 spine: DO ledger; rule 7: rollback is a ref operation).
-Status: **rev 3: approved with changes by the verification pass (2026-11-02), changes applied; ready to implement on the maintainer's go-ahead. Nothing implemented.**
+Status: **rev 3, implemented (`agent/d2-canary-ping-pong`) and code-reviewed (approve with changes, section 11), merged to `main`; not deployed.**
 
 ## 1. Facts (line numbers at `2fe3c3b`)
 
@@ -170,3 +170,19 @@ changes (V1-V5 below, all applied); fuzz of 400 random sequences and 1,500 seede
 | V4 | Wording: test 8 line, "required on every retry", `workers/spec-do/schema.sql` prefix; add namespacing test | Accepted: sections 4-6 |
 | V5 | Risk 4 cascade wording | Accepted: risk 4 |
 | V6 | Seeded A, empty promote, B: empty head restores A | Noted, no change: no production writer of an empty promote; revisit if a "disable canary" route is added |
+
+## 11. Code review dispositions (independent agent, 2026-11-02: approve with changes, no blockers)
+
+Fuzz: 600 random sequences (8,707 operations) and 1,500 seeded chains, zero failures; 13 of 14 mutants killed.
+
+| # | Finding | Disposition |
+|---|---|---|
+| S1 | Repeated rollback can walk to a tombstoned or purged candidate | Deferred, recorded: OPEN-QUESTIONS 2026-11-02 (owner PR-G `candidateExposure`), OPS line, governance plan wording. Changing rollback behavior here needs a plan amendment and re-review; out of D2 scope |
+| S2 | Two test titles over-claim | Fixed: retitled; `liveRefs` and the single `deployed` row are asserted after every rollback step in the shared helper |
+| S3 | Per-trace assertions only partly done | Fixed: the helper runs after every step of every trace; the redeploy traces assert no `deployed` row at the end |
+| S4 | Status text wrong; branch not on a remote | Fixed: FOCUS and plan status updated; branch and merge pushed |
+| N1 | Stale wording | Fixed: OPEN-QUESTIONS (two places), `index.ts` and `canary-worker/rollback.ts` comments, governance plan |
+| N2 | Commit not named in the D2 status | Fixed: the status names the task; the commit is in git log (a sha written before the merge would be wrong) |
+| N3 | Docstring says "successor"/"identities below" | Fixed: reworded, inline comment |
+| N4 | `key` tests truthiness, plan says `??` | No change: only differs for an empty-string version, which the route rejects (`deploy-refs.ts:97`) |
+| N5 | Mutant removing `if (undone)` survives | No change: reachable only by a hand-seeded chain with a rollback row at the bottom |
