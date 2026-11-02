@@ -43,6 +43,7 @@ const IDEMPOTENT_ROUTES: Set<string | RegExp> = new Set([
   'POST /api/organizations', 'POST /api/actors', 'POST /api/repositories', 'POST /api/specs',
   'POST /api/candidates', 'POST /api/gate-verdicts', 'POST /api/trials', 'POST /api/promotions',
   'POST /api/gate-runs', // start only; the result route is a compare-and-set and replays on its own
+  'POST /deploy-refs/rollback', // internal DO route: a redelivered rollback must not toggle back (resolved in handleDeployRefs)
   /^POST \/api\/entities\/[^\/]+\/[^\/]+\/history$/, // Dynamic entity history POST
 ]);
 
@@ -54,7 +55,12 @@ interface IdempotencyContext {
   path: string;
 }
 
-class ConflictError extends Error {}
+/** A 409. `code` is set only where a caller branches on it (the deploy-ref CAS); every other 409 stays code-less. */
+class ConflictError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
+}
 
 /** Parsed X-Expected-Version: null when absent, 'invalid' when not a positive integer. */
 function expectedVersion(request: Request): number | null | 'invalid' {
@@ -378,6 +384,7 @@ import {
   type CanaryMoveResult,
   type LiveRef,
   isAcceptableCanaryUrl,
+  EXPECTED_HEAD_HEADER,
 } from '../shared/deploy-refs';
 
 // Gate runs (shared with the gate worker)
@@ -3303,6 +3310,11 @@ export class SpecDO {
     const actorId = request.headers.get('X-Actor-ID') || 'system';
     const id = rawId === undefined ? undefined : decodeURIComponent(rawId);
 
+    // Idempotency-Key, ref rollback only: resolved before the body is read (it hashes a clone of it)
+    const isRefRollback = collection === 'deploy-refs' && id === 'rollback' && sub === undefined && method === 'POST';
+    const idem = isRefRollback ? await this.resolveIdempotency(request, method, url.pathname, actorId) : null;
+    if (idem instanceof Response) return idem;
+
     let body: unknown;
     if (method === 'POST' || method === 'PATCH') {
       try {
@@ -3386,12 +3398,18 @@ export class SpecDO {
           const p = parse(RefRollbackRequestSchema, 'rollback');
           if ('error' in p) return p.error;
           const { specId, rung, reason } = p.data;
-          return json(this.state.storage.transactionSync(() => this.rollbackHead(specId, rung, reason, actorId)));
+          const expectedHead = request.headers.get(EXPECTED_HEAD_HEADER);
+          if (expectedHead !== null && expectedHead.trim() === '') return fail(`Invalid ${EXPECTED_HEAD_HEADER}`, 400);
+          const move = () => this.rollbackHead(specId, rung, reason, actorId, expectedHead ?? undefined);
+          // idempotent() runs the move in its own transaction; without a key it would run outside one
+          return idem
+            ? this.idempotent(idem, 200, () => ({ success: true, data: move(), timestamp: Date.now() }))
+            : json(this.state.storage.transactionSync(move));
         }
       }
     } catch (e) {
       if (e instanceof NotFoundError) return fail(e.message, 404, RECORD_NOT_FOUND);
-      if (e instanceof ConflictError) return fail(e.message, 409);
+      if (e instanceof ConflictError) return fail(e.message, 409, e.code);
       if (e instanceof BadRequestError) return fail(e.message, 400);
       throw e;
     }
@@ -3659,10 +3677,14 @@ export class SpecDO {
    * Move the head to the target of head.prev_ref_id (the empty ref when there is
    * none), mark the candidate's active promotion to this rung rolled back, and
    * re-derive canary statuses from the new head. Runs inside transactionSync.
+   * `expectedHeadId` (X-Expected-Head): a 409 version_conflict before any write when the head is another ref.
    */
-  private rollbackHead(specId: string, rung: DeployRung, reason: string, actorId: string): DeployRef {
+  private rollbackHead(specId: string, rung: DeployRung, reason: string, actorId: string, expectedHeadId?: string): DeployRef {
     const head = this.deployHead(specId, rung);
     if (!head) throw new NotFoundError(`Deploy ref ${specId}/${rung} not found`);
+    if (expectedHeadId !== undefined && head.id !== expectedHeadId) {
+      throw new ConflictError(`deploy ref head is ${head.id}, not ${expectedHeadId}; re-read and retry`, VERSION_CONFLICT);
+    }
     const prevRow = head.prevRefId ? this.queryAll('SELECT * FROM deploy_refs WHERE id = ?', head.prevRefId)[0] : undefined;
     const prev = prevRow ? this.rowToDeployRef(prevRow) : null;
     const ref = this.moveDeployRef(

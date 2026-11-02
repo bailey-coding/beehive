@@ -420,9 +420,16 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
 
 - **The pointer is the Spec DO `deploy_refs` chain per (spec, rung).** Deploying a canary
   appends a row whose `prev_ref_id` is the old head; rolling back appends a row pointing at the
-  previous target (the empty ref if there was none). Rolling back twice toggles back. The
-  shadow router reads the live canary heads on every mirrored request, so a rollback takes
-  effect on the next request with no redeploy. History is never rewritten.
+  previous target (the empty ref if there was none). Two distinct rollbacks currently toggle
+  back; known hazard, see `docs/OPEN-QUESTIONS.md` 2026-11-01 "rolling back the restored canary
+  re-promotes the rolled-back one" (D2). The shadow router reads the live canary heads on every
+  mirrored request, so a rollback takes effect on the next request with no redeploy. History is
+  never rewritten.
+- **Ref rollback (internal DO route `POST /deploy-refs/rollback {specId, rung, reason}`):** send
+  `Idempotency-Key: <one per decision>` so a retry replays instead of toggling back, and
+  `X-Expected-Head: <head ref id you read>` so a stale decision is a 409 `version_conflict` that moves nothing
+  (an empty header is a 400). The canary route `/canary-deployments/:id/rollback` takes neither: it refuses
+  (409) a deployment that is not live.
 - **Manual rollback:** `POST https://beehive-canary-worker.../rollback` with
   `{"candidateId","specId","reason":"manual","timestamp","metrics":{}}`. Automatic triggers
   (`latency`, `error_rate`, `slo_violation`) are refused (409) for a canary whose switch is off:
@@ -559,6 +566,10 @@ gotchas, deploy learnings).
   trials, promotions) forwards the client's `Idempotency-Key` to the Spec DO; a key over 255 characters is a 400 at the
   edge. Other routes ignore the header. Replays answer with the stored status and `Idempotent-Replay: true`; the same key
   with another body is a 409.
+- **Spec DO internal route:** `POST /deploy-refs/rollback` (no edge route; reached over the `SPEC_DO` binding or the
+  local e2e probe) honors `Idempotency-Key` the same way. The key is scoped by `X-Actor-ID`; a caller without one
+  is actor `system`, so headerless callers share one key scope. `X-Expected-Head` is not part of the key's request
+  hash (only the body is): the same key and body with a different header replays the first answer.
 - **Queue consumer:** a message is retried with `message.retry()` (30 s doubling to 900 s) on 5xx, 408, 429, 401, 403,
   a missing repository or candidate, a thrown fetch, or an in-flight gate run; it is dropped with an error log on other
   4xx, validation failures and a history-key 409. After attempt 5 it gives up with an error log; `max_retries = 4` in

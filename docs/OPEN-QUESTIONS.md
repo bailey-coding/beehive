@@ -1136,6 +1136,28 @@ Config, image and export only; nothing here ran on the platform (no Docker on th
 
 `rollbackHead` (`workers/spec-do/index.ts`) moves a ref to `head.prevRefId`'s target. After one rollback the new head's `prev` is the head that was just rolled back, so a second (or redelivered) `POST /deploy-refs/rollback` moves the ref **back** to it ("rolling back twice toggles back", `docs/OPS.md`). Pre-existing behavior; since PR-B the second call also writes an `slo_rollback` near-miss for the candidate that was live in between, which did not lose anything. Found in the PR-B review. Options: make the rollback route idempotent per request (Idempotency-Key, the deploy-ref routes are not keyed today), or define rollback as "move to the last ref whose candidate is not the current head's". Not changed in PR-B.
 
+**Status**: Partly resolved (task `rollback-idempotency`, `docs/plans/rollback-idempotency-plan.md`). A redelivered
+`POST /deploy-refs/rollback` with the same `Idempotency-Key` now replays the first answer (no toggle, one near-miss),
+and `X-Expected-Head` refuses a stale decision (409 `version_conflict`). The canary route was already guarded (409 for
+a deployment that is not live). Two distinct rollbacks still toggle: see the next entry (D2). The "last ref whose
+candidate is not the current head's" alternative above does not fix that.
+
+## 2026-11-01: rolling back the restored canary re-promotes the rolled-back one (D2)
+
+Trace: deploy A, deploy B, roll back B: the canary head moves to A and `syncCanaryStatuses`
+(`workers/spec-do/index.ts`, the `UPDATE ... SET status = 'deployed'` for the head's canary) marks A `deployed`. Roll
+back A: `rollbackCanary`'s liveness guard passes (A is the live head), the head's `prev` is B's ref, so `rollbackHead`
+moves the ref back to B and B is marked `deployed` again. The SLO loop runs from the Spec DO alarm every 60 s
+(`CANARY_TICK_INTERVAL_MS`, via the `canary-slo-ticks` queue; canary-worker `crons = []`) over a 15-minute metrics window
+(`CANARY_METRICS_DEFAULT_WINDOW_MINUTES`, `workers/shared/deploy-refs.ts`), so two violating canaries can ping-pong
+about once a minute, each flip a new `slo_rollback` near-miss. Per-request idempotency does not touch it (each flip is a
+new decision), and "the last ref whose candidate is not the current head's" picks B when rolling back A, so it does not
+fix it either. Found in the review of `docs/plans/rollback-idempotency-plan.md`.
+
+Minimal fix idea (reviewer): `rollbackHead` walks the prev chain from `head.prev`, skipping refs whose candidate already
+has an `slo_rollback` near-miss on this rung (or whose `canaryForRef` is `rolled_back`), falling back to the empty ref;
+it still appends exactly one ref. Rule 7 territory (rollback semantics): needs its own plan and review.
+
 **Status**: Open.
 
 ## 2026-11-01: merge train matches cars by candidate only, so a re-added candidate's old car is updated too
