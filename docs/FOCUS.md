@@ -24,7 +24,8 @@ Completed items are removed, not struck through; history lives in git.*
 - PR-S: log-only candidate-stage and promotion-state validation (`invalid_transition` rows; `docs/plans/pr-s-state-machine-plan.md`).
 - Retired `POST /api/candidates/:id/execute` (410 `route_retired`; `docs/plans/retire-execute-plan.md`).
 - Docs: RFC renamed RFD (`docs/rfds/`); `docs/AGENTS-REVIEWER.md` "Handling approve with changes".
-Last full local run: typecheck clean, unit suite green (77 files, ~1977 tests); e2e not run this session.
+- From another session (PR #21, `3d48bc7`): new organizations need 2-63 character names; Artifacts limits and ArtifactFS findings in `docs/OPEN-QUESTIONS.md`.
+Last full local run (merged tree, 2026-11-02): typecheck clean, unit suite green (78 files, 1979 tests); e2e not run this session.
 
 **Deploy checks when `main` is deployed** (`docs/OPS.md` sections): Spec DO migrates m13 -> m14 on first request (`schema_version = m14`, five empty tables, `governance.m14_epoch` present); Workers Logs `Giving up on message` / `Dropping message` (queue retries); `invalid_transition` rows appear from normal traffic (expected: today's tournament and merge-train flows violate table (c)); candidates get no body/query in mirrored requests; execute answers 410. The PR-A to PR-G provenance window starts at this deploy (see OPS "Governance schema m14").
 
