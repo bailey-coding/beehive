@@ -568,7 +568,8 @@ gotchas, deploy learnings).
   with another body is a 409.
 - **Spec DO internal route:** `POST /deploy-refs/rollback` (no edge route; reached over the `SPEC_DO` binding or the
   local e2e probe) honors `Idempotency-Key` the same way. The key is scoped by `X-Actor-ID`; a caller without one
-  is actor `system`, so headerless callers share one key scope.
+  is actor `system`, so headerless callers share one key scope. `X-Expected-Head` is not part of the key's request
+  hash (only the body is): the same key and body with a different header replays the first answer.
 - **Queue consumer:** a message is retried with `message.retry()` (30 s doubling to 900 s) on 5xx, 408, 429, 401, 403,
   a missing repository or candidate, a thrown fetch, or an in-flight gate run; it is dropped with an error log on other
   4xx, validation failures and a history-key 409. After attempt 5 it gives up with an error log; `max_retries = 4` in

@@ -414,6 +414,21 @@ describe('ref rollback idempotency (Idempotency-Key) and X-Expected-Head', () =>
     expect((await head()).candidateId).toBe('cand-a');
   });
 
+  it('a keyed request refused by X-Expected-Head stores no key, so the retry with the same key after re-reading runs', async () => {
+    await deploy('cand-a');
+    const b = await deploy('cand-b');
+    const refused = await rb({ 'Idempotency-Key': 'k9', 'X-Expected-Head': 'stale' });
+    expect(refused.status).toBe(409);
+    expect(keys()).toBe(0);
+    expect(refs()).toBe(2);
+    expect(nearMisses()).toBe(0);
+    const retried = await rb({ 'Idempotency-Key': 'k9', 'X-Expected-Head': b.ref.id });
+    expect(retried.status).toBe(200);
+    expect(retried.headers.get('Idempotent-Replay')).toBeNull();
+    expect((await head()).candidateId).toBe('cand-a');
+    expect(keys()).toBe(1);
+  });
+
   it('X-Expected-Head: the current head moves; a stale one is a 409 version_conflict that writes nothing', async () => {
     await deploy('cand-a');
     const b = await deploy('cand-b');

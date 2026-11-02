@@ -227,7 +227,7 @@ export const DEPLOY_PATHS = {
 /** POST /deploy-refs/rollback only: the head ref id the caller decided on. A header, so an older Spec DO ignores it. */
 export const EXPECTED_HEAD_HEADER = 'X-Expected-Head';
 
-export const DEPLOY_ROUTE =/^\/(canary-deployments|deploy-refs|canary-metrics)(?:\/([^\/]+))?(?:\/(rollback))?$/;
+export const DEPLOY_ROUTE = /^\/(canary-deployments|deploy-refs|canary-metrics)(?:\/([^\/]+))?(?:\/(rollback))?$/;
 
 // ============================================================================
 // CLIENT
