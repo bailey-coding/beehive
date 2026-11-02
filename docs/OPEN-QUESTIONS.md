@@ -12,82 +12,6 @@ tags:
 
 ---
 
-## Hierarchical Repository URLs - Duplicate Name Issue
-
-**Status**: Open - Requires Schema Decision
-
-**Date**: 2026-10-14
-
-**Issue**: The hierarchical URL feature (`/app/repos/{org}/{namespace}/{repo}`) has a silent failure mode when multiple repositories share the same `(organization.name, namespace, name)` tuple.
-
-**Current Behavior**: 
-- `.find()` returns the first matching repository
-- Second+ repos with the same path become unreachable via hierarchical URL
-- Their links open the wrong repository
-
-**Impact**: Data integrity issue - users cannot reliably access repositories with duplicate names via the friendly URL format.
-
-**Root Cause**: No uniqueness constraint in the Spec DO schema for:
-- `organizations.name`
-- `(organization_id, namespace, name)` in `repositories`
-
-**Constraints**: 
-- AGENTS.md rule: "Spec DO is the orchestration spine - hand-written, not agent-generated"
-- Schema changes to Spec DO must be hand-written and carefully reviewed
-
-**Recommended Solutions** (in priority order):
-
-1. **Add UNIQUE indexes** (Preferred but requires schema change):
-   ```sql
-   CREATE UNIQUE INDEX idx_organizations_name ON organizations(name);
-   CREATE UNIQUE INDEX idx_repositories_path ON repositories(organization_id, namespace, name);
-   ```
-   - Prevents duplicates at database level
-   - Requires hand-written migration
-
-2. **Application-level validation** (Quick fix):
-   - Validate uniqueness before creating orgs/repos
-   - Return error if duplicate detected
-   - No schema change required
-
-3. **Fallback with warning** (Temporary):
-   - If duplicate detected during lookup, log warning
-   - Fall back to UUID URL for duplicates
-   - User still gets to their repo, but via less-friendly URL
-
-**Decision Needed**: Should we enforce uniqueness at the schema level (breaking change for existing duplicates) or at the application level (prevents new duplicates only)?
-
-**Related**: Hierarchical URL implementation in commit `8df4792`
-
----
-
-## Pre-existing Test Gaps
-
-**Status**: Open
-
-**Date**: 2026-10-14
-
-**Issue**: Test files in `workers/api/tests/ui.test.ts` are not included in the Vitest configuration (`vitest.config.ts` only includes `tests/**/*.test.ts`).
-
-**Impact**: 
-- 15+ pre-existing test failures in `workers/api/tests/` go unnoticed
-- New failures from hierarchical URL changes (2 tests) also not caught by CI
-- No CI coverage for UI route handlers
-
-**Current State**:
-- Unit tests in `tests/unit/` pass
-- E2E tests in `tests/e2e/` run but many fail (require running workers)
-- UI tests in `workers/api/tests/ui.test.ts` are never executed
-
-**Recommended Fix**:
-1. Update `vitest.config.ts` to include `workers/api/tests/**/*.test.ts`
-2. Investigate and fix the 15 pre-existing failures
-3. Add tests for hierarchical URL routes
-
-**Blocker for**: Full test confidence in UI routing changes
-
----
-
 ## Artifacts REST API: repo content routes (2026-10-15)
 
 **Status**: Resolved (README + tree working in the UI); response shapes still undocumented
@@ -706,7 +630,7 @@ to that work to avoid a conflict. Until then the pages are dead code with no pro
 
 ## Issue writes trust a client-asserted actor until a user-bound token exists (2026-10-17)
 
-**Status**: Open - proposal only, needs a human (spine; overlaps M3/M6.2 capability minting).
+**Status**: Superseded. The user-bound token proposal was built (M12 PR-C: `kind: 'user'` tokens, `workers/api/principal.ts`). What remains, the master token acting as any actor, is M12 stage 2 (`docs/OPS.md`) and M5a-2 PR-D0 (`docs/M5A-2-GOVERNANCE-PLAN.md`). The text below is history.
 
 **Done (M8 PR 1, `agent/m8-issues-do`)**: the Spec DO resolves the `X-Actor-ID` header against the `actors` table for issue create, comment, status and comment-policy. An unknown id, `unknown` (no header) and any service-account actor get 403 (`requireIssueActor`, `workers/spec-do/index.ts`). Maintainer status stays ledger-global `actors.role` (`isMaintainer`), service actors excluded. UI requests derive the actor from the signed session, never from a form field (`workers/api/tests/ui-actor.test.ts`); a session whose actor row is gone is sent to `/login`, and a first login creates the row (`ensureActor`).
 
@@ -717,19 +641,11 @@ to that work to avoid a conflict. Until then the pages are dead code with no pro
 **Addendum (2026-10-17, PR 1 review)**: first login is tested end to end (`workers/api/tests/ui-actor.test.ts`): the callback creates a plain `human` actor (no role, so not a maintainer), the session is accepted, and a second login reuses the row. Pre-existing limit: `ensureActor` (`workers/api/ui.ts:498`) and the per-request existence check (`ui.ts:119`) both read `/api/actors?limit=500&offset=0`. Beyond 500 actors a real user's row is not found, so every request bounces to `/login` and login creates a duplicate actor. Issue writes now depend on that lookup. Fix later with a by-id / by-github-id lookup route. Also noted: `PATCH /api/issues/:id/stage` still has no actor check (outside the plan).
 
 
-## A schema version bump turns a rollback into an outage (2026-10-17)
+## Issue visibility cannot be set through any route (2026-10-17)
 
-**Status**: Open - hazard recorded; the safe method is in `docs/M8-UI-ISSUES-PLAN.md` section 13 (plan branch `agent/ui-issues-plan-v2`).
+**Status**: Open (low). The schema-version rollback hazard that used to share this entry is resolved: the rollback floor shipped (`docs/OPS.md` "Rollback floor", `8de5485`).
 
-`runMigrations` throws `Unknown schema_version '<v>'` when the stored version is not in the code's own step list
-(`workers/spec-do/index.ts:842`), and `init()` rethrows (`:499-506`), so every request fails. Therefore any change that bumps
-`LATEST_SCHEMA_VERSION` (`:27`, `'m8'` today) makes rolling the Spec DO back to the previous code (AGENTS.md rule 7) an outage, not
-a degraded mode. `docs/OPS.md` said only that this combination "is untested"; it is known to fail. m4-m8 shipped in one push, each step
-additive and idempotent, with a read-only `schema_version` check before and after (`docs/OPS.md`); nothing in m3-m8 made them
-rollback-safe. Safe method for the next bump (M11): push A first, with no bump, so `runMigrations` accepts an `m<N>` above the latest
-it knows (log and continue, with a test); push B, only after A is live, adds the step. Not built.
-
-**Also (M8 PR 2)**: no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
+no API sets an issue's `visibility`, so private issues cannot be made through the API, UI or CLI; the UI hides them
 (404 on detail, comment, status and legacy routes) and that is covered by unit tests only, not the local e2e.
 
 ## Queue-consumer double-write prevention is unfinished (2026-10-19)
@@ -752,7 +668,7 @@ M5a now closes the at-least-once double-write for all nine POST routes in `IDEMP
 
 ## Cloudflare Flagship for Beehive platform features (2026-10-18)
 
-**Status**: Open - deferred, no immediate need
+**Status**: Decided - deferred (not an open question; revisit when broken deploys become costly)
 
 **Question**: Should Beehive adopt Cloudflare Flagship for gating platform-level features (new gate types, UI changes, promotion algorithms)?
 
@@ -1136,7 +1052,7 @@ Config, image and export only; nothing here ran on the platform (no Docker on th
 
 `rollbackHead` (`workers/spec-do/index.ts`) moves a ref to `head.prevRefId`'s target. After one rollback the new head's `prev` is the head that was just rolled back, so a second (or redelivered) `POST /deploy-refs/rollback` moves the ref **back** to it ("rolling back twice toggles back", `docs/OPS.md`). Pre-existing behavior; since PR-B the second call also writes an `slo_rollback` near-miss for the candidate that was live in between, which did not lose anything. Found in the PR-B review. Options: make the rollback route idempotent per request (Idempotency-Key, the deploy-ref routes are not keyed today), or define rollback as "move to the last ref whose candidate is not the current head's". Not changed in PR-B.
 
-**Status**: Partly resolved (task `rollback-idempotency`, `docs/plans/rollback-idempotency-plan.md`). A redelivered
+**Status**: Resolved (task `rollback-idempotency`, `docs/plans/rollback-idempotency-plan.md`). A redelivered
 `POST /deploy-refs/rollback` with the same `Idempotency-Key` now replays the first answer (no toggle, one near-miss),
 and `X-Expected-Head` refuses a stale decision (409 `version_conflict`). The canary route was already guarded (409 for
 a deployment that is not live). Two distinct rollbacks still toggled at that point: fixed by the next entry (D2). The "last ref whose
