@@ -1627,19 +1627,19 @@ export class SpecDO {
   }
 
   /**
-   * The live candidate's stage, commit and organization name, read before a stage write, or null
+   * The live candidate's stage, spec and organization name, read before a stage write, or null
    * (unknown or tombstoned id, or the read failed). Null means "do not log"; never throws.
    */
-  private readCandidatePrior(id: string): { stage: string; commitSha: string; specId: string; orgName: string | null } | null {
+  private readCandidatePrior(id: string): { stage: string; specId: string; orgName: string | null } | null {
     try {
       const r = this.queryAll(
-        `SELECT c.stage, c.commit_sha, c.spec_id, o.name AS org_name FROM candidates c
+        `SELECT c.stage, c.spec_id, o.name AS org_name FROM candidates c
            LEFT JOIN specs s ON s.id = c.spec_id LEFT JOIN organizations o ON o.id = s.organization_id
          WHERE c.id = ? AND c.deleted_at IS NULL`,
         id
       )[0];
       if (!r) return null;
-      return { stage: String(r.stage), commitSha: String(r.commit_sha ?? ''), specId: String(r.spec_id), orgName: (r.org_name as string | null) ?? null };
+      return { stage: String(r.stage), specId: String(r.spec_id), orgName: (r.org_name as string | null) ?? null };
     } catch (e) {
       console.error('[SpecDO] invalid_transition prior read failed', id, e instanceof Error ? e.message : String(e));
       return null;
@@ -1648,7 +1648,7 @@ export class SpecDO {
 
   /** Log-only table (c) check for a candidate stage write; runs inside the write's transaction. */
   private logCandidateTransition(
-    prior: { stage: string; commitSha: string; specId: string; orgName: string | null } | null,
+    prior: { stage: string; specId: string; orgName: string | null } | null,
     id: string,
     to: string,
     source: CandidateWriteSource,
@@ -5649,11 +5649,6 @@ export class SpecDO {
       createdAt: now(),
     };
   }
-
-  // ============================================================================
-  // SANDBOX INTEGRATION
-  // ============================================================================
-
 }
 
 export default SpecDO;

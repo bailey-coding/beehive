@@ -49,8 +49,8 @@ export const CANDIDATE_LADDER: readonly CandidateStage[] = [
 
 /**
  * What caused the write. A stage PATCH carries no rung or commit, so it is 'stage_patch'. 'execute_pass' and 'execute_error' have no
- * producer since the execute route was retired (docs/plans/retire-execute-plan.md); kept so existing governance_events rows with those
- * sources still parse, and removed with the enforce PR together with EXECUTE_ONLY.
+ * producer since the execute route was retired (docs/plans/retire-execute-plan.md); kept for the pure matrix tests and to name the
+ * sources of historical governance_events rows, and removed with the enforce PR together with EXECUTE_ONLY.
  */
 export type CandidateWriteSource = 'stage_patch' | 'execute_pass' | 'execute_error';
 export interface CandidateTransitionContext {
