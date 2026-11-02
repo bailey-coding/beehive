@@ -9,7 +9,7 @@
  *         promotion ledger: promotion_states, tournaments, merge_trains.
  */
 
-import { isValidNamespace } from '../shared/namespace';
+import { isValidNamespace, isValidNewNamespace } from '../shared/namespace';
 import { DurableObject } from '@cloudflare/workers-types/experimental';
 import { createSqlStorage, SqlDb } from './sql-storage';
 
@@ -4116,8 +4116,8 @@ export class SpecDO {
         // The name becomes the Artifacts namespace of fork-created candidate repos (createFork), and the sandbox runner builds
         // from it, so only a valid namespace is accepted. New names only; existing rows are untouched (docs/SF-8-NAMESPACE-PLAN.md).
         // Checked here, not in createOrganization, so legacy-shaped rows stay constructible in tests.
-        if (!isValidNamespace(body.name)) {
-          return new Response(JSON.stringify({ success: false, error: "organization name must be 1-64 characters: letters, digits, '_' and '-', starting with a letter or digit", timestamp: Date.now() }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        if (!isValidNewNamespace(body.name)) {
+          return new Response(JSON.stringify({ success: false, error: "organization name must be 2-63 characters: letters, digits, '_' and '-', starting with a letter or digit", timestamp: Date.now() }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
         return this.idempotent(idem, 201, () => {
           const org = this.createOrganization(body.name, body.type, body.externalId);
