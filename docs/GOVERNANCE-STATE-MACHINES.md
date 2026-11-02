@@ -81,7 +81,7 @@ Roll out in two steps: first **log-only** (`invalid_transition` rows in `governa
 
 | From | Event | Guard | To |
 |---|---|---|---|
-| pending | pre-merge pass (sandbox execute or gate) | | passed_premerge |
+| pending | pre-merge pass (today only a stage PATCH; gate runs write a verdict, not a stage; sandbox execute retired 2026-11-02) | | passed_premerge |
 | pending | execute error | | failed |
 | passed_premerge | shadow pass | | passed_shadow |
 | passed_shadow | train pass | | passed_train |
@@ -90,8 +90,8 @@ Roll out in two steps: first **log-only** (`invalid_transition` rows in `governa
 | passed_canary | promote | `assertPromotionApprovals` (the hook) | promoted |
 | any non-terminal | rung failure | | failed |
 | passed_train, passed_canary, promoted | rollback (SLO, train drop) | never gated (rule 7) | rolled_back |
-| failed, rolled_back | re-execute with a new commit | resets sha; approvals go stale by sha mismatch | passed_premerge |
-| promoted | re-execute | refuse 409, or demote via rollback first | |
+| failed, rolled_back | re-run with a new commit (no producer since execute was retired; open M5a-2 item) | resets sha; approvals go stale by sha mismatch | passed_premerge |
+| promoted | re-run (execute retired; applies to whatever replaces it) | refuse 409, or demote via rollback first | |
 | promoted | anything else | | rejected |
 | rolled_back, failed | promote directly | | rejected (must re-pass the rungs) |
 

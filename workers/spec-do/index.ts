@@ -299,6 +299,7 @@ type Service = { fetch: (request: Request) => Promise<Response> };
 
 // Seed data for local development
 import { seedDatabase, isSeeded } from './seed';
+import { routeRetired, EXECUTE_RETIRED_MESSAGE } from '../shared/retired-route';
 import { NearMissQuerySchema, NearMissReasonSchema, MAX_NEAR_MISS_EVIDENCE_BYTES, type NearMiss, type NearMissReason } from '../shared/near-miss';
 
 /** A malformed evidence value (written by hand or by a future build) is returned raw, never a 500 for the whole list */
@@ -1651,8 +1652,7 @@ export class SpecDO {
     id: string,
     to: string,
     source: CandidateWriteSource,
-    assertedActorId: string | null,
-    commitSha?: string
+    assertedActorId: string | null
   ): void {
     if (!prior) return;
     this.logTransitionViolation(
@@ -1664,7 +1664,6 @@ export class SpecDO {
         candidateId: id,
         specId: prior.specId,
         orgName: prior.orgName,
-        ...(commitSha === undefined ? {} : { commitChanged: commitSha !== prior.commitSha }),
       })
     );
   }
@@ -4699,49 +4698,10 @@ export class SpecDO {
       // SANDBOX EXECUTION
       // ============================================================================
 
+      // Retired (docs/plans/retire-execute-plan.md): the sandbox path was broken end to end and the gate-runs pipeline replaces
+      // the test execution. Answered before reading the body or the candidate, so the reply never reveals whether it exists.
       if (path.match(/^\/api\/candidates\/[^\/]+\/execute$/) && method === 'POST') {
-        const id = this.extractParentId(path);
-        const body = await request.json() as { commitMessage?: string; sandboxRunnerUrl?: string };
-        
-        // Get candidate to find repo details
-        const candidate = this.getCandidate(id);
-        if (!candidate) {
-          return new Response(JSON.stringify({ success: false, error: 'Candidate not found', timestamp: Date.now() }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        
-        // Get repo to find namespace
-        const repo = this.getRepository(candidate.repository_id);
-        if (!repo) {
-          return new Response(JSON.stringify({ success: false, error: 'Repository not found', timestamp: Date.now() }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        
-        // Execute in sandbox
-        const result = await this.executeCandidateInSandbox(
-          id,
-          candidate.spec_id,
-          repo.name,
-          repo.namespace,
-          body.commitMessage || 'Agent implementation',
-          actorId,
-          body.sandboxRunnerUrl || 'http://localhost:8787' // Default for local dev
-        );
-        
-        if (!result.success) {
-          return new Response(JSON.stringify({ success: false, error: result.error, timestamp: Date.now() }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-        
-        return new Response(JSON.stringify({ ...result, success: true, timestamp: Date.now() }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return routeRetired(EXECUTE_RETIRED_MESSAGE);
       }
       
       // ============================================================================
@@ -5694,118 +5654,6 @@ export class SpecDO {
   // SANDBOX INTEGRATION
   // ============================================================================
 
-  /**
-   * Execute a candidate implementation in the sandbox
-   * Creates a task and calls the Sandbox Runner Worker
-   */
-  async executeCandidateInSandbox(
-    candidateId: string,
-    specId: string,
-    repoName: string,
-    namespace: string,
-    commitMessage: string,
-    agentId: string,
-    sandboxRunnerUrl: string
-  ): Promise<{ success: boolean; taskId: string; commitSha?: string; error?: string }> {
-    if (!this.db) throw new Error('Database not initialized');
-
-    const taskId = generateId();
-
-    try {
-      // Create the task in the sandbox runner
-      const task = {
-        taskId,
-        candidateId,
-        specId,
-        repoName,
-        namespace,
-        commitMessage,
-        agentId,
-        maxDurationMs: 30000,
-      };
-
-      // Call the Sandbox Runner Worker
-      const sandboxResponse = await fetch(`${sandboxRunnerUrl}/sandbox/tasks`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Actor-ID': agentId,
-        },
-        body: JSON.stringify(task),
-      });
-
-      if (!sandboxResponse.ok) {
-        throw new Error(`Sandbox Runner returned ${sandboxResponse.status}`);
-      }
-
-      const sandboxData = await sandboxResponse.json() as { success?: boolean; error?: string; taskId?: string };
-
-      // Poll for task completion
-      const resultResponse = await this.pollForResult(sandboxRunnerUrl, taskId, 30000, 100);
-      const resultData = await resultResponse.json() as { success?: boolean; error?: string; commitSha?: string };
-
-      if (!resultData.success) {
-        throw new Error(resultData.error || 'Sandbox execution failed');
-      }
-
-      const commitSha = resultData.commitSha;
-
-      // Commit SHA, stage and history in one transaction; the table (c) check is log-only (PR-S)
-      this.state.storage.transactionSync(() => {
-        const prior = this.readCandidatePrior(candidateId);
-        this.run(`UPDATE candidates SET commit_sha = ?, stage = ? WHERE id = ?`, commitSha ?? '', 'passed_premerge', candidateId);
-        this.recordHistory('candidate', candidateId, 'passed_premerge', agentId, 'Executed in sandbox');
-        this.logCandidateTransition(prior, candidateId, 'passed_premerge', 'execute_pass', agentId, commitSha ?? '');
-      });
-
-      return {
-        success: true,
-        taskId,
-        commitSha,
-      };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      // Failure stage and history in one transaction; the table (c) check is log-only (PR-S)
-      this.state.storage.transactionSync(() => {
-        const prior = this.readCandidatePrior(candidateId);
-        this.run(`UPDATE candidates SET stage = ? WHERE id = ?`, 'failed', candidateId);
-        this.recordHistory('candidate', candidateId, 'failed', agentId, `Sandbox error: ${message}`);
-        this.logCandidateTransition(prior, candidateId, 'failed', 'execute_error', agentId);
-      });
-
-      return {
-        success: false,
-        taskId,
-        error: message,
-      };
-    }
-  }
-
-  /**
-   * Poll for task result with timeout
-   */
-
-  private async pollForResult(
-    sandboxRunnerUrl: string,
-    taskId: string,
-    timeoutMs: number,
-    intervalMs: number
-  ): Promise<Response> {
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < timeoutMs) {
-      const response = await fetch(`${sandboxRunnerUrl}/sandbox/tasks/${taskId}/result`);
-      const data = await response.json() as { success?: boolean; error?: string; commitSha?: string };
-
-      if (data.success !== undefined) {
-        return response;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, intervalMs));
-    }
-
-    throw new Error('Task result polling timed out');
-  }
 }
 
 export default SpecDO;

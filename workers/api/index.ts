@@ -25,6 +25,7 @@ interface Env {
 
 import { authenticate, authorize } from './principal';
 import { ACTOR_ID_MAX_CHARS, withAuth, withActor } from '../shared/principal';
+import { routeRetired, EXECUTE_RETIRED_MESSAGE } from '../shared/retired-route';
 import type { ActorRequest } from '../shared/principal';
 import { handleServiceAccountRoutes } from './service-accounts';
 import { handleUserTokenRoutes } from './user-tokens';
@@ -357,9 +358,10 @@ export default {
     // SANDBOX INTEGRATION
     // ============================================================================
 
-    // POST /api/candidates/:id/execute - Execute candidate in sandbox
+    // POST /api/candidates/:id/execute - retired (410, docs/plans/retire-execute-plan.md). Answered here, before reading the body
+    // and without calling the Spec DO; a user token is refused with 403 by authorize() first.
     if (path.match(/^\/api\/candidates\/[^\/]+\/execute$/) && method === 'POST') {
-      return handleExecuteCandidate(actorRequest, specDoStub);
+      return routeRetired(EXECUTE_RETIRED_MESSAGE);
     }
 
     // ============================================================================
@@ -2036,23 +2038,6 @@ async function handleGetEntityHistory(
 // SANDBOX INTEGRATION
 // ============================================================================
 
-async function handleExecuteCandidate(
-  request: ActorRequest,
-  stub: SpecDoStub
-): Promise<Response> {
-  const id = extractParentId(request.url);
-  const body = await request.json() as { sandboxRunnerUrl?: string };
-  const actorId = request.actorId;
-
-  // Extract sandbox runner URL from body or use default
-  const sandboxRunnerUrl = body.sandboxRunnerUrl || 'https://beehive.example.com';
-
-  const response = await sendToSpecDo(stub, `/api/candidates/${id}/execute`, 'POST', {
-    ...body,
-    sandboxRunnerUrl,
-  }, actorId);
-  return response;
-}
 
 // ============================================================================
 // GATE WORKFLOW

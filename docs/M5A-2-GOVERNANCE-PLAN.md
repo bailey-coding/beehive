@@ -34,7 +34,7 @@ Part 1 (`docs/M5A-2-IMPL-PLAN.md`) is merged. This part ships **additive** (new 
 | 5 | Merge-train mode never sets 'promoted' (only 'rolled_back', `merge-train.ts:470`) | | only 3/4 gate it |
 | 6 | Deploy-ref 'full' rung (`DeployRungSchema = ['canary','full']`, `deploy-refs.ts:25`); only `deployCanary` moves a ref today (`index.ts:3308`) | `index.ts:3498+` | in the allowlist; any future full-rung move must call the hook |
 | 7 | `POST /api/promotions` inserts a `pending` row only; `promotions.stage='active'` is never set | `index.ts:4219, 1958` | no gate needed |
-| 8 | `executeCandidateInSandbox` sets only `passed_premerge`/`failed` | `index.ts:5440, 5458` | n/a |
+| 8 | `executeCandidateInSandbox` set only `passed_premerge`/`failed`; **retired 2026-11-02** (route answers 410, function deleted) | (deleted) | n/a |
 | 9 | `seed.ts` (local dev) | | allowlisted |
 
 - **The hook gates the ledger record and the `full` deploy-ref move, not external side effects.** In both promotion modes the canary and preview deploys happen before the ledger records `full`; a refused write fails the tournament cleanly (recorded failed, retryable) but does not undo a deploy. State this wherever the rule is described (B2).

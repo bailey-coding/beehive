@@ -437,19 +437,6 @@ export class BeehiveClient {
     return this.request<ClaimSpecResponse>('POST', `/specs/${specId}/claim`, request, options);
   }
 
-  async executeCandidate(
-    candidateId: string,
-    sandboxRunnerUrl?: string,
-    options?: RequestOptions
-  ): Promise<CandidateResponse> {
-    return this.request<CandidateResponse>(
-      'POST',
-      `/candidates/${candidateId}/execute`,
-      { sandboxRunnerUrl },
-      options
-    );
-  }
-
   // ============================================================================
   // GATE VERDICTS
   // ============================================================================

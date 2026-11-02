@@ -47,7 +47,11 @@ export const CANDIDATE_LADDER: readonly CandidateStage[] = [
   'pending', 'passed_premerge', 'passed_shadow', 'passed_train', 'passed_canary', 'promoted',
 ];
 
-/** What caused the write. A stage PATCH carries no rung or commit, so it is 'stage_patch'. */
+/**
+ * What caused the write. A stage PATCH carries no rung or commit, so it is 'stage_patch'. 'execute_pass' and 'execute_error' have no
+ * producer since the execute route was retired (docs/plans/retire-execute-plan.md); kept so existing governance_events rows with those
+ * sources still parse, and removed with the enforce PR together with EXECUTE_ONLY.
+ */
 export type CandidateWriteSource = 'stage_patch' | 'execute_pass' | 'execute_error';
 export interface CandidateTransitionContext {
   source: CandidateWriteSource;
@@ -80,7 +84,10 @@ const ALLOWED: Record<CandidateStage, readonly CandidateStage[]> = {
   rolled_back: ['failed'],
 };
 
-/** Edges allowed only when the write is a sandbox-execute pass (a re-execute with a new run). */
+/**
+ * Edges allowed only when the write is a sandbox-execute pass (a re-execute with a new run). Unreachable from production since the
+ * execute route was retired: no legal re-run path from failed/rolled_back exists yet (docs/MILESTONES.md M5a-2 follow-up).
+ */
 const EXECUTE_ONLY: Partial<Record<CandidateStage, readonly CandidateStage[]>> = {
   failed: ['passed_premerge'],
   rolled_back: ['passed_premerge'],

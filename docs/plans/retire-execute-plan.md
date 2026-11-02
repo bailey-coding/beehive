@@ -1,6 +1,6 @@
 ---
 category: planning
-status: draft
+status: implemented
 audience: human,agent
 tags:
   - spine-work
@@ -9,7 +9,7 @@ tags:
 
 # Plan: retire `POST /api/candidates/:id/execute` (410 Gone)
 
-**Date:** 2026-11-02 | **Tier:** default (small) | **Spine:** touches the Spec DO router, so an independent plan review before code and a code review before merge (AGENTS.md rule 2). | **Decision:** maintainer chose option C (retire) on 2026-11-02 over fixing the Spec DO side (A) or both sides (B).
+**Date:** 2026-11-02 | **Tier:** heavy (Spec DO router, governance state-machine inputs) | **Spine:** touches the Spec DO router, so an independent plan review before code and a code review before merge (AGENTS.md rule 2). | **Decision:** maintainer chose option C (retire) on 2026-11-02 over fixing the Spec DO side (A) or both sides (B).
 
 ## Why
 
@@ -57,3 +57,15 @@ No schema change, so the rollback floor is untouched. A rollback to a pre-retire
 1. Is 410 with `code: 'route_retired'` the right shape (consistent with other coded errors in the edge and DO)?
 2. Is anything else reachable only through `executeCandidateInSandbox` that would become dead (helpers, types, constants)?
 3. Any caller missed (scripts, UI, docs, e2e, the promotion worker)?
+
+## Review 1 dispositions (independent plan review, 2026-11-02: approve with changes, no blockers)
+
+1. Dead code after retirement (should-fix): fixed. The `commitSha` parameter of `logCandidateTransition` (only execute passed it) is removed. The `CandidateWriteSource` members `execute_pass` / `execute_error` and `EXECUTE_ONLY` are **kept** with a comment: no producer since retirement, kept so existing `governance_events` rows with those sources still parse, removed with the enforce PR. Their pure matrix tests stay.
+2. Replacement overstated (should-fix): fixed. Gate runs replace the test execution, not the candidate stage or `commit_sha` write; after this change only a stage PATCH writes `passed_premerge`, and `failed`/`rolled_back -> passed_premerge` is always `reset_needs_execute`. Recorded in OPS, in `docs/GOVERNANCE-STATE-MACHINES.md` (c) and as a `docs/MILESTONES.md` follow-up to decide before the enforce step.
+3. Tests (should-fix): fixed. In `governance-transitions.test.ts` the ladder test keeps the PATCH ladder through `rolled_back`, the reset test keeps the PATCH half, the `sandbox execute: log-only` block and the sandbox stub are deleted. New: `workers/spec-do/tests/execute-retired.test.ts` (410 with the code for a known and an unknown id, the same body, empty and non-JSON body, nothing changed, no fetch) and `workers/api/tests/execute-retired-edge.test.ts` (master 410 without a Spec DO call for no body, `{}` and invalid JSON). The S9 403 rows stay.
+4. Error shape (should-fix): fixed. `workers/shared/retired-route.ts` exports `ROUTE_RETIRED` and `routeRetired()`, used by both the edge and the DO; the edge answers before reading the body. The service-accounts 410 is left as is (optional, later).
+5. Authorization order (nit): confirmed; the stale comment in `workers/api/principal.ts` is reworded.
+6. Mixed version (nit): an old edge still parses the body before forwarding, so an empty body is a 500 at an old edge as today; a rollback restores the old route and the old DO still writes `execute_*` rows, which the kept type accepts.
+7. Docs (should-fix): fixed: OPS, FEATURE-PARITY, CLI-PLAN, MILESTONES, GOVERNANCE-STATE-MACHINES (c), the governance plan inventory row 8. Historical records (the PR-S plan, M12 plan and review, OPEN-QUESTIONS 2026-10-16, the promotion-routes RFO) are left unchanged on purpose.
+8. Sandbox runner routes (nit): follow-up (b) in `docs/MILESTONES.md`.
+9. Tier label (nit): fixed (heavy).

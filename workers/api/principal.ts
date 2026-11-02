@@ -255,7 +255,7 @@ export async function authenticate(
  * write route missing here is a 403, so a new route is closed to user tokens until it is added.
  * Never here: actor admin (create, trust, promotion authority), gate verdicts, trials,
  * promotions, candidate stage (no transition guard; rung outcomes go through it) and candidate
- * execute (a client-supplied sandbox URL the DO fetches), lifecycle and /api/admin/*. The DO
+ * execute (retired, 410; still denied so a user token never learns more than 403), lifecycle and /api/admin/*. The DO
  * still applies its own rules (author match, creator-or-maintainer) on every route.
  */
 const USER_WRITE_ROUTES: Array<{ method: string; path: RegExp }> = [

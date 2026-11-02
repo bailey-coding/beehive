@@ -59,18 +59,6 @@ function seed(name = 'gov-org') {
   return { org, repo, spec: s, c };
 }
 
-/** A sandbox runner stub. The poll result is read twice by the DO, so it is a plain object, not a Response. */
-function stubSandbox(result: { success: boolean; commitSha?: string; error?: string } | 'post-fails') {
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    if (String(url).endsWith('/sandbox/tasks')) {
-      return result === 'post-fails' ? { ok: false, status: 503, json: async () => ({}) } : { ok: true, status: 200, json: async () => ({ success: true }) };
-    }
-    return { ok: true, status: 200, json: async () => result };
-  }));
-}
-const execute = (c: { id: string; spec_id: string }) =>
-  spec.executeCandidateInSandbox(c.id, c.spec_id, 'repo', 'ns', 'msg', actor, 'https://sandbox.invalid');
-
 let warn: ReturnType<typeof vi.spyOn>;
 let error: ReturnType<typeof vi.spyOn>;
 
@@ -118,14 +106,12 @@ describe('candidate stage PATCH: log-only', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('the full valid ladder, rollback and a re-execute write no event', async () => {
+  it('the full valid ladder and a rollback write no event', async () => {
     const { c } = seed();
     for (const stage of ['passed_premerge', 'passed_shadow', 'passed_train', 'passed_canary', 'promoted', 'rolled_back']) {
       expect((await patchStage(c.id, stage)).status).toBe(200);
     }
-    stubSandbox({ success: true, commitSha: 'c'.repeat(40) });
-    expect((await execute(c)).success).toBe(true);
-    expect(stageOf(c.id)).toBe('passed_premerge');
+    expect(stageOf(c.id)).toBe('rolled_back');
     expect(events()).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
@@ -179,41 +165,11 @@ describe('candidate stage PATCH: log-only', () => {
     expect(events()).toEqual([]);
   });
 
-  it('failed -> passed_premerge via PATCH is reset_needs_execute; via sandbox execute it writes no event', async () => {
+  it('failed -> passed_premerge via PATCH is reset_needs_execute (no legal re-run path exists since execute was retired)', async () => {
     const { c } = seed();
     setStage(c.id, 'failed');
     await patchStage(c.id, 'passed_premerge');
     expect(events().map((e) => JSON.parse(e.detail).rule)).toEqual(['reset_needs_execute']);
-
-    const { c: c2 } = seed('gov-org-2');
-    setStage(c2.id, 'failed');
-    stubSandbox({ success: true, commitSha: 'd'.repeat(40) });
-    expect((await execute(c2)).success).toBe(true);
-    expect(stageOf(c2.id)).toBe('passed_premerge');
-    expect(events()).toHaveLength(1);
-  });
-});
-
-describe('sandbox execute: log-only', () => {
-  it('a pass on a promoted candidate still writes passed_premerge and logs one promoted_exit (commitChanged recorded)', async () => {
-    const { c } = seed();
-    setStage(c.id, 'promoted');
-    stubSandbox({ success: true, commitSha: 'e'.repeat(40) });
-    expect((await execute(c)).success).toBe(true);
-    expect(stageOf(c.id)).toBe('passed_premerge');
-    const [e] = events();
-    expect(events()).toHaveLength(1);
-    expect(JSON.parse(e.detail)).toMatchObject({ rule: 'promoted_exit', source: 'execute_pass', enforceable: true, commitChanged: true });
-  });
-
-  it('an error on a promoted candidate still writes failed and logs one non-enforceable promoted_exit', async () => {
-    const { c } = seed();
-    setStage(c.id, 'promoted');
-    stubSandbox('post-fails');
-    expect((await execute(c)).success).toBe(false);
-    expect(stageOf(c.id)).toBe('failed');
-    expect(history(c.id).map((h) => h.stage)).toEqual(['pending', 'failed']);
-    expect(JSON.parse(events()[0].detail)).toMatchObject({ rule: 'promoted_exit', source: 'execute_error', enforceable: false });
   });
 });
 

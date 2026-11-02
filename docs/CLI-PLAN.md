@@ -204,7 +204,7 @@ beehive candidate stage <candidate-id> \
   [--notes <notes>]
 
 # Execute candidate in sandbox
-beehive candidate execute <candidate-id> [--sandbox-url <url>]
+beehive candidate execute <candidate-id> [--sandbox-url <url>]   # retired 2026-11-02: the route answers 410; use the gate-runs flow
 
 # Get gate verdicts for candidate
 beehive candidate gate-verdicts <candidate-id>

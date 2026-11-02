@@ -25,7 +25,7 @@ named way; **no** = absent. "Read-only" for UI means list/detail pages only.
 | Issue comments | **yes**: POST/GET `/api/issues/:id/comments` (`index.ts:284-292`); `locked`/`maintainers_only` issues take maintainer comments only (403 otherwise) | **no**: no client method, no command | **yes (2026-10-17, M8 PR 2)**: posts to `/api/issues/:id/comments`; the form is replaced by "Locked" / a notice for non-maintainers |
 | Issue links (spec/candidate) | **yes**: POST `/api/issue-spec-links`, `/api/issue-candidate-links` (`index.ts:295-300`); no GET | **no** | **no** |
 | Specs | **yes**: POST/GET, GET `:id`, PATCH `stage`, POST `claim` (`index.ts:171-185`) | **partial**: `spec list/get/claim`; `spec create` stub (`spec.ts:20`); client has `updateSpecStage` but no command | **partial**: create (`ui.ts:348`) and detail (`specPage`, `ui-pages.ts:630`); no claim, no stage change |
-| Candidates | **yes**: POST/GET, GET `:id`, PATCH `stage`, POST `execute` (`index.ts:191-203`, `328`) | **partial**: `candidate create/list/get/gate-verdicts`; `create` cannot receive its flags (see §3.2); `executeCandidate` in client has no command | **partial**: read-only `candidatePage` (`ui-pages.ts:826`) |
+| Candidates | **yes**: POST/GET, GET `:id`, PATCH `stage`, POST `execute` (retired 2026-11-02, answers 410) | **partial**: `candidate create/list/get/gate-verdicts`; `create` cannot receive its flags (see §3.2); `executeCandidate` in client has no command | **partial**: read-only `candidatePage` (`ui-pages.ts:826`) |
 | Candidate preview PUT | **no** at the edge; only in the DO (`spec-do/index.ts:3301`) and `candidate-service` | **no** | **no** |
 | Gate verdicts | **yes**: POST/GET `/api/gate-verdicts`, GET `:id`, GET `candidates/:id/gate-verdicts`, POST `candidates/:id/gate/pre-merge` (`index.ts:208-231`) | **partial**: `gate run` (pre-merge only), `gate list/get`, `candidate gate-verdicts`; no manual verdict create | **partial**: verdict table on the candidate page (`ui-pages.ts:843,959`); no run, no list page |
 | Trials | **yes**: POST/GET, GET `:id`, POST `decide` (`index.ts:236-250`) | **partial**: `trial list/get`; `create` stub (`trial.ts:20`); `decide` sends the wrong body (see §3.2) | **partial**: read-only `trialPage` (`ui-pages.ts:999`) |
@@ -80,7 +80,7 @@ Per-worker health routes exist on all ten workers; none is reachable through the
 3. **CLI promotion create and trial decide send wrong bodies** (§3.2). They will be rejected or
    mis-recorded. Small, mechanical fix.
 4. **No CLI or UI for issue comments, links, stage changes and comment policy**, spec and candidate
-   stage changes, and candidate execute. All have API routes and some have client methods
+   stage changes, and candidate execute (retired 2026-11-02, 410). All have API routes and some have client methods
    (`api-client.ts:331,374,390`) with no command.
 5. **No read access to ledger, canary and deploy-ref state outside workers.** The oracle ladder's
    Canary and Full rungs are invisible to humans: no CLI, no UI, no edge route. A read-only edge
@@ -179,7 +179,7 @@ Each bullet is one builder task. None touches the spine (spec schema, DO ledger,
    Recommend deleting. Files: `cli/src/index.ts:226-241`, `cli/src/types/definitions.ts:421-500`,
    `cli/src/utils/command-factory.ts`, `cli/src/utils/api-client.ts:575-607`.
 6. **Add CLI commands for existing API routes.** `issue comment add/list`, `issue stage`,
-   `issue comment-policy`, `spec stage`, `candidate stage`, `candidate execute`, `link spec/candidate`,
+   `issue comment-policy`, `spec stage`, `candidate stage`, `candidate execute` (retired route, do not build), `link spec/candidate`,
    `gate create`. Files: `cli/src/commands/*.ts`, `api-client.ts`.
 7. **Add a `service-account` CLI group** (master token): create, list, revoke, mint-token,
    revoke-token, plus `whoami`. Files: new `cli/src/commands/service-account.ts`, `cli/src/index.ts`,
