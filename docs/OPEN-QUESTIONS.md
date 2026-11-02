@@ -1201,3 +1201,29 @@ message) is part of this follow-up.
 
 **Status**: Open.
 
+
+## 2026-11-02: Artifacts limits and ArtifactFS (M3 item 9)
+
+Sources: developers.cloudflare.com/artifacts/platform/limits (updated 2026-10-28), `/artifacts/guides/artifact-fs`, and
+the `cloudflare/artifact-fs` README (beta).
+
+**Namespace names.** Artifacts requires 2-63 characters (start with a letter or digit; letters, digits, `.`, `_`, `-`).
+`NAMESPACE_RE` allowed 1-64 and no `.`. New organization names now use `isValidNewNamespace` (2-63) at
+`POST /api/organizations` only; `isValidNamespace` stays permissive so rows written earlier keep working
+(mixed-version rule). `.` is still not allowed (narrower than Artifacts, safe). Existing 1- or 64-character
+namespaces are not repaired and would fail at fork creation.
+
+**Limits that shape the design.** 1 GB per repo created on or after 2026-09-29 (10 GB before); 64 MiB, 50,000 objects,
+32 MiB per file and 1 MiB of ref updates per push (many `scratch/*` updates in one push can hit the ref limit);
+2,000 requests per 10 s per namespace (control plane) and per artifact (Git). Fork creation and token minting share the
+per-namespace control-plane budget, so a large trial fan-out under one organization can hit it. Not verified in code.
+
+**ArtifactFS.** A FUSE daemon (blobless clone, blobs hydrate on read, writable copy-on-write overlay; `git commit/push`
+supported, nothing is pushed automatically, so the always-pushed invariant still needs an explicit push). Cloudflare
+recommends it for large repos; for small repos a plain `git clone` is simpler. Candidate services are small and new
+repos are capped at 1 GB, so M3 item 9 should be conditional on measured repo size. Open: (1) does Artifacts advertise
+partial-clone filtering (else blobs download eagerly); (2) does the Sandbox image provide `/dev/fuse` and `fuse3`;
+(3) token-in-URL (`https://x:<token>@...`, strip `?expires=`) works for sync `add-repo`; async mounts reject inline
+credentials and need a credential helper.
+
+**Status**: Open.

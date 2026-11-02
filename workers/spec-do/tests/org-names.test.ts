@@ -22,7 +22,7 @@ const create = (name: unknown) =>
 
 describe('POST /api/organizations name validation', () => {
   it('rejects a name that is not a valid Artifacts namespace with 400, and writes nothing', async () => {
-    for (const bad of ['my.org', '_x', '-x', 'a b', 'a/b', '', 'x'.repeat(65), '<img src=x>', null, 5]) {
+    for (const bad of ['my.org', '_x', '-x', 'a b', 'a/b', '', 'a', 'x'.repeat(64), '<img src=x>', null, 5]) {
       const res = await create(bad);
       expect(res.status, String(bad)).toBe(400);
       expect(await res.json()).toMatchObject({ success: false, error: expect.stringContaining('organization name') });
@@ -32,7 +32,7 @@ describe('POST /api/organizations name validation', () => {
   });
 
   it('accepts valid names, including the longest one', async () => {
-    for (const ok of ['my-org', 'Org_1', 'a', 'x'.repeat(64), 'test-org-e2e-sbx-1']) {
+    for (const ok of ['my-org', 'Org_1', 'ab', 'x'.repeat(63), 'test-org-e2e-sbx-1']) {
       expect((await create(ok)).status, ok).toBe(201);
     }
   });
