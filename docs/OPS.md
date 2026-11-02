@@ -420,13 +420,15 @@ init; additive: `deploy_refs`, `canary_deployments`). Contract: `workers/shared/
 
 - **The pointer is the Spec DO `deploy_refs` chain per (spec, rung).** Deploying a canary
   appends a row whose `prev_ref_id` is the old head; rolling back appends a row pointing at the
-  previous target (the empty ref if there was none). Two distinct rollbacks currently toggle
-  back; known hazard, see `docs/OPEN-QUESTIONS.md` 2026-11-01 "rolling back the restored canary
-  re-promotes the rolled-back one" (D2). The shadow router reads the live canary heads on every
+  nearest earlier target that was not rolled back since (identity: worker version, else candidate; the
+  empty ref if there is none). Rollbacks never toggle: rolling back repeatedly walks down the chain and
+  stops at the empty ref, so two failing canaries cannot ping-pong (D2, `docs/plans/d2-canary-ping-pong-plan.md`).
+  A rolled-back version returns only by a new deploy. A chain that already toggled before this fix may
+  roll back to the empty ref where it used to restore an earlier canary. The shadow router reads the live canary heads on every
   mirrored request, so a rollback takes effect on the next request with no redeploy. History is
   never rewritten.
 - **Ref rollback (internal DO route `POST /deploy-refs/rollback {specId, rung, reason}`):** send
-  `Idempotency-Key: <one per decision>` so a retry replays instead of toggling back, and
+  `Idempotency-Key: <one per decision>` on every retry, so a retry replays instead of rolling back one more ref, and
   `X-Expected-Head: <head ref id you read>` so a stale decision is a 409 `version_conflict` that moves nothing
   (an empty header is a 400). The canary route `/canary-deployments/:id/rollback` takes neither: it refuses
   (409) a deployment that is not live.

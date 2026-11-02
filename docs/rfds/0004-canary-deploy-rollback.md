@@ -57,8 +57,9 @@ Implemented in c27628a (2026-10-16 01:26 UTC), migration m6 -> m7, additive.
   action IN ('promote','rollback'), moved_by, moved_at` (epoch ms). `candidate_id NULL` is the
   empty ref.
 - **Rollback is a ref operation (AGENTS.md rule 7).** Promotion inserts a row pointing at the
-  new target; rollback inserts a row pointing at the target of `head.prev_ref_id`. Both are the
-  same insert in opposite directions, so rolling back twice toggles back. No status field is
+  new target; rollback inserts a row pointing at the nearest earlier target not rolled back since
+  (else the empty ref; amended by D2, `docs/plans/d2-canary-ping-pong-plan.md`). Both are the
+  same insert, so rolling back repeatedly walks down the chain and stops at the empty ref. No status field is
   edited and nothing is redeployed. The Artifacts production ref is a provenance mirror only.
 - **`canary_deployments`** records each canary and the ref row it created: `id, candidate_id,
   spec_id, status IN ('deployed','superseded','rolled_back'), url, worker_version_id, commit_sha,

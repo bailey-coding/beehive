@@ -359,8 +359,8 @@ live DO only through the maintainer's deploy flow. Local e2e: 6 failed -> 0 fail
 - **"Pointer move" is an append (inference, human call).** The head of a (spec, rung) is the row
   no other row names as `prev_ref_id` (a unique index on `prev_ref_id` keeps the chain linear).
   Promotion appends a row with the new target; rollback appends a row with the target of
-  `head.prev_ref_id`. So rows are never updated, history is a reflog, promotion and demotion are
-  the same insert, and rolling back twice toggles back (the plan's unit test). Rolling back the
+  `head.prev_ref_id` (superseded 2026-11-02: the nearest earlier target not rolled back since, see D2 below). So rows are never updated, history is a reflog, promotion and demotion are
+  the same insert, and rolling back twice toggled back (the plan's unit test, inverted by D2). Rolling back the
   first canary moves to the empty ref (`candidate_id` NULL: no canary). Going back more than one
   step needs a new promotion; there is no "rollback to ref X" route.
 - **Schema beyond the approved column list:** `deploy_refs.action` (`promote`|`rollback`, audit),
@@ -1158,7 +1158,13 @@ Minimal fix idea (reviewer): `rollbackHead` walks the prev chain from `head.prev
 has an `slo_rollback` near-miss on this rung (or whose `canaryForRef` is `rolled_back`), falling back to the empty ref;
 it still appends exactly one ref. Rule 7 territory (rollback semantics): needs its own plan and review.
 
-**Status**: Open.
+**Status**: Fixed (task `d2-canary-ping-pong`, plan `docs/plans/d2-canary-ping-pong-plan.md`, two independent plan
+reviews). The reviewer's idea above (skip refs whose candidate has an `slo_rollback` near-miss) was not used: near-misses
+are per candidate and best-effort, and a ref-id variant of the chain walk still looped from three refs on. `rollbackHead`
+now picks the nearest earlier `promote` ref whose identity (worker version, else candidate) was not rolled back after it
+was written, else the empty ref (`rollbackTarget`). Repeated rollbacks, manual or SLO-driven, end at the empty ref, and
+the SLO loop goes quiet. Spec DO only; no schema or route change. Not repaired: chains already toggled, which may now
+roll back to the empty ref instead of an earlier canary.
 
 ## 2026-11-01: merge train matches cars by candidate only, so a re-added candidate's old car is updated too
 

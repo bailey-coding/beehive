@@ -7,8 +7,8 @@
  * append-only chain per (spec, rung): every move inserts a row whose
  * prev_ref_id is the head it replaces, and the head is the row nothing points
  * back to. Promotion moves the head to a new target; rollback moves it to the
- * target of head.prev_ref_id. Both are the same insert in opposite directions,
- * so they cost the same (AGENTS.md rule 7), and rolling back twice toggles back.
+ * nearest earlier promote target that was not rolled back since (else the empty ref). Both are the same insert, so
+ * they cost the same (AGENTS.md rule 7); rolling back repeatedly walks down the chain and stops at the empty ref.
  * A row with candidateId null is the empty ref: no candidate takes that rung's
  * traffic. The Artifacts ref is at most a provenance mirror of this (rule 4).
  *
@@ -217,8 +217,8 @@ export const DEPLOY_PATHS = {
   canaryRollback: (id: string) => `/canary-deployments/${encodeURIComponent(id)}/rollback`,
   deployRefs: '/deploy-refs',
   deployRefHead: '/deploy-refs/head',
-  // Optional Idempotency-Key (a redelivery replays, never toggles back) and EXPECTED_HEAD_HEADER (409 version_conflict
-  // when the head moved). Two distinct rollbacks still toggle: docs/OPEN-QUESTIONS.md 2026-11-01 (D2).
+  // Optional Idempotency-Key (a redelivery replays, never rolls back twice) and EXPECTED_HEAD_HEADER (409 version_conflict
+  // when the head moved). Distinct rollbacks walk down the chain and never return to a rolled-back version (D2).
   deployRefRollback: '/deploy-refs/rollback',
   liveRefs: '/deploy-refs/live',
   canaryMetrics: '/canary-metrics',

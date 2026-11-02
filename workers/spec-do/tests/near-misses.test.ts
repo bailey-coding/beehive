@@ -219,8 +219,8 @@ describe('deploy ref rollback: the candidate that was live is an slo_rollback ne
     expect(rows().map((r) => r.candidate_id)).toEqual(['cand-b']);
   });
 
-  // Known hazard pending D2 (docs/OPEN-QUESTIONS.md 2026-11-01): pins today's behavior, not a design choice
-  it('two distinct unkeyed rollbacks write two near-misses: known hazard pending D2', async () => {
+  // Each is a true loss (cand-b, then cand-a once restored); the second rollback goes to the empty ref (D2)
+  it('two distinct unkeyed rollbacks write two near-misses, one per candidate that was live', async () => {
     await deployAB();
     expect((await rollback()).status).toBe(200);
     expect((await rollback()).status).toBe(200);
