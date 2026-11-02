@@ -8,35 +8,37 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-10-30
+**Last updated:** 2026-11-02
 
-## Handoff (2026-10-28, end of session): start here
+## Handoff (2026-11-02, end of session): start here
 
-**State.** Production (the `cf` remote) and `origin/main` are both at `523291b` (pushed and built 2026-10-28 on the maintainer's go-ahead; CI green before the cf push). It carries
-**m13** (slice 5: `gate_runs`, strict routes, `preview_*` columns in the base schema), the backtest harness 2, the gate spike results, real-gate plan rev 3, **slice 4** (`TestSandbox`,
-`NpmRegistryGateway`, `POST /sandbox/test`, `SANDBOX_MODE=stub`; independently reviewed, fixes applied) and **slice 6** (second `[[containers]]` block, `Dockerfile.test`, `TEST_SANDBOX`
-binding, `[exports.TestSandbox]`; independently reviewed). After the push `scripts/prod-health.sh` was green (all ten workers 200, Spec DO 200), `GET /sandbox/probe` still returned node
-v24.22.1, and a bad `POST /sandbox/test` answered 400 `BAD_REQUEST`.
-**Not verified:** `schema_version = m13` (no CLI reads DO SQLite: dashboard SQL editor only; trusted from the green Spec DO call), that the `TestSandbox` image built and the
-container application exists (the wrangler OAuth login returned `Authentication error`: re-run `wrangler login`; the `.env` token cannot read Workers Builds, use the dashboard), that
-`TEST_SANDBOX` is bound (a valid-shaped `POST /sandbox/test` starts a container = the first production run, needs approval), and a candidate preview write.
-Ledger ops use the `beehive-system` agent actor (`9da1f201-89d4-4907-9e86-52426cffcb7d`, maintainer role); `X-Actor-ID` takes an actor UUID; actors cannot be deleted. Competition over: no deadline.
+**Read first:** `AGENTS.md` (rule 2 now lets agents write the spine under plan + independent review), this section, then `docs/M5A-2-GOVERNANCE-PLAN.md` by section (rev 5; "Rev 3/4/5 amendments", "PR-A/PR-B/PR-S status") and `docs/GOVERNANCE-STATE-MACHINES.md`.
 
-**Next, in order, each needing the maintainer's explicit go-ahead in a normal chat message:**
-1. Verify the slice 6 push: Workers Builds log for `beehive-sandbox-runner` (two images built, elapsed time against the 5.5 min kill precedent), `wrangler containers list` / `images list` after
-   `wrangler login`, no 10086 lifecycle error. If the sandbox-runner build failed, the other nine are unaffected; fix forward (rollback of this worker is probably forward-fix only, OPS).
-2. Real test gate, `docs/REAL-GATE-IMPL-PLAN.md` rev 3. Done: slices 1-6, spike S1-S5. Open: 7a (gate consumer behind the old path: queue + `SANDBOX_RUNNER` binding + `queue()` handler +
-   `POST /gates/runs`; the maintainer creates the queue first; then the approved production run), 7b, 8, 9. The first run must check: `imageDigest` (expected `null`, wrangler tags images),
-   `instance = standard-2`, bash ran the `ulimit` wrapper (no exit 125), `ulimit -u 512` with a multi-threaded test run, container destroyed. Slice 7a must make the gate's class table and zod
-   schema accept the `killed` class, and choose the gate abort (e.g. 630 s) above the runner's 600 s deadline.
-3. MR flow, `docs/MR-FLOW-PLAN.md` rev 2: decisions accepted as recommended; reviewer-agent threat model must be accepted before slice 3; Artifacts non-fast-forward push and branch protection are
-   unprobed (spike before slice 2).
-4. Backtest (`docs/SPEC-BACKTEST-PLAN.md`, `tools/backtest/`, summaries in `docs/backtest/results/`): pilot-1 A1 complete; pilot-2 A4/A5/A11 complete, A2's spec failed (prompt fixed since, not re-run).
-   Pending from the maintainer: answers to the 2-case human sample (`docs/backtest/runs/pilot-2/human-sample.md`, then `npm run backtest -- sample --run pilot-2 --ingest`); release of the Bash canary
-   (`canary --release-pilot --allow-bash`, about 4 calls). Corpus is 10 strict rows (A6-A10 have no issue texts yet); the decision rule needs 11, so results stay inconclusive by construction.
-   Global call ledger `tools/backtest/.ledger.json` (gitignored): 288/850 used. Models: Sonnet 5.5 medium, same-family grader (pilot only).
-5. Housekeeping: `.env` holds an obsolete `SPIKE_TOKEN` and is mode 644; decide the project direction after the competition and update AGENTS.md framing then. Optional: a test tying
-   `workers/sandbox-runner/wrangler.toml` exports to `index.ts` (review N3).
+**State.** `origin/main` is ahead of production (`cf`, last deployed `523291b`, 2026-10-28). **Nothing below is deployed**; deploying is the maintainer's push to the Artifacts repo. On `main` since `523291b`, each planned, independently reviewed and code-reviewed:
+- M5a-2 part 1: edge forwards `Idempotency-Key` on 8 keyed routes; queue-consumer retry classification, keyed gate start, `max_retries = 4` (`docs/M5A-2-IMPL-PLAN.md`).
+- PR-H: shadow-router hardening, `MIRROR_BODY_MODE = "none"` default, route templates, queue/log allowlists (`docs/OPS.md` "Mirror body mode").
+- PR-A: schema **m14** (five governance tables, `governance.m14_epoch`; empty until writers exist).
+- PR-B: near-miss writes in loss transactions, `GET /api/near-misses`, trial decide guards (re-decide is 409), purge sweep.
+- Rollback idempotency: `Idempotency-Key` and `X-Expected-Head` on `POST /deploy-refs/rollback` (`docs/plans/rollback-idempotency-plan.md`).
+- Merge-train cars matched by `(position, candidateId)`, CAS claim/outcome (`docs/plans/merge-train-car-matching-plan.md`).
+- PR-S: log-only candidate-stage and promotion-state validation (`invalid_transition` rows; `docs/plans/pr-s-state-machine-plan.md`).
+- Retired `POST /api/candidates/:id/execute` (410 `route_retired`; `docs/plans/retire-execute-plan.md`).
+- Docs: RFC renamed RFD (`docs/rfds/`); `docs/AGENTS-REVIEWER.md` "Handling approve with changes".
+Last full local run: typecheck clean, unit suite green (77 files, ~1977 tests); e2e not run this session.
+
+**Deploy checks when `main` is deployed** (`docs/OPS.md` sections): Spec DO migrates m13 -> m14 on first request (`schema_version = m14`, five empty tables, `governance.m14_epoch` present); Workers Logs `Giving up on message` / `Dropping message` (queue retries); `invalid_transition` rows appear from normal traffic (expected: today's tournament and merge-train flows violate table (c)); candidates get no body/query in mirrored requests; execute answers 410. The PR-A to PR-G provenance window starts at this deploy (see OPS "Governance schema m14").
+
+**Next, in order:**
+1. **D2 plan: canary ping-pong** (`docs/OPEN-QUESTIONS.md` 2026-11-01 "rolling back the restored canary re-promotes the rolled-back one"): rollback can move a ref back to an already-failed canary and two failing canaries can flip about once a minute. Spine (rule 7); plan + review first. The maintainer asked for this next.
+2. Rest of M5a-2 per the governance plan's PR slicing: PR-C (change-type classifier; needs a changed-file source for the gate), PR-D0 (signed edge principal envelope; admin routes to maintainer user tokens), PR-D (approvals, policy, the rule in bootstrap mode), PR-G (intent provenance, `candidateExposure()` at `deployCanary`/`rollbackHead`/`liveRefs`, the m14-to-PR-G backfill), PR-F (continuity; `enforced` blocked until PR-F, master stage 2 and a changed-file source), PR-E (remaining idempotency keys).
+3. Before any PR-S **enforce** step: the promotion-worker prerequisites in `docs/MILESTONES.md` (one stage per rung, merge-train success writes `passed_train`) and the new open item "who writes `passed_premerge` and `commit_sha`" (execute is retired; gate runs write a verdict, not a stage).
+4. Still open from the 2026-10-28 handoff (each needs the maintainer): verify the slice 6 push (Workers Builds log, `wrangler containers list` after `wrangler login`); real gate slice 7a (`docs/REAL-GATE-IMPL-PLAN.md` rev 3; the maintainer creates the queue first); MR flow (`docs/MR-FLOW-PLAN.md` rev 2); backtest human sample (`docs/backtest/runs/pilot-2/human-sample.md`); `.env` housekeeping.
+
+**Open questions with owners** (`docs/OPEN-QUESTIONS.md`, all dated 2026-11-01/02): D2 above; a merge-train car stuck in `merging` is never recovered (needs a lease field; also the waiting car after a failed claim, and a 500 when the write after a passing gate fails); the promotion worker's merge train calls a nonexistent gate `/run` route; trace redaction for Honeycomb unconfirmed (check one trace before real traffic); deferred router and queue follow-ups in `docs/MILESTONES.md` (dead-letter queue, negative cache, `limit=100` lookups, comparator body cap, sandbox-runner `/sandbox/tasks` routes to retire).
+
+**Maintainer decisions this session (do not re-litigate):** RFD over RFC; agents write the spine under plan + review; governance: approvals per (candidate, rung, commit), two approvals with the initiator allowed, single-maintainer self-approval marked in bootstrap, no automatic fallback (critical changes need a new maintainer or break-glass), reject is a veto with a 14-day TTL, `enforced` only after PR-F and master stage 2, policy changes by maintainer user token only, approval gates `full` (canary accepted for maintainer origin), untrusted creation stays closed until PR-G/PR-H and rate limits, customer data = everything but method and route template; rollback: Idempotency-Key plus `X-Expected-Head`; execute retired (option C).
+
+**How we worked this session.** Spine work: plan doc -> independent review agent -> implement -> independent code review -> fixes with a written disposition per finding (`docs/AGENTS-REVIEWER.md`) -> verification pass when a fix changes behavior -> merge to `main` with a full unit run, one workstream at a time. Parallel agents ran in git worktrees under `.claude/worktrees/` (excluded locally via `.git/info/exclude`), committed locally and never pushed; the orchestrator merged. Three Opus agents in parallel hit the 5-hour usage limit; resume a stopped agent with SendMessage after the reset instead of starting a new one. The two CLI test files need `cli/node_modules` (absent in fresh worktrees).
 
 **How to work here (learned).** The permission layer blocks, and you must stop and ask instead of working around: a `cf` push when the approval arrived as a mid-turn notification rather than a chat
 message, writing secrets to a worker, minting registry credentials, installing external binaries, and agent prompts with deploy wording (describe local validation only, never mention deploying). A plain
@@ -257,9 +259,8 @@ agent-autonomy items (agent-created issues/specs, change-type classification).
 ## Queued milestones
 
 **Recommended order (per Opus agent):**
-1. **M5a-2** (M5a is partial; idempotency is on `main` for nine Spec DO routes) — edge key forwarding, queue-consumer
-   retry and gate dedupe, remaining routes, then the governance migration (bootstrap fields, near-miss table),
-   change-type classification and the two-person rule.
+1. **M5a-2** (see the 2026-11-02 handoff above): D2 canary ping-pong plan, then PR-C, PR-D0, PR-D, PR-G, PR-F, PR-E
+   per `docs/M5A-2-GOVERNANCE-PLAN.md`.
 2. M7 (session provenance)
 3. Capability minting (M3 core + M6.2 merged)
 4. M5b (trust registry calibration)
