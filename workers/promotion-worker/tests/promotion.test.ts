@@ -642,6 +642,14 @@ describe('Spec DO promotion ledger wiring', () => {
     expect(tournament.winner).toBeDefined();
     expect(tournament.candidates).toHaveLength(2);
     expect(spec.getCandidate(tournament.winner!)?.stage).toBe('passed_train');
+    // Characterization (PR-S, log-only): today's winner write skips the ladder (pending -> passed_train), so it is
+    // recorded as one invalid_transition. The enforce PR must change the worker first (docs/MILESTONES.md M5a-2).
+    const rows = (spec as unknown as { queryAll(sql: string): Record<string, unknown>[] }).queryAll(
+      `SELECT subject, reason, detail FROM governance_events WHERE event = 'invalid_transition'`
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ subject: `candidate:${tournament.winner}`, reason: 'candidate_stage:pending->passed_train' });
+    expect(JSON.parse(rows[0].detail as string)).toMatchObject({ rule: 'skip_ahead', source: 'stage_patch' });
   });
 
   it('merge-train mode: records the train and the merged car in the DO', async () => {
