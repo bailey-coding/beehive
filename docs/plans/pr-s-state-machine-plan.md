@@ -305,3 +305,11 @@ Findings applied:
 - `createPromotionState` takes the asserted actor from `X-Actor-ID`, falling back to the row's `actorId`.
 - Real-flow characterization: the tournament winner test (`workers/promotion-worker/tests/promotion.test.ts`) asserts one `skip_ahead` row. The merge-train rollback edge (`pending -> rolled_back`) is covered by the pure matrix, not by a worker-level test (building a merged car through the worker harness was out of proportion).
 - Found while testing: `pollForResult` calls `response.json()` and `executeCandidateInSandbox` calls it again on the same Response, so a real sandbox success throws "body used" and lands as `failed`. Execute tests stub the poll result as a plain object. Recorded in `docs/MILESTONES.md` (M5a-2) with the execute pre-check; not fixed here (out of scope).
+
+## Review 2 dispositions (implementation review, 2026-11-02; approve with changes, no blockers)
+
+- S1: the execute breakage is its own `docs/MILESTONES.md` bullet (pre-existing, end to end; maintainer decision pending). Not fixed in PR-S.
+- S2: promotion-state edges into `rolled_back`/`failed` are permanently non-enforceable (stated in `docs/GOVERNANCE-STATE-MACHINES.md` (d)); `isEnforceable` moved to `ledger-state-machine.ts`, re-exported by the governance module, used by both checks.
+- S3: the flood-control window is a **trailing hour** (sliding); `capReached` can repeat when the oldest row leaves it (test added).
+- S4: DO-level test for `pending -> rolled_back` (200, one non-enforceable `rollback_before_train` row).
+- N1: `CANDIDATE_RULES` and `PROMOTION_STATUSES` are commented as exported test data. N2: `subject` truncated to 256 characters (`MAX_GOVERNANCE_SUBJECT_CHARS`, tested). N3: brace formatting fixed.

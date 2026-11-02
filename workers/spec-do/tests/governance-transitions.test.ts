@@ -251,6 +251,55 @@ describe('flood control', () => {
   });
 });
 
+describe('flood control: trailing-hour window', () => {
+  it('capReached repeats when the oldest row leaves the trailing hour', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date('2026-11-01T00:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const { repo, spec: s } = seed();
+    const make = (i: number) => spec.createCandidate(s.id, repo.id, String(i).padStart(40, '0'), 'b'.repeat(40), actor).id;
+    await patchStage(make(0), 'passed_shadow'); // the oldest row, at t0
+    vi.setSystemTime(t0 + 60_000);
+    for (let i = 1; i < INVALID_TRANSITION_CAP_PER_WINDOW; i++) await patchStage(make(i), 'passed_shadow');
+    const capped = () => events().filter((r) => JSON.parse(r.detail).capReached === true);
+    expect(events()).toHaveLength(INVALID_TRANSITION_CAP_PER_WINDOW);
+    expect(capped()).toHaveLength(1);
+
+    // Past the oldest row only: 99 rows remain in the trailing hour, so the next row reaches the cap again
+    vi.setSystemTime(t0 + INVALID_TRANSITION_WINDOW_MS + 1);
+    const late = make(1000);
+    await patchStage(late, 'passed_shadow');
+    expect(capped().map((r) => r.subject)).toEqual([
+      events()[INVALID_TRANSITION_CAP_PER_WINDOW - 1].subject,
+      `candidate:${late}`,
+    ]);
+  });
+});
+
+describe('subject and rollback edges', () => {
+  it('a PATCH pending -> rolled_back answers 200 and writes one non-enforceable rollback_before_train row', async () => {
+    const { c } = seed();
+    const res = await patchStage(c.id, 'rolled_back');
+    expect(res.status).toBe(200);
+    expect(stageOf(c.id)).toBe('rolled_back');
+    const rows = events();
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0].detail)).toMatchObject({ rule: 'rollback_before_train', enforceable: false, from: 'pending', to: 'rolled_back' });
+  });
+
+  it('truncates subject to 256 characters', async () => {
+    const id = 'p'.repeat(400);
+    const res = await call('/promotion-states', 'POST', {
+      id, candidateId: 'cand-1', specId: 'spec-1', currentRung: 'shadow', targetRung: 'train',
+      status: 'failed', mode: 'tournament', startedAt: '2026-11-01T00:00:00.000Z',
+    });
+    expect(res.status).toBe(201);
+    const [e] = events();
+    expect(e.subject).toHaveLength(256);
+    expect(e.subject).toBe(`promotion_state:${id}`.slice(0, 256));
+  });
+});
+
 describe('failure isolation', () => {
   it('a failing event INSERT (trigger RAISE(ABORT)) leaves the PATCH at 200 with stage and history committed', async () => {
     const { c } = seed();

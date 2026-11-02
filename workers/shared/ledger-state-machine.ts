@@ -113,8 +113,20 @@ export interface GovernanceViolation extends TransitionViolation {
   enforceable: boolean;
 }
 
+/**
+ * Whether an enforce step may ever refuse a write into `to`, for both the candidate-stage and the
+ * promotion-state machines. Never for rolled_back or failed, from any state (terminal ones included,
+ * e.g. completed -> failed, cancelled -> rolled_back): rollbacks and failures always land (AGENTS.md
+ * rule 7, rollback is a ref operation as cheap as promotion), so those edges stay log-only permanently.
+ * Same-state writes are never violations at all.
+ */
+export function isEnforceable(to: string): boolean {
+  return to !== 'rolled_back' && to !== 'failed';
+}
+
 type PromotionStatus = PromotionState['status'];
 
+/** Exported as test data (the drift test compares it with the zod enum); the module is reachable from the Spec DO. */
 export const PROMOTION_STATUSES: readonly PromotionStatus[] = ['pending', 'in_progress', 'completed', 'failed', 'rolled_back', 'cancelled'];
 
 const PROMOTION_ALLOWED: Record<PromotionStatus, readonly PromotionStatus[]> = {
@@ -138,7 +150,7 @@ export function checkPromotionStateTransition(prev: string | null, next: string)
     rule,
     from: prev,
     to: next,
-    enforceable: next !== 'rolled_back' && next !== 'failed',
+    enforceable: isEnforceable(next),
     message,
   });
   if (prev === null) {

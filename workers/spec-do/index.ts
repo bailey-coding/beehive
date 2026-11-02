@@ -339,6 +339,7 @@ import {
   INVALID_TRANSITION_WINDOW_MS,
   INVALID_TRANSITION_CAP_PER_WINDOW,
   MAX_GOVERNANCE_DETAIL_BYTES,
+  MAX_GOVERNANCE_SUBJECT_CHARS,
   type CandidateWriteSource,
   type GovernanceViolation,
 } from '../shared/governance-state-machine';
@@ -1665,16 +1666,18 @@ export class SpecDO {
    * Write one invalid_transition row in governance_events for a violation (docs/plans/pr-s-state-machine-plan.md
    * section 5). LOG-ONLY: never throws, never refuses. The check itself runs inside the try, so a bug in it
    * cannot break the write. Flood control: one row per (subject, reason) per window and at most
-   * INVALID_TRANSITION_CAP_PER_WINDOW rows per window; the row that reaches the cap says so.
+   * INVALID_TRANSITION_CAP_PER_WINDOW rows per trailing hour; the row that reaches the cap says so (the window
+   * slides, so a later row can reach it again). `subject` is truncated to MAX_GOVERNANCE_SUBJECT_CHARS.
    * Runs inside the caller's transactionSync; a failed single INSERT is rolled back by SQLite at statement
    * level (constraint and schema errors), so the enclosing write still commits.
    */
   private logTransitionViolation(
     check: () => GovernanceViolation | null,
-    subject: string,
+    rawSubject: string,
     assertedActorId: string | null,
     extra: () => Record<string, unknown>
   ): void {
+    const subject = rawSubject.slice(0, MAX_GOVERNANCE_SUBJECT_CHARS);
     try {
       const v = check();
       if (!v) return;
@@ -1700,7 +1703,8 @@ export class SpecDO {
         generateId(), INVALID_TRANSITION_EVENT, assertedActorId, subject, reason, detail, at
       );
     } catch (e) {
-      console.error('[SpecDO] invalid_transition log failed', subject, e instanceof Error ? e.message : String(e));    }
+      console.error('[SpecDO] invalid_transition log failed', subject, e instanceof Error ? e.message : String(e));
+    }
   }
 
   updateCandidatePreview(

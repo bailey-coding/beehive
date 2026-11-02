@@ -21,9 +21,10 @@
  * Spec: docs/M5A-2-GOVERNANCE-PLAN.md PR-S; AGENTS.md rule 7 (rollback is never gated)
  */
 
-import { INVALID_TRANSITION, type GovernanceViolation } from './ledger-state-machine';
+import { INVALID_TRANSITION, isEnforceable, type GovernanceViolation } from './ledger-state-machine';
 
-export { INVALID_TRANSITION, checkPromotionStateTransition, type GovernanceViolation } from './ledger-state-machine';
+// One enforceable rule for both machines (it lives beside table (d) in ledger-state-machine.ts)
+export { INVALID_TRANSITION, checkPromotionStateTransition, isEnforceable, type GovernanceViolation } from './ledger-state-machine';
 
 /** governance_events.event for a transition-table violation (frozen name, M5A-2 plan rev 3 S9) */
 export const INVALID_TRANSITION_EVENT = 'invalid_transition';
@@ -33,6 +34,8 @@ export const INVALID_TRANSITION_WINDOW_MS = 60 * 60 * 1000;
 export const INVALID_TRANSITION_CAP_PER_WINDOW = 100;
 /** UTF-8 bytes of governance_events.detail; a larger detail is replaced by a truncation marker. */
 export const MAX_GOVERNANCE_DETAIL_BYTES = 2048;
+/** governance_events.subject is truncated to this many characters. */
+export const MAX_GOVERNANCE_SUBJECT_CHARS = 256;
 
 export const CANDIDATE_STAGES = [
   'pending', 'passed_premerge', 'passed_shadow', 'passed_train', 'passed_canary', 'promoted', 'failed', 'rolled_back',
@@ -60,6 +63,7 @@ export type CandidateRule =
   | 'backward' // to a lower ladder stage
   | 'not_allowed'; // any other edge (e.g. failed -> passed_shadow)
 
+/** Exported as test data (the closed rule set the matrix test checks); the module is reachable from the Spec DO. */
 export const CANDIDATE_RULES: readonly CandidateRule[] = [
   'unknown_stage', 'promoted_exit', 'promote_not_from_canary', 'rollback_before_train',
   'reset_needs_execute', 'skip_ahead', 'backward', 'not_allowed',
@@ -83,15 +87,6 @@ const EXECUTE_ONLY: Partial<Record<CandidateStage, readonly CandidateStage[]>> =
 };
 
 const isStage = (s: string): s is CandidateStage => (CANDIDATE_STAGES as readonly string[]).includes(s);
-
-/**
- * Whether an enforce step may ever refuse a write into `to`. Never for rolled_back or failed:
- * rollbacks and failures always land (AGENTS.md rule 7); they stay log-only permanently.
- * Same-state writes are never violations at all.
- */
-export function isEnforceable(to: string): boolean {
-  return to !== 'rolled_back' && to !== 'failed';
-}
 
 function ruleFor(from: CandidateStage, to: CandidateStage): CandidateRule {
   if (from === 'promoted') return 'promoted_exit';
