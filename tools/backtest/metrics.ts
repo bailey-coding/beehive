@@ -227,3 +227,128 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta, human: HumanAn
     },
   };
 }
+
+// ---------------------------------------------------------------- arms runs (candidate-only, paired set)
+
+export interface ArmSummary {
+  arm: string;
+  rows: number;
+  candidates: number;
+  clearAll: number;
+  clearAllRate: number | null;
+  heldOutPassed: number;
+  heldOutTotal: number;
+  deterministicRegressions: number;
+  /** Candidates that cleared every rung yet regressed deterministically (held-out or repo tests). */
+  escapes: number;
+  heldOutEscapes: number;
+  calls: number;
+  tokens: number;
+  /** Sum of the costs the CLI reported (killed runs report none). */
+  costUsd: number;
+  /** Upper bounds charged for killed runs that reported no cost: not measurements. */
+  estimatedUsd: number;
+  /** Some run was killed: its tokens and cost are lower bounds. */
+  lowerBound: boolean;
+  wallMs: number;
+  timeouts: number;
+  callLimits: number;
+}
+
+export interface GraderTable {
+  grader: string;
+  family: string;
+  sameFamilyAsCandidate: boolean;
+  /** arm -> label -> count */
+  byArm: Record<string, Record<string, number>>;
+}
+
+export interface ArmsMetrics {
+  armIds: string[];
+  pairedRows: string[];
+  unpairedRows: { id: string; reason: string }[];
+  paired: ArmSummary[];
+  unpaired: ArmSummary[];
+  graders: GraderTable[];
+  /** Items judged by every grader whose labels all agree. */
+  agreement: { items: number; agree: number; rate: number | null };
+  /** Issue text, spec and wrong-issue spec: once per row, never per arm. */
+  frontHalf: { calls: number; costUsd: number | null };
+}
+
+function summarize(arm: string, rows: RowResult[]): ArmSummary {
+  const s: ArmSummary = { arm, rows: rows.length, candidates: 0, clearAll: 0, clearAllRate: null, heldOutPassed: 0, heldOutTotal: 0, deterministicRegressions: 0, escapes: 0, heldOutEscapes: 0, calls: 0, tokens: 0, costUsd: 0, estimatedUsd: 0, lowerBound: false, wallMs: 0, timeouts: 0, callLimits: 0 };
+  for (const r of rows) {
+    const mine = r.candidates.filter((c) => c.arm?.arm === arm);
+    const m = rowMetrics({ ...r, candidates: mine });
+    s.escapes += m.escapes;
+    s.heldOutEscapes += m.heldOutEscapes;
+    for (const c of mine) {
+      s.candidates++;
+      if (c.clearsAllRungs) s.clearAll++;
+      if (c.deterministicRegression) s.deterministicRegressions++;
+      if (c.report) {
+        s.heldOutTotal += c.report.heldOut.total;
+        s.heldOutPassed += Object.values(c.report.heldOut.outcomes).filter((o) => o === 'passed').length;
+      }
+      s.calls += c.cost.calls;
+      s.tokens += c.cost.usage.inputTokens + c.cost.usage.outputTokens + c.cost.usage.cacheReadTokens + c.cost.usage.cacheCreationTokens;
+      if (c.cost.costUsd !== null) s.costUsd += c.cost.costUsd;
+      else s.estimatedUsd += c.cost.estimatedUsd ?? 0;
+      if (c.cost.killed) s.lowerBound = true;
+      s.wallMs += c.cost.durationMs;
+      if (c.stopReason === 'timeout') s.timeouts++;
+      if (c.stopReason === 'call-limit') s.callLimits++;
+    }
+  }
+  s.clearAllRate = s.candidates ? s.clearAll / s.candidates : null;
+  return s;
+}
+
+/** Candidate-only numbers per arm. Between-arm differences use the paired set (rows where every arm finished all K); other rows are reported apart. */
+export function computeArmsMetrics(rows: RowResult[], meta: RunMeta): ArmsMetrics {
+  const armIds = (meta.arms ?? []).map((a) => a.id);
+  const pairedRows: RowResult[] = [];
+  const unpairedRows: { id: string; reason: string }[] = [];
+  const unpaired: RowResult[] = [];
+  for (const r of rows) {
+    const short = armIds.filter((a) => r.candidates.filter((c) => c.arm?.arm === a && c.report).length < meta.k);
+    if (r.status === 'complete' && short.length === 0) pairedRows.push(r);
+    else {
+      unpaired.push(r);
+      const why = r.status !== 'complete' ? `row ${r.status}` : `not every arm finished K=${meta.k}: ${short.map((a) => `${a} ${r.candidates.filter((c) => c.arm?.arm === a && c.report).length}/${meta.k}`).join(', ')}`;
+      unpairedRows.push({ id: r.id, reason: why });
+    }
+  }
+  const tables = new Map<string, GraderTable>();
+  let items = 0;
+  let agree = 0;
+  for (const r of rows) for (const c of r.candidates) {
+    const gs = gradesOf(c);
+    for (const g of gs) {
+      const t = tables.get(g.tag.grader) ?? { grader: g.tag.grader, family: g.tag.family, sameFamilyAsCandidate: g.tag.sameFamilyAsCandidate, byArm: {} };
+      const byLabel = (t.byArm[c.arm?.arm ?? '-'] ??= {});
+      byLabel[g.label] = (byLabel[g.label] ?? 0) + 1;
+      tables.set(g.tag.grader, t);
+    }
+  }
+  // items every grader judged: how often all of them chose the same label
+  for (const r of rows) for (const c of r.candidates) {
+    const gs = gradesOf(c);
+    if (gs.length >= 2 && gs.length === tables.size) {
+      items++;
+      if (new Set(gs.map((g) => g.label)).size === 1) agree++;
+    }
+  }
+  const front = rows.flatMap((r) => [r.issueCost, r.spec?.cost ?? null]).filter((x): x is NonNullable<typeof x> => !!x);
+  return {
+    armIds,
+    pairedRows: pairedRows.map((r) => r.id),
+    unpairedRows,
+    paired: armIds.map((a) => summarize(a, pairedRows)),
+    unpaired: unpaired.length ? armIds.map((a) => summarize(a, unpaired)) : [],
+    graders: [...tables.values()].sort((a, b) => a.grader.localeCompare(b.grader)),
+    agreement: { items, agree, rate: items ? agree / items : null },
+    frontHalf: { calls: front.reduce((n, c) => n + c.calls, 0), costUsd: front.some((c) => c.costUsd === null) ? null : front.reduce((n, c) => n + (c.costUsd ?? 0), 0) },
+  };
+}

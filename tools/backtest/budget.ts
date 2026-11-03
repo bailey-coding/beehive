@@ -115,9 +115,9 @@ export class BudgetTracker {
   get remaining(): number {
     return Math.max(0, this.hardStop - this.used);
   }
-  byRole(): Record<string, { calls: number; costUsd: number | null; inputTokens: number; outputTokens: number }> {
+  byRole(only?: (e: LedgerEntry) => boolean): Record<string, { calls: number; costUsd: number | null; inputTokens: number; outputTokens: number }> {
     const out: Record<string, { calls: number; costUsd: number | null; inputTokens: number; outputTokens: number }> = {};
-    for (const e of this.ledger) {
+    for (const e of only ? this.ledger.filter(only) : this.ledger) {
       const o = (out[e.role] ??= { calls: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 });
       o.calls += e.calls;
       o.inputTokens += e.usage.inputTokens + e.usage.cacheReadTokens + e.usage.cacheCreationTokens;

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { computeMetrics, TIER_A_ROWS } from '../metrics.ts';
+import { computeArmsMetrics, computeMetrics, TIER_A_ROWS } from '../metrics.ts';
+import { buildReport } from '../report.ts';
 import type { OracleReport } from '../oracles.ts';
-import type { CandidateResult, RowResult, RunMeta } from '../results.ts';
+import type { CandidateResult, Grade, RowResult, RunMeta } from '../results.ts';
 
 const meta: RunMeta = { runId: 't', bashMode: 'none', sandbox: null, client: 'fake', startedAt: '', finishedAt: '', k: 3, aborted: null, budget: { expected: 565, hardStop: 850, used: 0, byRole: {} } };
 const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 };
@@ -109,5 +110,57 @@ describe('spec-failed rows count against A2', () => {
     const m = computeMetrics(rows, meta);
     expect(m.specsPassedWithinOneRetry).toBe(7);
     expect(m.decision.A2).not.toBe('validating');
+  });
+});
+
+describe('arms metrics: candidate-only, paired set, two graders', () => {
+  const armsMeta: RunMeta = { ...meta, k: 2, arms: [{ id: 'a', model: 'ma', effort: 'medium', cliAlias: 'ma', family: 'claude' }, { id: 'b', model: 'mb', effort: 'medium', cliAlias: 'mb', family: 'claude' }], cliVersion: '1', seed: 's', candidateMaxCalls: { value: 20, default: 40, deliberateChange: true } };
+  const ident = (arm: string) => ({ arm, model: `m${arm}`, modelFromInit: true, effort: 'medium', cliVersion: '1', cliAlias: `m${arm}`, family: 'claude' });
+  const grade = (grader: string, label: Grade['label']): Grade => ({ tag: { grader, family: 'claude', sameFamilyAsCandidate: true }, label, rationale: 'r' });
+  const ac = (arm: string, k: number, over: Partial<CandidateResult> = {}) => cand(k, { arm: ident(arm), ...over });
+
+  it('per-arm cost counts candidate sessions only (not the front half or grading) and sums killed runs apart as estimates', () => {
+    const killed = ac('a', 2, { stopReason: 'timeout', cost: { calls: 3, usage, costUsd: null, durationMs: 60_000, estimatedUsd: 0.7, killed: true } });
+    const r = row('R1', [ac('a', 1), killed, ac('b', 1), ac('b', 2)], { graderCalls: 4, issueCost: cc(50), spec: { attempts: [], passedValidators: true, retries: 0, cost: cc(60), editDistance: 0, humanMinutes: 1 } });
+    const m = computeArmsMetrics([r], armsMeta);
+    const a = m.paired.find((x) => x.arm === 'a')!;
+    expect(a).toMatchObject({ candidates: 2, calls: 13, timeouts: 1, lowerBound: true });
+    expect(a.costUsd).toBeCloseTo(1.0);
+    expect(a.estimatedUsd).toBeCloseTo(0.7);
+    expect(m.paired.find((x) => x.arm === 'b')).toMatchObject({ calls: 20, costUsd: 2, estimatedUsd: 0, lowerBound: false });
+    expect(m.frontHalf.calls).toBe(110); // reported once, outside the arm numbers
+  });
+
+  it('between-arm numbers use the paired set only: a row where an arm did not finish K is reported apart', () => {
+    const full = row('R1', [ac('a', 1), ac('a', 2), ac('b', 1), ac('b', 2)]);
+    const partial = row('R2', [ac('a', 1), ac('a', 2), ac('b', 1)]);
+    const aborted = row('R3', [ac('a', 1)], { status: 'aborted' });
+    const m = computeArmsMetrics([full, partial, aborted], armsMeta);
+    expect(m.pairedRows).toEqual(['R1']);
+    expect(m.unpairedRows.map((u) => u.id)).toEqual(['R2', 'R3']);
+    expect(m.unpairedRows[0].reason).toMatch(/b 1\/2/);
+    expect(m.paired.map((s) => s.candidates)).toEqual([2, 2]);
+    expect(m.unpaired.find((s) => s.arm === 'a')!.candidates).toBe(3);
+  });
+
+  it('two grades per item flow through metrics, per grader and in the agreement count; the legacy counts see both', () => {
+    const g2 = (arm: string, k: number, l1: Grade['label'], l2: Grade['label']) => ac(arm, k, { label: null, labelSource: null, clearsAllRungs: true, grades: [grade('g-a', l1), grade('g-b', l2)] });
+    const r = row('R1', [g2('a', 1, 'spec-gap', 'spec-gap'), g2('a', 2, 'regression', 'spec-gap'), ac('b', 1), ac('b', 2)]);
+    const m = computeArmsMetrics([r], armsMeta);
+    expect(m.graders.map((g) => g.grader)).toEqual(['g-a', 'g-b']);
+    expect(m.graders[0].byArm.a).toEqual({ 'spec-gap': 1, regression: 1 });
+    expect(m.graders[1].byArm.a).toEqual({ 'spec-gap': 2 });
+    expect(m.agreement).toEqual({ items: 2, agree: 1, rate: 0.5 });
+    const legacy = computeMetrics([r], armsMeta);
+    expect(legacy.graderLabelled.count).toBe(4);
+    expect(legacy.graderLabelled.byGrader['g-a']).toEqual({ 'spec-gap': 1, regression: 1 });
+    expect(legacy.rows[0].escapesModelJudged).toBe(1); // any grader's regression on a candidate that cleared every rung
+  });
+
+  it('the report carries the arms sections, labels each grader, and leaves out the decision rule', () => {
+    const r = row('R1', [ac('a', 1, { label: null, labelSource: null, grades: [grade('g-a', 'spec-gap'), grade('g-b', 'equivalent')] }), ac('a', 2), ac('b', 1), ac('b', 2)]);
+    const rep = buildReport({ ...armsMeta, runBudget: { grade: { calls: 2, costUsd: 0.08, inputTokens: 1, outputTokens: 1 } }, reportedModels: { a: 'ma-x' }, dollar: { capUsd: 15, chargedUsd: 3, estimatedUsd: 0.5 } }, { version: 1, plan: 'p', frozenAt: 'f', freezes: [], rows: [] }, [r], computeMetrics([r], armsMeta));
+    for (const s of ['## Arms', 'ma-x', 'not reported', 'Paired set', 'Candidate-only', 'Grader g-a (family claude; sameFamilyAsCandidate: true, labelled same-family grader)', 'Agreement between graders', 'grade 2 calls', 'Dollar cap $15.00', 'no superiority claim', 'spec-gap [g-a (same-family grader)] / equivalent [g-b (same-family grader)]']) expect(rep.toLowerCase(), s).toContain(s.toLowerCase());
+    expect(rep).not.toContain('## Decision rule');
   });
 });

@@ -153,6 +153,8 @@ export interface RunMeta {
   modelNotReported?: string[];
   dollar?: { capUsd: number; chargedUsd: number; estimatedUsd: number };
   harness?: { commit: string; dirty: boolean };
+  /** Spend of this run id alone (the `budget` block below is the lifetime global ledger). */
+  runBudget?: Record<string, { calls: number; costUsd: number | null; inputTokens: number; outputTokens: number }>;
   /** Front half copied from an earlier run (see arms.ts reuseFrontHalf). */
   reuse?: { from: string; manifest: string };
   budget: { expected: number; hardStop: number; used: number; byRole: Record<string, { calls: number; costUsd: number | null; inputTokens: number; outputTokens: number }> };

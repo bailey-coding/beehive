@@ -264,6 +264,7 @@ function armsMeta(o: RunOptions, armRuns: ArmRun[], rows: RowResult[], seed: str
     modelNotReported: unreported,
     dollar: { capUsd: meter.capUsd, chargedUsd: meter.chargedUsd, estimatedUsd: meter.estimatedUsd },
     harness: o.harness,
+    runBudget: o.tracker.byRole((e) => e.runId === o.runId),
     reuse: { from: o.reuseFrom!, manifest: sha256(JSON.stringify(manifest)) },
   };
 }
