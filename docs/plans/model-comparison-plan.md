@@ -163,9 +163,15 @@ stop-reason mapping against recorded fixtures.
 ## 8. Decisions for the maintainer (answered 2026-11-03: "your recommendations")
 
 - **M1: Option 1 first, then Option 2 after the narrowed S1.** Accepted.
-- **M2: a dollar cap for the comparison run that fails closed on unknown cost.** Accepted in principle. **The figure is set at the
-  run gate (section 4 step 3)**, from the one-Opus-candidate cost probe and pilot-2's $2.12 for nine Sonnet sessions; no number is
-  assumed here, and no model call is made before the maintainer states it.
+- **M2: dollar caps that fail closed on unknown cost.** Accepted 2026-11-03 as the proposed figures below; **re-stated at the
+  run gate** after the one-Opus-candidate probe and a check of the vendors' own price pages (the inputs are aggregator listings).
+  - Option 1 (Sonnet + Opus, crossed grading by both): typical about $8, **hard cap $15**.
+  - Option 2 (all four arms, one run): typical about $16, worst about $28, **hard cap $40 combined**; sub-caps Sonnet $5,
+    Opus $15, Mistral Medium 3.5 $8, Mistral Large 4 $8, grading $4. An arm that hits its sub-cap aborts alone.
+  - Basis (per 9 candidate sessions, 3 rows x K=3): Sonnet measured $2.12 (pilot-2); Opus 5.5 at $4/$20/$0.20 per M
+    (input/output/cache read) assumed about $0.47 per session; Mistral Large 4 $1.36/$4.18/$0.14 and Medium 3.5 $1.50/$7.50/$0.15
+    per M at pilot-2's token volume with a 1.5x margin; grader about $0.04 per call. Where the CLI reports no `costUsd` (Mistral),
+    cost = tokens x a rates table in `arms.ts`; with tokens missing too the arm aborts.
 - **M3: fully crossed grading.** Accepted (one fixed non-Claude grader stays an Option 2 alternative).
 - **M4: rows A4, A5, A11.** Accepted (all 10 would need a ledger-cap plan amendment and issue-text approvals).
 - **M5: the pilot's same-family-grader waiver is not extended;** Option 1 uses the crossed design.
