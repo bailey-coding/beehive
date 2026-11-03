@@ -1,5 +1,5 @@
 // Metrics and the decision rule (plan sections 4 and 5), computed on the strict tier (A) only.
-import type { RowResult, RunMeta, CandidateResult } from './results.ts';
+import { gradesOf, type RowResult, type RunMeta, type CandidateResult } from './results.ts';
 import { humanAgreement, type HumanAgreement, type HumanAnswers } from './sample.ts';
 
 /** The plan's strict tier: the decision rule's denominators (3 of 11, 8 of 11, ...) assume all 11 rows. */
@@ -55,7 +55,7 @@ export interface Metrics {
   escapesE: number;
   referenceFalseRejects: number;
   rungsRan: boolean;
-  graderLabelled: { count: number; byLabel: Record<string, number>; label: 'same-family grader' };
+  graderLabelled: { count: number; byLabel: Record<string, number>; byGrader: Record<string, Record<string, number>>; label: 'same-family grader' };
   /** Agreement of a human reviewer with the model labels on the sampled cases (null until `sample --ingest`). */
   human: HumanAgreement | null;
   costPerAcceptedChange: number | null;
@@ -84,6 +84,9 @@ const rowCost = (r: RowResult): { calls: number; usd: number | null; tokens: num
   return { calls, usd, tokens };
 };
 
+/** The label a candidate carries in the funnel columns: the deterministic one, else the first grader's. */
+const effectiveLabel = (c: CandidateResult) => c.label ?? gradesOf(c)[0]?.label ?? null;
+
 function isConfirmedClear(c: CandidateResult): boolean {
   return c.clearsAllRungs && c.labelSource === 'deterministic' && (c.label === 'equivalent' || c.label === 'spec-permitted variation');
 }
@@ -94,7 +97,7 @@ function rowMetrics(r: RowResult): RowMetrics {
   const c1 = cands.find((c) => c.k === 1);
   const rescue = !!c1 && !c1.clearsAllRungs && clears.length > 0;
   const heldPass = (c: CandidateResult) => Object.values(c.report!.heldOut.outcomes).filter((s) => s === 'passed').length;
-  const differing = clears.length >= 2 && (new Set(clears.map((c) => c.label)).size > 1 || clears.some((c) => (c.probeAgreement?.permitted ?? 0) > 0));
+  const differing = clears.length >= 2 && (new Set(clears.map(effectiveLabel)).size > 1 || clears.some((c) => (c.probeAgreement?.permitted ?? 0) > 0));
   const detRank = clears.length >= 2 && new Set(clears.map(heldPass)).size > 1 && clears.every((c) => c.labelSource === 'deterministic');
   let catches = 0;
   let heldOutEscapes = 0;
@@ -110,7 +113,7 @@ function rowMetrics(r: RowResult): RowMetrics {
     if (rep.rungs.preMerge && heldFailed) heldOutEscapes++;
     if (c.clearsAllRungs) {
       if (c.deterministicRegression || c.label === 'regression' && c.labelSource === 'deterministic') escapes++;
-      else if (c.label === 'regression' && c.labelSource === 'same-family grader') escapesModelJudged++;
+      else if (c.label === null && gradesOf(c).some((g) => g.label === 'regression')) escapesModelJudged++;
     }
   }
   const cost = rowCost(r);
@@ -135,7 +138,7 @@ function rowMetrics(r: RowResult): RowMetrics {
       clearAll: clears.length,
     },
     meanProbeAgreement: agreements.length ? agreements.reduce((a, b) => a + b, 0) / agreements.length : null,
-    anyCandidateFullyAgrees: cands.some((c) => c.label === 'equivalent'),
+    anyCandidateFullyAgrees: cands.some((c) => effectiveLabel(c) === 'equivalent'),
     rescue,
     rescueConfirmedDeterministically: rescue && clears.some(isConfirmedClear),
     spreadS: differing,
@@ -181,8 +184,14 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta, human: HumanAn
     : sum(totals.map((t) => t.tokens)) > 0 ? doneRows.reduce((n, r) => n + (r.spec ? tok(r.spec.cost.usage) : 0), 0) / sum(totals.map((t) => t.tokens)) : null;
   const accepted = done.filter((m) => m.funnel.clearAll > 0);
   const gl: Record<string, number> = {};
+  const glBy: Record<string, Record<string, number>> = {};
   let glCount = 0;
-  for (const r of rows) for (const c of r.candidates) if (c.labelSource === 'same-family grader' && c.label) { glCount++; gl[c.label] = (gl[c.label] ?? 0) + 1; }
+  for (const r of rows) for (const c of r.candidates) for (const g of gradesOf(c)) {
+    glCount++;
+    gl[g.label] = (gl[g.label] ?? 0) + 1;
+    const by = (glBy[g.tag.grader] ??= {});
+    by[g.label] = (by[g.label] ?? 0) + 1;
+  }
   const perAccepted = accepted.length && done.every((m) => m.totalCostUsd !== null) ? done.reduce((a, m) => a + (m.totalCostUsd ?? 0), 0) / accepted.length : null;
   const k1Accepted = done.filter((m) => rows.find((r) => r.id === m.id)!.candidates.find((c) => c.k === 1)?.clearsAllRungs).length;
   const perAcceptedK1 = k1Accepted && done.every((m) => m.k1Cost !== null) ? done.reduce((a, m) => a + (m.k1Cost ?? 0), 0) / k1Accepted : null;
@@ -208,7 +217,7 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta, human: HumanAn
     medianHumanMinutes: mins,
     specCostShare: specShare,
     catches, falsePositives: fps, escapesE, referenceFalseRejects: falseRejects, rungsRan,
-    graderLabelled: { count: glCount, byLabel: gl, label: 'same-family grader' },
+    graderLabelled: { count: glCount, byLabel: gl, byGrader: glBy, label: 'same-family grader' },
     human: humanAgreement(human),
     costPerAcceptedChange: perAccepted,
     costPerAcceptedChangeK1: perAcceptedK1,

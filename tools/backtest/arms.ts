@@ -78,7 +78,7 @@ export const armIdent = (a: ArmSpec, cliVersion: string, reportedModel?: string)
 });
 
 /** The identity the resume guard compares: arm table, models, efforts and CLI version. */
-export function runIdentity(arms: ArmSpec[], cliVersion: string): string {
+export function runIdentity(arms: { id: string; model: string; effort: string }[], cliVersion: string): string {
   return JSON.stringify({ cliVersion, arms: arms.map((a) => ({ id: a.id, model: a.model, effort: a.effort })) });
 }
 
