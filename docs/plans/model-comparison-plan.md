@@ -2,7 +2,7 @@
 
 Task: `model-comparison` | Spec: `docs/SPEC-BACKTEST-PLAN.md` (harness `tools/backtest/`) | Tier: default plan, independent review
 before code (the harness holds a sandbox and a spend ledger; no production code changes).
-Status: **rev 3 after the verification pass (approve with changes: V1-V6); dispositions in section 10. Option 2 stays unapproved
+Status: **rev 4 (diff-check wording fixes) on top of rev 3 after the verification pass (approve with changes: V1-V6); dispositions in section 10. Option 2 stays unapproved
 until its narrowed spike and a client plan amendment are reviewed. M1-M5 answered (section 8). Implementation of Option 1 can start after a quick diff check of rev 3; the dollar cap figure is re-stated at the run gate. Nothing implemented.**
 
 Two options, built in order. **Option 1 (cheap)**: Sonnet 5.5 medium vs Opus 5.5 medium through the existing `claude -p` path,
@@ -28,8 +28,8 @@ non-Claude grader. Option 2 reuses Option 1's arm mechanism.
   tokens each, about 19 calls per row. Front half per row: spec 5-7 + leakage-1 4-8 calls (issue texts were reused). 7 of 9
   candidates cleared every rung; held-out tests are what separated them (6 escapes). Grading (lifetime): 8 calls, $0.31.
 - **Local artifacts**: pilot-2's `issue.json` / `spec.json` for A4, A5, A11 exist under `docs/backtest/runs/pilot-2/rows/`
-  (git-ignored). The post-pilot commit `329b715` changed only the spec prompt in `generate.ts`; confirm `94e20af` left
-  `candidatePrompt` unchanged before reusing them (section 2.2).
+  (git-ignored). The post-pilot commit `329b715` changed only the spec prompt in `generate.ts`; `candidatePrompt` is unchanged
+  for the file-tools path (verified by diff `96da29d..HEAD`, section 2.2).
 - **Paseo models** (`list_models`): `claude`: Opus 5.5, Sonnet 5.5 with a medium thinking option; `mistral-vibe`:
   `mistral-medium-3.5` (resolves to the moving alias `mistral-vibe-cli-latest`), `mistral-large-4-0-3`, and GLM-5.3 (a
   different family, Mistral-hosted). No cost per run from Paseo.
@@ -58,15 +58,15 @@ An **arm** is `{id, model, effort, client}` (table in `arms.ts`, validated: effo
 3. **Paired set** = rows where every arm finished all K candidates; between-arm differences use only the paired set, and
    unpaired rows are reported separately.
 4. **Record who produced what.** `run.json`, every ledger entry and every `CandidateResult` carry `{arm, model, effort, cliVersion,
-   cliAlias}`, where `model` is the one the CLI reports in its init event, not only the one requested. The resume guard refuses a changed arm table, model, effort or CLI version, as it refuses a `bashMode` change.
+   cliAlias}`, where `model` is the one the CLI reports in its init event, not only the one requested (if the init event carries no model, fall back to the requested one and flag it in `run.json`). The resume guard refuses a changed arm table, model, effort or CLI version, as it refuses a `bashMode` change.
 5. **Grading is a separate pass** over the residue of **all** arms after candidates finish (also fixes the resume gap: residue
    is rebuilt from stored results, not from this invocation's fresh candidates), with the arm hidden from the grader prompt.
+6. **Cost per arm = candidate-only** (calls, tokens, cost, wall time, timeouts), built from `CandidateResult.cost`; the front
+   half and grading are reported separately, once. The lifetime ledger table is not used for per-arm numbers.
 7. **Cross-arm isolation (V6).** Each candidate's agent root is deleted right after its eval clone (today it lives until the end of
    the row, `run.ts:378`, next to `reference/` and other arms' `eval-*` clones in the work dir). The canary is extended from
    Read to Glob and Grep on an absolute `/tmp` path, for both clients (`canary.ts:36-45` checks Read only; confinement rests on
    the CLI's `--restricted` file-tool confinement).
-6. **Cost per arm = candidate-only** (calls, tokens, cost, wall time, timeouts), built from `CandidateResult.cost`; the front
-   half and grading are reported separately, once. The lifetime ledger table is not used for per-arm numbers.
 
 Subcommand: `backtest arms --run <id> --arms sonnet-medium,opus-medium --rows A4,A5,A11 --k 3 --candidate-max-calls 20` (add `arms` to the
 allowed-flags table in `cli.ts`) (named `arms`, because `compare.ts`
@@ -79,13 +79,13 @@ is the oracle labeler). `run` keeps its behavior.
   (zero front-half calls); copy them into the new run directory with their hashes recorded.
 - **Call budget (V2).** Expected: Sonnet about 57 candidate calls for 3 rows x K=3, Opus 57-115, crossed grading 36 grader runs of
   1-2 calls, leakage-1 reused (V3), canaries 3-6: about **170-270 calls**. Worst case under today's defaults is about 870
-  (18 candidates x `maxCalls` 40 = 720, grading 72, leakage-1 72), over the 562 remaining. The run therefore sets candidate
+  (18 candidates x `maxCalls` 40 = 720, grading 72, leakage-1 72, canaries 6), over the 562 remaining. The run therefore sets candidate
   `maxCalls` to **20 for both arms** (observed maximum 11 in two pilots), recorded in `run.json` as a deliberate change from 40,
-  with a new `--candidate-max-calls` flag (none exists, `cli.ts:154-163`); worst case then about 510. A pre-flight check adds
+  with a new `--candidate-max-calls` flag (none exists, `cli.ts:154-163`); worst case then about **438** (18 x 20 = 360, grading 72, canaries 6; leakage-1 is reused, so it has no term). A pre-flight check adds
   arms x rows x K x `maxCalls` + grading + canaries and refuses to start above the remaining ledger.
 - **Leakage-1 (V3)** is not resumable (`run.ts:269-277` re-runs it per invocation) and its wrong-issue pairing depends on the row
   set (pilot-2's order was A2, A11, A4, A5). Reuse pilot-2's `result.json` leakage block for A4, A5, A11 (hash-recorded) and skip
-  the test, or persist a new result; do not pay about 19 calls per invocation.
+  the test; do not pay about 19 calls per invocation.
 - **Reuse is safe for the file-tools candidate path (verified by diff `96da29d..HEAD`):** the file-tools `candidatePrompt` string and
   the non-Bash `buildClaudeArgs` are byte-identical to what pilot-2 ran; additions sit behind `allowBash`. Before any call, re-run
   `validateSpec` and `acceptanceAgainstReference` (no model) on each reused spec at HEAD. Hash-record: `issue.json`, `spec.json`,
@@ -97,7 +97,8 @@ is the oracle labeler). `run` keeps its behavior.
   (timeouts are a pre-registered endpoint). Instead: parse per-message `usage` from assistant stream events (`parseStreamLine` ignores
   it today, `client.ts:178-184`); a run with null cost is charged toward the cap at an **upper bound** (tokens seen x the rates
   table, else `maxCalls` x the arm's worst per-call estimate), labelled "estimated"; the cap is checked **before each call**, and the
-  arm aborts only if the bound would break its cap. Killed sessions' tokens and cost are reported as lower bounds. Optionally pass
+  run aborts only if the bound would break the run-level cap. The same fallback applies to every arm; a call can only be bounded
+  once the arm has a per-call estimate, so an arm aborts only when none exists, i.e. before its first priced call. Option 1 has one run-level hard cap of $15 (no per-arm sub-caps): hitting it aborts the whole run, as does the global 850-call ledger's `BudgetExceeded` (`budget.ts:91-104`). Killed sessions' tokens and cost are reported as lower bounds. Optionally pass
   `--max-budget-usd` per call, only with a fixture for how the CLI reports a budget stop.
 - Isolation: a fresh private config per client (under `--allow-bash`, `shell-snapshots/` appears in the config dir,
   `client.ts:275`, and would fail canary check 1); the **canary runs for the Opus client too** (3 calls; check 2 tests model
@@ -172,7 +173,7 @@ work-dir/branch separation; leak-blocked in one arm leaves the other; paired-set
 model / effort / CLI version; `run.json`, ledger entries and `CandidateResult` carry arm, model, effort, CLI version; per-arm cost
 excludes the front half and grading; grading pass after a resume covers all arms' residue; the grader prompt never contains the
 arm id; new grader tags flow through `metrics`, `report` and `sample`; `sample`/`publish` work with the per-arm layout and the
-human sample hides the arm; the dollar cap fails closed on null `costUsd`; `effort` lands in `buildClaudeArgs`; the rendered-prompt hash is identical across arms; leakage-1 is skipped on reuse and on resume;
+human sample hides the arm; null cost is charged at an upper bound and the cap is checked before each call; a run fails closed only when no bound can be computed; hitting the run-level $15 cap aborts the whole run; `effort` lands in `buildClaudeArgs`; the rendered-prompt hash is identical across arms; leakage-1 is skipped on reuse and on resume;
 null-cost estimation charges an upper bound and the cap is checked before each call, and a killed candidate does not abort the
 run; `sample` case ids are opaque and map back to arms; two grades per item flow through `metrics`; the agent root is deleted after
 the eval clone; the canary covers Glob and Grep for both clients; the pre-flight worst-case check refuses an over-ledger run;
@@ -198,16 +199,16 @@ stop-reason mapping against recorded fixtures.
 - **M1: Option 1 first, then Option 2 after the narrowed S1.** Accepted.
 - **M2: dollar caps that fail closed on unknown cost.** Accepted 2026-11-03 as the proposed figures below; **re-stated at the
   run gate** after the one-Opus-candidate probe and a check of the vendors' own price pages (the inputs are aggregator listings).
-  - Option 1 (Sonnet + Opus, crossed grading by both): typical about $8, **hard cap $15**.
+  - Option 1 (Sonnet + Opus, crossed grading by both): typical about $8, **a single run-level hard cap of $15, no per-arm sub-caps**. Hitting it aborts the whole run (both arms), as does the global 850-call ledger's `BudgetExceeded` (`budget.ts:91-104`).
   - Option 2 (all four arms, one run): typical about $16, worst about $28, **hard cap $40 combined**; sub-caps Sonnet $5,
-    Opus $15, Mistral Medium 3.5 $8, Mistral Large 4 $8, grading $4. An arm that hits its sub-cap aborts alone.
+    Opus $15, Mistral Medium 3.5 $8, Mistral Large 4 $8, grading $4. An arm that hits its sub-cap aborts alone (sub-caps are an Option 2 feature).
   - Basis (per 9 candidate sessions, 3 rows x K=3): Sonnet measured **about $0.99** for pilot-2 alone (not $2.12, which is the lifetime ledger); Opus 5.5 at $4/$20/$0.20 per M
     (input/output/cache read) assumed about $0.47 per session; Mistral Large 4 $1.36/$4.18/$0.14 and Medium 3.5 $1.50/$7.50/$0.15
     per M at pilot-2's token volume with a 1.5x margin; grader about $0.04 per call. **Corrected typical figures** (the chat estimate used the
     lifetime numbers and was about 2x high): Sonnet about $1, Opus about $2 (worst $5), Mistral Large about $1.5 (worst $3), Medium about
     $2 (worst $3), crossed grading about $2; Option 1 about $4 and the four-model run about $9 (worst about $17). The approved hard caps
     ($15 and $40) stay as ceilings; the maintainer may tighten them at the run gate. Where the CLI reports no `costUsd` (Mistral),
-    cost = tokens x a rates table in `arms.ts`; with tokens missing too the arm aborts.
+    cost = tokens x a rates table in `arms.ts`; with tokens missing too, `maxCalls` x the arm's worst per-call estimate is charged (section 2.2); an arm aborts only when no per-call estimate exists, i.e. before its first priced call.
 - **M3: fully crossed grading.** Accepted (one fixed non-Claude grader stays an Option 2 alternative).
 - **M4: rows A4, A5, A11.** Accepted (all 10 would need a ledger-cap plan amendment and issue-text approvals).
 - **M5: the pilot's same-family-grader waiver is not extended;** Option 1 uses the crossed design.
@@ -237,7 +238,7 @@ stop-reason mapping against recorded fixtures.
 | Fact | Pilot-2 numbers were the lifetime ledger (pilot-1 included): pilot-2 alone is 57 candidate calls, about $0.99, about 19 calls per row | Accepted: section 1, M2 basis |
 | V1 | "Fail closed on null cost" aborts on the first killed candidate, correlated with the arm | Accepted: upper-bound charge, per-call cap check, per-message usage parsing (2.2) |
 | V2 | Worst case under defaults about 870 calls, over the 562 remaining | Accepted: candidate `maxCalls` 20 for both arms, new flag, pre-flight check (2.2) |
-| V3 | Leakage-1 is not resumable; pairing depends on the row set; "zero front-half calls" is false | Accepted: reuse the hash-recorded pilot-2 result and skip, or persist (2.2) |
+| V3 | Leakage-1 is not resumable; pairing depends on the row set; "zero front-half calls" is false | Accepted: reuse the hash-recorded pilot-2 result and skip (2.2) |
 | V4 | M5 contradicts itself (Claude graders on both arms) | Accepted: Option 1 model-judged numbers are labelled same-family and stay out of conclusions (2.3) |
 | V5 | One label per candidate; `sample` case ids collide across arms | Accepted: `grades[]`, opaque ids (2.3) |
 | V6 | Agent roots outlive the candidate; the canary tests only Read | Accepted: delete after the eval clone, canary Glob/Grep (2.1.7) |
