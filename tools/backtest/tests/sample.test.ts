@@ -7,7 +7,7 @@ import { computeMetrics } from '../metrics.ts';
 import { sanitizeReport } from '../publish.ts';
 import { buildReport } from '../report.ts';
 import type { CandidateResult, RowResult, RunMeta } from '../results.ts';
-import { DEFAULT_SEED, humanAgreement, loadHumanAnswers, modelJudged, parseAnswers, pickCases, renderSample, trimDiff, type SampleCase } from '../sample.ts';
+import { DEFAULT_SEED, caseId, graderLetters, humanAgreement, loadHumanAnswers, modelJudged, parseAnswers, pickCases, pickCasesPerArm, renderSample, trimDiff, type PickMap, type SampleCase } from '../sample.ts';
 
 const cases: SampleCase[] = [
   { rowId: 'A11', k: 1, label: 'spec violation', rationale: 'r1' },
@@ -123,5 +123,87 @@ describe('published summaries', () => {
     expect(t).toContain('~/x/y');
     expect(t).toContain('plain');
     expect(t.startsWith('<!-- Summary of run pilot-9')).toBe(true);
+  });
+});
+
+describe('arms layout: per-arm candidates, opaque case ids, two graders, the arm hidden', () => {
+  const grade = (grader: string, label: string, why: string) => ({ tag: { grader, family: 'claude', sameFamilyAsCandidate: true }, label, rationale: why });
+  function armsRun() {
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sample-arms-'));
+    const rowDir = path.join(runDir, 'rows', 'A4');
+    fs.mkdirSync(rowDir, { recursive: true });
+    fs.writeFileSync(path.join(rowDir, 'issue.json'), JSON.stringify({ text: 'SLO thresholds can be NaN\n\nThe monitor reads healthy.' }));
+    fs.writeFileSync(path.join(rowDir, 'spec.json'), JSON.stringify({ name: 's', contract: '{}', acceptance: [{ name: 'a', file: 'slo.test.ts', code: "it('x', () => {});" }], declaredDeltaSurface: [], out_of_scope: [] }));
+    for (const arm of ['sonnet-medium', 'opus-medium']) {
+      fs.mkdirSync(path.join(rowDir, 'candidates', arm), { recursive: true });
+      for (const k of [1, 2]) {
+        fs.writeFileSync(path.join(rowDir, 'candidates', arm, `c${k}.patch`), `diff --git a/workers/slo.ts b/workers/slo.ts\n+const v${arm.length}${k} = 1;\n`);
+        const c = { k, label: null, labelSource: null, arm: { arm }, grades: [grade('sonnet-medium', 'spec-gap', `rs${k}`), grade('opus-medium', k === 1 ? 'spec-gap' : 'regression', `ro${k}`)], deterministicRegression: false, report: { rungs: { preMerge: true, conformance: null, shadow: null }, acceptance: { total: 1, passed: 1, failed: [] }, heldOut: { total: 1, outcomes: { 'w::a': 'passed' } }, regressions: [], failedRepoTests: [], conformanceViolations: [], shadowViolations: [], loadErrors: [], failureMessages: {} } };
+        fs.writeFileSync(path.join(rowDir, 'candidates', arm, `c${k}.json`), JSON.stringify(c));
+      }
+    }
+    return runDir;
+  }
+
+  it('reads the per-arm layout (and the flat one), one case per candidate with every grader\'s verdict', () => {
+    const { cases: cs, candidates } = modelJudged(armsRun());
+    expect(cs).toHaveLength(4);
+    expect(cs.map((c) => c.arm).sort()).toEqual(['opus-medium', 'opus-medium', 'sonnet-medium', 'sonnet-medium']);
+    expect(cs.every((c) => c.grades!.length === 2)).toBe(true);
+    expect(candidates.has('A4-opus-medium-c2')).toBe(true);
+    const flat = modelJudged(fixtureRun());
+    expect(flat.cases[0].arm).toBeUndefined();
+    expect(flat.cases[0].grades).toHaveLength(1); // a pre-grades[] result is normalised
+  });
+
+  it('case ids are opaque and distinct per arm, while single-client ids stay readable', () => {
+    const { cases: cs } = modelJudged(armsRun());
+    const idsA = cs.map((c) => caseId('r', c));
+    expect(new Set(idsA).size).toBe(4);
+    for (const id of idsA) expect(id).toMatch(/^x[0-9a-f]{8}$/);
+    expect(idsA.join()).not.toMatch(/A4|sonnet|opus|c1|c2/);
+    expect(caseId('r', { rowId: 'A4', k: 1 })).toBe('A4-c1');
+  });
+
+  it('the pick is stratified per arm and its order does not reveal the arm', () => {
+    const { cases: cs } = modelJudged(armsRun());
+    const picked = pickCasesPerArm(cs, 1, 7);
+    expect(picked.map((c) => c.arm).sort()).toEqual(['opus-medium', 'sonnet-medium']);
+    expect(pickCasesPerArm(cs, 1, 7)).toEqual(picked);
+    const orders = new Set([1, 2, 3, 4, 5, 6, 7, 8].map((seed) => pickCasesPerArm(cs, 1, seed).map((c) => c.arm).join()));
+    expect(orders.size).toBeGreaterThan(1);
+    expect(pickCasesPerArm(cases, 2, DEFAULT_SEED)).toEqual(pickCases(cases, 2, DEFAULT_SEED)); // no arms: unchanged
+  });
+
+  it('the review file hides the arm and the grader names, shows both graders\' labels, and asks A1 once per grader', async () => {
+    const runDir = armsRun();
+    const { cases: cs, candidates } = modelJudged(runDir);
+    const chosen = pickCasesPerArm(cs, 1, 7);
+    const md = await renderSample({ run: 'r', seed: 7, chosen, total: cs.length, files: { runDir, rows: [corpusRow], referenceDiff: async () => 'diff --git a/workers/slo.ts b/workers/slo.ts\n+const real = 2;\n' }, candidates });
+    expect(md).not.toMatch(/sonnet|opus/i);
+    for (const s of ['#### Grader A', '#### Grader B', 'A1 (Grader A): ___', 'A1 (Grader B): ___', 'A2: ___', 'A3: ___', '+const ']) expect(md, s).toContain(s);
+    expect(md.match(/^- label: \*\*/gm)).toHaveLength(4);
+    expect(md).toMatch(/## Case x[0-9a-f]{8}:/);
+  });
+
+  it('answers map back to row, arm, k and grader through the pick file, and the agreement is computed with each grader', () => {
+    const { cases: cs } = modelJudged(armsRun());
+    const two = pickCasesPerArm(cs, 1, 7);
+    const map: PickMap = Object.fromEntries(two.map((c) => [caseId('r', c), { rowId: c.rowId, arm: c.arm, k: c.k, graders: graderLetters(c.grades!) }]));
+    const [id1, id2] = Object.keys(map);
+    const md = `## Case ${id1}: x\n- label: **spec-gap**\n- label: **regression**\nA1 (Grader A): yes\nA1 (Grader B): no\nA2: spec-gap\nA3: yes\nNotes (optional): ___\n## Case ${id2}: y\n- label: **spec-gap**\n- label: **spec-gap**\nA1 (Grader A): yes\nA1 (Grader B): yes\nA2: permitted-variation\nA3: no\nNotes (optional): ___\n`;
+    const h = parseAnswers(md, 'r', 7, new Date('2026-11-04T00:00:00Z'), map);
+    expect(h.cases[0]).toMatchObject({ key: id1, rowId: 'A4', arm: map[id1].arm, k: map[id1].k, labelRight: false, labelRightBy: { 'opus-medium': true, 'sonnet-medium': false } }); // Grader A is the first by name
+    expect(h.cases[1].labelRight).toBe(true);
+    const a = humanAgreement(h)!;
+    expect(a).toMatchObject({ answered: 2, labelAgree: 1, byGrader: { 'opus-medium': { answered: 2, agree: 2, rate: 1 }, 'sonnet-medium': { answered: 2, agree: 1, rate: 0.5 } } });
+    expect(() => parseAnswers(md.replace('A1 (Grader B): no', 'A1 (Grader B): ___'), 'r', 7, new Date(), map)).toThrow(/A1 \(Grader B\) must be yes or no/);
+    expect(() => parseAnswers(md, 'r', 7, new Date(), {})).toThrow(/not in the pick file/);
+  });
+
+  it('publish keeps the arms report free of code, tokens and home paths', async () => {
+    const t = sanitizeReport('# r\n## Arms\nCLI 1.2.3 harness abc /home/paseo/x Bearer abcdefghijklmnop1234\n```ts\nconst secret = 1;\n```\n| sonnet-medium | 3 |', { name: 'arms-1', home: '/home/paseo' });
+    expect(t).not.toMatch(/const secret|\/home\/paseo|abcdefghijklmnop1234/);
+    expect(t).toContain('| sonnet-medium | 3 |');
   });
 });

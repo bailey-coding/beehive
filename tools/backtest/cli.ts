@@ -16,7 +16,7 @@ import { DEFAULT_ORACLE_CONFIG } from './oracles.ts';
 import { ALL_ROWS, PILOT_IDS } from './pilot-rows.ts';
 import { runPilot } from './run.ts';
 import { diffOf, git } from './git.ts';
-import { DEFAULT_SEED, HumanAnswersSchema, loadHumanAnswers, modelJudged, parseAnswers, pickCases, renderSample } from './sample.ts';
+import { DEFAULT_SEED, HumanAnswersSchema, caseId, graderLetters, loadHumanAnswers, modelJudged, parseAnswers, pickCasesPerArm, renderSample, type PickMap } from './sample.ts';
 import { sanitizeReport } from './publish.ts';
 import { buildReport } from './report.ts';
 import { computeMetrics } from './metrics.ts';
@@ -177,8 +177,8 @@ async function main(): Promise<void> {
     const files = { runDir, rows: corpus.rows, referenceDiff: (row: (typeof corpus.rows)[number]) => diffOf(repo, row.sha) };
     if (f.ingest) {
       const mdFile = path.join(runDir, 'human-sample.md');
-      const pick = JSON.parse(fs.readFileSync(path.join(runDir, 'human-sample.pick.json'), 'utf8')) as { seed: number };
-      const answers = parseAnswers(fs.readFileSync(mdFile, 'utf8'), run, pick.seed);
+      const pick = JSON.parse(fs.readFileSync(path.join(runDir, 'human-sample.pick.json'), 'utf8')) as { seed: number; map?: PickMap };
+      const answers = parseAnswers(fs.readFileSync(mdFile, 'utf8'), run, pick.seed, new Date(), pick.map ?? {});
       fs.writeFileSync(path.join(runDir, 'human-answers.json'), JSON.stringify(HumanAnswersSchema.parse(answers), null, 2) + '\n');
       const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8')) as { meta: RunMeta; rows: RowResult[] };
       const m = computeMetrics(saved.rows, saved.meta, loadHumanAnswers(runDir));
@@ -186,11 +186,11 @@ async function main(): Promise<void> {
       log(`ingested ${answers.cases.length} answers; human agreement with the model labels: ${m.human?.labelAgree}/${m.human?.answered}; report.md regenerated`);
       return;
     }
-    const chosen = pickCases(cases, Number(f.n ?? 2), seed);
+    const chosen = pickCasesPerArm(cases, Number(f.n ?? 2), seed);
     const md = await renderSample({ run, seed, chosen, total: cases.length, files, candidates });
     fs.writeFileSync(path.join(runDir, 'human-sample.md'), md);
-    fs.writeFileSync(path.join(runDir, 'human-sample.pick.json'), JSON.stringify({ seed, picked: chosen.map((c) => `${c.rowId}-c${c.k}`), total: cases.length }, null, 2) + '\n');
-    log(`wrote ${path.join(runDir, 'human-sample.md')}: ${chosen.map((c) => `${c.rowId}-c${c.k} (${c.label})`).join(', ')} of ${cases.length} model-judged cases, seed ${seed}`);
+    fs.writeFileSync(path.join(runDir, 'human-sample.pick.json'), JSON.stringify({ seed, picked: chosen.map((c) => caseId(run, c)), total: cases.length, map: Object.fromEntries(chosen.map((c) => [caseId(run, c), { rowId: c.rowId, ...(c.arm ? { arm: c.arm } : {}), k: c.k, graders: graderLetters(c.grades ?? []) }])) }, null, 2) + '\n');
+    log(`wrote ${path.join(runDir, 'human-sample.md')}: ${chosen.map((c) => `${caseId(run, c)} (${c.label})`).join(', ')} of ${cases.length} model-judged cases, seed ${seed}`);
     if (f['template-out']) {
       fs.mkdirSync(path.dirname(String(f['template-out'])), { recursive: true });
       fs.writeFileSync(String(f['template-out']), await renderSample({ run, seed, chosen, total: cases.length, files, candidates, template: true }));
