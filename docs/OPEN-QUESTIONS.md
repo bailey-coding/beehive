@@ -685,6 +685,12 @@ M5a now closes the at-least-once double-write for all nine POST routes in `IDEMP
 
 `workers/promotion-worker/merge-train.ts:342` calls `GATE_WORKFLOW.fetch('/run', ...)` with a relative URL, and the gate worker has no `/run` route (only `/gates/pre-merge`, status and result routes), so the call answers 404. Found while reviewing `docs/M5A-2-IMPL-PLAN.md`; not changed there. Same class as the three nonexistent DO routes of 2026-10-16: check `Response.ok` and decide whether the merge train should call `/gates/pre-merge`.
 
+**Status**: Fixed (task `merge-train-gate-call`, plan `docs/plans/merge-train-gate-call-plan.md` rev 2, branch `agent/merge-train-gate-call`). `executeMerge` now posts `${GATE_WORKFLOW_ORIGIN}${GATE_PRE_MERGE_PATH}` (shared constants in `workers/shared/schemas.ts`) with `Authorization: Bearer ${API_AUTH_TOKEN}` and `X-Actor-ID: promotion-worker`, reads the candidate's `commitSha`/`baseCommitSha` from `GET /api/candidates/:id`, and merges only on `result.status === 'pass'` (the route answers 201 `success:true` even for a fail verdict). The gate call is keyless (no lease id yet; see the stuck-`merging` entry). Alongside: `createGateVerdict` now upserts `gate_verdicts` on `UNIQUE(candidate_id, gate)` (latest-summary semantics, same as the gate-runs path) so the train's verdict write no longer 500s against the queue consumer's push-path verdict.
+
+## 2026-11-02: tournament comparison calls a shadow-router route that does not exist
+
+`workers/promotion-worker/tournament.ts:388` calls `SHADOW_ROUTER.fetch('/compare', ...)` with a relative URL, no bearer, and the shadow router has no `/compare` route — the same defect class as the merge-train `/run` call above, masked by `fallbackCompareCandidates` (every tournament comparison silently uses the fallback). Not changed.
+
 **Status**: Open.
 
 ## Sandbox build spike: containers deploy and build work (2026-10-24)

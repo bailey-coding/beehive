@@ -565,6 +565,12 @@ export const GateWorkflowRequestSchema = z.object({
   repoName: z.string().optional(),
 });
 
+// Gate worker's own routes, reached over a Service binding (so absolute URLs; the host names the binding).
+// One module owns them so a caller (promotion worker's merge train) and the worker's route table cannot drift;
+// a contract test in workers/gate-workflow/tests pins this. The DO-side gate-run routes live in gate-run-schema.ts.
+export const GATE_WORKFLOW_ORIGIN = 'http://beehive-gate-workflow';
+export const GATE_PRE_MERGE_PATH = '/gates/pre-merge';
+
 // Test result schema
 export const TestResultSchema = z.object({
   testName: z.string().min(1),

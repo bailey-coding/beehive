@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Import the handler
 import handler from '../index';
+import { GATE_PRE_MERGE_PATH } from '../../shared/schemas';
 
 type JsonResponse = Record<string, unknown>;
 async function readJson(res: Response): Promise<JsonResponse> {
@@ -224,6 +225,26 @@ describe('Pre-merge Gate Workflow', () => {
       const data = await readJson(response);
       expect(data.success).toBe(false);
       expect(data.error).toContain('Failed to get spec');
+    });
+
+    it('routes the shared GATE_PRE_MERGE_PATH constant, which the promotion worker merge train posts to', async () => {
+      // docs/plans/merge-train-gate-call-plan.md section 6 test 10: executeMerge and this route check share the
+      // constant, so renaming either side breaks this test
+      mockValidSpec();
+      mockVerdictRecording();
+
+      const requestBody = {
+        candidateId: TEST_CANDIDATE_ID,
+        specId: TEST_SPEC_ID,
+        commitSha: TEST_COMMIT_SHA,
+        baseCommitSha: TEST_BASE_COMMIT_SHA,
+        actorId: TEST_ACTOR_ID,
+      };
+
+      const response = await callHandler(GATE_PRE_MERGE_PATH, 'POST', requestBody);
+      expect(response.status).toBe(201);
+      const data = await readJson(response);
+      expect(data.success).toBe(true);
     });
   });
 

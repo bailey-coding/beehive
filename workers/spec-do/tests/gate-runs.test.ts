@@ -566,6 +566,31 @@ describe('finish', () => {
       // a legacy verdict is not a run: it never dedupes one
       expect((await start(s.cand.id, sha(5))).json.data).toMatchObject({ attempt: 1, status: 'running' });
     });
+
+    it('a repeat POST /api/gate-verdicts for the same (candidate, gate) upserts instead of 500 (merge-train gate call)', async () => {
+      // task merge-train-gate-call: the merge train's keyless pre-merge call must not hit UNIQUE(candidate_id, gate);
+      // gate_verdicts is the latest-summary table (schema-inline.ts:720), so the repeat updates the row in place
+      const s = seed('org-a');
+      const first = await call('/api/gate-verdicts', 'POST', { candidateId: s.cand.id, gate: 'pre-merge', status: 'fail', score: 10, complexityDelta: 3, decidedBy: actor, notes: 'push-path verdict' });
+      expect(first.status).toBe(201);
+      const second = await call('/api/gate-verdicts', 'POST', { candidateId: s.cand.id, gate: 'pre-merge', status: 'pass', score: 95, complexityDelta: 1, decidedBy: actor, notes: 'merge-train verdict' });
+      expect(second.status).toBe(201);
+      const rows = summary(s.cand.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: first.json.data.id,
+        status: 'pass',
+        score: 95,
+        complexity_delta: 1,
+        notes: 'merge-train verdict',
+      });
+      // both writes are in the history, on the same entity id
+      expect(count("SELECT COUNT(*) AS n FROM entity_history WHERE entity_type = 'gate_verdict' AND entity_id = ?", first.json.data.id)).toBe(2);
+      // a different gate still inserts its own row
+      const other = await call('/api/gate-verdicts', 'POST', { candidateId: s.cand.id, gate: 'shadow', status: 'pass', score: 90, complexityDelta: 0, decidedBy: actor });
+      expect(other.status).toBe(201);
+      expect(count('SELECT COUNT(*) AS n FROM gate_verdicts WHERE candidate_id = ?', s.cand.id)).toBe(2);
+    });
   });
 });
 

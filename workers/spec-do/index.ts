@@ -1841,19 +1841,27 @@ export class SpecDO {
     notes?: string
   ): GateVerdictRow {
     if (!this.db) throw new Error('Database not initialized');
-    
-    const id = generateId();
+
+    // gate_verdicts is the latest-summary table (UNIQUE(candidate_id, gate), schema-inline.ts:148): a repeat verdict
+    // for the same (candidate, gate) updates the row in place instead of throwing, like the gate-runs write below.
+    // The existing row id is reused so the history entry and the returned row stay on the same entity.
+    const [existing] = this.queryAll('SELECT id FROM gate_verdicts WHERE candidate_id = ? AND gate = ?', candidateId, gate);
+    const id = (existing?.id as string | undefined) ?? generateId();
+    const at = now();
     const stmt = this.db.prepare(
-      `INSERT INTO gate_verdicts 
-       (id, candidate_id, gate, status, score, complexity_delta, notes, created_at, decided_by, stage) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO gate_verdicts
+       (id, candidate_id, gate, status, score, complexity_delta, notes, created_at, decided_by, stage)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+       ON CONFLICT(candidate_id, gate) DO UPDATE SET
+         status = excluded.status, score = excluded.score, complexity_delta = excluded.complexity_delta,
+         notes = excluded.notes, created_at = excluded.created_at, decided_by = excluded.decided_by`
     );
-    stmt.bind(id, candidateId, gate, status, score, complexityDelta, notes || null, now(), decidedBy, 'pending');
+    stmt.bind(id, candidateId, gate, status, score, complexityDelta, notes || null, at, decidedBy);
     stmt.step();
     stmt.free();
-    
+
     this.recordHistory('gate_verdict', id, status, decidedBy, notes);
-    
+
     return {
       id,
       candidate_id: candidateId,
@@ -1862,7 +1870,7 @@ export class SpecDO {
       score,
       complexity_delta: complexityDelta,
       notes,
-      created_at: now(),
+      created_at: at,
       decided_by: decidedBy,
       stage: 'pending',
     };

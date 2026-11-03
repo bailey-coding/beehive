@@ -11,7 +11,8 @@ import {
   Rung,
   Env,
 } from './types';
-import { setCandidateStage, getPromotionLedger } from './spec-do';
+import { setCandidateStage, getPromotionLedger, getCandidate } from './spec-do';
+import { GATE_WORKFLOW_ORIGIN, GATE_PRE_MERGE_PATH } from '../shared/schemas';
 
 /**
  * Extended merge train type with ID
@@ -365,34 +366,67 @@ export class MergeTrainManager {
   }
 
   /**
-   * Execute merge via Gate Workflow
+   * Execute merge via the gate workflow: POST /gates/pre-merge over the GATE_WORKFLOW binding (absolute URL, bearer
+   * auth) and read the verdict — a car merges only on result.status === 'pass' (the route answers 201 with
+   * success: true even for a fail verdict). No Idempotency-Key: the car has no lease/attempt id, so a key could not
+   * be stable across a redelivery of one claim yet different across a retry of the same car
+   * (docs/plans/merge-train-gate-call-plan.md section 2 part 3).
    */
   private async executeMerge(candidate: MergeTrainCandidate): Promise<void> {
     console.log(`[MergeTrain] Executing merge for ${candidate.candidateId}`);
 
+    // Fail closed without the token, same as the queue consumer
+    if (!this.env.API_AUTH_TOKEN) {
+      throw new Error('API_AUTH_TOKEN not configured');
+    }
+
+    // A car carries only candidateId/specId; the commit shas live on the candidate row (camelCase in the API response)
+    const row = await getCandidate(this.env, candidate.candidateId);
+    const nonEmpty = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
+    const commitSha = nonEmpty(row.commitSha) ?? nonEmpty(row.commit_sha);
+    const baseCommitSha = nonEmpty(row.baseCommitSha) ?? nonEmpty(row.base_commit_sha);
+    if (!commitSha || !baseCommitSha) {
+      throw new Error(`Candidate ${candidate.candidateId} has no commitSha/baseCommitSha`);
+    }
+
     const response = await this.env.GATE_WORKFLOW.fetch(
-      '/run',
+      `${GATE_WORKFLOW_ORIGIN}${GATE_PRE_MERGE_PATH}`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.env.API_AUTH_TOKEN}`,
+          'X-Actor-ID': 'promotion-worker',
+        },
         body: JSON.stringify({
           candidateId: candidate.candidateId,
           specId: candidate.specId,
-          type: 'merge-promotion',
-          timestamp: new Date().toISOString(),
+          commitSha,
+          baseCommitSha,
+          actorId: 'promotion-worker',
         }),
       }
     );
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Gate workflow failed: ${error}`);
+      const text = (await response.text()).slice(0, 200);
+      throw new Error(`Gate answered ${response.status}: ${text}`);
     }
 
-    const result = await response.json() as { success: boolean; error?: string };
+    let body: { success?: unknown; verdictId?: unknown; result?: { status?: unknown; notes?: unknown } };
+    try {
+      body = await response.json() as typeof body;
+    } catch {
+      throw new Error(`Gate answered ${response.status} with a non-JSON body`);
+    }
 
-    if (!result.success) {
-      throw new Error(`Gate workflow returned failure: ${result.error || 'Unknown error'}`);
+    const status = body.result?.status;
+    if (body.success !== true || status !== 'pass') {
+      if (status === 'fail' || status === 'pending') {
+        throw new Error(`Pre-merge gate ${status} (verdict ${String(body.verdictId)}): ${String(body.result?.notes ?? '')}`);
+      }
+      // Never "empty is pass": a body without a pass verdict fails the car
+      throw new Error(`Gate answered ${response.status} without a pass verdict (success: ${String(body.success)}, result.status: ${String(status)})`);
     }
 
     console.log(`[MergeTrain] Gate workflow completed for ${candidate.candidateId}`);
