@@ -172,7 +172,7 @@ describe('front-half reuse', () => {
 });
 
 describe('arms subcommand flags', () => {
-  const ok = { 'release-pilot': true, run: 'cmp-1', arms: 'sonnet-medium,opus-medium', rows: 'A4,A5,A11', 'reuse-from': 'pilot-2' };
+  const ok: Record<string, string | true> = { 'release-pilot': true, run: 'cmp-1', arms: 'sonnet-medium,opus-medium', rows: 'A4,A5,A11', 'reuse-from': 'pilot-2' };
   it('accepts the plan\'s invocation, with --candidate-max-calls and a lowered --dollar-cap', () => {
     expect(() => validateFlags('arms', { ...ok, k: '3', 'candidate-max-calls': '20' })).not.toThrow();
     expect(() => validateFlags('arms', { ...ok, 'dollar-cap': '8' })).not.toThrow();
