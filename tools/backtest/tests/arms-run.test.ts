@@ -150,6 +150,7 @@ describe('arms run: two arms, K=2, interleaved, crossed grading', () => {
     expect(res.meta.reuse?.manifest).toMatch(/^[0-9a-f]{64}$/);
     expect(clients.flatMap((c) => c.requests).filter((r) => r.role === 'spec' || r.role === 'leakage' || r.role === 'issue')).toHaveLength(0);
     expect(res.rows[0].leakage!.wrongIssue).toMatchObject({ ran: true }); // leakage-1 reused, not run
+    expect(res.rows[0].referenceDiffersFromReused).toBe(false); // the reference recomputed at HEAD matches the reused one
   });
 
   it('records arm, model, effort and CLI version in run.json, every ledger entry and every candidate', () => {
@@ -236,6 +237,12 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
     const log: Log = [];
     const clients = [armClient('sonnet-medium', { 1: { write: APP_FIXED } }, log), armClient('opus-medium', { 1: { write: APP_FIXED } }, log)];
     const o = opts('arms-leak', corpus1, { k: 1, arms: armRuns(clients), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' });
+    // a reused reference that no longer matches HEAD's is flagged, not ignored
+    const stale = path.join(o.outDir, o.runId, 'rows/A1');
+    fs.mkdirSync(stale, { recursive: true });
+    const reused = JSON.parse(fs.readFileSync(path.join(sourceRun, 'rows/A1/reference.json'), 'utf8'));
+    reused.report.acceptance.passed -= 1;
+    fs.writeFileSync(path.join(stale, 'reference.reused.json'), JSON.stringify(reused));
     hoisted.historyCalls = 0;
     hoisted.failHistoryAt = 1; // the first candidate scheduled (whichever arm the seeded order puts first)
     let r;
@@ -251,6 +258,9 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
     expect(r.rows[0].perArm![second].blocked).toEqual([]);
     expect(r.rows[0].candidates.map((c) => c.arm!.arm)).toEqual([second]);
     expect(r.rows[0].leakage!.history!.passed).toBe(false);
+    expect(r.rows[0].referenceDiffersFromReused).toBe(true);
+    expect(r.rows[0].note).toMatch(/differs from the reused earlier reference/);
+    expect(fs.readFileSync(r.reportPath, 'utf8')).toMatch(/Reference differs from the reused one\*\* for A1/);
   }, 200_000);
 
   it('hitting the run-level dollar cap aborts the whole run, keeps partial results and writes the report', async () => {

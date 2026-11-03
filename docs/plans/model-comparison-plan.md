@@ -3,7 +3,7 @@
 Task: `model-comparison` | Spec: `docs/SPEC-BACKTEST-PLAN.md` (harness `tools/backtest/`) | Tier: default plan, independent review
 before code (the harness holds a sandbox and a spend ledger; no production code changes).
 Status: **rev 4 (diff-check wording fixes) on top of rev 3 after the verification pass (approve with changes: V1-V6); dispositions in section 10. Option 2 stays unapproved
-until its narrowed spike and a client plan amendment are reviewed. M1-M5 answered (section 8). Implementation of Option 1 can start after a quick diff check of rev 3; the dollar cap figure is re-stated at the run gate. Nothing implemented.**
+until its narrowed spike and a client plan amendment are reviewed. M1-M5 answered (section 8). Implementation of Option 1 can start after a quick diff check of rev 3; the dollar cap figure is re-stated at the run gate. Option 1 is implemented on branch `agent/model-comparison-opt1`, awaiting independent code review; nothing has been run against a model.**
 
 Two options, built in order. **Option 1 (cheap)**: Sonnet 5.5 medium vs Opus 5.5 medium through the existing `claude -p` path,
 on the three rows pilot-2 completed. **Option 2 (full)**: adds Mistral Medium 3.5 and Mistral Large 4 as candidate arms and a

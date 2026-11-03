@@ -123,6 +123,8 @@ export interface RowResult {
   leakage: LeakageResult | null;
   /** Arms runs: what is per row in a single-client run, kept per arm (status, grader calls, leakage test 3). */
   perArm?: Record<string, ArmRowState>;
+  /** Reused front half: the reference recomputed at HEAD differs from the earlier run's (acceptance, held-out outcomes, rungs). */
+  referenceDiffersFromReused?: boolean;
 }
 
 export interface ArmRowState {

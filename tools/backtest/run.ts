@@ -14,7 +14,7 @@ import { addedLinesOf, addWorktree, commitAndPush, createScratchRepo, diffOf, gi
 import { baseTokenSet, docAtBaseTest, historyTest, reachabilityTest, referenceMarkers, wrongIssueVerdict } from './leakage.ts';
 import { requireSandbox } from './sandbox.ts';
 import { loadHumanAnswers } from './sample.ts';
-import { acceptanceAgainstReference, baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig } from './oracles.ts';
+import { acceptanceAgainstReference, baselineReport, evaluateCheckout, linkDeps, loadHeldOut, runAcceptanceOn, type BaselineReport, type OracleConfig, type OracleReport } from './oracles.ts';
 import { installProbe } from './probe.ts';
 import { gradesOf, type ArmRowState, type CandidateResult, type Grade, type GraderTag, type LeakageResult, type RowResult, type RunMeta } from './results.ts';
 import { ACCEPTANCE_DIR, parseSpec, validateSpec, writeAcceptance, type ParsedSpec } from './spec.ts';
@@ -411,6 +411,16 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
     const falseRejected = !refReport.rungs.preMerge || refReport.rungs.conformance === false || refReport.rungs.shadow === false || heldBad;
     res.reference = { report: refReport, acceptancePassed: refAccepted, falseRejected };
     writeJson(path.join(dir, 'reference.json'), res.reference);
+    // A reused front half carries the earlier run's reference: flag any difference with the one recomputed at HEAD (never silently).
+    const reusedRef = path.join(dir, 'reference.reused.json');
+    if (fs.existsSync(reusedRef)) {
+      const digest = (r: OracleReport) => JSON.stringify({ acceptance: r.acceptance, heldOut: r.heldOut.outcomes, rungs: r.rungs, regressions: r.regressions });
+      res.referenceDiffersFromReused = digest(readJson<{ report: OracleReport }>(reusedRef).report) !== digest(refReport);
+      if (res.referenceDiffersFromReused) {
+        res.note = `${res.note ? `${res.note}; ` : ''}the reference recomputed at HEAD differs from the reused earlier reference (acceptance, held-out outcomes or rungs)`;
+        log(`${row.id}: reference at HEAD differs from the reused one`);
+      }
+    }
     log(`${row.id}: reference acceptance ${refReport.acceptance.passed}/${refReport.acceptance.total}${falseRejected ? ' (FALSE-REJECTED by a rung)' : ''}`);
 
     // ---- candidate arms: for each k every arm, in a seeded order (arms mode) or the single client (legacy)

@@ -12,3 +12,9 @@ patches and outputs, per-candidate JSON, ledgers) are git-ignored because they a
 Both reports were produced with the file-tools-only candidate mode (no Bash). They are stripped to summaries by
 `npm run backtest -- publish`: code blocks removed, token-shaped text redacted, home paths shortened. Nothing here is a
 verdict on the plan's A1-A3: the strict tier is not complete (`docs/SPEC-BACKTEST-PLAN.md`).
+
+Reports of `arms` runs (the model comparison, `docs/plans/model-comparison-plan.md`) are published the same way and have a different
+shape: an arms table (requested and CLI-reported model, effort, CLI version), candidate-only cost and outcomes per arm over the
+paired rows, unpaired rows apart, one label table per grader with their agreement, and the front-half and grading spend once. They
+are descriptive (few rows): only the deterministic endpoints are conclusions, and every model-judged number carries its grader and
+whether that grader is the candidates' own family. No `arms` report has been published yet.

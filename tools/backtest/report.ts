@@ -92,6 +92,8 @@ export function buildReport(meta: RunMeta, corpus: Corpus, rows: RowResult[], m:
   L.push('');
 
   if (meta.arms) {
+    const differs = rows.filter((r) => r.referenceDiffersFromReused).map((r) => r.id);
+    if (differs.length) L.push(`> **Reference differs from the reused one** for ${differs.join(', ')}: the reference recomputed at HEAD is not the one the reused spec was validated against.`, '');
     L.push(...armsSections(meta, computeArmsMetrics(rows, meta)));
     return L.join('\n');
   }
