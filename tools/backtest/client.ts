@@ -45,6 +45,12 @@ export interface ModelResponse {
   error?: string;
   /** Tools announced by the CLI's init event (used by the canary to prove Bash is absent). */
   initTools?: string[];
+  /** Model the CLI reported in its init event (the one that actually answered; may differ from the one requested). */
+  model?: string;
+  /** Usage was summed from per-message events because no result event arrived (a killed run): tokens are a lower bound. */
+  usageLowerBound?: boolean;
+  /** Set by BudgetedClient when costUsd is null: the upper bound charged toward the dollar cap, not a measurement. */
+  estimatedUsd?: number;
 }
 
 export interface ModelClient {
@@ -60,10 +66,14 @@ export interface FakeReply {
   text: string;
   calls?: number;
   usage?: Partial<Usage>;
-  costUsd?: number;
+  /** null: the CLI reported no cost (a killed run). Default 0. */
+  costUsd?: number | null;
   stopReason?: ModelResponse['stopReason'];
   initTools?: string[];
   error?: string;
+  /** The model the fake "CLI" reports in its init event. */
+  model?: string;
+  usageLowerBound?: boolean;
 }
 
 /** Deterministic client: a handler maps a request to a reply. It may write files into req.cwd to act as an agent. */
@@ -80,12 +90,14 @@ export class FakeClient implements ModelClient {
       text: r.text,
       calls: r.calls ?? 1,
       usage,
-      costUsd: r.costUsd ?? 0,
+      costUsd: r.costUsd === undefined ? 0 : r.costUsd,
       durationMs: 1,
       stopReason: r.stopReason ?? 'done',
       exitCode: r.stopReason === 'error' ? 1 : 0,
       error: r.error,
       initTools: r.initTools,
+      ...(r.model ? { model: r.model } : {}),
+      ...(r.usageLowerBound ? { usageLowerBound: true } : {}),
     };
   }
 }
@@ -94,6 +106,8 @@ export class FakeClient implements ModelClient {
 
 export const MODEL = 'claude-sonnet-5-5';
 export const EFFORT = 'medium';
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type Effort = (typeof EFFORTS)[number];
 
 /**
  * Env the CLI child may see: PATH, LANG, TERM, and a private HOME and CLAUDE_CONFIG_DIR (see claudeconfig.ts) that hold
@@ -134,13 +148,15 @@ const DENY = ['WebFetch', 'WebSearch', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(git
 export interface ArgOptions {
   allowBash?: boolean;
   model?: string;
+  /** Default 'medium' (the harness's one setting before arms existed). */
+  effort?: Effort;
 }
 
 export function buildClaudeArgs(req: Pick<ModelRequest, 'tools'>, opts: ArgOptions = {}): string[] {
   const args = [
     '-p',
     '--model', opts.model ?? MODEL,
-    '--effort', EFFORT,
+    '--effort', opts.effort ?? EFFORT,
     '--output-format', 'stream-json',
     '--verbose',
     '--no-session-persistence',
@@ -165,6 +181,10 @@ export interface StreamState {
   /** The latest assistant message asked for a tool, so another API call will follow unless the run is stopped. */
   pendingTool?: boolean;
   initTools?: string[];
+  /** Model named by the init event. */
+  model?: string;
+  /** Latest usage per assistant message id (a message streams as several events that repeat its usage). */
+  usageById?: Map<string, Usage>;
   result: Record<string, any> | null;
 }
 
@@ -182,11 +202,32 @@ export function parseStreamLine(line: string, st: StreamState): void {
     const t = blocks.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('');
     if (t) st.lastText = t;
     st.pendingTool = blocks.some((b: any) => b?.type === 'tool_use');
-  } else if (ev?.type === 'system' && ev.subtype === 'init' && Array.isArray(ev.tools)) {
-    st.initTools = ev.tools.map((t: unknown) => (typeof t === 'string' ? t : String((t as { name?: unknown })?.name ?? '')));
+    const mu = ev.message.usage;
+    if (mu && typeof mu === 'object') {
+      (st.usageById ??= new Map()).set(id, {
+        inputTokens: Number(mu.input_tokens) || 0,
+        outputTokens: Number(mu.output_tokens) || 0,
+        cacheReadTokens: Number(mu.cache_read_input_tokens) || 0,
+        cacheCreationTokens: Number(mu.cache_creation_input_tokens) || 0,
+      });
+    }
+  } else if (ev?.type === 'system' && ev.subtype === 'init') {
+    if (Array.isArray(ev.tools)) st.initTools = ev.tools.map((t: unknown) => (typeof t === 'string' ? t : String((t as { name?: unknown })?.name ?? '')));
+    if (typeof ev.model === 'string' && ev.model) st.model = ev.model;
   } else if (ev?.type === 'result') {
     st.result = ev;
   }
+}
+
+export function sumUsage(us: Usage[]): Usage {
+  const z: Usage = { ...ZERO_USAGE };
+  for (const u of us) {
+    z.inputTokens += u.inputTokens;
+    z.outputTokens += u.outputTokens;
+    z.cacheReadTokens += u.cacheReadTokens;
+    z.cacheCreationTokens += u.cacheCreationTokens;
+  }
+  return z;
 }
 
 export function responseFromStream(st: StreamState, durationMs: number, stopReason: ModelResponse['stopReason'], exit: { code: number | null; stderr: string } = { code: 0, stderr: '' }): ModelResponse {
@@ -195,6 +236,9 @@ export function responseFromStream(st: StreamState, durationMs: number, stopReas
   const turns = typeof r?.num_turns === 'number' ? r.num_turns : 0;
   const calls = st.assistantIds.size || turns;
   const isErr = r ? r.is_error === true : false;
+  // A killed run has no result event: fall back to the per-message usage seen so far (a lower bound, never zeros).
+  const seen = sumUsage([...(st.usageById?.values() ?? [])]);
+  const useSeen = !r?.usage && st.usageById !== undefined && st.usageById.size > 0;
   const failed = stopReason === 'done' && (isErr || !r || (exit.code !== 0 && exit.code !== null));
   const finalReason = stopReason !== 'done' ? stopReason : failed ? 'error' : 'done';
   // An error result's text is the CLI's error message, not model output: never return it as the reply.
@@ -203,12 +247,14 @@ export function responseFromStream(st: StreamState, durationMs: number, stopReas
   return {
     text,
     calls,
-    usage: {
+    usage: useSeen ? seen : {
       inputTokens: u.input_tokens ?? 0,
       outputTokens: u.output_tokens ?? 0,
       cacheReadTokens: u.cache_read_input_tokens ?? 0,
       cacheCreationTokens: u.cache_creation_input_tokens ?? 0,
     },
+    ...(useSeen ? { usageLowerBound: true } : {}),
+    ...(st.model ? { model: st.model } : {}),
     costUsd: typeof r?.total_cost_usd === 'number' ? r.total_cost_usd : null,
     durationMs,
     stopReason: finalReason,
@@ -224,6 +270,8 @@ export interface ClaudeCliOptions {
   config: PrivateConfig;
   /** Model override (the canary uses a deliberately bad id). */
   model?: string;
+  /** Reasoning effort passed as --effort (default 'medium'). */
+  effort?: Effort;
   /** Keep the Bash tool for candidates, run inside bwrap. Needs `bash`, a passing proveBashSandbox() result. */
   allowBash?: boolean;
   bash?: BashSandboxProof;
@@ -243,12 +291,15 @@ export class ClaudeCliClient implements ModelClient {
   private readonly allowBash: boolean;
   private readonly config: PrivateConfig;
   private readonly model: string;
+  private readonly effort: Effort;
   private readonly bwrap: string | null;
   private scriptDir: string | null = null;
 
   constructor(opts: ClaudeCliOptions) {
     this.config = opts.config;
     this.model = opts.model ?? MODEL;
+    this.effort = opts.effort ?? EFFORT;
+    if (!EFFORTS.includes(this.effort)) throw new Error(`effort ${JSON.stringify(opts.effort)} is not one of ${EFFORTS.join(', ')}`);
     this.bin = opts.bin ?? 'claude';
     this.allowBash = opts.allowBash === true;
     this.sandbox = null;
@@ -280,7 +331,7 @@ export class ClaudeCliClient implements ModelClient {
       extra.TMPDIR = req.bashBox.tmpDir;
     }
     const t0 = Date.now();
-    const r = await exec(this.bin, buildClaudeArgs(req, { allowBash: this.allowBash, model: this.model }), {
+    const r = await exec(this.bin, buildClaudeArgs(req, { allowBash: this.allowBash, model: this.model, effort: this.effort }), {
       cwd,
       env: childEnv(this.config, process.env, extra),
       timeoutMs: req.timeoutMs,

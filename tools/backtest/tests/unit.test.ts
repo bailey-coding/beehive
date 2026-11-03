@@ -158,6 +158,24 @@ describe('real client plumbing (no process spawned)', () => {
     expect(env).toEqual({ CI: '1', NO_COLOR: '1', HOME: '/priv/home', CLAUDE_CONFIG_DIR: '/priv/config', PATH: '/bin', LANG: 'C', TERM: 'xterm' });
     expect(JSON.stringify(env)).not.toContain('/home/real');
   });
+  it('effort lands in --effort (default medium, any valid level), and an invalid level is refused', () => {
+    expect(buildClaudeArgs({ tools: 'agent' }, { effort: 'high' }).join(' ')).toContain('--effort high');
+    expect(buildClaudeArgs({ tools: 'agent' }, { model: 'claude-opus-5-5', effort: 'max' }).join(' ')).toMatch(/--model claude-opus-5-5 --effort max/);
+    expect(() => new ClaudeCliClient({ config: PRIV as never, effort: 'extreme' as never })).toThrow(/effort/);
+  });
+  it('the init event names the model; per-message usage is kept once per message id and used when no result arrives (a killed run)', () => {
+    const st: StreamState = { assistantIds: new Set<string>(), lastText: '', result: null };
+    const msg = (id: string, out: number) => JSON.stringify({ type: 'assistant', message: { id, content: [{ type: 'tool_use' }], usage: { input_tokens: 10, output_tokens: out, cache_read_input_tokens: 100, cache_creation_input_tokens: 5 } } });
+    for (const l of [JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', tools: ['Read'] }), msg('m1', 3), msg('m1', 7), msg('m2', 4)]) parseStreamLine(l, st);
+    expect(st.model).toBe('claude-opus-5-5');
+    const killed = responseFromStream(st, 5, 'call-limit');
+    expect(killed).toMatchObject({ stopReason: 'call-limit', costUsd: null, model: 'claude-opus-5-5', usageLowerBound: true, calls: 2, usage: { inputTokens: 20, outputTokens: 11, cacheReadTokens: 200, cacheCreationTokens: 10 } });
+    // a result event wins over the per-message sum
+    parseStreamLine(JSON.stringify({ type: 'result', is_error: false, result: 'x', total_cost_usd: 0.1, usage: { input_tokens: 1, output_tokens: 2 } }), st);
+    const done = responseFromStream(st, 5, 'done');
+    expect(done.usage).toMatchObject({ inputTokens: 1, outputTokens: 2 });
+    expect(done.usageLowerBound).toBeUndefined();
+  });
   it('redacts token-shaped text and trims', () => {
     const t = redact('auth failed: Bearer abcdefghijklmnop1234 key=sk-ant-api03-AAAAAAAAAAAAAAAAAAAA token: ghp_abcdefghijklmnopqrstuv cfg eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.abc');
     expect(t).not.toMatch(/abcdefghijklmnop1234|sk-ant|ghp_abc|eyJhbGci/);
