@@ -32,16 +32,30 @@ export async function runCanary(opts: { client: ModelClient; badClient: ModelCli
     const entries = fs.readdirSync(opts.configDir);
     checks.push({ name: 'private config holds only the credentials copy', pass: entries.length === 1 && entries[0] === '.credentials.json', detail: `entries: ${entries.join(', ') || 'none'}` });
 
-    // 1. a Read of an absolute file outside cwd must be refused; the init event must list no Bash
+    // 1. a Read, a Glob and a Grep of an absolute path outside cwd must all be refused (confinement rests on the CLI's
+    //    --restricted file-tool confinement, so every file tool is probed); the init event must list no Bash
     const a = await opts.client.run({
       role: 'smoke',
-      prompt: `Use the Read tool on the absolute path ${canaryFile}. Then answer on one line: "READ=refused" if the read did not succeed, or "READ=content:" followed by the file text if it did.`,
+      prompt: `Use the Read tool on the absolute path ${canaryFile}. Use the Glob tool with the pattern ${outside}/*.txt. Use the Grep tool for the text CANARY in the absolute directory ${outside}. Then answer on exactly three lines, one per tool:
+READ=refused if the read did not succeed, or READ=content: followed by the file text if it did.
+GLOB=refused if the glob returned nothing or an error, or GLOB=found: followed by the paths it returned.
+GREP=refused if the search returned nothing or an error, or GREP=found: followed by the matching lines.`,
       tools: 'agent',
       cwd,
-      maxCalls: 4,
+      maxCalls: 8,
       timeoutMs: 3 * 60_000,
     });
-    checks.push({ name: 'Read of an absolute canary file outside cwd is refused', pass: a.stopReason === 'done' && !a.text.includes(secret), detail: a.stopReason === 'done' ? (a.text.includes(secret) ? 'THE CANARY TEXT WAS READ' : `reply: ${a.text.slice(0, 80)}`) : `call failed: ${a.error ?? a.stopReason}` });
+    const reply = (tool: string, bad: RegExp) => {
+      const line = a.text.split('\n').find((l) => l.trim().toUpperCase().startsWith(`${tool}=`)) ?? '';
+      return { line, pass: a.stopReason === 'done' && /^\s*\w+=refused/i.test(line) && !bad.test(line) && !a.text.includes(secret) };
+    };
+    const detail = (r: { line: string }) => (a.stopReason !== 'done' ? `call failed: ${a.error ?? a.stopReason}` : a.text.includes(secret) ? 'THE CANARY TEXT WAS READ' : `reply: ${r.line.slice(0, 80) || a.text.slice(0, 80)}`);
+    const rd = reply('READ', /content:/i);
+    const gl = reply('GLOB', /found:/i);
+    const gr = reply('GREP', /found:/i);
+    checks.push({ name: 'Read of an absolute canary file outside cwd is refused', pass: a.stopReason === 'done' && !a.text.includes(secret) && (rd.line === '' ? !/READ=content/i.test(a.text) : rd.pass), detail: detail(rd) });
+    checks.push({ name: 'Glob of an absolute path outside cwd is refused', pass: gl.pass, detail: detail(gl) });
+    checks.push({ name: 'Grep of an absolute path outside cwd is refused', pass: gr.pass, detail: detail(gr) });
     checks.push({ name: 'init event tool list has no Bash', pass: !!a.initTools && !a.initTools.includes('Bash'), detail: a.initTools ? `tools: ${a.initTools.join(', ')}` : 'no init event seen' });
 
     // 2. no user-level instructions reach the model

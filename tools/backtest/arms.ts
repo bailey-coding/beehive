@@ -93,6 +93,10 @@ export async function claudeCliVersion(bin = 'claude'): Promise<string> {
 // ---------------------------------------------------------------- pre-flight
 
 export const GRADE_MAX_CALLS = 2;
+/** Run-level dollar cap for an arms run (plan M2): --dollar-cap can only lower it. */
+export const ARMS_DOLLAR_CAP_USD = 15;
+/** Candidate maxCalls of an arms run (plan 2.2: the observed maximum is 11; the single-client default is 40). */
+export const ARMS_CANDIDATE_MAX_CALLS = 20;
 /** Reserve for the canary on both clients (3-6 calls, plan 2.2). */
 export const CANARY_RESERVE_CALLS = 6;
 

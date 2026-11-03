@@ -5,8 +5,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ARM_TABLE, assertPreflight, pricingOf, preflight, reuseFrontHalf, selectArms, seededOrder, validateArmTable, type ArmSpec } from '../arms.ts';
 import { BudgetExceeded, BudgetTracker, BudgetedClient, DollarMeter, costFromTokens, worstCallUsd } from '../budget.ts';
+import { validateFlags } from '../cli.ts';
 import { FakeClient } from '../client.ts';
 import type { CorpusRow } from '../corpus.ts';
+import { exec } from '../exec.ts';
 
 const spec = (over: Partial<ArmSpec> = {}): ArmSpec => ({ ...ARM_TABLE[0], ...over });
 const req = (maxCalls = 4) => ({ role: 'candidate' as const, rowId: 'A1', prompt: '', tools: 'agent' as const, maxCalls, timeoutMs: 1 });
@@ -166,5 +168,31 @@ describe('front-half reuse', () => {
     const s = source();
     fs.rmSync(path.join(s, 'rows/A4/spec.json'));
     expect(() => reuseFrontHalf({ fromRunDir: s, toRunDir: to(), rows: [row], harness })).toThrow(/spec.json is missing/);
+  });
+});
+
+describe('arms subcommand flags', () => {
+  const ok = { 'release-pilot': true, run: 'cmp-1', arms: 'sonnet-medium,opus-medium', rows: 'A4,A5,A11', 'reuse-from': 'pilot-2' };
+  it('accepts the plan\'s invocation, with --candidate-max-calls and a lowered --dollar-cap', () => {
+    expect(() => validateFlags('arms', { ...ok, k: '3', 'candidate-max-calls': '20' })).not.toThrow();
+    expect(() => validateFlags('arms', { ...ok, 'dollar-cap': '8' })).not.toThrow();
+  });
+  it('rejects unknown flags, missing required ones, a raised dollar cap and an out-of-range call limit', () => {
+    expect(() => validateFlags('arms', { ...ok, 'hard-stop': '100' })).toThrow(/unknown flag --hard-stop/);
+    expect(() => validateFlags('arms', { ...ok, 'allow-bash': true })).toThrow(/unknown flag --allow-bash/);
+    for (const need of ['run', 'arms', 'rows', 'reuse-from']) expect(() => validateFlags('arms', { ...ok, [need]: true })).toThrow(new RegExp(`--${need}`));
+    expect(() => validateFlags('arms', { ...ok, 'dollar-cap': '16' })).toThrow(/between 0 and 15/);
+    expect(() => validateFlags('arms', { ...ok, 'candidate-max-calls': '41' })).toThrow(/between 1 and 40/);
+    expect(() => validateFlags('arms', { ...ok, 'candidate-max-calls': '2.5' })).toThrow(/integer/);
+    expect(() => validateFlags('pilot', { 'candidate-max-calls': '20' })).toThrow(/unknown flag --candidate-max-calls/); // the single-client run keeps its flags
+    expect(() => validateFlags('canary', { 'release-pilot': true, arms: 'sonnet-medium,opus-medium' })).not.toThrow();
+  });
+  it('refuses to spend without --release-pilot, before anything else happens', async () => {
+    const root = path.resolve(__dirname, '..', '..', '..');
+    const { 'release-pilot': _skip, ...noRelease } = ok;
+    const args = Object.entries(noRelease).flatMap(([k, v]) => [`--${k}`, String(v)]);
+    const r = await exec('node', ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', 'tools/backtest/cli.ts', 'arms', ...args], { cwd: root, env: { PATH: process.env.PATH } });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/--release-pilot/);
   });
 });
