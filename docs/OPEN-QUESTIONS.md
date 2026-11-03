@@ -1177,3 +1177,22 @@ Still open: partial-clone support, FUSE in the Sandbox image, async-mount creden
 Not fixed in D2 (plan rev 3 scope: target selection by chain identity). Planned home: `candidateExposure()` in M5a-2 PR-G, whose `rollbackHead` rule is "ineligible target -> empty ref" (`docs/M5A-2-GOVERNANCE-PLAN.md`); a smaller fix is a `deleted_at` check in `rollbackTarget` that treats such a ref as withdrawn.
 
 **Status**: Open (owner: PR-G).
+
+## 2026-11-03: gate-workflow and queue-consumer builds failed on the 27c74e2 push (Could not resolve "zod"); CI did not catch it
+
+The cf push of `27c74e2` (2026-11-03 09:46Z) built eight workers and **failed two**: `beehive-gate-workflow` (build `b55aaadf`) and
+`beehive-queue-consumer` (build `f6f34faf`), both `Could not resolve "zod"` at `workers/shared/schemas.ts:22`. Both gained an
+import of `GATE_PRE_MERGE_PATH` / `GATE_WORKFLOW_ORIGIN` from `workers/shared/schemas.ts` (task `merge-train-gate-call`), a
+zod-using shared module; neither had the `postinstall` that installs zod into `workers/shared` (the 2026-10-16 "Three workers did
+not redeploy" cause, same fix). Both kept their previous deployments (10-28), so production ran new promotion-worker and Spec
+DO code against the old gate worker; the shared constant is the same path, so the merge-train call still resolves.
+`scripts/prod-health.sh` was green anyway (it cannot see build failures).
+
+Why CI was green: `.github/workflows/ci.yml:66` runs `npm install` in `workers/shared` **before** the per-worker builds
+("clean-install-build" says it simulates Workers Builds), so a missing `postinstall` is masked. The CI step should not
+pre-install shared, or should assert that every worker importing a zod-using shared module declares the postinstall.
+
+**Fix**: branch `agent/shared-zod-postinstall` adds the same `postinstall` to both workers; verified in a clean `git archive`
+copy (per-worker `npm install`, then `wrangler deploy --dry-run` builds both). Not yet pushed to `cf`.
+
+**Status**: Fix on a branch, not merged or deployed; CI gap open.
