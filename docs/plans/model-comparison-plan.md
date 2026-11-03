@@ -3,7 +3,7 @@
 Task: `model-comparison` | Spec: `docs/SPEC-BACKTEST-PLAN.md` (harness `tools/backtest/`) | Tier: default plan, independent review
 before code (the harness holds a sandbox and a spend ledger; no production code changes).
 Status: **rev 2 after Review 1 (approve with changes: B1-B3, S1-S9); dispositions in section 9. Option 2 stays unapproved
-until its narrowed spike and a client plan amendment are reviewed. Nothing implemented.**
+until its narrowed spike and a client plan amendment are reviewed. M1-M5 answered (section 8); awaiting the reviewer's verification pass on rev 2. Nothing implemented.**
 
 Two options, built in order. **Option 1 (cheap)**: Sonnet 5.5 medium vs Opus 5.5 medium through the existing `claude -p` path,
 on the three rows pilot-2 completed. **Option 2 (full)**: adds Mistral Medium 3.5 and Mistral Large 4 as candidate arms and a
@@ -160,14 +160,15 @@ stop-reason mapping against recorded fixtures.
 - Is reusing pilot-2's frozen front half safe (prompt unchanged since `94e20af`; hashes)?
 - Is the call estimate (about 270-290) right, and does the dollar cap work with `costUsd` null for some roles?
 
-## 8. Decisions for the maintainer
+## 8. Decisions for the maintainer (answered 2026-11-03: "your recommendations")
 
-- **M1:** Option 1 first, then Option 2 after the narrowed S1 (recommended).
-- **M2:** a dollar cap for the comparison run, and acceptance that it fails closed on unknown cost.
-- **M3 (replaces cross-grading):** fully crossed grading, or one fixed grader outside both families (e.g. GLM-5.3 via Vibe,
-  Option 2 only).
-- **M4:** rows: A4, A5, A11 (recommended: front half exists, fits the ledger) or all 10 (needs ledger and issue-text approvals).
-- **M5:** extend the pilot's same-family-grader waiver to Option 1, or require the crossed design (recommended).
+- **M1: Option 1 first, then Option 2 after the narrowed S1.** Accepted.
+- **M2: a dollar cap for the comparison run that fails closed on unknown cost.** Accepted in principle. **The figure is set at the
+  run gate (section 4 step 3)**, from the one-Opus-candidate cost probe and pilot-2's $2.12 for nine Sonnet sessions; no number is
+  assumed here, and no model call is made before the maintainer states it.
+- **M3: fully crossed grading.** Accepted (one fixed non-Claude grader stays an Option 2 alternative).
+- **M4: rows A4, A5, A11.** Accepted (all 10 would need a ledger-cap plan amendment and issue-text approvals).
+- **M5: the pilot's same-family-grader waiver is not extended;** Option 1 uses the crossed design.
 
 ## 9. Review 1 dispositions (independent agent, approve with changes)
 
