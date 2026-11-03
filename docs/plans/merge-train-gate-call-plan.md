@@ -102,9 +102,12 @@ Two parts: (0) make the Spec DO's legacy verdict write an upsert so the train's 
 
 ## 4. Mixed-version window (one push deploys all ten workers)
 
-Promotion worker only. The gate worker, Spec DO, routes and schemas are untouched. Old promotion worker + new gate: still
-fails every car (as today). New promotion worker + old gate: the same `/gates/pre-merge` route exists in both. No ordering
-dependency. Rollback: redeploying the old worker brings the 404 back; nothing is stored.
+Three workers change: promotion worker, gate worker (route check uses the shared constant — same route, no behavior
+change), Spec DO (the verdict upsert). Old promotion worker + new DO: cars still fail on the 404 as today; the upsert only
+changes repeat verdict writes from 500 to 201 (a strict improvement for the queue-consumer path too). New promotion
+worker + old DO: the train's keyless verdict write hits the plain INSERT and 500s again — the car fails, same as today,
+so no new failure mode. New gate worker + old promotion worker: unchanged. No ordering dependency beyond the usual
+one-push-deploys-all-ten. Rollback: redeploying the old workers brings the 404 and the 500 back; nothing is stored.
 
 ## 5. Behavior change to accept
 
