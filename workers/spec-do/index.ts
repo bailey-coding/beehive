@@ -1842,7 +1842,7 @@ export class SpecDO {
   ): GateVerdictRow {
     if (!this.db) throw new Error('Database not initialized');
 
-    // gate_verdicts is the latest-summary table (UNIQUE(candidate_id, gate), schema-inline.ts:148): a repeat verdict
+    // gate_verdicts is the latest-summary table (UNIQUE(candidate_id, gate), schema-inline.ts:147): a repeat verdict
     // for the same (candidate, gate) updates the row in place instead of throwing, like the gate-runs write below.
     // The existing row id is reused so the history entry and the returned row stay on the same entity.
     const [existing] = this.queryAll('SELECT id FROM gate_verdicts WHERE candidate_id = ? AND gate = ?', candidateId, gate);

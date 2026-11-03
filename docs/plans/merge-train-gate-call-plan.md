@@ -2,8 +2,9 @@
 
 Task: `merge-train-gate-call` | Spec: `docs/OPEN-QUESTIONS.md` "2026-10-30: promotion worker calls a gate route that does not
 exist" | Tier: default plan with heavy review (AGENTS.md rule 2 spine: promotion train + DO ledger; rule "check `Response.ok`").
-Status: **rev 2 — review 1 (agent `plan-review-gate-call`) returned approve with changes; dispositions applied below.**
-Nothing implemented.
+Status: **implemented and code-reviewed (branch `agent/merge-train-gate-call`, commit `e1bdbc2`).** Plan rev 2 after two
+independent reviews (plan reviews 1-2, approve with changes, dispositions in sections 10 and 12); code review approve
+(section 12). Ready for merge to `main`.
 
 ## 1. Facts (line numbers at `c948b29`; `git diff 8e495e2..HEAD -- workers/` is empty)
 
@@ -207,3 +208,20 @@ Review 1 (agent `plan-review-gate-call`, approve with changes) answered the orig
   `spec-do/index.ts:4062-4079`, via the edge/DO probe).
 - **M3:** the upsert of `gate_verdicts` (latest wins, history kept) — recommended, matches the gate-runs path; the
   alternative is keeping the plain INSERT and having the train read the existing verdict instead of re-gating.
+
+## 12. Code review of the implementation (commit `e1bdbc2`, agent `code-review-gate-call`): approve, dispositions
+
+- **Verdict: approve.** No blockers, no should-fix. Verified: a failing gate cannot merge a car (every non-pass path in
+  `executeMerge` throws, and the outcome write merges only when `failureReason === null`); nothing escapes
+  `processMergeTrain`'s guarded call; the upsert mirrors the gate-runs precedent and is single-threaded-safe inside the
+  DO; the diff touches exactly the section 8 file list; `API_AUTH_TOKEN` on the promotion worker is documented
+  (`docs/OPS.md:220`, `docs/SETUP.md:25-34`) and a missing secret fails closed, same posture as the queue consumer.
+  Reviewer's test run: 3 files / 139 tests green, typecheck clean.
+- **Finding 1 (nit, fixed):** the comment in `createGateVerdict` cited `schema-inline.ts:148` for the UNIQUE; it is at
+  `schema-inline.ts:147` — corrected.
+- **Finding 2 (follow-up, not done, out of scope):** `workers/queue-consumer/index.ts:330` and
+  `workers/spec-do/index.ts:4819` still hardcode the gate URL instead of `GATE_WORKFLOW_ORIGIN + GATE_PRE_MERGE_PATH`
+  (the spec-do call uses its own `https://gate-workflow` host). Disposition: leave for a one-line consistency follow-up;
+  no drift risk today because the gate's own route check uses the constant, so a path rename breaks the contract test.
+- Plan-optional item not added: section 6 test 5's 409-inFlight / 200-replay mock-robustness cases (allowed, not
+  required; keyless-unreachable on the real route).
