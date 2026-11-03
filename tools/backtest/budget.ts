@@ -20,6 +20,63 @@ export interface LedgerEntry {
   costUsd: number | null;
   durationMs: number;
   stopReason: ModelResponse['stopReason'];
+  /** Arms runs: who made the call (absent in single-client runs and in older ledgers). */
+  runId?: string;
+  arm?: string;
+  /** Requested model / effort / CLI version, and the model the CLI reported in its init event. */
+  model?: string;
+  effort?: string;
+  cliVersion?: string;
+  cliAlias?: string;
+  reportedModel?: string;
+  /** What this call counted toward the dollar cap: costUsd, or an upper bound when costUsd is null (costEstimated). */
+  chargedUsd?: number;
+  costEstimated?: boolean;
+}
+
+/** USD per million tokens. */
+export interface Rates {
+  inputPerM: number;
+  outputPerM: number;
+  cacheReadPerM: number;
+  cacheCreationPerM: number;
+}
+
+export function costFromTokens(u: Usage, r: Rates): number {
+  return (u.inputTokens * r.inputPerM + u.outputTokens * r.outputPerM + u.cacheReadTokens * r.cacheReadPerM + u.cacheCreationTokens * r.cacheCreationPerM) / 1e6;
+}
+
+/** A deliberately generous single API call (observed pilot calls are about a tenth of this); the per-call estimate when nothing else is known. */
+export const WORST_CALL: Usage = { inputTokens: 10_000, outputTokens: 6_000, cacheReadTokens: 120_000, cacheCreationTokens: 20_000 };
+export const worstCallUsd = (r: Rates): number => costFromTokens(WORST_CALL, r);
+
+export interface Pricing {
+  rates: Rates;
+  worstCallUsd: number;
+}
+
+/**
+ * Run-level dollar cap. Spend is read from the ledger entries of this run (chargedUsd), so it survives a resume and no
+ * state lives outside the ledger. Entries without a charge (older ledgers, unpriced clients) count as zero.
+ */
+export class DollarMeter {
+  constructor(readonly capUsd: number, private readonly tracker: BudgetTracker, readonly runId: string) {}
+  private mine(): LedgerEntry[] {
+    return this.tracker.ledger.filter((e) => e.runId === this.runId);
+  }
+  get chargedUsd(): number {
+    return this.mine().reduce((n, e) => n + (e.chargedUsd ?? 0), 0);
+  }
+  get estimatedUsd(): number {
+    return this.mine().filter((e) => e.costEstimated).reduce((n, e) => n + (e.chargedUsd ?? 0), 0);
+  }
+}
+
+export interface BudgetedOptions {
+  ident?: { runId?: string; arm: string; model: string; effort: string; cliVersion: string; cliAlias: string };
+  /** With a meter, every call must be priced: no pricing means no per-call estimate, so the run aborts before the call. */
+  pricing?: Pricing;
+  meter?: DollarMeter;
 }
 
 export class BudgetTracker {
@@ -81,17 +138,43 @@ export class BudgetTracker {
 /** Wraps a client: refuses to start past the hard stop, clamps each run's call limit to what remains, records everything. */
 export class BudgetedClient implements ModelClient {
   /** throwOnError: a failed call (auth, bad model, crash) aborts the run instead of becoming silent empty text. */
-  constructor(private readonly inner: ModelClient, readonly tracker: BudgetTracker, private readonly throwOnError = true) {}
+  constructor(private readonly inner: ModelClient, readonly tracker: BudgetTracker, private readonly throwOnError = true, private readonly opts: BudgetedOptions = {}) {}
   get name(): string {
     return this.inner.name;
   }
   async run(req: ModelRequest): Promise<ModelResponse> {
     const t = this.tracker;
     if (t.remaining <= 0) throw new BudgetExceeded(`hard stop: ${t.used}/${t.hardStop} calls used`);
+    const { meter, pricing, ident } = this.opts;
+    const maxCalls = Math.min(req.maxCalls, t.remaining);
+    if (meter) {
+      // Checked before every call: the call's own worst case (maxCalls x the per-call estimate) must still fit under the cap.
+      if (!pricing) throw new BudgetExceeded(`dollar cap: no per-call estimate for arm ${ident?.arm ?? '?'}; refusing before its first priced call`);
+      const bound = maxCalls * pricing.worstCallUsd;
+      if (meter.chargedUsd + bound > meter.capUsd) throw new BudgetExceeded(`dollar cap $${meter.capUsd.toFixed(2)}: $${meter.chargedUsd.toFixed(2)} charged, and the next ${req.role} call could cost up to $${bound.toFixed(2)}`);
+    }
     const clamped = req.maxCalls > t.remaining;
-    const res = await this.inner.run({ ...req, maxCalls: Math.min(req.maxCalls, t.remaining) });
-    t.ledger.push({ role: req.role, rowId: req.rowId, calls: res.calls, usage: res.usage, costUsd: res.costUsd, durationMs: res.durationMs, stopReason: res.stopReason });
+    const res = await this.inner.run({ ...req, maxCalls });
+    // A null costUsd (a killed run) is charged at an upper bound so a timeout cannot hide spend: tokens seen plus one
+    // in-flight call when any were seen, else maxCalls x the per-call estimate. Labelled estimated; never a measurement.
+    let chargedUsd: number | undefined;
+    let estimated = false;
+    if (pricing) {
+      if (res.costUsd !== null) chargedUsd = res.costUsd;
+      else {
+        estimated = true;
+        const u = res.usage;
+        const seen = u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheCreationTokens > 0;
+        chargedUsd = seen ? costFromTokens(u, pricing.rates) + pricing.worstCallUsd : maxCalls * pricing.worstCallUsd;
+      }
+    }
+    t.ledger.push({
+      role: req.role, rowId: req.rowId, calls: res.calls, usage: res.usage, costUsd: res.costUsd, durationMs: res.durationMs, stopReason: res.stopReason,
+      ...(ident ? { runId: ident.runId, arm: ident.arm, model: ident.model, effort: ident.effort, cliVersion: ident.cliVersion, cliAlias: ident.cliAlias, ...(res.model ? { reportedModel: res.model } : {}) } : {}),
+      ...(chargedUsd !== undefined ? { chargedUsd, ...(estimated ? { costEstimated: true } : {}) } : {}),
+    });
     t.persist();
+    if (meter && meter.chargedUsd > meter.capUsd) throw new BudgetExceeded(`dollar cap $${meter.capUsd.toFixed(2)} exceeded: $${meter.chargedUsd.toFixed(2)} charged`);
     if (this.throwOnError && res.stopReason === 'error') {
       throw new BudgetExceeded(`model call failed (${req.role}${req.rowId ? ` ${req.rowId}` : ''}): ${res.error ?? `exit code ${res.exitCode}`}`);
     }
@@ -99,6 +182,6 @@ export class BudgetedClient implements ModelClient {
       // The run was cut by the global limit, not its own: surface it so the caller aborts cleanly.
       throw new BudgetExceeded(`hard stop reached mid-run: ${t.used}/${t.hardStop} calls used`);
     }
-    return res;
+    return estimated ? { ...res, estimatedUsd: chargedUsd } : res;
   }
 }

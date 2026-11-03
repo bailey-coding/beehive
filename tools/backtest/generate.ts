@@ -7,7 +7,11 @@ import { parseSpec, validateSpec, type ParsedSpec, type SpecValidation, type Tes
 import { ACCEPTANCE_DIR } from './spec.ts';
 import { LABELS, type CallCost, type Label, type SpecAttempt } from './results.ts';
 
-export const cost = (r: ModelResponse): CallCost => ({ calls: r.calls, usage: r.usage, costUsd: r.costUsd, durationMs: r.durationMs });
+export const cost = (r: ModelResponse): CallCost => ({
+  calls: r.calls, usage: r.usage, costUsd: r.costUsd, durationMs: r.durationMs,
+  ...(r.estimatedUsd !== undefined ? { estimatedUsd: r.estimatedUsd } : {}),
+  ...(r.stopReason === 'call-limit' || r.stopReason === 'timeout' ? { killed: true } : {}),
+});
 
 export function sumCost(cs: CallCost[]): CallCost {
   const z: CallCost = { calls: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, costUsd: 0, durationMs: 0 };
@@ -19,6 +23,8 @@ export function sumCost(cs: CallCost[]): CallCost {
     z.usage.cacheReadTokens += c.usage.cacheReadTokens;
     z.usage.cacheCreationTokens += c.usage.cacheCreationTokens;
     z.costUsd = z.costUsd === null || c.costUsd === null ? null : z.costUsd + c.costUsd;
+    if (c.estimatedUsd !== undefined) z.estimatedUsd = (z.estimatedUsd ?? 0) + c.estimatedUsd;
+    if (c.killed) z.killed = true;
   }
   return z;
 }
