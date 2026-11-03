@@ -468,16 +468,13 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           cr.arm = armIdent(arm.run.spec, arm.run.cliVersion);
           cr.promptHash = sha256(prompt);
         }
+        let reported: string | undefined;
         try {
           const run = await arm.client.run({ role: 'candidate', rowId: row.id, prompt, tools: 'agent', cwd: wt, ...(o.allowBash ? { bashBox: { agentRoot: croot, cwd: wt, tmpDir: agentTmp } } : {}), maxCalls: o.candidateMaxCalls ?? 40, timeoutMs: o.candidateTimeoutMs ?? 30 * 60_000 });
           cr.cost = cost(run);
           cr.stopReason = run.stopReason;
-          if (arm.run) {
-            // Record the model the CLI reported; refuse a resume that now sees a different one for this arm.
-            cr.arm = armIdent(arm.run.spec, arm.run.cliVersion, run.model);
-            const earlier = res.candidates.find((c) => c.arm?.arm === arm.id && c.arm.modelFromInit);
-            if (run.model && earlier && earlier.arm!.model !== run.model) throw new Error(`arm ${arm.id} reported model ${run.model}, but an earlier candidate of this run reported ${earlier.arm!.model}: results of two models are never mixed`);
-          }
+          reported = run.model;
+          if (arm.run) cr.arm = armIdent(arm.run.spec, arm.run.cliVersion, run.model);
         } catch (e) {
           if (e instanceof BudgetExceeded) {
             // Always-pushed invariant: whatever the agent left is committed and pushed to scratch before aborting.
@@ -486,6 +483,9 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           }
           cr.error = e instanceof Error ? e.message : String(e);
         }
+        // Refuse a resume that now sees another model for this arm (checked outside the try: it must not become a candidate error).
+        const earlier = res.candidates.find((c) => c.arm?.arm === arm.id && c.arm.modelFromInit);
+        if (reported && earlier && earlier.arm!.model !== reported) throw new Error(`arm ${arm.id} reported model ${reported}, but an earlier candidate of this run reported ${earlier.arm!.model}: results of two models are never mixed`);
         cr.commit = await commitAndPush(wt, branch, `candidate ${tag}`);
         cr.changedFiles = (await git(wt, ['diff', '--name-only', 'main', 'HEAD'])).split('\n').filter((f) => f && !f.startsWith(ACCEPTANCE_DIR));
         const patch = await git(wt, ['diff', 'main', 'HEAD', '--', '.', `:!${ACCEPTANCE_DIR}`]);
