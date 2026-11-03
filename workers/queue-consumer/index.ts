@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { CandidateResponse } from '../api/types';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
+import { GATE_WORKFLOW_ORIGIN, GATE_PRE_MERGE_PATH } from '../shared/schemas';
 
 export interface Queue {
   send: (message: any) => Promise<void>;
@@ -327,7 +328,7 @@ async function processMessage(
 
   // Trigger pre-merge gate workflow via service binding; the gate dedupes a repeat of this key
   const gateResponse = await env.GATE_WORKFLOW.fetch(
-    new Request(`http://beehive-gate-workflow/gates/pre-merge`, {
+    new Request(`${GATE_WORKFLOW_ORIGIN}${GATE_PRE_MERGE_PATH}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

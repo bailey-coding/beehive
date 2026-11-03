@@ -221,7 +221,8 @@ Review 1 (agent `plan-review-gate-call`, approve with changes) answered the orig
   `schema-inline.ts:147` — corrected.
 - **Finding 2 (follow-up, not done, out of scope):** `workers/queue-consumer/index.ts:330` and
   `workers/spec-do/index.ts:4819` still hardcode the gate URL instead of `GATE_WORKFLOW_ORIGIN + GATE_PRE_MERGE_PATH`
-  (the spec-do call uses its own `https://gate-workflow` host). Disposition: leave for a one-line consistency follow-up;
-  no drift risk today because the gate's own route check uses the constant, so a path rename breaks the contract test.
+  (the spec-do call uses its own `https://gate-workflow` host). Disposition: queue-consumer now uses the constants (same URL as
+  before, tests green). The Spec DO call is left: it uses its own `https://gate-workflow` host and is a spine file; the gate's
+  own route check uses the constant, so a path rename breaks the contract test.
 - Plan-optional item not added: section 6 test 5's 409-inFlight / 200-replay mock-robustness cases (allowed, not
   required; keyless-unreachable on the real route).
