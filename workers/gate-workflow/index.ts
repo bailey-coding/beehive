@@ -11,6 +11,8 @@
 import { z } from 'zod';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
+// Constants only: this module declares its own local GateWorkflowRequestSchema below, so importing that name too would collide
+import { GATE_PRE_MERGE_PATH } from '../shared/schemas';
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
@@ -137,7 +139,7 @@ export default {
     // ============================================================================
 
     // POST /gates/pre-merge - Start pre-merge gate evaluation
-    if (path === '/gates/pre-merge' && method === 'POST') {
+    if (path === GATE_PRE_MERGE_PATH && method === 'POST') {
       return await handleStartPreMergeGate(request, env);
     }
 

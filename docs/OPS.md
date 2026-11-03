@@ -580,7 +580,14 @@ gotchas, deploy learnings).
 - **Gate worker:** `POST /gates/pre-merge` with an `Idempotency-Key` derives its verdict id from the key and replays a
   run only after the Spec DO confirmed the verdict; the in-memory run map is per isolate, so after a restart the Spec DO
   key is the guard and the gate re-runs once. Errors: 400 invalid body, 404 unknown spec, 409 `{inFlight:true}` while a
-  run is still going, 500 otherwise (including a failed verdict write).
+  run is still going, 500 otherwise (including a failed verdict write). The route answers **201 `{success:true, result}`
+  even for a `fail` verdict** — callers must read `result.status === 'pass'`, not just `success`. The merge train does
+  exactly this: `executeMerge` posts the same route per claimed car (bearer `API_AUTH_TOKEN`, `X-Actor-ID:
+  promotion-worker`, no idempotency key — the car has no lease id yet) with the candidate's `commitSha`/`baseCommitSha`
+  from `GET /api/candidates/:id`, and merges only on a pass (`docs/plans/merge-train-gate-call-plan.md`). A repeat
+  `POST /api/gate-verdicts` for the same `(candidate, gate)` upserts the summary row (201, latest wins, one history row
+  per write) instead of 500 — same semantics as the gate-runs path. What a train pass means today: the gate is still
+  simulated (section 0 of `docs/REAL-GATE-IMPL-PLAN.md`), so a pass is "score >= 80 with a random conformance warning".
 - Preview deploys run on the first delivery only and are best effort.
 - A master token can pre-plant the Spec DO key `<queue>:<event id>:gate` as actor `queue-consumer` with another body; the gate then treats its verdict write as already recorded. Master is trusted, so this is accepted.
 - Known load: a push for a repository with no candidate is retried 5 times (about 7.5 minutes). A dead-letter queue or a negative cache is the follow-up.
