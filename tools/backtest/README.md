@@ -7,15 +7,18 @@ and CI do not run its tests (CI does not run `test:backtest`; add a step if want
 - `npm run backtest -- check [--base-green [--write]]`: independence, leakage test 4, and the base test run (npm ci/install of the base's own deps in root and cli/, up to 3 runs, red drops the row, flaky is noted). No model cost.
 - `npm run backtest -- freeze --force`: rewrite `docs/backtest/corpus.json` from `pilot-rows.ts` (only before any model run).
 - `npm run backtest -- smoke --release-pilot`: one real `claude -p` call in a temp dir, ledgered.
-- `npm run backtest -- canary --release-pilot`: at most 3 trivial real calls, ledgered (expected cost roughly $0.02-0.05:
-  two ordinary calls like the smoke call, which cost about $0.01, plus one bad-model call that costs nothing). It verifies
+- `npm run backtest -- canary --release-pilot`: 3 CLI runs, ledgered, each capped by its own call limit (10 + 2 + 1 API calls, so up to
+  about 13 per client, typically 5-8; expected cost roughly $0.03-0.08). It verifies
   on the real CLI: (1) a Read, a Glob and a Grep of an absolute path under /tmp, outside the cwd, are each refused (three checks, one
-  call); (2) the init event's tool
-  list has no Bash; (3) the model, asked to quote any CLAUDE.md / memory / user-level instructions, answers NONE;
+  run), and each refusal only counts together with a positive control: the same tool must return the file the host planted inside the
+  cwd, else "refused" could mean the tool never ran; (2) the init event's tool
+  list has no Bash, names a model, and per-message usage was parsed from the stream (both from the same run, no extra call; if the
+  model is missing the arms cannot verify which model answered, and if usage is not parsed every killed candidate is charged an upper
+  bound of `maxCalls` x the per-call estimate instead of the tokens seen); (3) the model, asked to quote any CLAUDE.md / memory / user-level instructions, answers NONE;
   (4) a deliberately bad model id surfaces stopReason `error`, a non-zero exit code and the (redacted) CLI error text instead
   of empty output; plus a no-call check that the private config dir holds only the credentials copy. Exit code 1 if any check fails.
 - `npm run backtest -- canary --release-pilot --arms sonnet-medium,opus-medium`: the same checks for every arm's client, each with its own
-  private config (3 calls per arm, about 6 for two arms; the `arms` pre-flight reserves 6). Run it before `arms`.
+  private config (3 CLI runs and up to about 13 API calls per arm, typically 5-8; the `arms` pre-flight reserves 13 per arm). Run it before `arms`.
 - Pilot (spends): `npm run backtest -- pilot --release-pilot --run pilot-1` (optional `--hard-stop N`, max 850), read and approve each
   `docs/backtest/runs/pilot-1/rows/*/issue.json` (`"approved": true`), then rerun the same command. Resumable by artifact.
   Optional human spec fix: `spec.fixed.json` (+ `spec.fixed.meta.json` `{"minutes":n}`) in the row directory before the rerun.
@@ -25,8 +28,9 @@ and CI do not run its tests (CI does not run `test:backtest`; add a step if want
 `npm run backtest -- arms --release-pilot --run NAME --arms sonnet-medium,opus-medium --rows A4,A5,A11 --reuse-from pilot-2 [--k 3] [--candidate-max-calls 20] [--dollar-cap 15] [--seed S]`
 runs every arm on the same rows and the same frozen front half. `pilot` keeps its single-client behaviour, flags and layout.
 
-- **Arms** live in `arms.ts` (`ARM_TABLE`: id, model, effort in `low|medium|high|xhigh|max`, family, assumed USD-per-million rates; the
-  rates are placeholders to re-state at the run gate). `ClaudeCliClient` takes `effort` (default `medium`). Nothing records or guesses
+- **Arms** live in `arms.ts` (`ARM_TABLE`: id, model, effort in `low|medium|high|xhigh|max`, family, USD-per-million rates; every rate is re-verified against
+  the vendors' pricing pages at the run gate, cache-write rates assume the 5-minute TTL, and the CLI's measured `costUsd` always takes
+  precedence over them). The rates and the per-call estimate derived from them are recorded in `run.json` and are part of the resume identity. `ClaudeCliClient` takes `effort` (default `medium`). Nothing records or guesses
   the model: the CLI's init event names it, and `run.json`, every ledger entry and every candidate carry `{arm, model, effort,
   cliVersion, cliAlias}`; an init event without a model falls back to the requested one and is flagged (`modelNotReported`).
 - **Front half is reused, never generated**: `--reuse-from` copies each row's `issue.json`, `spec.json`, `spec.generated.json`,
@@ -47,12 +51,16 @@ runs every arm on the same rows and the same frozen front half. `pilot` keeps it
   (default 20 here against 40 in `pilot`, recorded as a deliberate change); an arm that reports another model than its earlier
   candidates is refused.
 - **Budget**: the global 850-call ledger still applies, and its `BudgetExceeded` aborts the whole run. A pre-flight check (pending
-  candidates x maxCalls + pending grading x 2 + 6 canary calls) refuses to start above the remaining ledger. On top there is one
+  candidates x maxCalls + pending grading x 2 + 13 canary calls per arm) refuses to start above the remaining ledger. On top there is one
   run-level dollar cap (default and maximum $15; `--dollar-cap` only lowers it): each call is priced from the CLI's `costUsd`; a run
   killed by the harness reports none, so it is charged an **upper bound** (tokens seen from the per-message usage x the rates table plus
   one in-flight call, else `maxCalls` x a generous per-call estimate), labelled estimated. The cap is checked **before each call**
   (the call's own worst case must fit) and after it; hitting it aborts the whole run with partial results. A call from an arm with no
-  per-call estimate is refused before it is made.
+  per-call estimate is refused before it is made. **The real ceiling is lower than $15**: the pre-call check needs the next call's
+  worst case (`maxCalls` x the per-call estimate: about $0.28 per call for Opus, $0.15 for Sonnet) to fit, so with `maxCalls` 20 an Opus
+  candidate is refused once about $9.32 is charged (a Sonnet one at about $11.92), and the run aborts there, not at $15. If the stream's
+  per-message usage is not parsed (the canary checks it), every killed candidate is charged `maxCalls` x the per-call estimate, which
+  reaches that ceiling much sooner. The candidate whose own call crosses the cap is stored (stopReason `cap-abort`) before the abort.
 - **Report** (`report.md`): candidate-only calls, tokens, cost, wall time and timeouts per arm over the **paired set** (rows where every
   arm finished all K); other rows are listed apart. Front half and grading are reported once. Per-grader label tables and their
   agreement; no agree-only headline and no mixed-arm decision rule. Descriptive, no superiority claim.
@@ -118,7 +126,7 @@ Unverified until the canary runs: that Claude Code honours `CLAUDE_CODE_SHELL_PR
 
 ## Other commands
 
-- `canary --release-pilot [--allow-bash]`: now up to 4 real calls (the 4th, with `--allow-bash`, asks the model to run `curl`, `cat` of an
+- `canary --release-pilot [--allow-bash]`: now 3 CLI runs, or 4 (the 4th, with `--allow-bash`, asks the model to run `curl`, `cat` of an
   absolute canary file and a write outside the worktree via Bash and report HOME; expected: HOME is the sandbox HOME and all three refused,
   checked host-side where possible). Expected cost: about $0.02-0.05 without Bash, about $0.03-0.08 with it (estimates).
 - `sample --run NAME [--n 2] [--seed S] [--template-out FILE]` writes `human-sample.md` (seeded, default seed 20261028: one case per label in the

@@ -133,8 +133,8 @@ export const GRADE_MAX_CALLS = 2;
 export const ARMS_DOLLAR_CAP_USD = 15;
 /** Candidate maxCalls of an arms run (plan 2.2: the observed maximum is 11; the single-client default is 40). */
 export const ARMS_CANDIDATE_MAX_CALLS = 20;
-/** Reserve for the canary on both clients (3-6 calls, plan 2.2). */
-export const CANARY_RESERVE_CALLS = 6;
+/** Canary reserve per arm: 3 CLI runs capped at 10 + 2 + 1 API calls (typically 5-8). */
+export const CANARY_CALLS_PER_ARM = 13;
 
 export interface Preflight {
   candidateCalls: number;
@@ -149,10 +149,10 @@ export interface Preflight {
  * Worst case in calls: every pending candidate runs to maxCalls, every pending grader run uses its 2 calls, plus the
  * canary reserve. Leakage-1 and the front half are reused, so they have no term. Refuses above the remaining ledger.
  */
-export function preflight(o: { pendingCandidates: number; pendingGrades: number; candidateMaxCalls: number; remaining: number; canaryCalls?: number }): Preflight {
+export function preflight(o: { pendingCandidates: number; pendingGrades: number; candidateMaxCalls: number; remaining: number; canaryArms?: number }): Preflight {
   const candidateCalls = o.pendingCandidates * o.candidateMaxCalls;
   const gradingCalls = o.pendingGrades * GRADE_MAX_CALLS;
-  const canaryCalls = o.canaryCalls ?? CANARY_RESERVE_CALLS;
+  const canaryCalls = (o.canaryArms ?? 2) * CANARY_CALLS_PER_ARM;
   const worstCase = candidateCalls + gradingCalls + canaryCalls;
   return { candidateCalls, gradingCalls, canaryCalls, worstCase, remaining: o.remaining, ok: worstCase <= o.remaining };
 }

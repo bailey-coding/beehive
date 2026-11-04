@@ -47,6 +47,8 @@ export interface ModelResponse {
   initTools?: string[];
   /** Model the CLI reported in its init event (the one that actually answered; may differ from the one requested). */
   model?: string;
+  /** How many assistant messages carried a parsed usage block (0: the stream format did not match; the canary checks it). */
+  usageMessages?: number;
   /** Usage was summed from per-message events because no result event arrived (a killed run): tokens are a lower bound. */
   usageLowerBound?: boolean;
   /** Set by BudgetedClient when costUsd is null: the upper bound charged toward the dollar cap, not a measurement. */
@@ -74,6 +76,7 @@ export interface FakeReply {
   /** The model the fake "CLI" reports in its init event. */
   model?: string;
   usageLowerBound?: boolean;
+  usageMessages?: number;
 }
 
 /** Deterministic client: a handler maps a request to a reply. It may write files into req.cwd to act as an agent. */
@@ -98,6 +101,7 @@ export class FakeClient implements ModelClient {
       initTools: r.initTools,
       ...(r.model ? { model: r.model } : {}),
       ...(r.usageLowerBound ? { usageLowerBound: true } : {}),
+      ...(r.usageMessages !== undefined ? { usageMessages: r.usageMessages } : {}),
     };
   }
 }
@@ -255,6 +259,7 @@ export function responseFromStream(st: StreamState, durationMs: number, stopReas
     },
     ...(useSeen ? { usageLowerBound: true } : {}),
     ...(st.model ? { model: st.model } : {}),
+    usageMessages: st.usageById?.size ?? 0,
     costUsd: typeof r?.total_cost_usd === 'number' ? r.total_cost_usd : null,
     durationMs,
     stopReason: finalReason,

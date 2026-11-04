@@ -48,10 +48,10 @@ describe('seeded interleaving', () => {
 describe('pre-flight worst-case check', () => {
   it('counts pending candidates x maxCalls, grading and the canary reserve, and refuses above the remaining ledger', () => {
     const p = preflight({ pendingCandidates: 18, pendingGrades: 36, candidateMaxCalls: 20, remaining: 562 });
-    expect(p).toMatchObject({ candidateCalls: 360, gradingCalls: 72, canaryCalls: 6, worstCase: 438, ok: true });
+    expect(p).toMatchObject({ candidateCalls: 360, gradingCalls: 72, canaryCalls: 26, worstCase: 458, ok: true }); // canary: 13 API calls per arm at most
     expect(() => assertPreflight(p)).not.toThrow();
     const over = preflight({ pendingCandidates: 18, pendingGrades: 36, candidateMaxCalls: 40, remaining: 562 });
-    expect(over.worstCase).toBe(798);
+    expect(over.worstCase).toBe(818);
     expect(() => assertPreflight(over)).toThrow(/exceeds the 562 calls left/);
   });
 });

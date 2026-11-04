@@ -157,7 +157,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
         }
       }
     }
-    const pf = preflight({ pendingCandidates: kCand - storedCands, pendingGrades: (kCand - storedCands) * armRuns.length + ungraded, candidateMaxCalls: o.candidateMaxCalls ?? 40, remaining: o.tracker.remaining });
+    const pf = preflight({ pendingCandidates: kCand - storedCands, pendingGrades: (kCand - storedCands) * armRuns.length + ungraded, candidateMaxCalls: o.candidateMaxCalls ?? 40, remaining: o.tracker.remaining, canaryArms: armRuns.length });
     log(`pre-flight: worst case ${pf.worstCase} calls (candidates ${pf.candidateCalls}, grading ${pf.gradingCalls}, canary reserve ${pf.canaryCalls}) of ${pf.remaining} remaining`);
     assertPreflight(pf);
   }
