@@ -277,8 +277,9 @@ describe('pilot run with the fake client', () => {
     expect(c2.testAgreement.agree).toBe(c2.testAgreement.total);
     expect(c3.clearsAllRungs).toBe(true); // acceptance and rungs pass
     expect(c3.deterministicRegression).toBe(true); // but the held-out test fails
-    expect(c3.label).toBe('spec-gap');
-    expect(c3.labelSource).toBe('same-family grader');
+    expect(c3.label).toBeNull(); // the deterministic label stays empty; the model-judged one lives in grades[]
+    expect(c3.labelSource).toBeNull();
+    expect(c3.grades).toEqual([{ tag: { grader: 'fake', family: 'claude', sameFamilyAsCandidate: true }, label: 'spec-gap', rationale: 'the spec never says what the page contains' }]);
     expect(rows[0].graderCalls).toBe(1);
   });
 

@@ -1,5 +1,5 @@
 // Metrics and the decision rule (plan sections 4 and 5), computed on the strict tier (A) only.
-import type { RowResult, RunMeta, CandidateResult } from './results.ts';
+import { gradesOf, type RowResult, type RunMeta, type CandidateResult } from './results.ts';
 import { humanAgreement, type HumanAgreement, type HumanAnswers } from './sample.ts';
 
 /** The plan's strict tier: the decision rule's denominators (3 of 11, 8 of 11, ...) assume all 11 rows. */
@@ -55,7 +55,7 @@ export interface Metrics {
   escapesE: number;
   referenceFalseRejects: number;
   rungsRan: boolean;
-  graderLabelled: { count: number; byLabel: Record<string, number>; label: 'same-family grader' };
+  graderLabelled: { count: number; byLabel: Record<string, number>; byGrader: Record<string, Record<string, number>>; label: 'same-family grader' };
   /** Agreement of a human reviewer with the model labels on the sampled cases (null until `sample --ingest`). */
   human: HumanAgreement | null;
   costPerAcceptedChange: number | null;
@@ -84,6 +84,9 @@ const rowCost = (r: RowResult): { calls: number; usd: number | null; tokens: num
   return { calls, usd, tokens };
 };
 
+/** The label a candidate carries in the funnel columns: the deterministic one, else the first grader's. */
+const effectiveLabel = (c: CandidateResult) => c.label ?? gradesOf(c)[0]?.label ?? null;
+
 function isConfirmedClear(c: CandidateResult): boolean {
   return c.clearsAllRungs && c.labelSource === 'deterministic' && (c.label === 'equivalent' || c.label === 'spec-permitted variation');
 }
@@ -94,7 +97,7 @@ function rowMetrics(r: RowResult): RowMetrics {
   const c1 = cands.find((c) => c.k === 1);
   const rescue = !!c1 && !c1.clearsAllRungs && clears.length > 0;
   const heldPass = (c: CandidateResult) => Object.values(c.report!.heldOut.outcomes).filter((s) => s === 'passed').length;
-  const differing = clears.length >= 2 && (new Set(clears.map((c) => c.label)).size > 1 || clears.some((c) => (c.probeAgreement?.permitted ?? 0) > 0));
+  const differing = clears.length >= 2 && (new Set(clears.map(effectiveLabel)).size > 1 || clears.some((c) => (c.probeAgreement?.permitted ?? 0) > 0));
   const detRank = clears.length >= 2 && new Set(clears.map(heldPass)).size > 1 && clears.every((c) => c.labelSource === 'deterministic');
   let catches = 0;
   let heldOutEscapes = 0;
@@ -110,7 +113,7 @@ function rowMetrics(r: RowResult): RowMetrics {
     if (rep.rungs.preMerge && heldFailed) heldOutEscapes++;
     if (c.clearsAllRungs) {
       if (c.deterministicRegression || c.label === 'regression' && c.labelSource === 'deterministic') escapes++;
-      else if (c.label === 'regression' && c.labelSource === 'same-family grader') escapesModelJudged++;
+      else if (c.labelSource !== 'deterministic' && gradesOf(c).some((g) => g.label === 'regression')) escapesModelJudged++; // legacy results keep label + labelSource 'same-family grader'
     }
   }
   const cost = rowCost(r);
@@ -135,7 +138,7 @@ function rowMetrics(r: RowResult): RowMetrics {
       clearAll: clears.length,
     },
     meanProbeAgreement: agreements.length ? agreements.reduce((a, b) => a + b, 0) / agreements.length : null,
-    anyCandidateFullyAgrees: cands.some((c) => c.label === 'equivalent'),
+    anyCandidateFullyAgrees: cands.some((c) => effectiveLabel(c) === 'equivalent'),
     rescue,
     rescueConfirmedDeterministically: rescue && clears.some(isConfirmedClear),
     spreadS: differing,
@@ -181,8 +184,14 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta, human: HumanAn
     : sum(totals.map((t) => t.tokens)) > 0 ? doneRows.reduce((n, r) => n + (r.spec ? tok(r.spec.cost.usage) : 0), 0) / sum(totals.map((t) => t.tokens)) : null;
   const accepted = done.filter((m) => m.funnel.clearAll > 0);
   const gl: Record<string, number> = {};
+  const glBy: Record<string, Record<string, number>> = {};
   let glCount = 0;
-  for (const r of rows) for (const c of r.candidates) if (c.labelSource === 'same-family grader' && c.label) { glCount++; gl[c.label] = (gl[c.label] ?? 0) + 1; }
+  for (const r of rows) for (const c of r.candidates) for (const g of gradesOf(c)) {
+    glCount++;
+    gl[g.label] = (gl[g.label] ?? 0) + 1;
+    const by = (glBy[g.tag.grader] ??= {});
+    by[g.label] = (by[g.label] ?? 0) + 1;
+  }
   const perAccepted = accepted.length && done.every((m) => m.totalCostUsd !== null) ? done.reduce((a, m) => a + (m.totalCostUsd ?? 0), 0) / accepted.length : null;
   const k1Accepted = done.filter((m) => rows.find((r) => r.id === m.id)!.candidates.find((c) => c.k === 1)?.clearsAllRungs).length;
   const perAcceptedK1 = k1Accepted && done.every((m) => m.k1Cost !== null) ? done.reduce((a, m) => a + (m.k1Cost ?? 0), 0) / k1Accepted : null;
@@ -208,7 +217,7 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta, human: HumanAn
     medianHumanMinutes: mins,
     specCostShare: specShare,
     catches, falsePositives: fps, escapesE, referenceFalseRejects: falseRejects, rungsRan,
-    graderLabelled: { count: glCount, byLabel: gl, label: 'same-family grader' },
+    graderLabelled: { count: glCount, byLabel: gl, byGrader: glBy, label: 'same-family grader' },
     human: humanAgreement(human),
     costPerAcceptedChange: perAccepted,
     costPerAcceptedChangeK1: perAcceptedK1,
@@ -216,5 +225,131 @@ export function computeMetrics(rows: RowResult[], _meta: RunMeta, human: HumanAn
       A1: gate(A1), A2: gate(A2), A3: gate(A3), decisive, computed: { A1, A2, A3 },
       note: decisive ? 'tier A has >= 11 complete rows' : `pilot: ${n + specFailedRows} attempted tier-A row(s) (${n} complete, ${specFailedRows} spec-failed) of ${TIER_A_ROWS} required, so every cell is inconclusive by rule (plan section 6); the thresholds are the plan's absolute counts over ${TIER_A_ROWS} rows`,
     },
+  };
+}
+
+// ---------------------------------------------------------------- arms runs (candidate-only, paired set)
+
+export interface ArmSummary {
+  arm: string;
+  rows: number;
+  candidates: number;
+  clearAll: number;
+  clearAllRate: number | null;
+  heldOutPassed: number;
+  heldOutTotal: number;
+  deterministicRegressions: number;
+  /** Candidates that cleared every rung yet regressed deterministically (held-out or repo tests). */
+  escapes: number;
+  heldOutEscapes: number;
+  calls: number;
+  tokens: number;
+  /** Sum of the costs the CLI reported (killed runs report none). */
+  costUsd: number;
+  /** Upper bounds charged for killed runs that reported no cost: not measurements. */
+  estimatedUsd: number;
+  /** Some run was killed: its tokens and cost are lower bounds. */
+  lowerBound: boolean;
+  wallMs: number;
+  timeouts: number;
+  callLimits: number;
+}
+
+export interface GraderTable {
+  grader: string;
+  family: string;
+  sameFamilyAsCandidate: boolean;
+  /** arm -> label -> count */
+  byArm: Record<string, Record<string, number>>;
+}
+
+export interface ArmsMetrics {
+  armIds: string[];
+  pairedRows: string[];
+  unpairedRows: { id: string; reason: string }[];
+  paired: ArmSummary[];
+  unpaired: ArmSummary[];
+  graders: GraderTable[];
+  /** Items judged by every grader whose labels all agree. */
+  agreement: { items: number; agree: number; rate: number | null };
+  /** Issue text, spec and wrong-issue spec: once per row, never per arm. */
+  frontHalf: { calls: number; costUsd: number | null };
+}
+
+function summarize(arm: string, rows: RowResult[]): ArmSummary {
+  const s: ArmSummary = { arm, rows: rows.length, candidates: 0, clearAll: 0, clearAllRate: null, heldOutPassed: 0, heldOutTotal: 0, deterministicRegressions: 0, escapes: 0, heldOutEscapes: 0, calls: 0, tokens: 0, costUsd: 0, estimatedUsd: 0, lowerBound: false, wallMs: 0, timeouts: 0, callLimits: 0 };
+  for (const r of rows) {
+    const mine = r.candidates.filter((c) => c.arm?.arm === arm);
+    const m = rowMetrics({ ...r, candidates: mine });
+    s.escapes += m.escapes;
+    s.heldOutEscapes += m.heldOutEscapes;
+    for (const c of mine) {
+      s.candidates++;
+      if (c.clearsAllRungs) s.clearAll++;
+      if (c.deterministicRegression) s.deterministicRegressions++;
+      if (c.report) {
+        s.heldOutTotal += c.report.heldOut.total;
+        s.heldOutPassed += Object.values(c.report.heldOut.outcomes).filter((o) => o === 'passed').length;
+      }
+      s.calls += c.cost.calls;
+      s.tokens += c.cost.usage.inputTokens + c.cost.usage.outputTokens + c.cost.usage.cacheReadTokens + c.cost.usage.cacheCreationTokens;
+      if (c.cost.costUsd !== null) s.costUsd += c.cost.costUsd;
+      else s.estimatedUsd += c.cost.estimatedUsd ?? 0;
+      if (c.cost.killed) s.lowerBound = true;
+      s.wallMs += c.cost.durationMs;
+      if (c.stopReason === 'timeout') s.timeouts++;
+      if (c.stopReason === 'call-limit') s.callLimits++;
+    }
+  }
+  s.clearAllRate = s.candidates ? s.clearAll / s.candidates : null;
+  return s;
+}
+
+/** Candidate-only numbers per arm. Between-arm differences use the paired set (rows where every arm finished all K); other rows are reported apart. */
+export function computeArmsMetrics(rows: RowResult[], meta: RunMeta): ArmsMetrics {
+  const armIds = (meta.arms ?? []).map((a) => a.id);
+  const pairedRows: RowResult[] = [];
+  const unpairedRows: { id: string; reason: string }[] = [];
+  const unpaired: RowResult[] = [];
+  for (const r of rows) {
+    const short = armIds.filter((a) => r.candidates.filter((c) => c.arm?.arm === a && c.report).length < meta.k);
+    // Candidates alone define the pairing: a row whose grading was cut short by a cap abort still has every candidate.
+    if (short.length === 0) pairedRows.push(r);
+    else {
+      unpaired.push(r);
+      const why = `not every arm finished K=${meta.k} candidates: ${short.map((a) => `${a} ${r.candidates.filter((c) => c.arm?.arm === a && c.report).length}/${meta.k}`).join(', ')}${r.status !== 'complete' ? ` (row ${r.status})` : ''}`;
+      unpairedRows.push({ id: r.id, reason: why });
+    }
+  }
+  const tables = new Map<string, GraderTable>();
+  let items = 0;
+  let agree = 0;
+  for (const r of rows) for (const c of r.candidates) {
+    const gs = gradesOf(c);
+    for (const g of gs) {
+      const t = tables.get(g.tag.grader) ?? { grader: g.tag.grader, family: g.tag.family, sameFamilyAsCandidate: g.tag.sameFamilyAsCandidate, byArm: {} };
+      const byLabel = (t.byArm[c.arm?.arm ?? '-'] ??= {});
+      byLabel[g.label] = (byLabel[g.label] ?? 0) + 1;
+      tables.set(g.tag.grader, t);
+    }
+  }
+  // items every grader judged: how often all of them chose the same label
+  for (const r of rows) for (const c of r.candidates) {
+    const gs = gradesOf(c);
+    if (gs.length >= 2 && gs.length === tables.size) {
+      items++;
+      if (new Set(gs.map((g) => g.label)).size === 1) agree++;
+    }
+  }
+  const front = rows.flatMap((r) => [r.issueCost, r.spec?.cost ?? null]).filter((x): x is NonNullable<typeof x> => !!x);
+  return {
+    armIds,
+    pairedRows: pairedRows.map((r) => r.id),
+    unpairedRows,
+    paired: armIds.map((a) => summarize(a, pairedRows)),
+    unpaired: unpaired.length ? armIds.map((a) => summarize(a, unpaired)) : [],
+    graders: [...tables.values()].sort((a, b) => a.grader.localeCompare(b.grader)),
+    agreement: { items, agree, rate: items ? agree / items : null },
+    frontHalf: { calls: front.reduce((n, c) => n + c.calls, 0), costUsd: front.some((c) => c.costUsd === null) ? null : front.reduce((n, c) => n + (c.costUsd ?? 0), 0) },
   };
 }

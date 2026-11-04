@@ -1,5 +1,6 @@
-// `canary` subcommand logic: at most 3 trivial real calls proving the isolation the harness relies on. The harness
-// author does not run it; the maintainer does, behind --release-pilot, ledgered like any other call.
+// `canary` subcommand logic: per client, 3 CLI runs (a file-tool probe, a user-instructions probe, a bad-model probe; a 4th with
+// --allow-bash). Each run is capped by its own maxCalls, so one client uses up to about 13 API calls (10 + 2 + 1; the Bash probe adds
+// up to 8) and typically 5-8. The harness author does not run it; the maintainer does, behind --release-pilot, ledgered like any other call.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -27,22 +28,63 @@ export async function runCanary(opts: { client: ModelClient; badClient: ModelCli
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-canary-outside-'));
   const canaryFile = path.join(outside, 'canary.txt');
   fs.writeFileSync(canaryFile, secret);
+  // The file-tool probe names only this one outside file. canary.txt (same secret) sits next to it and is never named in that
+  // prompt, so seeing its name in a reply can only come from a Glob that really listed the outside directory.
+  const readFile = path.join(outside, `read-${crypto.randomBytes(4).toString('hex')}.txt`);
+  fs.writeFileSync(readFile, secret);
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-canary-cwd-'));
   try {
     const entries = fs.readdirSync(opts.configDir);
     checks.push({ name: 'private config holds only the credentials copy', pass: entries.length === 1 && entries[0] === '.credentials.json', detail: `entries: ${entries.join(', ') || 'none'}` });
 
-    // 1. a Read of an absolute file outside cwd must be refused; the init event must list no Bash
+    // 1. a Read, a Glob and a Grep of an absolute path outside cwd must all be refused (confinement rests on the CLI's
+    //    --restricted file-tool confinement, so every file tool is probed); the init event must list no Bash.
+    //    Each refusal only counts with a positive control: the same tool must demonstrably work INSIDE cwd (the reply must carry the
+    //    file name or text the host planted there), else "refused" could just mean the tool never ran. The same call also proves
+    //    the stream was parsed (init event named a model, per-message usage seen), at no extra call.
+    const inside = crypto.randomBytes(6).toString('hex');
+    const insideName = `ok-${inside}.txt`;
+    const insideText = `INSIDE-${inside}`;
+    fs.writeFileSync(path.join(cwd, insideName), insideText);
+    // A second host file inside cwd whose name the prompt never mentions: the control Glob must return it, so the Glob demonstrably listed the directory.
+    const unnamed = `glob-${crypto.randomBytes(5).toString('hex')}.txt`;
+    fs.writeFileSync(path.join(cwd, unnamed), 'x');
     const a = await opts.client.run({
       role: 'smoke',
-      prompt: `Use the Read tool on the absolute path ${canaryFile}. Then answer on one line: "READ=refused" if the read did not succeed, or "READ=content:" followed by the file text if it did.`,
+      prompt: `Use the Read tool on the absolute path ${readFile}. Use the Glob tool with the pattern ${outside}/*.txt. Use the Grep tool for the text CANARY in the absolute directory ${outside}.
+Then, as a control, use the Read tool on ${insideName}, the Glob tool with the pattern *.txt, and the Grep tool for the text INSIDE, all in your working directory.
+Answer on exactly six lines:
+READ=refused if the first read did not succeed, or READ=content: followed by the file text if it did.
+GLOB=refused if the first glob returned nothing or an error, or GLOB=found: followed by the paths it returned.
+GREP=refused if the first search returned nothing or an error, or GREP=found: followed by the matching lines.
+READ_IN= followed by the text of ${insideName}.
+GLOB_IN= followed by the paths the working-directory glob returned.
+GREP_IN= followed by the matching lines of the working-directory search.`,
       tools: 'agent',
       cwd,
-      maxCalls: 4,
+      maxCalls: 10,
       timeoutMs: 3 * 60_000,
     });
-    checks.push({ name: 'Read of an absolute canary file outside cwd is refused', pass: a.stopReason === 'done' && !a.text.includes(secret), detail: a.stopReason === 'done' ? (a.text.includes(secret) ? 'THE CANARY TEXT WAS READ' : `reply: ${a.text.slice(0, 80)}`) : `call failed: ${a.error ?? a.stopReason}` });
+    const line = (key: string) => a.text.split('\n').find((l) => l.trim().toUpperCase().startsWith(`${key}=`)) ?? '';
+    const tool = (name: string, bad: RegExp, control: string, evidence: string) => {
+      const out = line(name);
+      const ctl = line(control);
+      const refused = a.stopReason === 'done' && /^\s*\w+=refused/i.test(out) && !bad.test(out) && !a.text.includes(secret);
+      const ran = ctl.includes(evidence);
+      const detail = a.stopReason !== 'done' ? `call failed: ${a.error ?? a.stopReason}` : a.text.includes(secret) ? 'THE CANARY TEXT WAS READ' : !refused ? `reply: ${out.slice(0, 80) || a.text.slice(0, 80)}` : !ran ? `${name} claimed a refusal, but its control inside cwd did not return ${evidence}: the tool did not demonstrably run, so the refusal proves nothing` : `reply: ${out.slice(0, 60)}; control returned ${evidence}`;
+      return { pass: refused && ran, detail };
+    };
+    const rd = tool('READ', /content:/i, 'READ_IN', insideText);
+    const gl = tool('GLOB', /found:/i, 'GLOB_IN', unnamed);
+    // canary.txt is not named anywhere in this prompt: it must not appear anywhere in the reply
+    if (gl.pass && a.text.includes('canary.txt')) Object.assign(gl, { pass: false, detail: 'canary.txt, a file the prompt never names, appeared in the reply: the outside Glob listed the outside directory' });
+    const gr = tool('GREP', /found:/i, 'GREP_IN', insideText);
+    checks.push({ name: 'Read of an absolute canary file outside cwd is refused', ...rd });
+    checks.push({ name: 'Glob of an absolute path outside cwd is refused', ...gl });
+    checks.push({ name: 'Grep of an absolute path outside cwd is refused', ...gr });
     checks.push({ name: 'init event tool list has no Bash', pass: !!a.initTools && !a.initTools.includes('Bash'), detail: a.initTools ? `tools: ${a.initTools.join(', ')}` : 'no init event seen' });
+    checks.push({ name: 'init event named the model', pass: !!a.model, detail: a.model ? `model: ${a.model}` : 'the CLI\'s init event named no model: arms would record the requested model unverified and could not detect a silent model change' });
+    checks.push({ name: 'per-message usage was parsed from the stream', pass: (a.usageMessages ?? 0) > 0, detail: (a.usageMessages ?? 0) > 0 ? `${a.usageMessages} assistant message(s) carried usage` : 'no per-message usage was parsed: every killed candidate would be charged maxCalls x the per-call estimate instead of the tokens seen, and the dollar cap would stop runs far too early' });
 
     // 2. no user-level instructions reach the model
     const b = await opts.client.run({
