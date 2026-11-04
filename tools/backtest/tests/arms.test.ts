@@ -76,6 +76,13 @@ describe('dollar cap and null cost', () => {
     expect(meter.chargedUsd).toBeCloseTo(0.4);
     expect(tracker.ledger[0]).toMatchObject({ runId: 'r1', arm: 'opus-medium', model: 'm', effort: 'medium', cliVersion: '1.0', cliAlias: 'm', reportedModel: 'claude-opus-5-5', chargedUsd: 0.4 });
     expect(tracker.ledger[0].costEstimated).toBeUndefined();
+    expect(tracker.ledger[0].grader).toBeUndefined(); // only grading calls carry it
+  });
+
+  it('a grading call is stamped with the grader', async () => {
+    const { tracker, client } = mk(15, new FakeClient(() => ({ text: '{}', costUsd: 0.04 })));
+    await client.run({ role: 'grade', rowId: 'A1', prompt: '', tools: 'none', maxCalls: 2, timeoutMs: 1 });
+    expect(tracker.ledger[0]).toMatchObject({ role: 'grade', arm: 'opus-medium', grader: 'opus-medium' });
   });
 
   it('a killed candidate (null cost) is charged an upper bound and labelled estimated; the run does not abort', async () => {
@@ -139,14 +146,14 @@ describe('dollar cap and null cost', () => {
 describe('front-half reuse', () => {
   const row = { id: 'A4', sha: 'abc' } as CorpusRow;
   const harness = { commit: 'deadbeef', dirty: false };
-  function source(over: { approved?: boolean; wrong?: unknown } = {}) {
+  function source(over: { approved?: boolean; wrong?: unknown; sha?: string } = {}) {
     const from = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-src-'));
     const d = path.join(from, 'rows', 'A4');
     fs.mkdirSync(d, { recursive: true });
     fs.writeFileSync(path.join(d, 'issue.json'), JSON.stringify({ text: 't', approved: over.approved ?? true }));
     fs.writeFileSync(path.join(d, 'spec.json'), '{"name":"s"}');
     fs.writeFileSync(path.join(d, 'reference.json'), '{"ref":1}');
-    fs.writeFileSync(path.join(d, 'result.json'), JSON.stringify({ leakage: { wrongIssue: 'wrong' in over ? over.wrong : { ran: true, similarity: 0.1, passed: true, detail: 'x' } } }));
+    fs.writeFileSync(path.join(d, 'result.json'), JSON.stringify({ sha: 'sha' in over ? over.sha : 'abc', leakage: { wrongIssue: 'wrong' in over ? over.wrong : { ran: true, similarity: 0.1, passed: true, detail: 'x' } } }));
     return from;
   }
   it('copies the files, records their hashes and the leakage-1 result, and never overwrites a different file', () => {
@@ -165,6 +172,8 @@ describe('front-half reuse', () => {
     const to = () => fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-dst-'));
     expect(() => reuseFrontHalf({ fromRunDir: source({ approved: false }), toRunDir: to(), rows: [row], harness })).toThrow(/not approved/);
     expect(() => reuseFrontHalf({ fromRunDir: source({ wrong: null }), toRunDir: to(), rows: [row], harness })).toThrow(/no wrong-issue result/);
+    expect(() => reuseFrontHalf({ fromRunDir: source({ sha: 'other' }), toRunDir: to(), rows: [row], harness })).toThrow(/is for sha other, the corpus row is abc/);
+    expect(() => reuseFrontHalf({ fromRunDir: source({ sha: undefined }), toRunDir: to(), rows: [row], harness })).toThrow(/\(none recorded\)/);
     const s = source();
     fs.rmSync(path.join(s, 'rows/A4/spec.json'));
     expect(() => reuseFrontHalf({ fromRunDir: s, toRunDir: to(), rows: [row], harness })).toThrow(/spec.json is missing/);

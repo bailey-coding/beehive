@@ -28,8 +28,11 @@ export interface SampleCase {
 export const candidateKey = (c: Pick<SampleCase, 'rowId' | 'k' | 'arm'>): string => (c.arm ? `${c.rowId}-${c.arm}-c${c.k}` : `${c.rowId}-c${c.k}`);
 
 /** Case id shown to the human: opaque in arms runs (no row or arm in it, so neither the arm nor the order of cases leaks), readable otherwise. */
-export const caseId = (run: string, c: Pick<SampleCase, 'rowId' | 'k' | 'arm'>): string =>
-  c.arm ? `x${crypto.createHash('sha256').update(`${run}|${candidateKey(c)}`).digest('hex').slice(0, 8)}` : `${c.rowId}-c${c.k}`;
+export const caseId = (run: string, c: Pick<SampleCase, 'rowId' | 'k' | 'arm'>, salt = ''): string =>
+  c.arm ? `x${crypto.createHash('sha256').update(`${salt}|${run}|${candidateKey(c)}`).digest('hex').slice(0, 8)}` : `${c.rowId}-c${c.k}`;
+
+/** Random per pick, stored only in the pick file: the ids cannot be recomputed from the (public) run name, row and arm. */
+export const newSalt = (): string => crypto.randomBytes(8).toString('hex');
 
 /** Grader names the human sees: Grader A, B, ... in grader-name order. */
 export const graderLetters = (grades: Grade[]): Record<string, string> =>
@@ -166,7 +169,7 @@ export const QUESTIONS = [
   'Q3 Would a reviewer accept the candidate as it stands? (yes / no)',
 ];
 
-export async function renderSample(opts: { run: string; seed: number; chosen: SampleCase[]; total: number; files: RunFiles; candidates: Map<string, CandidateResult>; template?: boolean }): Promise<string> {
+export async function renderSample(opts: { run: string; salt?: string; seed: number; chosen: SampleCase[]; total: number; files: RunFiles; candidates: Map<string, CandidateResult>; template?: boolean }): Promise<string> {
   const L: string[] = [];
   L.push(`# Human sample: ${opts.run}`, '');
   L.push(`You have not seen this run, and you do not need to. Each case below is one candidate implementation of a real past change, judged by a model (${GRADER_LABEL}: the same model family that wrote the candidate and the spec, so its label is NOT independent evidence). Please check the label yourself.`, '');
@@ -177,7 +180,7 @@ export async function renderSample(opts: { run: string; seed: number; chosen: Sa
     const grades = c.grades ?? [];
     const multi = grades.length > 1;
     const letters = graderLetters(grades);
-    L.push(`---`, '', `## Case ${caseId(opts.run, c)}: ${row.change}`, '');
+    L.push(`---`, '', `## Case ${caseId(opts.run, c, opts.salt)}: ${row.change}`, '');
     if (opts.template) {
       L.push('(template: the real file lists here, for each case, the issue text, the spec acceptance summary, the candidate diff next to the reference diff, the oracle failures with messages, and the model grader\'s label and rationale.)', '');
     } else {

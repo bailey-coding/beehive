@@ -7,7 +7,7 @@ import { computeMetrics } from '../metrics.ts';
 import { sanitizeReport } from '../publish.ts';
 import { buildReport } from '../report.ts';
 import type { CandidateResult, RowResult, RunMeta } from '../results.ts';
-import { DEFAULT_SEED, caseId, graderLetters, humanAgreement, loadHumanAnswers, modelJudged, parseAnswers, pickCases, pickCasesPerArm, renderSample, trimDiff, type PickMap, type SampleCase } from '../sample.ts';
+import { DEFAULT_SEED, newSalt, caseId, graderLetters, humanAgreement, loadHumanAnswers, modelJudged, parseAnswers, pickCases, pickCasesPerArm, renderSample, trimDiff, type PickMap, type SampleCase } from '../sample.ts';
 
 const cases: SampleCase[] = [
   { rowId: 'A11', k: 1, label: 'spec violation', rationale: 'r1' },
@@ -158,8 +158,13 @@ describe('arms layout: per-arm candidates, opaque case ids, two graders, the arm
 
   it('case ids are opaque and distinct per arm, while single-client ids stay readable', () => {
     const { cases: cs } = modelJudged(armsRun());
-    const idsA = cs.map((c) => caseId('r', c));
+    const idsA = cs.map((c) => caseId('r', c, 'salt-1'));
     expect(new Set(idsA).size).toBe(4);
+    // random salt: the same cases get other ids with another salt, so ids cannot be recomputed from run, row and arm
+    expect(cs.map((c) => caseId('r', c, 'salt-2'))).not.toEqual(idsA);
+    expect(cs.map((c) => caseId('r', c, 'salt-1'))).toEqual(idsA);
+    expect(newSalt()).toMatch(/^[0-9a-f]{16}$/);
+    expect(newSalt()).not.toBe(newSalt());
     for (const id of idsA) expect(id).toMatch(/^x[0-9a-f]{8}$/);
     expect(idsA.join()).not.toMatch(/A4|sonnet|opus|c1|c2/);
     expect(caseId('r', { rowId: 'A4', k: 1 })).toBe('A4-c1');

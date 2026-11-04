@@ -30,6 +30,8 @@ export interface LedgerEntry {
   cliVersion?: string;
   cliAlias?: string;
   reportedModel?: string;
+  /** Grading calls: the model that graded (the arm whose client was used). */
+  grader?: string;
   /** What this call counted toward the dollar cap: costUsd, or an upper bound when costUsd is null (costEstimated). */
   chargedUsd?: number;
   costEstimated?: boolean;
@@ -171,7 +173,7 @@ export class BudgetedClient implements ModelClient {
     }
     t.ledger.push({
       role: req.role, rowId: req.rowId, calls: res.calls, usage: res.usage, costUsd: res.costUsd, durationMs: res.durationMs, stopReason: res.stopReason,
-      ...(ident ? { runId: ident.runId, arm: ident.arm, model: ident.model, effort: ident.effort, cliVersion: ident.cliVersion, cliAlias: ident.cliAlias, ...(res.model ? { reportedModel: res.model } : {}) } : {}),
+      ...(ident ? { runId: ident.runId, arm: ident.arm, model: ident.model, effort: ident.effort, cliVersion: ident.cliVersion, cliAlias: ident.cliAlias, ...(res.model ? { reportedModel: res.model } : {}), ...(req.role === 'grade' ? { grader: ident.arm } : {}) } : {}),
       ...(chargedUsd !== undefined ? { chargedUsd, ...(estimated ? { costEstimated: true } : {}) } : {}),
     });
     t.persist();

@@ -17,7 +17,7 @@ import { DEFAULT_ORACLE_CONFIG } from './oracles.ts';
 import { ALL_ROWS, PILOT_IDS } from './pilot-rows.ts';
 import { runPilot, type ArmRun } from './run.ts';
 import { diffOf, git } from './git.ts';
-import { DEFAULT_SEED, HumanAnswersSchema, caseId, graderLetters, loadHumanAnswers, modelJudged, parseAnswers, pickCasesPerArm, renderSample, type PickMap } from './sample.ts';
+import { DEFAULT_SEED, HumanAnswersSchema, caseId, graderLetters, loadHumanAnswers, modelJudged, newSalt, parseAnswers, pickCasesPerArm, renderSample, type PickMap } from './sample.ts';
 import { sanitizeReport } from './publish.ts';
 import { buildReport } from './report.ts';
 import { computeMetrics } from './metrics.ts';
@@ -242,13 +242,14 @@ async function main(): Promise<void> {
       return;
     }
     const chosen = pickCasesPerArm(cases, Number(f.n ?? 2), seed);
-    const md = await renderSample({ run, seed, chosen, total: cases.length, files, candidates });
+    const salt = newSalt(); // random per pick and kept only in the pick file
+    const md = await renderSample({ run, salt, seed, chosen, total: cases.length, files, candidates });
     fs.writeFileSync(path.join(runDir, 'human-sample.md'), md);
-    fs.writeFileSync(path.join(runDir, 'human-sample.pick.json'), JSON.stringify({ seed, picked: chosen.map((c) => caseId(run, c)), total: cases.length, map: Object.fromEntries(chosen.map((c) => [caseId(run, c), { rowId: c.rowId, ...(c.arm ? { arm: c.arm } : {}), k: c.k, graders: graderLetters(c.grades ?? []) }])) }, null, 2) + '\n');
-    log(`wrote ${path.join(runDir, 'human-sample.md')}: ${chosen.map((c) => `${caseId(run, c)} (${c.label})`).join(', ')} of ${cases.length} model-judged cases, seed ${seed}`);
+    fs.writeFileSync(path.join(runDir, 'human-sample.pick.json'), JSON.stringify({ seed, salt, picked: chosen.map((c) => caseId(run, c, salt)), total: cases.length, map: Object.fromEntries(chosen.map((c) => [caseId(run, c, salt), { rowId: c.rowId, ...(c.arm ? { arm: c.arm } : {}), k: c.k, graders: graderLetters(c.grades ?? []) }])) }, null, 2) + '\n');
+    log(`wrote ${path.join(runDir, 'human-sample.md')}: ${chosen.map((c) => `${caseId(run, c, salt)} (${c.label})`).join(', ')} of ${cases.length} model-judged cases, seed ${seed}`);
     if (f['template-out']) {
       fs.mkdirSync(path.dirname(String(f['template-out'])), { recursive: true });
-      fs.writeFileSync(String(f['template-out']), await renderSample({ run, seed, chosen, total: cases.length, files, candidates, template: true }));
+      fs.writeFileSync(String(f['template-out']), await renderSample({ run, salt, seed, chosen, total: cases.length, files, candidates, template: true }));
       log(`wrote template ${String(f['template-out'])} (no candidate source)`);
     }
     return;

@@ -166,6 +166,9 @@ describe('arms run: two arms, K=2, interleaved, crossed grading', () => {
     expect(mine.length).toBeGreaterThan(0);
     for (const e of mine) expect(e).toMatchObject({ cliVersion: '9.9.9', effort: 'medium', arm: expect.stringMatching(/-medium$/) });
     expect(mine.find((e: { arm: string; role: string }) => e.arm === 'sonnet-medium' && e.role === 'candidate').model).toBe('claude-sonnet-5-5');
+    const graded = mine.filter((e: { role: string }) => e.role === 'grade');
+    expect(graded.length).toBeGreaterThan(0);
+    for (const e of graded) expect(e.grader).toBe(e.arm); // grading entries name the grader explicitly
     expect(cand('sonnet-medium', 1).arm).toEqual({ arm: 'sonnet-medium', model: 'claude-sonnet-5-5', modelFromInit: true, effort: 'medium', cliVersion: '9.9.9', cliAlias: 'claude-sonnet-5-5', family: 'claude' });
     expect(cand('opus-medium', 1).arm).toMatchObject({ model: 'claude-opus-5-5', modelFromInit: false }); // fell back to the requested model, flagged
   });

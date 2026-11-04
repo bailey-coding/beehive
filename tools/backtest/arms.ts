@@ -200,6 +200,9 @@ export function reuseFrontHalf(o: { fromRunDir: string; toRunDir: string; rows: 
     if ((JSON.parse(fs.readFileSync(path.join(dst, 'issue.json'), 'utf8')) as { approved?: boolean }).approved !== true) throw new Error(`${row.id}: the reused issue.json is not approved`);
     // Leakage-1 is not resumable and its pairing depends on the row set: reuse the earlier result and skip the test.
     const res = readIf(path.join(src, 'result.json'));
+    // The earlier result must be for the very same change as the corpus row it is reused for.
+    const earlierSha = res ? (JSON.parse(res.toString('utf8')) as { sha?: string }).sha : undefined;
+    if (earlierSha !== row.sha) throw new Error(`cannot reuse the front half of ${row.id}: ${path.join(src, 'result.json')} is for sha ${earlierSha ?? '(none recorded)'}, the corpus row is ${row.sha}`);
     const wrong = res ? (JSON.parse(res.toString('utf8')) as { leakage?: { wrongIssue?: unknown } }).leakage?.wrongIssue ?? null : null;
     const dstLeak = path.join(dst, 'leakage1.json');
     if (!wrong && !fs.existsSync(dstLeak)) throw new Error(`cannot reuse leakage-1 for ${row.id}: ${path.join(src, 'result.json')} holds no wrong-issue result`);
