@@ -311,11 +311,11 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
   it('an arm that reports a different model than its earlier candidates (across rows or resumes) aborts the whole run', async () => {
     const mk = (modelAt: (k: number) => string) => [armClient('sonnet-medium', {}, [], { modelAt }), armClient('opus-medium', {}, [])];
     // across rows: sonnet's 2nd candidate (row A2) reports another model than its 1st (row A1)
-    const o = opts('arms-model', corpus2, { k: 1, arms: armRuns(mk((k) => (k === 1 ? 'claude-sonnet-5-5' : 'claude-sonnet-5-5-b'))), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' });
+    const o = opts('arms-model', corpus2, { k: 1, arms: armRuns(mk((k) => (k === 1 ? 'claude-sonnet-5-5-20261001' : 'claude-sonnet-5-5-20261002'))), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' });
     const r = await runPilot(o);
-    expect(r.meta.aborted).toMatch(/arm sonnet-medium reported model claude-sonnet-5-5-b, but an earlier candidate of this run reported claude-sonnet-5-5/);
+    expect(r.meta.aborted).toMatch(/arm sonnet-medium reported model claude-sonnet-5-5-20261002, but an earlier candidate of this run reported claude-sonnet-5-5-20261001/);
     expect(r.rows.map((x) => x.status)).toEqual(['complete', 'aborted']);
-    expect(r.meta.reportedModels).toEqual({ 'sonnet-medium': 'claude-sonnet-5-5', 'opus-medium': 'claude-opus-5-5' }); // the run-wide map, not the offending model
+    expect(r.meta.reportedModels).toEqual({ 'sonnet-medium': 'claude-sonnet-5-5-20261001', 'opus-medium': 'claude-opus-5-5' }); // the run-wide map, not the offending model
     expect(r.rows[1].candidates.some((c) => c.arm?.arm === 'sonnet-medium')).toBe(false); // the offender is not stored
   }, 250_000);
 

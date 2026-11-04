@@ -102,9 +102,13 @@ export function runIdentity(arms: Pick<ArmMeta, 'id' | 'model' | 'effort' | 'rat
 /** A run that must not continue (changed setup, or stored results from another setup): refused before anything is spent. */
 export class RunRefused extends Error {}
 
-/** The reported model is the requested one, or a dated/suffixed form of it (claude-x-5-5 -> claude-x-5-5-20261001, claude-x-5-5[1m]). */
+/**
+ * The reported model is the requested id exactly, optionally followed by a date suffix (-YYYYMMDD) and/or a trailing [...] suffix
+ * (claude-x-5-5 -> claude-x-5-5-20261001, claude-x-5-5[1m]). Any other continuation (-mini, -fast, 5-5x) is another model.
+ */
 export function modelMatches(requested: string, reported: string): boolean {
-  return reported === requested || reported.startsWith(`${requested}-`) || reported.startsWith(`${requested}[`);
+  const escaped = requested.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}(?:-\\d{8})?(?:\\[[^\\]]*\\])?$`).test(reported);
 }
 
 /** A stored candidate must have been produced by the arm that is about to continue the run. Model: see the run-wide map in run.ts. */

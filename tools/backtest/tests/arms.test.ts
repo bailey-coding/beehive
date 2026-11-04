@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ARM_TABLE, assertPreflight, pricingOf, preflight, reuseFrontHalf, selectArms, seededOrder, validateArmTable, type ArmSpec } from '../arms.ts';
+import { ARM_TABLE, assertPreflight, modelMatches, pricingOf, preflight, reuseFrontHalf, selectArms, seededOrder, validateArmTable, type ArmSpec } from '../arms.ts';
 import { BudgetExceeded, BudgetTracker, BudgetedClient, DollarMeter, costFromTokens, worstCallUsd } from '../budget.ts';
 import { validateFlags } from '../cli.ts';
 import { FakeClient } from '../client.ts';
@@ -42,6 +42,25 @@ describe('seeded interleaving', () => {
     for (const row of ['A4', 'A5', 'A11']) for (let k = 1; k <= 3; k++) orders.add(seededOrder('s', row, k, ids).join());
     expect(orders.size).toBeGreaterThan(1);
     expect(new Set([1, 2, 3, 4, 5, 6].map((s) => seededOrder(String(s), 'A4', 1, ids).join())).size).toBeGreaterThan(1);
+  });
+});
+
+describe('modelMatches: the requested id, a date suffix, a [..] suffix; nothing else', () => {
+  it('accepts the exact id, -YYYYMMDD and a trailing bracket suffix', () => {
+    for (const ok of ['claude-x-5-5', 'claude-x-5-5-20261001', 'claude-x-5-5[1m]', 'claude-x-5-5-20261001[1m]']) expect(modelMatches('claude-x-5-5', ok), ok).toBe(true);
+  });
+  it('rejects other models that merely start with the requested id', () => {
+    expect(modelMatches('claude-sonnet-5-5', 'claude-sonnet-5-5-mini')).toBe(false);
+    expect(modelMatches('claude-opus-5-5', 'claude-opus-5-5-fast')).toBe(false);
+    expect(modelMatches('claude-opus-5', 'claude-opus-5-5')).toBe(false);
+    expect(modelMatches('claude-opus-5-5', 'claude-opus-5-5x')).toBe(false);
+    expect(modelMatches('claude-opus-5-5', 'claude-opus-5-5-2026100')).toBe(false); // not a full date
+    expect(modelMatches('claude-opus-5-5', 'claude-opus-5-5-20261001-fast')).toBe(false);
+    expect(modelMatches('claude-opus-5-5', 'xclaude-opus-5-5')).toBe(false);
+  });
+  it('the requested id is matched literally (dots are not wildcards)', () => {
+    expect(modelMatches('model-1.5', 'model-1x5')).toBe(false);
+    expect(modelMatches('model-1.5', 'model-1.5-20261001')).toBe(true);
   });
 });
 
