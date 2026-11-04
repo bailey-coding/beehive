@@ -30,8 +30,8 @@ const RESERVED_IDS = ['deps', 'reference', 'rows', 'candidates'];
 // measured costUsd always takes precedence; these only price a killed run (no costUsd) and the per-call estimate behind the
 // pre-call cap check. Cache-write rates assume the 5-minute cache TTL (1.25x input).
 export const ARM_TABLE: ArmSpec[] = [
-  // Sonnet 5.5: $2 in / $10 out / $0.20 cache read per the Claude API price table (cached 2026-10-06).
-  { id: 'sonnet-medium', model: 'claude-sonnet-5-5', effort: 'medium', family: 'claude', rates: { inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2, cacheCreationPerM: 2.5 } },
+  // Sonnet 5.5: $2 in / $10 out / $0.10 cache read (0.05x base) / $2.50 5-minute cache write, per the official pricing page read 2026-11-04 (platform.claude.com/docs/en/about-claude/pricing); Opus 5.5 matches: $4 / $20 / $0.20 / $5.
+  { id: 'sonnet-medium', model: 'claude-sonnet-5-5', effort: 'medium', family: 'claude', rates: { inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1, cacheCreationPerM: 2.5 } },
   { id: 'opus-medium', model: 'claude-opus-5-5', effort: 'medium', family: 'claude', rates: { inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2, cacheCreationPerM: 5 } },
 ];
 
