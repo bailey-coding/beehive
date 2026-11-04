@@ -1,4 +1,5 @@
 // Result shapes shared by the runner, metrics and report writer.
+import type { ArmMeta } from './arms.ts';
 import type { Usage } from './client.ts';
 import type { Agreement } from './delta.ts';
 import type { OracleReport } from './oracles.ts';
@@ -145,7 +146,9 @@ export interface RunMeta {
   k: number;
   aborted: string | null;
   /** Arms runs (all optional: absent in single-client runs). */
-  arms?: { id: string; model: string; effort: string; cliAlias: string; family: string }[];
+  arms?: ArmMeta[];
+  /** The meta stub written before the first model call (a crashed run leaves it as run.json): no results yet. */
+  inProgress?: boolean;
   cliVersion?: string;
   /** Seed of the interleaving order (arm order per row and k). */
   seed?: string;

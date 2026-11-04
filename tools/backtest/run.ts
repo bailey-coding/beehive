@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { armIdent, assertPreflight, GRADE_MAX_CALLS, preflight, pricingOf, reuseFrontHalf, runIdentity, seededOrder, sha256, type ArmSpec } from './arms.ts';
+import { armIdent, armMeta, assertPreflight, assertStoredCandidate, GRADE_MAX_CALLS, modelMatches, preflight, pricingOf, reuseFrontHalf, RunRefused, runIdentity, seededOrder, sha256, type ArmSpec } from './arms.ts';
 import { BudgetedClient, BudgetExceeded, DollarMeter, type BudgetTracker } from './budget.ts';
 import type { ModelClient } from './client.ts';
 import { labelDeterministically, testAgreement } from './compare.ts';
@@ -115,18 +115,21 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   const startedAt = new Date().toISOString();
   const bashMode: 'none' | 'bwrap' = o.allowBash ? 'bwrap' : 'none';
   const seed = o.seed ?? o.runId;
-  const identity = armRuns ? runIdentity(armRuns.map((a) => a.spec), armRuns[0].cliVersion) : null;
+  const identity = armRuns ? runIdentity(armRuns.map((a) => armMeta(a.spec)), armRuns[0].cliVersion) : null;
   const prevMeta = path.join(runDir, 'run.json');
   if (fs.existsSync(prevMeta)) {
     const pm = JSON.parse(fs.readFileSync(prevMeta, 'utf8')).meta as Partial<RunMeta> | undefined;
     const prev = pm?.bashMode ?? 'none';
-    if (prev !== bashMode) throw new Error(`run ${o.runId} was started with bashMode=${prev}; refusing to continue it with bashMode=${bashMode} (results of the two modes are never mixed): use a new --run name`);
+    if (prev !== bashMode) throw new RunRefused(`run ${o.runId} was started with bashMode=${prev}; refusing to continue it with bashMode=${bashMode} (results of the two modes are never mixed): use a new --run name`);
     // Arm table, model, effort and CLI version are fixed for a run id, like bashMode: results of two setups are never mixed.
     const prevIdentity = pm?.arms ? runIdentity(pm.arms, pm.cliVersion ?? '') : null;
-    if (prevIdentity !== identity) throw new Error(`run ${o.runId} was started with ${prevIdentity ?? 'a single client'}; refusing to continue it with ${identity ?? 'a single client'} (changed arm table, model, effort or CLI version): use a new --run name`);
-    if (armRuns && pm?.candidateMaxCalls && pm.candidateMaxCalls.value !== (o.candidateMaxCalls ?? 40)) throw new Error(`run ${o.runId} was started with candidate maxCalls ${pm.candidateMaxCalls.value}; refusing to continue it with ${o.candidateMaxCalls ?? 40}`);
+    if (prevIdentity !== identity) throw new RunRefused(`run ${o.runId} was started with ${prevIdentity ?? 'a single client'}; refusing to continue it with ${identity ?? 'a single client'} (changed arm table, model, effort, rates or CLI version): use a new --run name`);
+    if (armRuns && pm?.seed !== undefined && pm.seed !== seed) throw new RunRefused(`run ${o.runId} was started with seed ${pm.seed}; refusing to continue it with ${seed}: use a new --run name`);
+    if (armRuns && pm?.candidateMaxCalls && pm.candidateMaxCalls.value !== (o.candidateMaxCalls ?? 40)) throw new RunRefused(`run ${o.runId} was started with candidate maxCalls ${pm.candidateMaxCalls.value}; refusing to continue it with ${o.candidateMaxCalls ?? 40}`);
   }
   let reuseManifest: ReturnType<typeof reuseFrontHalf> | null = null;
+  // Run-wide: the model each arm's CLI reported, from every stored candidate (all rows) and then from each new one.
+  const reportedModels = new Map<string, string>();
   if (armRuns) {
     if (armRuns.length < 2) throw new Error('an arms run needs at least two arms');
     if (!o.reuseFrom || !o.harness) throw new Error('an arms run reuses a frozen front half: reuseFrom and harness are required');
@@ -142,6 +145,13 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
           if (!fs.existsSync(f)) continue;
           storedCands++;
           const c = readJson<CandidateResult>(f);
+          // Stored results must come from this very setup (checked before any spend; a crashed run has no final run.json to guard it).
+          assertStoredCandidate(o.runId, a.spec, a.cliVersion, c, `${row.id}/${a.spec.id}/c${k}`);
+          if (c.arm!.modelFromInit) {
+            const known = reportedModels.get(a.spec.id);
+            if (known && known !== c.arm!.model) throw new RunRefused(`run ${o.runId}: arm ${a.spec.id} reported model ${known} in one stored candidate and ${c.arm!.model} in ${row.id}/c${k}; refusing to continue it: use a new --run name`);
+            reportedModels.set(a.spec.id, c.arm!.model);
+          }
           if (c.label === null && c.report) ungraded += armRuns.filter((g) => !gradesOf(c).some((x) => x.tag.grader === g.spec.id)).length;
         }
       }
@@ -150,6 +160,21 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
     log(`pre-flight: worst case ${pf.worstCase} calls (candidates ${pf.candidateCalls}, grading ${pf.gradingCalls}, canary reserve ${pf.canaryCalls}) of ${pf.remaining} remaining`);
     assertPreflight(pf);
   }
+  const buildMeta = (aborted: string | null, inProgress: boolean): RunMeta => ({
+    runId: o.runId,
+    bashMode,
+    sandbox: o.allowBash ? o.sandboxDetail ?? null : null,
+    client: armRuns ? 'arms' : o.client!.name,
+    startedAt,
+    finishedAt: inProgress ? '' : new Date().toISOString(),
+    ...(inProgress ? { inProgress: true } : {}),
+    k: o.k,
+    aborted,
+    ...(armRuns ? armsMeta(o, armRuns, seed, meter!, reuseManifest!, reportedModels) : {}),
+    budget: { expected: o.tracker.expected, hardStop: o.tracker.hardStop, used: o.tracker.used, byRole: o.tracker.byRole() },
+  });
+  // The meta stub goes to disk before the first model call, so the resume guard also works after a crash (run.json used to be written only at a clean exit).
+  if (!fs.existsSync(prevMeta)) writeJson(prevMeta, { meta: buildMeta(null, true), ledger: [], rows: [] });
   const rows: RowResult[] = o.corpus.rows.map((r) => ({ id: r.id, sha: r.sha, tier: r.tier, obs: r.obs, status: 'aborted', issueCost: null, spec: null, reference: null, candidates: [], graderCalls: 0, leakage: null }));
   let aborted: string | null = null;
   const save = (res: RowResult) => writeJson(path.join(rowDir(o.corpus.rows.find((r) => r.id === res.id)!), 'result.json'), res);
@@ -202,9 +227,9 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
         if (res.status === 'leak-blocked') continue;
         res.status = 'aborted';
         try {
-          await runRow(o, { front: client, arms: armCtxs, graders, seed, reuse: !!reuseManifest }, row, issues, res, rowDir(row), log);
+          await runRow(o, { front: client, arms: armCtxs, graders, seed, reuse: !!reuseManifest, reported: reportedModels }, row, issues, res, rowDir(row), log);
         } catch (e) {
-          if (e instanceof BudgetExceeded) throw e;
+          if (e instanceof BudgetExceeded || e instanceof RunRefused) throw e;
           res.status = 'error';
           res.note = e instanceof Error ? e.message : String(e);
           log(`${row.id}: error ${res.note}`);
@@ -229,39 +254,22 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
     }
   }
 
-  const meta: RunMeta = {
-    runId: o.runId,
-    bashMode,
-    sandbox: o.allowBash ? o.sandboxDetail ?? null : null,
-    client: armRuns ? 'arms' : o.client!.name,
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    k: o.k,
-    aborted,
-    ...(armRuns ? armsMeta(o, armRuns, rows, seed, meter!, reuseManifest!) : {}),
-    budget: { expected: o.tracker.expected, hardStop: o.tracker.hardStop, used: o.tracker.used, byRole: o.tracker.byRole() },
-  };
+  const meta = buildMeta(aborted, false);
   writeJson(path.join(runDir, 'run.json'), { meta, ledger: o.tracker.ledger, rows });
   const reportPath = path.join(runDir, 'report.md');
   fs.writeFileSync(reportPath, buildReport(meta, o.corpus, rows, computeMetrics(rows, meta, loadHumanAnswers(runDir))));
   return { rows, meta, reportPath };
 }
 
-function armsMeta(o: RunOptions, armRuns: ArmRun[], rows: RowResult[], seed: string, meter: DollarMeter, manifest: ReturnType<typeof reuseFrontHalf>): Partial<RunMeta> {
-  const reported: Record<string, string> = {};
-  const unreported: string[] = [];
-  for (const a of armRuns) {
-    const fromInit = rows.flatMap((r) => r.candidates).find((c) => c.arm?.arm === a.spec.id && c.arm.modelFromInit);
-    if (fromInit) reported[a.spec.id] = fromInit.arm!.model;
-    else unreported.push(a.spec.id); // the init event carried no model: results carry the requested one, flagged here
-  }
+function armsMeta(o: RunOptions, armRuns: ArmRun[], seed: string, meter: DollarMeter, manifest: ReturnType<typeof reuseFrontHalf>, reported: Map<string, string>): Partial<RunMeta> {
   return {
-    arms: armRuns.map((a) => ({ id: a.spec.id, model: a.spec.model, effort: a.spec.effort, cliAlias: a.spec.model, family: a.spec.family })),
+    arms: armRuns.map((a) => armMeta(a.spec)),
     cliVersion: armRuns[0].cliVersion,
     seed,
     candidateMaxCalls: { value: o.candidateMaxCalls ?? 40, default: 40, deliberateChange: (o.candidateMaxCalls ?? 40) !== 40 },
-    reportedModels: reported,
-    modelNotReported: unreported,
+    // The run-wide map, not the first model found: an arm whose init event carried no model falls back to the requested one, flagged here.
+    reportedModels: Object.fromEntries(reported),
+    modelNotReported: armRuns.map((a) => a.spec.id).filter((id) => !reported.has(id)),
     dollar: { capUsd: meter.capUsd, chargedUsd: meter.chargedUsd, estimatedUsd: meter.estimatedUsd },
     harness: o.harness,
     runBudget: o.tracker.byRole((e) => e.runId === o.runId),
@@ -289,7 +297,12 @@ interface RowCtx {
   seed: string;
   /** The front half was copied from an earlier run: re-validate the spec at HEAD before any candidate call. */
   reuse: boolean;
+  /** Run-wide: arm id -> the model its CLI reported (shared by every row). */
+  reported: Map<string, string>;
 }
+
+/** An arm's CLI reported a model other than the requested or earlier-reported one: the whole run aborts (results of two models are never mixed). */
+class ModelMismatch extends BudgetExceeded {}
 
 async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<string, IssueFile>, res: RowResult, dir: string, log: (s: string) => void): Promise<void> {
   const client = ctx.front;
@@ -434,7 +447,9 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
       for (const arm of order) {
         const cfile = candFile(arm.id, k);
         if (fs.existsSync(cfile)) {
-          res.candidates.push(readJson<CandidateResult>(cfile));
+          const stored = readJson<CandidateResult>(cfile);
+          if (arm.run) assertStoredCandidate(o.runId, arm.run.spec, arm.run.cliVersion, stored, `${row.id}/${arm.id}/c${k}`);
+          res.candidates.push(stored);
           continue;
         }
         const tag = arm.id ? `${row.id}-${arm.id}-c${k}` : `${row.id}-c${k}`;
@@ -494,9 +509,16 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           }
           cr.error = e instanceof Error ? e.message : String(e);
         }
-        // Refuse a resume that now sees another model for this arm (checked outside the try: it must not become a candidate error).
-        const earlier = res.candidates.find((c) => c.arm?.arm === arm.id && c.arm.modelFromInit);
-        if (reported && earlier && earlier.arm!.model !== reported) throw new Error(`arm ${arm.id} reported model ${reported}, but an earlier candidate of this run reported ${earlier.arm!.model}: results of two models are never mixed`);
+        // One run-wide model per arm (rows and resumes included), and it must be the requested one: else the whole run aborts.
+        if (reported && arm.run) {
+          const known = ctx.reported.get(arm.id!);
+          const why = !modelMatches(arm.run.spec.model, reported) ? `reported model ${reported}, but ${arm.run.spec.model} was requested` : known && known !== reported ? `reported model ${reported}, but an earlier candidate of this run reported ${known}` : null;
+          if (why) {
+            await commitAndPush(wt, branch, `scratch: ${tag} (aborted)`).catch(() => {});
+            throw new ModelMismatch(`arm ${arm.id} ${why}: results of two models are never mixed`);
+          }
+          ctx.reported.set(arm.id!, reported);
+        }
         cr.commit = await commitAndPush(wt, branch, `candidate ${tag}`);
         cr.changedFiles = (await git(wt, ['diff', '--name-only', 'main', 'HEAD'])).split('\n').filter((f) => f && !f.startsWith(ACCEPTANCE_DIR));
         const patch = await git(wt, ['diff', 'main', 'HEAD', '--', '.', `:!${ACCEPTANCE_DIR}`]);

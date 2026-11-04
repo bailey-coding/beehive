@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ARM_TABLE, seededOrder, type ArmSpec } from '../arms.ts';
-import { BudgetTracker } from '../budget.ts';
+import { BudgetTracker, worstCallUsd } from '../budget.ts';
 import { FakeClient, type FakeReply, type ModelRequest } from '../client.ts';
 import type { Corpus } from '../corpus.ts';
 import { runPilot, type ArmRun, type RunOptions } from '../run.ts';
@@ -44,16 +44,17 @@ const tmp = (p: string) => {
 
 /** Shared log of candidate requests across the arms, in global call order. */
 type Log = { arm: string; k: number; cwd: string; prompt: string; maxCalls: number }[];
-function armClient(arm: string, script: Record<number, Step>, log: Log, over: { model?: string | null; grade?: string } = {}) {
+function armClient(arm: string, script: Record<number, Step>, log: Log, over: { model?: string | null; grade?: string; onCandidate?: () => void; modelAt?: (k: number) => string } = {}) {
   let k = 0;
   const model = over.model === null ? undefined : over.model ?? (arm === 'sonnet-medium' ? 'claude-sonnet-5-5' : 'claude-opus-5-5');
   return new FakeClient((req: ModelRequest): FakeReply => {
     if (req.role === 'candidate') {
       k++;
+      over.onCandidate?.();
       log.push({ arm, k, cwd: req.cwd!, prompt: req.prompt, maxCalls: req.maxCalls });
       const s = script[k] ?? {};
       if (s.write) fs.writeFileSync(path.join(req.cwd!, 'workers/api/index.ts'), s.write);
-      return { text: 'done', calls: 4, costUsd: 0.5, model, ...s.reply };
+      return { text: 'done', calls: 4, costUsd: 0.5, model: over.modelAt ? over.modelAt(k) : model, ...s.reply };
     }
     if (req.role === 'grade') return { text: over.grade ?? '{"label":"spec-gap","rationale":"the spec never says what the page contains"}', calls: 1, costUsd: 0.04, model };
     throw new Error(`unexpected role ${req.role} for ${arm}`);
@@ -155,7 +156,7 @@ describe('arms run: two arms, K=2, interleaved, crossed grading', () => {
 
   it('records arm, model, effort and CLI version in run.json, every ledger entry and every candidate', () => {
     const run = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8'));
-    expect(run.meta.arms).toEqual(specs.map((a) => ({ id: a.id, model: a.model, effort: a.effort, cliAlias: a.model, family: a.family })));
+    expect(run.meta.arms).toEqual(specs.map((a) => ({ id: a.id, model: a.model, effort: a.effort, cliAlias: a.model, family: a.family, rates: a.rates, worstCallUsd: worstCallUsd(a.rates) }))); // rates and the per-call estimate are part of the identity
     expect(run.meta).toMatchObject({ cliVersion: '9.9.9', seed: 'seed-1', candidateMaxCalls: { value: 20, default: 40, deliberateChange: true }, harness: { commit: 'abc1234', dirty: false } });
     expect(run.meta.reportedModels).toEqual({ 'sonnet-medium': 'claude-sonnet-5-5' });
     expect(run.meta.modelNotReported).toEqual(['opus-medium']);
@@ -286,14 +287,72 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
     expect(clients.flatMap((c) => c.requests)).toHaveLength(0);
   });
 
-  it('an arm that reports a different model than its earlier candidates is refused, not mixed', async () => {
-    const log: Log = [];
-    const mk = (model: string) => [armClient('sonnet-medium', {}, log, { model }), armClient('opus-medium', {}, log, { model: 'claude-opus-5-5' })];
-    const o = opts('arms-model', corpus1, { k: 2, arms: armRuns(mk('claude-sonnet-5-5')), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' });
-    await runPilot({ ...o, k: 1 });
-    // a later invocation asks for a second candidate per arm; sonnet now reports another model
-    const r = await runPilot({ ...o, arms: armRuns(mk('claude-sonnet-5-6')), tracker: new BudgetTracker() });
-    expect(r.rows[0].status).toBe('error');
-    expect(r.rows[0].note).toMatch(/arm sonnet-medium reported model claude-sonnet-5-6, but an earlier candidate of this run reported claude-sonnet-5-5/);
+  it('an arm that reports a different model than its earlier candidates (across rows or resumes) aborts the whole run', async () => {
+    const mk = (modelAt: (k: number) => string) => [armClient('sonnet-medium', {}, [], { modelAt }), armClient('opus-medium', {}, [])];
+    // across rows: sonnet's 2nd candidate (row A2) reports another model than its 1st (row A1)
+    const o = opts('arms-model', corpus2, { k: 1, arms: armRuns(mk((k) => (k === 1 ? 'claude-sonnet-5-5' : 'claude-sonnet-5-5-b'))), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' });
+    const r = await runPilot(o);
+    expect(r.meta.aborted).toMatch(/arm sonnet-medium reported model claude-sonnet-5-5-b, but an earlier candidate of this run reported claude-sonnet-5-5/);
+    expect(r.rows.map((x) => x.status)).toEqual(['complete', 'aborted']);
+    expect(r.meta.reportedModels).toEqual({ 'sonnet-medium': 'claude-sonnet-5-5', 'opus-medium': 'claude-opus-5-5' }); // the run-wide map, not the offending model
+    expect(r.rows[1].candidates.some((c) => c.arm?.arm === 'sonnet-medium')).toBe(false); // the offender is not stored
+  }, 250_000);
+
+  it('a reported model that is not the requested one aborts the run; a dated form of the requested id is accepted', async () => {
+    const wrong = [armClient('sonnet-medium', {}, [], { model: 'claude-sonnet-5-6' }), armClient('opus-medium', {}, [])];
+    const r = await runPilot(opts('arms-model2', corpus1, { k: 1, arms: armRuns(wrong), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' }));
+    expect(r.meta.aborted).toMatch(/reported model claude-sonnet-5-6, but claude-sonnet-5-5 was requested/);
+    const dated = [armClient('sonnet-medium', {}, [], { model: 'claude-sonnet-5-5-20261001' }), armClient('opus-medium', {}, [])];
+    const ok = await runPilot(opts('arms-model3', corpus1, { k: 1, arms: armRuns(dated), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' }));
+    expect(ok.meta.aborted).toBeNull();
+    expect(ok.meta.reportedModels!['sonnet-medium']).toBe('claude-sonnet-5-5-20261001');
+  }, 250_000);
+});
+
+describe('arms run: resume after a crash (no clean exit, no final run.json)', () => {
+  let o: RunOptions;
+  let runDir: string;
+  let stub: { meta: Record<string, any> };
+
+  beforeAll(async () => {
+    const hook = () => {
+      stub ??= JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8'));
+    };
+    const clients = [armClient('sonnet-medium', { 1: { write: APP_FIXED } }, [], { onCandidate: hook }), armClient('opus-medium', { 1: { write: APP_FIXED } }, [], { onCandidate: hook })];
+    o = opts('arms-crash', corpus1, { k: 1, arms: armRuns(clients), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' });
+    runDir = path.join(o.outDir, o.runId);
+    await runPilot(o);
+  }, 250_000);
+
+  const fresh = () => [armClient('sonnet-medium', {}, []), armClient('opus-medium', {}, [])];
+  const again = (over: Partial<RunOptions>, cs = fresh()) => runPilot({ ...o, tracker: new BudgetTracker(), arms: armRuns(cs), ...over });
+
+  it('writes the meta stub (arms, rates, per-call estimates, CLI version, maxCalls, seed, front-half hash) before the first model call', () => {
+    expect(stub.meta).toMatchObject({ inProgress: true, cliVersion: '9.9.9', seed: 's', candidateMaxCalls: { value: 20 }, reuse: { manifest: expect.stringMatching(/^[0-9a-f]{64}$/) } });
+    expect(stub.meta.arms.map((a: { id: string }) => a.id)).toEqual(ids);
+    for (const a of stub.meta.arms) expect(a).toMatchObject({ rates: { inputPerM: expect.any(Number), cacheReadPerM: expect.any(Number) }, worstCallUsd: expect.any(Number) });
+  });
+
+  it('after a crash that left only the stub, a changed CLI version, arm table or rate is refused and an unchanged resume works', async () => {
+    fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ meta: stub.meta, ledger: [], rows: [] }));
+    await expect(again({ arms: armRuns(fresh(), { cliVersion: '9.9.10' }) })).rejects.toThrow(/refusing to continue it/);
+    await expect(again({ arms: armRuns(fresh(), { specs: [specs[0], { ...specs[1], effort: 'high' }] }) })).rejects.toThrow(/refusing to continue it/);
+    await expect(again({ arms: armRuns(fresh(), { specs: [specs[0], { ...specs[1], rates: { ...specs[1].rates, outputPerM: 99 } }] }) })).rejects.toThrow(/rates/);
+    await expect(again({ seed: 'other' })).rejects.toThrow(/seed s/);
+    const cs = fresh();
+    const r = await again({}, cs);
+    expect(cs.flatMap((c) => c.requests).filter((q) => q.role === 'candidate')).toHaveLength(0);
+    expect(r.rows[0].candidates).toHaveLength(2);
+    expect(JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8')).meta.inProgress).toBeUndefined(); // the clean exit replaced the stub
+  }, 250_000);
+
+  it('with no run.json at all, stored candidates from another setup still refuse the resume (read-back check); the same setup resumes', async () => {
+    fs.rmSync(path.join(runDir, 'run.json'));
+    await expect(again({ arms: armRuns(fresh(), { cliVersion: '9.9.10' }) })).rejects.toThrow(/stored candidate A1\/\S+\/c1 was produced by arm \S+: .*CLI 9\.9\.9; refusing to continue it/);
+    await expect(again({ arms: armRuns(fresh(), { specs: [specs[0], { ...specs[1], effort: 'high' }] }) })).rejects.toThrow(/stored candidate .* effort medium.*refusing to continue it with arm opus-medium: effort high/);
+    const cs = fresh();
+    await again({}, cs);
+    expect(cs.flatMap((c) => c.requests).filter((q) => q.role === 'candidate')).toHaveLength(0);
+    expect(fs.existsSync(path.join(runDir, 'run.json'))).toBe(true);
   }, 250_000);
 });

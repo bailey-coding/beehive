@@ -26,8 +26,12 @@ export interface Arm extends ArmSpec {
 /** Ids that name directories next to the arm work dirs. */
 const RESERVED_IDS = ['deps', 'reference', 'rows', 'candidates'];
 
+// Rates are USD per million tokens and every one is re-verified against the vendors' pricing pages at the run gate. The CLI's
+// measured costUsd always takes precedence; these only price a killed run (no costUsd) and the per-call estimate behind the
+// pre-call cap check. Cache-write rates assume the 5-minute cache TTL (1.25x input).
 export const ARM_TABLE: ArmSpec[] = [
-  { id: 'sonnet-medium', model: 'claude-sonnet-5-5', effort: 'medium', family: 'claude', rates: { inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheCreationPerM: 3.75 } },
+  // Sonnet 5.5: $2 in / $10 out / $0.20 cache read per the Claude API price table (cached 2026-10-06).
+  { id: 'sonnet-medium', model: 'claude-sonnet-5-5', effort: 'medium', family: 'claude', rates: { inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2, cacheCreationPerM: 2.5 } },
   { id: 'opus-medium', model: 'claude-opus-5-5', effort: 'medium', family: 'claude', rates: { inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2, cacheCreationPerM: 5 } },
 ];
 
@@ -77,9 +81,41 @@ export const armIdent = (a: ArmSpec, cliVersion: string, reportedModel?: string)
   arm: a.id, model: reportedModel ?? a.model, modelFromInit: reportedModel !== undefined, effort: a.effort, cliVersion, cliAlias: a.model, family: a.family,
 });
 
-/** The identity the resume guard compares: arm table, models, efforts and CLI version. */
-export function runIdentity(arms: { id: string; model: string; effort: string }[], cliVersion: string): string {
-  return JSON.stringify({ cliVersion, arms: arms.map((a) => ({ id: a.id, model: a.model, effort: a.effort })) });
+/** What run.json records per arm: the table entry plus the per-call estimate derived from its rates. */
+export interface ArmMeta {
+  id: string;
+  model: string;
+  effort: string;
+  cliAlias: string;
+  family: string;
+  rates: Rates;
+  worstCallUsd: number;
+}
+
+export const armMeta = (a: ArmSpec): ArmMeta => ({ id: a.id, model: a.model, effort: a.effort, cliAlias: a.model, family: a.family, rates: a.rates, worstCallUsd: worstCallUsd(a.rates) });
+
+/** The identity the resume guard compares: arm table (order included), models, efforts, rates, per-call estimates and CLI version. */
+export function runIdentity(arms: Pick<ArmMeta, 'id' | 'model' | 'effort' | 'rates' | 'worstCallUsd'>[], cliVersion: string): string {
+  return JSON.stringify({ cliVersion, arms: arms.map((a) => ({ id: a.id, model: a.model, effort: a.effort, rates: a.rates, worstCallUsd: a.worstCallUsd })) });
+}
+
+/** A run that must not continue (changed setup, or stored results from another setup): refused before anything is spent. */
+export class RunRefused extends Error {}
+
+/** The reported model is the requested one, or a dated/suffixed form of it (claude-x-5-5 -> claude-x-5-5-20261001, claude-x-5-5[1m]). */
+export function modelMatches(requested: string, reported: string): boolean {
+  return reported === requested || reported.startsWith(`${requested}-`) || reported.startsWith(`${requested}[`);
+}
+
+/** A stored candidate must have been produced by the arm that is about to continue the run. Model: see the run-wide map in run.ts. */
+export function assertStoredCandidate(runId: string, spec: ArmSpec, cliVersion: string, c: { k: number; arm?: ArmIdent }, where: string): void {
+  const a = c.arm;
+  const now = `arm ${spec.id}: effort ${spec.effort}, alias ${spec.model}, CLI ${cliVersion}`;
+  if (!a) throw new RunRefused(`run ${runId}: stored candidate ${where} has no arm record; refusing to continue it (results of two setups are never mixed): use a new --run name`);
+  if (a.arm !== spec.id || a.effort !== spec.effort || a.cliAlias !== spec.model || a.cliVersion !== cliVersion) {
+    throw new RunRefused(`run ${runId}: stored candidate ${where} was produced by arm ${a.arm}: effort ${a.effort}, alias ${a.cliAlias}, CLI ${a.cliVersion}; refusing to continue it with ${now} (results of two setups are never mixed): use a new --run name`);
+  }
+  if (a.modelFromInit && !modelMatches(spec.model, a.model)) throw new RunRefused(`run ${runId}: stored candidate ${where} reports model ${a.model}, not the requested ${spec.model}; refusing to continue it: use a new --run name`);
 }
 
 /** `claude --version`: no model call. */

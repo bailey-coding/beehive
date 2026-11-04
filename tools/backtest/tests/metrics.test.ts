@@ -114,7 +114,8 @@ describe('spec-failed rows count against A2', () => {
 });
 
 describe('arms metrics: candidate-only, paired set, two graders', () => {
-  const armsMeta: RunMeta = { ...meta, k: 2, arms: [{ id: 'a', model: 'ma', effort: 'medium', cliAlias: 'ma', family: 'claude' }, { id: 'b', model: 'mb', effort: 'medium', cliAlias: 'mb', family: 'claude' }], cliVersion: '1', seed: 's', candidateMaxCalls: { value: 20, default: 40, deliberateChange: true } };
+  const rates = { inputPerM: 1, outputPerM: 1, cacheReadPerM: 1, cacheCreationPerM: 1 };
+  const armsMeta: RunMeta = { ...meta, k: 2, arms: [{ id: 'a', model: 'ma', effort: 'medium', cliAlias: 'ma', family: 'claude', rates, worstCallUsd: 0.1 }, { id: 'b', model: 'mb', effort: 'medium', cliAlias: 'mb', family: 'claude', rates, worstCallUsd: 0.1 }], cliVersion: '1', seed: 's', candidateMaxCalls: { value: 20, default: 40, deliberateChange: true } };
   const ident = (arm: string) => ({ arm, model: `m${arm}`, modelFromInit: true, effort: 'medium', cliVersion: '1', cliAlias: `m${arm}`, family: 'claude' });
   const grade = (grader: string, label: Grade['label']): Grade => ({ tag: { grader, family: 'claude', sameFamilyAsCandidate: true }, label, rationale: 'r' });
   const ac = (arm: string, k: number, over: Partial<CandidateResult> = {}) => cand(k, { arm: ident(arm), ...over });
