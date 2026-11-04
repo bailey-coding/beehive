@@ -132,6 +132,12 @@ describe('arms metrics: candidate-only, paired set, two graders', () => {
     expect(m.frontHalf.calls).toBe(110); // reported once, outside the arm numbers
   });
 
+  it('a candidate stored after its own call crossed a cap counts under its real stop reason (capAbort is only a flag)', () => {
+    const capped = ac('a', 2, { stopReason: 'timeout', capAbort: true, cost: { calls: 3, usage, costUsd: null, durationMs: 60_000, estimatedUsd: 0.7, killed: true } });
+    const m = computeArmsMetrics([row('R1', [ac('a', 1), capped, ac('b', 1), ac('b', 2)])], armsMeta);
+    expect(m.paired.find((x) => x.arm === 'a')).toMatchObject({ timeouts: 1, callLimits: 0, lowerBound: true });
+  });
+
   it('a legacy-shaped candidate (label and labelSource \'same-family grader\', no grades[]) still counts as a model-judged escape', () => {
     const legacy = cand(1, { label: 'regression', labelSource: 'same-family grader', rationale: 'same-family grader: breaks a route', clearsAllRungs: true });
     const m = computeMetrics([row('A1', [legacy])], meta);

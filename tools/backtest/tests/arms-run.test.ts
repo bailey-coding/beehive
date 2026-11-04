@@ -273,7 +273,8 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
 
   it('hitting the run-level dollar cap aborts the whole run, keeps partial results and writes the report', async () => {
     const log: Log = [];
-    const costly = { reply: { costUsd: 20 } };
+    // both first candidates hit their call limit, so the real stopReason of the capped one is not 'done'
+    const costly = { reply: { costUsd: 20, stopReason: 'call-limit' as const } };
     const clients = [armClient('sonnet-medium', { 1: costly, 2: costly }, log), armClient('opus-medium', { 1: costly, 2: costly }, log)];
     const o = opts('arms-cap', corpus1, { arms: armRuns(clients), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's', dollarCapUsd: 30 });
     const r = await runPilot(o);
@@ -281,8 +282,10 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
     expect(log).toHaveLength(2); // the second call pushed the charge past the cap; nothing after it ran
     expect(r.rows[0].status).toBe('aborted');
     // the candidate whose call crossed the cap is stored too (marked), so the per-arm tables and the meter agree
-    expect(r.rows[0].candidates.map((c) => c.stopReason)).toEqual(['done', 'cap-abort']);
-    const stored = r.rows[0].candidates.find((c) => c.stopReason === 'cap-abort')!;
+    expect(r.rows[0].candidates.map((c) => c.stopReason)).toEqual(['call-limit', 'call-limit']); // the real stop reason is kept
+    expect(r.rows[0].candidates.map((c) => c.capAbort)).toEqual([undefined, true]);
+    expect(computeArmsMetrics(r.rows, r.meta).unpaired.reduce((n, s) => n + s.callLimits, 0)).toBe(2); // and the per-arm call-limit column counts the capped one
+    const stored = r.rows[0].candidates.find((c) => c.capAbort)!;
     expect(stored.error).toMatch(/dollar cap \$30\.00 exceeded/);
     expect(stored.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(stored.report).not.toBeNull();

@@ -60,7 +60,7 @@ runs every arm on the same rows and the same frozen front half. `pilot` keeps it
   worst case (`maxCalls` x the per-call estimate: about $0.28 per call for Opus, $0.15 for Sonnet) to fit, so with `maxCalls` 20 an Opus
   candidate is refused once about $9.32 is charged (a Sonnet one at about $11.92), and the run aborts there, not at $15. If the stream's
   per-message usage is not parsed (the canary checks it), every killed candidate is charged `maxCalls` x the per-call estimate, which
-  reaches that ceiling much sooner. The candidate whose own call crosses the cap is stored (stopReason `cap-abort`) before the abort.
+  reaches that ceiling much sooner. The candidate whose own call crosses the cap is stored before the abort, with its real `stopReason` and `capAbort: true`.
 - **Report** (`report.md`): candidate-only calls, tokens, cost, wall time and timeouts per arm over the **paired set** (rows where every
   arm finished all K); other rows are listed apart. Front half and grading are reported once. Per-grader label tables and their
   agreement; no agree-only headline and no mixed-arm decision rule. Descriptive, no superiority claim.

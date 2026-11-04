@@ -58,6 +58,8 @@ export interface SpecAttempt extends CallCost {
 export interface CandidateResult {
   k: number;
   stopReason: string;
+  /** This candidate's own call crossed the dollar cap or the hard stop; it was stored before the run aborted. stopReason stays the real one. */
+  capAbort?: boolean;
   cost: CallCost;
   /** Final scratch commit pushed to the scratch origin (always-pushed invariant, scratch only). */
   commit: string | null;

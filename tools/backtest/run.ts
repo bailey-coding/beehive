@@ -496,7 +496,7 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           cr.promptHash = sha256(prompt);
         }
         let reported: string | undefined;
-        // An arms run keeps the candidate whose own call crossed a cap: it is stored (stopReason 'cap-abort') before the run aborts.
+        // An arms run keeps the candidate whose own call crossed a cap: it is stored (real stopReason, capAbort: true) before the run aborts.
         let pendingAbort: BudgetExceeded | null = null;
         try {
           const run = await arm.client.run({ role: 'candidate', rowId: row.id, prompt, tools: 'agent', cwd: wt, ...(o.allowBash ? { bashBox: { agentRoot: croot, cwd: wt, tmpDir: agentTmp } } : {}), maxCalls: o.candidateMaxCalls ?? 40, timeoutMs: o.candidateTimeoutMs ?? 30 * 60_000 });
@@ -508,7 +508,8 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           if (e instanceof BudgetExceeded && arm.run && e.response && e.response.stopReason !== 'error') {
             pendingAbort = e;
             cr.cost = cost(e.response);
-            cr.stopReason = 'cap-abort';
+            cr.stopReason = e.response.stopReason; // the real one (done / timeout / call-limit): per-arm timeout and call-limit counts stay true
+            cr.capAbort = true;
             cr.error = e.reason;
             reported = e.response.model;
             cr.arm = armIdent(arm.run.spec, arm.run.cliVersion, e.response.model);
