@@ -49,7 +49,7 @@ runs every arm on the same rows and the same frozen front half. `pilot` keeps it
   Option 1 graders are the candidates' own family: every such number is labelled same-family and stays out of conclusions.
 - **Resume guard**: a run id fixes bash mode, the arm table (ids, order, models, efforts), the CLI version and `--candidate-max-calls`
   (default 20 here against 40 in `pilot`, recorded as a deliberate change); an arm that reports another model than its earlier
-  candidates is refused.
+  candidates aborts the whole run. A run that aborted on such a mismatch records it in `run.json` (`modelMismatch`) and cannot be resumed (use a new `--run`).
 - **Budget**: the global 850-call ledger still applies, and its `BudgetExceeded` aborts the whole run. A pre-flight check (pending
   candidates x maxCalls + pending grading x 2 + 13 canary calls per arm) refuses to start above the remaining ledger. On top there is one
   run-level dollar cap (default and maximum $15; `--dollar-cap` only lowers it): each call is priced from the CLI's `costUsd`; a run

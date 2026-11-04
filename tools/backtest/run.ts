@@ -122,6 +122,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
     const pm = JSON.parse(fs.readFileSync(prevMeta, 'utf8')).meta as Partial<RunMeta> | undefined;
     const prev = pm?.bashMode ?? 'none';
     if (prev !== bashMode) throw new RunRefused(`run ${o.runId} was started with bashMode=${prev}; refusing to continue it with bashMode=${bashMode} (results of the two modes are never mixed): use a new --run name`);
+    if (pm?.modelMismatch) throw new RunRefused(`run ${o.runId} aborted on a model mismatch (${pm.modelMismatch.reason}); refusing to continue it, a resume would spend a call before aborting again: use a new --run name`);
     // Arm table, model, effort and CLI version are fixed for a run id, like bashMode: results of two setups are never mixed.
     const prevIdentity = pm?.arms ? runIdentity(pm.arms, pm.cliVersion ?? '') : null;
     if (prevIdentity !== identity) throw new RunRefused(`run ${o.runId} was started with ${prevIdentity ?? 'a single client'}; refusing to continue it with ${identity ?? 'a single client'} (changed arm table, model, effort, rates or CLI version): use a new --run name`);
@@ -161,6 +162,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
     log(`pre-flight: worst case ${pf.worstCase} calls (candidates ${pf.candidateCalls}, grading ${pf.gradingCalls}, canary reserve ${pf.canaryCalls}) of ${pf.remaining} remaining`);
     assertPreflight(pf);
   }
+  let mismatch: RunMeta['modelMismatch'];
   const buildMeta = (aborted: string | null, inProgress: boolean): RunMeta => ({
     runId: o.runId,
     bashMode,
@@ -172,6 +174,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
     k: o.k,
     aborted,
     ...(armRuns ? armsMeta(o, armRuns, seed, meter!, reuseManifest!, reportedModels) : {}),
+    ...(mismatch ? { modelMismatch: mismatch } : {}),
     budget: { expected: o.tracker.expected, hardStop: o.tracker.hardStop, used: o.tracker.used, byRole: o.tracker.byRole() },
   });
   // The meta stub goes to disk before the first model call, so the resume guard also works after a crash (run.json used to be written only at a clean exit).
@@ -243,6 +246,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   } catch (e) {
     if (!(e instanceof BudgetExceeded)) throw e;
     aborted = e.reason;
+    if (e instanceof ModelMismatch) mismatch = { arm: e.arm, reported: e.reported, reason: e.reason };
     log(`ABORT: ${aborted}`);
     for (const row of o.corpus.rows) {
       const res = rows.find((r) => r.id === row.id)!;
@@ -303,7 +307,11 @@ interface RowCtx {
 }
 
 /** An arm's CLI reported a model other than the requested or earlier-reported one: the whole run aborts (results of two models are never mixed). */
-class ModelMismatch extends BudgetExceeded {}
+class ModelMismatch extends BudgetExceeded {
+  constructor(reason: string, readonly arm: string, readonly reported: string) {
+    super(reason);
+  }
+}
 
 async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<string, IssueFile>, res: RowResult, dir: string, log: (s: string) => void): Promise<void> {
   const client = ctx.front;
@@ -525,7 +533,7 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           const why = !modelMatches(arm.run.spec.model, reported) ? `reported model ${reported}, but ${arm.run.spec.model} was requested` : known && known !== reported ? `reported model ${reported}, but an earlier candidate of this run reported ${known}` : null;
           if (why) {
             await commitAndPush(wt, branch, `scratch: ${tag} (aborted)`).catch(() => {});
-            throw new ModelMismatch(`arm ${arm.id} ${why}: results of two models are never mixed`);
+            throw new ModelMismatch(`arm ${arm.id} ${why}: results of two models are never mixed`, arm.id!, reported);
           }
           ctx.reported.set(arm.id!, reported);
         }

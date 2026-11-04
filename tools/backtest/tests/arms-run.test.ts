@@ -324,8 +324,15 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
 
   it('a reported model that is not the requested one aborts the run; a dated form of the requested id is accepted', async () => {
     const wrong = [armClient('sonnet-medium', {}, [], { model: 'claude-sonnet-5-6' }), armClient('opus-medium', {}, [])];
-    const r = await runPilot(opts('arms-model2', corpus1, { k: 1, arms: armRuns(wrong), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' }));
+    const wrongOpts = opts('arms-model2', corpus1, { k: 1, arms: armRuns(wrong), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' });
+    const r = await runPilot(wrongOpts);
     expect(r.meta.aborted).toMatch(/reported model claude-sonnet-5-6, but claude-sonnet-5-5 was requested/);
+    // the mismatch is recorded in the run meta, and the run id cannot be resumed on it (no extra paid call)
+    expect(r.meta.modelMismatch).toMatchObject({ arm: 'sonnet-medium', reported: 'claude-sonnet-5-6', reason: expect.stringContaining('was requested') });
+    expect(JSON.parse(fs.readFileSync(path.join(wrongOpts.outDir, 'arms-model2', 'run.json'), 'utf8')).meta.modelMismatch.arm).toBe('sonnet-medium');
+    const retry = [armClient('sonnet-medium', {}, [], { model: 'claude-sonnet-5-5' }), armClient('opus-medium', {}, [])];
+    await expect(runPilot({ ...wrongOpts, arms: armRuns(retry), tracker: new BudgetTracker() })).rejects.toThrow(/aborted on a model mismatch .* refusing to continue it/);
+    expect(retry.flatMap((c) => c.requests)).toHaveLength(0);
     const dated = [armClient('sonnet-medium', {}, [], { model: 'claude-sonnet-5-5-20261001' }), armClient('opus-medium', {}, [])];
     const ok = await runPilot(opts('arms-model3', corpus1, { k: 1, arms: armRuns(dated), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's' }));
     expect(ok.meta.aborted).toBeNull();

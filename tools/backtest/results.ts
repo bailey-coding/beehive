@@ -160,6 +160,8 @@ export interface RunMeta {
   modelNotReported?: string[];
   dollar?: { capUsd: number; chargedUsd: number; estimatedUsd: number };
   harness?: { commit: string; dirty: boolean };
+  /** The run aborted because an arm's CLI reported an unexpected model: the run id cannot be resumed (a resume would pay for one more call before aborting again). */
+  modelMismatch?: { arm: string; reported: string; reason: string };
   /** Spend of this run id alone (the `budget` block below is the lifetime global ledger). */
   runBudget?: Record<string, { calls: number; costUsd: number | null; inputTokens: number; outputTokens: number }>;
   /** Front half copied from an earlier run (see arms.ts reuseFrontHalf). */
