@@ -140,6 +140,9 @@ describe('arms metrics: candidate-only, paired set, two graders', () => {
     expect(m.pairedRows).toEqual(['R1']);
     expect(m.unpairedRows.map((u) => u.id)).toEqual(['R2', 'R3']);
     expect(m.unpairedRows[0].reason).toMatch(/b 1\/2/);
+    // an aborted row (a cap hit during grading) whose candidates are all there is still paired
+    const capped = row('R4', [ac('a', 1), ac('a', 2), ac('b', 1), ac('b', 2)], { status: 'aborted' });
+    expect(computeArmsMetrics([full, capped], armsMeta).pairedRows).toEqual(['R1', 'R4']);
     expect(m.paired.map((s) => s.candidates)).toEqual([2, 2]);
     expect(m.unpaired.find((s) => s.arm === 'a')!.candidates).toBe(3);
   });

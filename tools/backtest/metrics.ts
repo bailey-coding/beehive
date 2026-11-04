@@ -313,10 +313,11 @@ export function computeArmsMetrics(rows: RowResult[], meta: RunMeta): ArmsMetric
   const unpaired: RowResult[] = [];
   for (const r of rows) {
     const short = armIds.filter((a) => r.candidates.filter((c) => c.arm?.arm === a && c.report).length < meta.k);
-    if (r.status === 'complete' && short.length === 0) pairedRows.push(r);
+    // Candidates alone define the pairing: a row whose grading was cut short by a cap abort still has every candidate.
+    if (short.length === 0) pairedRows.push(r);
     else {
       unpaired.push(r);
-      const why = r.status !== 'complete' ? `row ${r.status}` : `not every arm finished K=${meta.k}: ${short.map((a) => `${a} ${r.candidates.filter((c) => c.arm?.arm === a && c.report).length}/${meta.k}`).join(', ')}`;
+      const why = `not every arm finished K=${meta.k} candidates: ${short.map((a) => `${a} ${r.candidates.filter((c) => c.arm?.arm === a && c.report).length}/${meta.k}`).join(', ')}${r.status !== 'complete' ? ` (row ${r.status})` : ''}`;
       unpairedRows.push({ id: r.id, reason: why });
     }
   }

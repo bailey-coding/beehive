@@ -34,7 +34,7 @@ function armsSections(meta: RunMeta, am: ArmsMetrics): string[] {
   if (meta.dollar) L.push(`Dollar cap $${meta.dollar.capUsd.toFixed(2)} for the whole run: $${meta.dollar.chargedUsd.toFixed(2)} charged, of which $${meta.dollar.estimatedUsd.toFixed(2)} are upper-bound estimates for killed runs that reported no cost.`);
   L.push('');
   L.push('## Candidate-only cost and outcomes per arm (paired rows)', '');
-  L.push(`Paired set: rows where every arm finished all K=${meta.k} candidates: ${am.pairedRows.join(', ') || 'none'}. Cost, tokens and wall time are the candidate sessions only; the front half and grading are below, once.`, '');
+  L.push(`Paired set: rows where every arm finished all K=${meta.k} candidates (candidates alone decide, not row status): ${am.pairedRows.join(', ') || 'none'}. Cost, tokens and wall time are the candidate sessions only; the front half and grading are below, once.`, '');
   L.push(...armTable(am.paired), '');
   if (am.unpairedRows.length) {
     L.push('## Unpaired rows (reported separately, not in the comparison above)', '');

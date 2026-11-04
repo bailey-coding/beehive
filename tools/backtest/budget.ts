@@ -7,7 +7,8 @@ export const EXPECTED_CALLS = 565;
 export const HARD_STOP_CALLS = 850;
 
 export class BudgetExceeded extends Error {
-  constructor(public readonly reason: string) {
+  /** `response`: the call finished and was recorded before the abort (a cap crossed by that very call), so the caller can still keep its result. */
+  constructor(public readonly reason: string, public readonly response?: ModelResponse) {
     super(reason);
   }
 }
@@ -174,14 +175,15 @@ export class BudgetedClient implements ModelClient {
       ...(chargedUsd !== undefined ? { chargedUsd, ...(estimated ? { costEstimated: true } : {}) } : {}),
     });
     t.persist();
-    if (meter && meter.chargedUsd > meter.capUsd) throw new BudgetExceeded(`dollar cap $${meter.capUsd.toFixed(2)} exceeded: $${meter.chargedUsd.toFixed(2)} charged`);
+    const done = estimated ? { ...res, estimatedUsd: chargedUsd } : res;
+    if (meter && meter.chargedUsd > meter.capUsd) throw new BudgetExceeded(`dollar cap $${meter.capUsd.toFixed(2)} exceeded: $${meter.chargedUsd.toFixed(2)} charged`, done);
     if (this.throwOnError && res.stopReason === 'error') {
       throw new BudgetExceeded(`model call failed (${req.role}${req.rowId ? ` ${req.rowId}` : ''}): ${res.error ?? `exit code ${res.exitCode}`}`);
     }
     if (clamped && res.stopReason === 'call-limit') {
       // The run was cut by the global limit, not its own: surface it so the caller aborts cleanly.
-      throw new BudgetExceeded(`hard stop reached mid-run: ${t.used}/${t.hardStop} calls used`);
+      throw new BudgetExceeded(`hard stop reached mid-run: ${t.used}/${t.hardStop} calls used`, done);
     }
-    return estimated ? { ...res, estimatedUsd: chargedUsd } : res;
+    return done;
   }
 }

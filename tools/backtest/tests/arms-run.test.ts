@@ -8,6 +8,7 @@ import { BudgetTracker, worstCallUsd } from '../budget.ts';
 import { FakeClient, type FakeReply, type ModelRequest } from '../client.ts';
 import type { Corpus } from '../corpus.ts';
 import { runPilot, type ArmRun, type RunOptions } from '../run.ts';
+import { computeArmsMetrics } from '../metrics.ts';
 import { gradesOf, type CandidateResult } from '../results.ts';
 import { APP_FIXED, APP_PARTIAL, SPEC, cfg, harnessRoot, makeFixture } from './fixture.ts';
 
@@ -44,7 +45,7 @@ const tmp = (p: string) => {
 
 /** Shared log of candidate requests across the arms, in global call order. */
 type Log = { arm: string; k: number; cwd: string; prompt: string; maxCalls: number }[];
-function armClient(arm: string, script: Record<number, Step>, log: Log, over: { model?: string | null; grade?: string; onCandidate?: () => void; modelAt?: (k: number) => string } = {}) {
+function armClient(arm: string, script: Record<number, Step>, log: Log, over: { model?: string | null; grade?: string; gradeCost?: number; onCandidate?: () => void; modelAt?: (k: number) => string } = {}) {
   let k = 0;
   const model = over.model === null ? undefined : over.model ?? (arm === 'sonnet-medium' ? 'claude-sonnet-5-5' : 'claude-opus-5-5');
   return new FakeClient((req: ModelRequest): FakeReply => {
@@ -56,7 +57,7 @@ function armClient(arm: string, script: Record<number, Step>, log: Log, over: { 
       if (s.write) fs.writeFileSync(path.join(req.cwd!, 'workers/api/index.ts'), s.write);
       return { text: 'done', calls: 4, costUsd: 0.5, model: over.modelAt ? over.modelAt(k) : model, ...s.reply };
     }
-    if (req.role === 'grade') return { text: over.grade ?? '{"label":"spec-gap","rationale":"the spec never says what the page contains"}', calls: 1, costUsd: 0.04, model };
+    if (req.role === 'grade') return { text: over.grade ?? '{"label":"spec-gap","rationale":"the spec never says what the page contains"}', calls: 1, costUsd: over.gradeCost ?? 0.04, model };
     throw new Error(`unexpected role ${req.role} for ${arm}`);
   });
 }
@@ -273,9 +274,17 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
     expect(r.meta.aborted).toMatch(/dollar cap \$30\.00 exceeded: \$40\.00 charged/);
     expect(log).toHaveLength(2); // the second call pushed the charge past the cap; nothing after it ran
     expect(r.rows[0].status).toBe('aborted');
-    expect(r.rows[0].candidates).toHaveLength(1); // the first candidate is kept
+    // the candidate whose call crossed the cap is stored too (marked), so the per-arm tables and the meter agree
+    expect(r.rows[0].candidates.map((c) => c.stopReason)).toEqual(['done', 'cap-abort']);
+    const stored = r.rows[0].candidates.find((c) => c.stopReason === 'cap-abort')!;
+    expect(stored.error).toMatch(/dollar cap \$30\.00 exceeded/);
+    expect(stored.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(stored.report).not.toBeNull();
+    expect(fs.existsSync(path.join(o.outDir, o.runId, 'rows/A1/candidates', stored.arm!.arm, 'c1.json'))).toBe(true);
     expect(fs.existsSync(r.reportPath)).toBe(true);
     expect(r.meta.dollar).toMatchObject({ capUsd: 30, chargedUsd: 40 });
+    const tableCost = r.rows[0].candidates.reduce((n, c) => n + (c.cost.costUsd ?? 0), 0);
+    expect(tableCost).toBeCloseTo(r.meta.dollar!.chargedUsd);
   }, 200_000);
 
   it('pre-flight refuses a run whose worst case exceeds the remaining ledger, before any call', async () => {
@@ -355,4 +364,19 @@ describe('arms run: resume after a crash (no clean exit, no final run.json)', ()
     expect(cs.flatMap((c) => c.requests).filter((q) => q.role === 'candidate')).toHaveLength(0);
     expect(fs.existsSync(path.join(runDir, 'run.json'))).toBe(true);
   }, 250_000);
+});
+
+describe('arms run: a cap abort during grading does not drop the row', () => {
+  it('every candidate was stored, so the row stays in the paired set although its status is aborted', async () => {
+    const log: Log = [];
+    const partial = { write: APP_PARTIAL };
+    const clients = [armClient('sonnet-medium', { 1: partial }, log, { gradeCost: 40 }), armClient('opus-medium', { 1: partial }, log, { gradeCost: 40 })];
+    const o = opts('arms-gradecap', corpus1, { k: 1, arms: armRuns(clients), reuseFrom: sourceRun, candidateMaxCalls: 20, seed: 's', dollarCapUsd: 30 });
+    const r = await runPilot(o);
+    expect(r.meta.aborted).toMatch(/dollar cap \$30\.00 exceeded/);
+    expect(r.rows[0].status).toBe('aborted');
+    expect(r.rows[0].candidates).toHaveLength(2);
+    expect(computeArmsMetrics(r.rows, r.meta).pairedRows).toEqual(['A1']);
+    expect(fs.readFileSync(r.reportPath, 'utf8')).toMatch(/Paired set: .*candidates alone decide.*: A1\./);
+  }, 200_000);
 });

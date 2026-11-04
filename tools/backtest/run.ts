@@ -495,6 +495,8 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           cr.promptHash = sha256(prompt);
         }
         let reported: string | undefined;
+        // An arms run keeps the candidate whose own call crossed a cap: it is stored (stopReason 'cap-abort') before the run aborts.
+        let pendingAbort: BudgetExceeded | null = null;
         try {
           const run = await arm.client.run({ role: 'candidate', rowId: row.id, prompt, tools: 'agent', cwd: wt, ...(o.allowBash ? { bashBox: { agentRoot: croot, cwd: wt, tmpDir: agentTmp } } : {}), maxCalls: o.candidateMaxCalls ?? 40, timeoutMs: o.candidateTimeoutMs ?? 30 * 60_000 });
           cr.cost = cost(run);
@@ -502,12 +504,18 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
           reported = run.model;
           if (arm.run) cr.arm = armIdent(arm.run.spec, arm.run.cliVersion, run.model);
         } catch (e) {
-          if (e instanceof BudgetExceeded) {
+          if (e instanceof BudgetExceeded && arm.run && e.response && e.response.stopReason !== 'error') {
+            pendingAbort = e;
+            cr.cost = cost(e.response);
+            cr.stopReason = 'cap-abort';
+            cr.error = e.reason;
+            reported = e.response.model;
+            cr.arm = armIdent(arm.run.spec, arm.run.cliVersion, e.response.model);
+          } else if (e instanceof BudgetExceeded) {
             // Always-pushed invariant: whatever the agent left is committed and pushed to scratch before aborting.
             await commitAndPush(wt, branch, `scratch: ${tag} (aborted)`).catch(() => {});
             throw e;
-          }
-          cr.error = e instanceof Error ? e.message : String(e);
+          } else cr.error = e instanceof Error ? e.message : String(e);
         }
         // One run-wide model per arm (rows and resumes included), and it must be the requested one: else the whole run aborts.
         if (reported && arm.run) {
@@ -546,6 +554,7 @@ async function runRow(o: RunOptions, ctx: RowCtx, row: CorpusRow, issues: Map<st
         res.candidates.push(cr);
         writeJson(cfile, cr);
         log(`${tag}: ${cr.label ?? 'residue'} (${cr.cost.calls} calls, rungs ${cr.clearsAllRungs ? 'cleared' : 'not cleared'})`);
+        if (pendingAbort) throw pendingAbort;
       }
     }
 
