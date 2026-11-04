@@ -180,6 +180,7 @@ describe('arms subcommand flags', () => {
   it('rejects unknown flags, missing required ones, a raised dollar cap and an out-of-range call limit', () => {
     expect(() => validateFlags('arms', { ...ok, 'hard-stop': '100' })).toThrow(/unknown flag --hard-stop/);
     expect(() => validateFlags('arms', { ...ok, 'allow-bash': true })).toThrow(/unknown flag --allow-bash/);
+    expect(() => validateFlags('arms', { ...ok, 'keep-work': true })).toThrow(/--keep-work is refused in arms mode/);
     for (const need of ['run', 'arms', 'rows', 'reuse-from']) expect(() => validateFlags('arms', { ...ok, [need]: true })).toThrow(new RegExp(`--${need}`));
     expect(() => validateFlags('arms', { ...ok, 'dollar-cap': '16' })).toThrow(/between 0 and 15/);
     expect(() => validateFlags('arms', { ...ok, 'candidate-max-calls': '41' })).toThrow(/between 1 and 40/);

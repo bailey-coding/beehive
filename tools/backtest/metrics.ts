@@ -113,7 +113,7 @@ function rowMetrics(r: RowResult): RowMetrics {
     if (rep.rungs.preMerge && heldFailed) heldOutEscapes++;
     if (c.clearsAllRungs) {
       if (c.deterministicRegression || c.label === 'regression' && c.labelSource === 'deterministic') escapes++;
-      else if (c.label === null && gradesOf(c).some((g) => g.label === 'regression')) escapesModelJudged++;
+      else if (c.labelSource !== 'deterministic' && gradesOf(c).some((g) => g.label === 'regression')) escapesModelJudged++; // legacy results keep label + labelSource 'same-family grader'
     }
   }
   const cost = rowCost(r);

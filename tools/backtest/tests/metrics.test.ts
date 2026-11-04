@@ -132,6 +132,14 @@ describe('arms metrics: candidate-only, paired set, two graders', () => {
     expect(m.frontHalf.calls).toBe(110); // reported once, outside the arm numbers
   });
 
+  it('a legacy-shaped candidate (label and labelSource \'same-family grader\', no grades[]) still counts as a model-judged escape', () => {
+    const legacy = cand(1, { label: 'regression', labelSource: 'same-family grader', rationale: 'same-family grader: breaks a route', clearsAllRungs: true });
+    const m = computeMetrics([row('A1', [legacy])], meta);
+    expect(m.rows[0].escapesModelJudged).toBe(1);
+    expect(m.rows[0].escapes).toBe(0); // not a deterministic escape
+    expect(m.graderLabelled.count).toBe(1);
+  });
+
   it('between-arm numbers use the paired set only: a row where an arm did not finish K is reported apart', () => {
     const full = row('R1', [ac('a', 1), ac('a', 2), ac('b', 1), ac('b', 2)]);
     const partial = row('R2', [ac('a', 1), ac('a', 2), ac('b', 1)]);

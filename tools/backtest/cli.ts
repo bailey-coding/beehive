@@ -60,6 +60,7 @@ export function validateFlags(cmd: string, f: Record<string, string | true>): vo
   for (const k of Object.keys(f)) if (!ok.includes(k)) throw new Error(`unknown flag --${k} for '${cmd}'`);
   if (f['candidate-max-calls'] !== undefined && !(Number.isInteger(Number(f['candidate-max-calls'])) && Number(f['candidate-max-calls']) >= 1 && Number(f['candidate-max-calls']) <= 40)) throw new Error('--candidate-max-calls must be an integer between 1 and 40 (the single-client default)');
   if (f['dollar-cap'] !== undefined && !(Number(f['dollar-cap']) > 0 && Number(f['dollar-cap']) <= ARMS_DOLLAR_CAP_USD)) throw new Error(`--dollar-cap must be between 0 and ${ARMS_DOLLAR_CAP_USD} (the run-level cap can only be lowered)`);
+  if (cmd === 'arms' && f['keep-work']) throw new Error('--keep-work is refused in arms mode: it would leave every candidate\'s agent root on disk next to the other arms\' work (cross-arm isolation)');
   if (cmd === 'arms') for (const need of ['run', 'arms', 'rows', 'reuse-from']) if (typeof f[need] !== 'string') throw new Error(`arms needs --${need}`);
   if (f['hard-stop'] !== undefined && !(Number(f['hard-stop']) >= 1 && Number(f['hard-stop']) <= HARD_STOP_CALLS)) throw new Error(`--hard-stop must be between 1 and ${HARD_STOP_CALLS} (the plan's cap)`);
 }
@@ -212,7 +213,7 @@ async function main(): Promise<void> {
         reuseFrom: path.resolve(outDir, String(f['reuse-from'])), harness,
         dollarCapUsd: Number(f['dollar-cap'] ?? ARMS_DOLLAR_CAP_USD),
         candidateMaxCalls: Number(f['candidate-max-calls'] ?? ARMS_CANDIDATE_MAX_CALLS),
-        keepWork: !!f['keep-work'], log,
+        log,
       });
       log(`report: ${out.reportPath}\ncalls used (global ledger): ${out.meta.budget.used}/${out.meta.budget.hardStop}; this run charged $${out.meta.dollar?.chargedUsd.toFixed(2)} of $${out.meta.dollar?.capUsd.toFixed(2)}${out.meta.aborted ? `\nABORTED: ${out.meta.aborted}` : ''}`);
     } finally {
@@ -265,7 +266,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  log('usage: cli.ts freeze [--force] | check [--base-green [--write] [--rows A6,A7]] | sample --run NAME [--n 2] [--seed S] [--ingest] [--template-out FILE] | publish --run NAME [--name N] | smoke --release-pilot | canary --release-pilot [--allow-bash] [--arms a,b] | arms --release-pilot --run NAME --arms sonnet-medium,opus-medium --rows A4,A5,A11 --reuse-from pilot-2 [--k 3] [--candidate-max-calls 20] [--dollar-cap 15] [--seed S] [--out DIR] [--work DIR] [--keep-work] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
+  log('usage: cli.ts freeze [--force] | check [--base-green [--write] [--rows A6,A7]] | sample --run NAME [--n 2] [--seed S] [--ingest] [--template-out FILE] | publish --run NAME [--name N] | smoke --release-pilot | canary --release-pilot [--allow-bash] [--arms a,b] | arms --release-pilot --run NAME --arms sonnet-medium,opus-medium --rows A4,A5,A11 --reuse-from pilot-2 [--k 3] [--candidate-max-calls 20] [--dollar-cap 15] [--seed S] [--out DIR] [--work DIR] | pilot --release-pilot [--run NAME] [--k 3] [--rows A1,A2] [--out DIR] [--work DIR] [--keep-work] [--allow-bash] [--hard-stop N<=850]');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main().catch((e) => {

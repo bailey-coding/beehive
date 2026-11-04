@@ -103,6 +103,7 @@ export async function runPilot(o: RunOptions): Promise<{ rows: RowResult[]; meta
   const armRuns = o.arms;
   const rowDir = (r: CorpusRow) => path.join(runDir, 'rows', r.id);
   if (!armRuns && !o.client) throw new Error('runPilot needs a client, or arms');
+  if (armRuns && o.keepWork) throw new Error('keepWork is refused in an arms run: candidate agent roots must not outlive their eval clone (cross-arm isolation)');
   const meter = armRuns ? new DollarMeter(o.dollarCapUsd ?? 15, o.tracker, o.runId) : undefined;
   const client = armRuns ? null : new BudgetedClient(o.client!, o.tracker);
   const armCtxs: ArmCtx[] = armRuns

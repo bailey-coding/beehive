@@ -44,7 +44,7 @@ const tmp = (p: string) => {
 };
 
 /** Shared log of candidate requests across the arms, in global call order. */
-type Log = { arm: string; k: number; cwd: string; prompt: string; maxCalls: number }[];
+type Log = { arm: string; k: number; cwd: string; prompt: string; maxCalls: number; previousRootsGone: boolean }[];
 function armClient(arm: string, script: Record<number, Step>, log: Log, over: { model?: string | null; grade?: string; gradeCost?: number; onCandidate?: () => void; modelAt?: (k: number) => string } = {}) {
   let k = 0;
   const model = over.model === null ? undefined : over.model ?? (arm === 'sonnet-medium' ? 'claude-sonnet-5-5' : 'claude-opus-5-5');
@@ -52,7 +52,8 @@ function armClient(arm: string, script: Record<number, Step>, log: Log, over: { 
     if (req.role === 'candidate') {
       k++;
       over.onCandidate?.();
-      log.push({ arm, k, cwd: req.cwd!, prompt: req.prompt, maxCalls: req.maxCalls });
+      // observed from inside the call: have all earlier candidates' agent roots already been deleted?
+      log.push({ arm, k, cwd: req.cwd!, prompt: req.prompt, maxCalls: req.maxCalls, previousRootsGone: log.every((p) => !fs.existsSync(path.dirname(p.cwd))) });
       const s = script[k] ?? {};
       if (s.write) fs.writeFileSync(path.join(req.cwd!, 'workers/api/index.ts'), s.write);
       return { text: 'done', calls: 4, costUsd: 0.5, model: over.modelAt ? over.modelAt(k) : model, ...s.reply };
@@ -202,6 +203,8 @@ describe('arms run: two arms, K=2, interleaved, crossed grading', () => {
 
   it('deletes each candidate\'s agent root right after its eval clone', () => {
     for (const l of log) expect(fs.existsSync(path.dirname(l.cwd)), l.cwd).toBe(false);
+    // and each one was already gone when the NEXT candidate's call started (a late deletion would leave it visible to that agent)
+    expect(log.map((l) => l.previousRootsGone)).toEqual([true, true, true, true]);
   });
 
   it('resume: the grading pass is rebuilt from stored results and covers every arm\'s residue; no candidate is rerun', async () => {
@@ -286,6 +289,12 @@ describe('arms run: leak-blocked arm, dollar cap, pre-flight, reported model', (
     const tableCost = r.rows[0].candidates.reduce((n, c) => n + (c.cost.costUsd ?? 0), 0);
     expect(tableCost).toBeCloseTo(r.meta.dollar!.chargedUsd);
   }, 200_000);
+
+  it('keepWork is refused in an arms run (candidate roots must not outlive their eval clone)', async () => {
+    const clients = [armClient('sonnet-medium', {}, []), armClient('opus-medium', {}, [])];
+    await expect(runPilot(opts('arms-keep', corpus1, { arms: armRuns(clients), reuseFrom: sourceRun, keepWork: true }))).rejects.toThrow(/keepWork is refused/);
+    expect(clients.flatMap((c) => c.requests)).toHaveLength(0);
+  });
 
   it('pre-flight refuses a run whose worst case exceeds the remaining ledger, before any call', async () => {
     const log: Log = [];
