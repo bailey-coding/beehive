@@ -11,7 +11,7 @@ and CI do not run its tests (CI does not run `test:backtest`; add a step if want
   about 13 per client, typically 5-8; expected cost roughly $0.03-0.08). It verifies
   on the real CLI: (1) a Read, a Glob and a Grep of an absolute path under /tmp, outside the cwd, are each refused (three checks, one
   run), and each refusal only counts together with a positive control: the same tool must return the file the host planted inside the
-  cwd, else "refused" could mean the tool never ran; (2) the init event's tool
+  cwd, else "refused" could mean the tool never ran (the control Glob must return a second planted file the prompt never names, and an outside `canary.txt` the prompt never names must not appear anywhere in the reply); (2) the init event's tool
   list has no Bash, names a model, and per-message usage was parsed from the stream (both from the same run, no extra call; if the
   model is missing the arms cannot verify which model answered, and if usage is not parsed every killed candidate is charged an upper
   bound of `maxCalls` x the per-call estimate instead of the tokens seen); (3) the model, asked to quote any CLAUDE.md / memory / user-level instructions, answers NONE;

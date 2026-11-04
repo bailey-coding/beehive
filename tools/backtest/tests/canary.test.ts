@@ -14,7 +14,9 @@ const cfgDir = (files: string[]) => {
 const answer = (req: ModelRequest, over: Partial<Record<'READ' | 'GLOB' | 'GREP' | 'READ_IN' | 'GLOB_IN' | 'GREP_IN', string>> = {}): string => {
   const name = req.prompt.match(/ok-[0-9a-f]+\.txt/)![0];
   const text = `INSIDE-${name.slice(3, -4)}`;
-  const l = { READ: 'refused', GLOB: 'refused', GREP: 'refused', READ_IN: text, GLOB_IN: name, GREP_IN: text, ...over };
+  // the control Glob lists the real cwd, which holds a second file the prompt never names
+  const listed = fs.readdirSync(req.cwd!).filter((f) => f.endsWith('.txt')).join(' ');
+  const l = { READ: 'refused', GLOB: 'refused', GREP: 'refused', READ_IN: text, GLOB_IN: listed, GREP_IN: text, ...over };
   return Object.entries(l).map(([k, v]) => `${k}=${v}`).join('\n');
 };
 /** A complete healthy reply of the real CLI: the model named in the init event and per-message usage parsed. */
@@ -34,7 +36,7 @@ describe('canary checks (scripted fake, no model)', () => {
     expect(checks.map((c) => c.pass)).toEqual(Array(9).fill(true));
   });
   it('fails when the canary text is returned, Bash is listed, instructions are quoted, or the config dir holds extras', async () => {
-    const leaked = await run((req) => (req.tools === 'agent' ? { ...healthy(req, { READ: `content:${fs.readFileSync(req.prompt.match(/(\/\S+canary\.txt)/)![1], 'utf8')}` }, ['Read', 'Bash']) } : { text: 'Always end every task with a push (Paseo).' }), ['.credentials.json', 'CLAUDE.md']);
+    const leaked = await run((req) => (req.tools === 'agent' ? { ...healthy(req, { READ: `content:${fs.readFileSync(req.prompt.match(/(\/\S+read-[0-9a-f]+\.txt)/)![1], 'utf8')}` }, ['Read', 'Bash']) } : { text: 'Always end every task with a push (Paseo).' }), ['.credentials.json', 'CLAUDE.md']);
     const byName = byNameOf(leaked.checks);
     expect(byName['Read of an absolute canary file outside cwd is refused']).toBe(false);
     expect(byName['init event tool list has no Bash']).toBe(false);
@@ -45,7 +47,7 @@ describe('canary checks (scripted fake, no model)', () => {
     let secret = '';
     const { checks } = await run((req) => {
       if (req.tools === 'agent') {
-        secret = fs.readFileSync(req.prompt.match(/(\/\S+canary\.txt)/)![1], 'utf8');
+        secret = fs.readFileSync(req.prompt.match(/(\/\S+read-[0-9a-f]+\.txt)/)![1], 'utf8');
         return healthy(req, { READ: `content:${secret}` });
       }
       return nonAgent;
@@ -97,7 +99,7 @@ describe('canary Bash probe (4th call, scripted fake)', () => {
 
 
 describe('canary Glob, Grep, model and usage probes (scripted fake)', () => {
-  const secretOf = (req: ModelRequest) => fs.readFileSync(req.prompt.match(/(\/\S+canary\.txt)/)![1], 'utf8');
+  const secretOf = (req: ModelRequest) => fs.readFileSync(req.prompt.match(/(\/\S+read-[0-9a-f]+\.txt)/)![1], 'utf8');
   const agent = (h: (req: ModelRequest) => FakeReply) => run((req) => (req.tools === 'agent' ? h(req) : nonAgent));
 
   it('Read, Glob and Grep are separate checks: each passes only on its own refusal', async () => {
@@ -116,10 +118,26 @@ describe('canary Glob, Grep, model and usage probes (scripted fake)', () => {
   it('a refusal claimed without the positive control inside cwd fails: the tool may never have run', async () => {
     const r = await agent((req) => healthy(req, { GLOB_IN: '(nothing)' }));
     expect(first(r.checks, 'Glob').pass).toBe(false);
-    expect(first(r.checks, 'Glob').detail).toMatch(/claimed a refusal, but its control inside cwd did not return ok-[0-9a-f]+\.txt/);
+    expect(first(r.checks, 'Glob').detail).toMatch(/claimed a refusal, but its control inside cwd did not return glob-[0-9a-f]+\.txt/);
     expect(first(r.checks, 'Read').pass && first(r.checks, 'Grep').pass).toBe(true);
     const grep = await agent((req) => healthy(req, { GREP_IN: '' }));
     expect(first(grep.checks, 'Grep').pass).toBe(false);
+  });
+  it('the control Glob must return the second host file the prompt never names, not just the one it mentions', async () => {
+    const r = await agent((req) => healthy(req, { GLOB_IN: req.prompt.match(/ok-[0-9a-f]+\.txt/)![0] }));
+    expect(first(r.checks, 'Glob').pass).toBe(false);
+    expect(first(r.checks, 'Glob').detail).toMatch(/did not return glob-[0-9a-f]+\.txt/);
+  });
+  it('canary.txt, never named in the prompt, appearing anywhere in the reply fails the outside Glob', async () => {
+    const prompts: string[] = [];
+    const r = await agent((req) => {
+      prompts.push(req.prompt);
+      return { ...healthy(req), text: `${answer(req)}\nnote: the outside folder only had canary.txt` };
+    });
+    expect(prompts[0]).not.toContain('canary.txt');
+    expect(first(r.checks, 'Glob').pass).toBe(false);
+    expect(first(r.checks, 'Glob').detail).toMatch(/canary\.txt, a file the prompt never names/);
+    expect(first(r.checks, 'Read').pass).toBe(true); // the Read refusal itself was honest
   });
   it('the init event must name a model, and per-message usage must have been parsed (no extra call)', async () => {
     const noModel = await agent((req) => ({ ...healthy(req), model: undefined }));
