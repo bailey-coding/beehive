@@ -32,7 +32,21 @@ export interface Session {
   /** Sign-in time (epoch seconds). Absent on cookies issued before M12: those are never "fresh" for a token mint. */
   iat?: number;
   exp: number;
+  /**
+   * Read-only viewer: a GitHub user not on ALLOWED_GITHUB_USERS, signed in while OPEN_VIEWER_SIGNIN is on.
+   * Has no actor row (`actorId` is ''), never writes, and does not see `internal` issues. Absent = member.
+   */
+  viewer?: true;
 }
+
+/** Issues a session may not see: private for everyone, internal for read-only viewers. */
+export function issueHiddenFrom(session: Pick<Session, 'viewer'>, issue: DoRow): boolean {
+  const visibility = str(pick(issue, 'visibility'));
+  return visibility === 'private' || (visibility === 'internal' && session.viewer === true);
+}
+
+/** Shown wherever a member would see a form. */
+export const READ_ONLY_NOTE = 'You have read-only access. Ask a maintainer to add your GitHub login as a contributor.';
 
 // ============================================================================
 // Types
@@ -179,7 +193,7 @@ export async function orgPage(
   const orgSpecs = specs.filter((s) => getOrganizationId(s) === id);
   const orgIssues = issues.filter((i) => {
     const repo = repos.find((r) => getId(r) === getRepositoryId(i));
-    return repo && getOrganizationId(repo) === id;
+    return repo && getOrganizationId(repo) === id && !issueHiddenFrom(session, i);
   });
   
   // Build searchable entities
@@ -324,7 +338,8 @@ export async function repoPage(
 
   const repoOrg = orgs.find((o) => getId(o) === getOrganizationId(repo));
   const linkedSpec = specs.find((s) => getId(s) === getSpecId(repo));
-  const repoIssues = issues.filter((i) => getRepositoryId(i) === id);
+  // Hidden issues never reach the tabs, the search index or the changelog.
+  const repoIssues = issues.filter((i) => getRepositoryId(i) === id && !issueHiddenFrom(session, i));
   const repoCandidates = candidates.filter((c) => getRepositoryId(c) === id);
   const repoSpecs = specs.filter((s) => getId(s) === getSpecId(repo));
   
@@ -631,7 +646,7 @@ export async function specPage(
   });
   
   const linkedRepoIds = new Set(linkedRepos.map(getId));
-  const linkedIssues = issues.filter((i) => linkedRepoIds.has(getRepositoryId(i)));
+  const linkedIssues = issues.filter((i) => linkedRepoIds.has(getRepositoryId(i)) && !issueHiddenFrom(session, i));
   
   const searchableEntities = [
     ...linkedRepos.map((r) => ({ kind: 'repo' as const, id: getId(r), name: getName(r), description: getDescription(r) || undefined })),
@@ -1166,11 +1181,6 @@ function renderIssueRow(issue: DoRow, repoUrl: string): string[] {
   ];
 }
 
-/** Private issues are hidden from lists and from the detail page. */
-function isPrivateIssue(issue: DoRow): boolean {
-  return getIssueVisibility(issue) === 'private';
-}
-
 /**
  * List issues for a repository.
  */
@@ -1191,7 +1201,7 @@ export async function repoIssuesPage(
 
   // Filter issues for this repo
   const repoIssues = issues.filter((i) => getRepositoryId(i) === repoId);
-  const publicIssues = repoIssues.filter((i) => !isPrivateIssue(i));
+  const publicIssues = repoIssues.filter((i) => !issueHiddenFrom(session, i));
 
   // Get spec for this repo if any
   const spec = specs.find((s) => getRepositoryId(s) === repoId);
@@ -1199,16 +1209,16 @@ export async function repoIssuesPage(
   const issueRows = publicIssues.map((i) => renderIssueRow(i, repoUrl));
 
   const body = `
-    <section class="action-bar">
+    ${session.viewer ? '' : `<section class="action-bar">
       <a href="${repoUrl}/issues/new" class="button">New Issue</a>
-    </section>
+    </section>`}
 
     <section>
-      <h2>Issues (${publicIssues.length} of ${repoIssues.length} total)</h2>
+      <h2>Issues (${session.viewer ? publicIssues.length : `${publicIssues.length} of ${repoIssues.length} total`})</h2>
       ${publicIssues.length > 0 ? tableHtml(
         ['Issue', 'Visibility', 'Stage', 'Labels', 'Created'],
         issueRows
-      ) : '<p class="empty">No issues found. <a href="' + repoUrl + '/issues/new">Create one</a></p>'}
+      ) : session.viewer ? '<p class="empty">No issues found.</p>' : '<p class="empty">No issues found. <a href="' + repoUrl + '/issues/new">Create one</a></p>'}
     </section>
 
     ${spec ? `
@@ -1275,6 +1285,8 @@ export function newIssuePage(ref: RepoRef, _url: URL, _session: Session, chrome:
 export interface IssueViewer {
   actorId: string;
   isMaintainer: boolean;
+  /** A read-only viewer session: no forms at all. */
+  readOnly?: boolean;
 }
 
 /**
@@ -1300,7 +1312,7 @@ export async function issuePage(
     doReader.list(`/api/issues/${encodeURIComponent(issueId)}/comments`, 500),
   ]);
 
-  if (!issue || isPrivateIssue(issue)) {
+  if (!issue || issueHiddenFrom(session, issue)) {
     return statusPage(chrome, 404, 'Not found', 'Issue not found. <a href="/app">Back to dashboard</a>');
   }
   const repoId = getRepositoryId(issue);
@@ -1319,7 +1331,7 @@ export async function issuePage(
   const labels = getIssueLabels(issue);
   const isOpen = getIssueStatus(issue) === 'open';
   const createdBy = str(pick(issue, 'created_by', 'createdBy'));
-  const canToggle = !!issueUrl && (viewer.isMaintainer || (!!createdBy && createdBy === viewer.actorId));
+  const canToggle = !!issueUrl && !viewer.readOnly && (viewer.isMaintainer || (!!createdBy && createdBy === viewer.actorId));
   const policy = getIssueCommentPolicy(issue) || 'open';
 
   const title = `Issue #${getIssueNumber(issue)}: ${getIssueTitle(issue)}`;
@@ -1331,7 +1343,9 @@ export async function issuePage(
     : '';
 
   let commentForm = '';
-  if (issueUrl) {
+  if (viewer.readOnly) {
+    commentForm = `<p class="empty">${READ_ONLY_NOTE}</p>`;
+  } else if (issueUrl) {
     if (policy === 'open' || viewer.isMaintainer) {
       commentForm = `
         <form method="POST" action="${issueUrl}/comments" class="comment-form">

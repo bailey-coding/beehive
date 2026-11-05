@@ -162,8 +162,9 @@ wrangler secret put GITHUB_CLIENT_ID --name beehive       # web UI login
 wrangler secret put GITHUB_CLIENT_SECRET --name beehive
 ```
 
-The web UI is served by the `beehive` worker (`/login` -> GitHub OAuth -> `/app`); only users
-in `ALLOWED_GITHUB_USERS` can sign in. Create a GitHub OAuth app whose callback is on your
+The web UI is served by the `beehive` worker (`/login` -> GitHub OAuth -> `/app`); users in
+`ALLOWED_GITHUB_USERS` sign in as members, and with `OPEN_VIEWER_SIGNIN = "true"` any other GitHub user signs in
+read-only. Create a GitHub OAuth app whose callback is on your
 worker's URL, path `/auth/callback`.
 
 ### e. Validated and unvalidated

@@ -68,7 +68,8 @@ CLOUDFLARE_ACCOUNT_ID=your_account_id_here
 ### 3. GitHub OAuth (implemented — web UI login)
 
 The `beehive` worker serves the browser UI (`/login`, `/app`) with GitHub OAuth.
-Only GitHub logins listed in `ALLOWED_GITHUB_USERS` can sign in.
+GitHub logins listed in `ALLOWED_GITHUB_USERS` sign in as members. Other GitHub users are refused, unless
+`OPEN_VIEWER_SIGNIN = "true"` is set, which lets them sign in read-only (`docs/plans/viewer-signin-plan.md`).
 
 ```bash
 # Create OAuth App at: https://github.com/settings/applications/new

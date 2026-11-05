@@ -24,6 +24,8 @@ CLOUDFLARE_ACCOUNT_ID = "bb21fa3c93c3cc02ac97b091b2d57811"
 # The account's workers.dev subdomain: canary urls must be Workers of this account (shared/deploy-refs.ts isAcceptableCanaryUrl)
 WORKERS_SUBDOMAIN = "bz23711"
 ALLOWED_GITHUB_USERS = "bailey-coding, OliverVermeulen"
+# "true" lets any other GitHub user sign in read-only (no actor row, no writes; docs/plans/viewer-signin-plan.md). Off while unset.
+# OPEN_VIEWER_SIGNIN = "true"
 
 # Durable Object for Spec coordination (class exported by this script)
 [[durable_objects.bindings]]

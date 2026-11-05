@@ -39,6 +39,8 @@ export type NavOrgs =
 /** Per-request navigation data. An interface so later milestones can add a user menu or counts. */
 export interface Chrome {
   login: string;
+  /** A read-only viewer session: no API tokens link, marked read-only. */
+  readOnly?: boolean;
   url: URL;
   orgs: NavOrgs;
 }
@@ -80,7 +82,7 @@ export function once<T>(fn: () => Promise<T>): () => Promise<T> {
 
 /** The light chrome: no organization list, and therefore no Spec DO read. */
 export function lightChrome(session: Session, url: URL): Chrome {
-  return { login: session.login, url, orgs: { skipped: true } };
+  return { login: session.login, readOnly: session.viewer === true, url, orgs: { skipped: true } };
 }
 
 /**
@@ -94,10 +96,10 @@ export async function loadChrome(reader: DoReader, session: Session, url: URL): 
     const orgs = rows
       .map((o) => ({ id: pick(o, 'id'), name: pick(o, 'name') }))
       .filter((o) => isValidId(o.id));
-    return { login: session.login, url, orgs: { ok: true, orgs, total: orgs.length } };
+    return { login: session.login, readOnly: session.viewer === true, url, orgs: { ok: true, orgs, total: orgs.length } };
   } catch (error) {
     console.error('Navigation organization list error:', error);
-    return { login: session.login, url, orgs: { ok: false } };
+    return { login: session.login, readOnly: session.viewer === true, url, orgs: { ok: false } };
   }
 }
 
@@ -216,8 +218,8 @@ export function trialCrumbs(trial: DoRow, spec?: DoRow | null, org?: DoRow | nul
 /** Login and sign-out in one place (a later user menu replaces this function). */
 export function renderAccount(chrome: Chrome): SafeHtml {
   return safe(
-    `<div class="site-account"><span>Signed in as <strong>${labelHtml(chrome.login)}</strong></span>` +
-      `<a href="/app/settings/tokens">API tokens</a>` +
+    `<div class="site-account"><span>Signed in as <strong>${labelHtml(chrome.login)}</strong>${chrome.readOnly ? ' (read-only)' : ''}</span>` +
+      (chrome.readOnly ? '' : `<a href="/app/settings/tokens">API tokens</a>`) +
       `<form method="POST" action="/logout"><button class="link">Sign out</button></form></div>`
   );
 }

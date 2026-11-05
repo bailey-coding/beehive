@@ -1,10 +1,11 @@
 /**
  * Beehive web UI: GitHub OAuth login and server-rendered management pages.
  *
- * Lives in the edge router so the browser never sees API_AUTH_TOKEN. Access is
- * limited to the GitHub logins in ALLOWED_GITHUB_USERS; the session is a signed,
- * HttpOnly cookie. Writes go straight to the Spec DO, the same path the REST
- * handlers use.
+ * Lives in the edge router so the browser never sees API_AUTH_TOKEN. Members are the
+ * GitHub logins in ALLOWED_GITHUB_USERS. With OPEN_VIEWER_SIGNIN = "true", any other
+ * GitHub user gets a read-only viewer session (no actor row, GET/HEAD only, no tokens,
+ * no internal issues); otherwise they are refused. The session is a signed, HttpOnly
+ * cookie. Writes go straight to the Spec DO, the same path the REST handlers use.
  */
 
 export interface UiEnv {
@@ -12,14 +13,16 @@ export interface UiEnv {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   ALLOWED_GITHUB_USERS?: string;
+  /** "true" lets GitHub users outside ALLOWED_GITHUB_USERS sign in read-only. Anything else: refused. */
+  OPEN_VIEWER_SIGNIN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
 }
 
 import { page, esc, str, table, tableHtml, isValidId } from './ui-html';
-import { orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, type DoReader, type DoRow, type Session, type IssueViewer } from './ui-pages';
+import { issueHiddenFrom, READ_ONLY_NOTE, orgPage, repoPage, specPage, candidatePage, trialPage, repoIssuesPage, newIssuePage, issuePage, type DoReader, type DoRow, type Session, type IssueViewer } from './ui-pages';
 import { parseRepoIssuesPath, resolveRepoRef, buildRepoUrl, validComponent, type RepoIssuesRoute, type RepoRef } from './ui-repo-ref';
-import { appPage, makeChromeSource, memoizeReader, statusPage, type ChromeSource } from './ui-layout';
+import { appPage, lightChrome, makeChromeSource, memoizeReader, statusPage, type ChromeSource } from './ui-layout';
 import { handleTokenSettings, parseTokenRoute, tokenPrecheck } from './ui-tokens';
 import type { SpecDoStub } from '../shared/spec-do-auth';
 
@@ -119,6 +122,18 @@ export async function handleUi(
 
   if (!session) return redirect('/login');
 
+  // A viewer cookie is honoured only while open sign-in is on and the login is still not a member;
+  // a login added to the allowlist signs in again to get its actor row.
+  const isViewer = session.viewer === true;
+  if (isViewer && (!viewerSigninOpen(env) || isMember(env, session.login))) {
+    return redirect('/login', [clearCookie(SESSION_COOKIE)]);
+  }
+  // Viewers write nothing: every non-GET/HEAD request and the token pages are refused before any
+  // DO call or body read. The light chrome (non-GET) reads nothing either.
+  if (isViewer && ((method !== 'GET' && method !== 'HEAD') || parseTokenRoute(path, method))) {
+    return statusPage(() => Promise.resolve(lightChrome(session, url)), 403, 'Read-only access', esc(READ_ONLY_NOTE));
+  }
+
   // API tokens (M12): the origin check and the mint freshness check precede every DO call,
   // the actor lookup below included.
   const tokenRoute = parseTokenRoute(path, method);
@@ -130,14 +145,19 @@ export async function handleUi(
   // A valid signature does not prove the actor still exists (the ledger can be wiped).
   // Force a fresh login so ensureActor re-creates it instead of failing on a foreign key.
   // Looked up by id, not in a capped list. Only a 404 means "gone"; any other failure is a 503, not a login loop.
-  const lookup = await findSessionActor(stub, session.actorId);
-  if (lookup.state === 'error') {
-    return page('Service unavailable', '<p>Could not check your account. Try again shortly.</p>', 503);
+  // Viewers have no actor row to check.
+  let viewer: IssueViewer;
+  if (isViewer) {
+    viewer = { actorId: '', isMaintainer: false, readOnly: true };
+  } else {
+    const lookup = await findSessionActor(stub, session.actorId);
+    if (lookup.state === 'error') {
+      return page('Service unavailable', '<p>Could not check your account. Try again shortly.</p>', 503);
+    }
+    if (lookup.state === 'missing') return redirect('/login', [clearCookie(SESSION_COOKIE)]);
+    // Only decides what the pages offer; the Spec DO re-checks every write. Sessions are never service accounts.
+    viewer = { actorId: session.actorId, isMaintainer: pick(lookup.row, 'role') === 'maintainer' };
   }
-  if (lookup.state === 'missing') return redirect('/login', [clearCookie(SESSION_COOKIE)]);
-  const actorRow = lookup.row;
-  // Only decides what the pages offer; the Spec DO re-checks every write. Sessions are never service accounts.
-  const viewer: IssueViewer = { actorId: session.actorId, isMaintainer: pick(actorRow, 'role') === 'maintainer' };
 
   // CREATE DOREADER - available to all authenticated routes below. GET/HEAD requests share
   // identical reads (the navigation's organization list and a page's own list) within the request.
@@ -149,7 +169,7 @@ export async function handleUi(
   const chrome = makeChromeSource(method, doReader, session, url);
 
   // Dashboard route
-  if (path === '/app' && method === 'GET') return dashboard(doReader, chrome);
+  if (path === '/app' && method === 'GET') return dashboard(doReader, chrome, isViewer);
 
   if (tokenRoute) return handleTokenSettings(tokenRoute, request, session, viewer, stub, chrome);
 
@@ -320,14 +340,19 @@ async function finishLogin(
     return page('Login failed', '<p>Could not read your GitHub profile.</p>', 502, [clearCookie(STATE_COOKIE)]);
   }
 
-  const allowed = (env.ALLOWED_GITHUB_USERS || '')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  if (!allowed.includes(user.login.toLowerCase())) {
-    return page('Access denied', `<p>GitHub user <strong>${esc(user.login)}</strong> is not allowed.</p>`, 403, [
-      clearCookie(STATE_COOKIE),
-    ]);
+  const iat = Math.floor(Date.now() / 1000);
+  if (!isMember(env, user.login)) {
+    if (!viewerSigninOpen(env)) {
+      return page('Access denied', `<p>GitHub user <strong>${esc(user.login)}</strong> is not allowed.</p>`, 403, [
+        clearCookie(STATE_COOKIE),
+      ]);
+    }
+    // Read-only viewer: no actor row is created, so strangers never write to the ledger.
+    const viewerToken = await signSession(
+      { login: user.login, actorId: '', viewer: true, iat, exp: iat + SESSION_TTL_SECONDS },
+      env.API_AUTH_TOKEN as string
+    );
+    return redirect('/app', [cookie(SESSION_COOKIE, viewerToken, SESSION_TTL_SECONDS), clearCookie(STATE_COOKIE)]);
   }
 
   const actorId = await ensureActor(stub, user.login, String(user.id));
@@ -335,12 +360,23 @@ async function finishLogin(
     return page('Login failed', '<p>Could not create your actor record.</p>', 500, [clearCookie(STATE_COOKIE)]);
   }
 
-  const iat = Math.floor(Date.now() / 1000);
   const token = await signSession(
     { login: user.login, actorId, iat, exp: iat + SESSION_TTL_SECONDS },
     env.API_AUTH_TOKEN as string
   );
   return redirect('/app', [cookie(SESSION_COOKIE, token, SESSION_TTL_SECONDS), clearCookie(STATE_COOKIE)]);
+}
+
+function isMember(env: UiEnv, login: string): boolean {
+  return (env.ALLOWED_GITHUB_USERS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(login.toLowerCase());
+}
+
+function viewerSigninOpen(env: UiEnv): boolean {
+  return env.OPEN_VIEWER_SIGNIN === 'true';
 }
 
 type SessionActor = { state: 'found'; row: Row } | { state: 'missing' } | { state: 'error' };
@@ -412,7 +448,7 @@ function formatDate(ts: number | string | undefined): string {
   return new Date(num).toLocaleString();
 }
 
-async function dashboard(doReader: DoReader, chrome: ChromeSource): Promise<Response> {
+async function dashboard(doReader: DoReader, chrome: ChromeSource, readOnly = false): Promise<Response> {
   try {
     const [orgs, repos, specs] = await Promise.all([
       doReader.list('/api/organizations'),
@@ -467,16 +503,17 @@ async function dashboard(doReader: DoReader, chrome: ChromeSource): Promise<Resp
   });
 
   // The layout renders the sign-out form and the flash; the section ids are the nav's anchors.
-  const body = `
+  const body = `${readOnly ? `
+    <p class="flash">${esc(READ_ONLY_NOTE)}</p>` : ''}
     <section id="organizations">
       <h2>Organizations (${orgs.length})</h2>
       ${tableHtml(['Name', 'Type', 'ID'], orgRows)}
-      <form method="POST" action="/app/organizations" class="inline">
+      ${readOnly ? '' : `<form method="POST" action="/app/organizations" class="inline">
         <input name="name" placeholder="Name" required>
         <select name="type">${ORG_TYPES.map((t) => `<option>${t}</option>`).join('')}</select>
         <input name="externalId" placeholder="External ID (optional)">
         <button>Create organization</button>
-      </form>
+      </form>`}
     </section>
 
     <section id="repositories">
@@ -485,7 +522,7 @@ async function dashboard(doReader: DoReader, chrome: ChromeSource): Promise<Resp
         ['Name', 'Org', 'Type', 'Spec'],
         repoRows
       )}
-      <form method="POST" action="/app/repositories" class="stack">
+      ${readOnly ? '' : `<form method="POST" action="/app/repositories" class="stack">
         <input name="name" placeholder="Name" required>
         <select name="organizationId" required>${orgOptions}</select>
         <select name="repoType">${REPO_TYPES.map((t) => `<option>${t}</option>`).join('')}</select>
@@ -493,7 +530,7 @@ async function dashboard(doReader: DoReader, chrome: ChromeSource): Promise<Resp
         <input name="namespace" placeholder="Namespace" required>
         <input name="defaultBranch" placeholder="Default branch (main)">
         <button>Create repository</button>
-      </form>
+      </form>`}
     </section>
 
     <section id="specs">
@@ -502,14 +539,14 @@ async function dashboard(doReader: DoReader, chrome: ChromeSource): Promise<Resp
         ['Name', 'Org', 'Stage', 'ID'],
         specRows
       )}
-      <form method="POST" action="/app/specs" class="stack">
+      ${readOnly ? '' : `<form method="POST" action="/app/specs" class="stack">
         <input name="name" placeholder="Name" required>
         <select name="organizationId" required>${orgOptions}</select>
         <input name="description" placeholder="Description (optional)">
         <textarea name="contract" rows="8" placeholder='Contract as JSON, e.g. {"endpoints":[{"method":"GET","path":"/health"}]}' required></textarea>
         <textarea name="declaredDeltaSurface" rows="3" placeholder="Declared delta surface, one entry per line"></textarea>
         <button>Create spec</button>
-      </form>
+      </form>`}
     </section>`;
 
     return await appPage(chrome, { title: 'Dashboard', crumbs: [], section: null }, body);
@@ -617,6 +654,7 @@ async function handleRepoIssues(
       case 'list':
         return await repoIssuesPage(ref, url, session, doReader, chrome);
       case 'new':
+        if (viewer.readOnly) return statusPage(chrome, 403, 'Read-only access', esc(READ_ONLY_NOTE));
         return await newIssuePage(ref, url, session, chrome);
       case 'detail': {
         const issueId = route.issueId as string;
@@ -744,7 +782,7 @@ function writeFailure(result: { status: number; error: string }, fallback: strin
  */
 async function legacyIssue(id: string, url: URL, session: Session, viewer: IssueViewer, doReader: DoReader, chrome: ChromeSource): Promise<Response> {
   const issue = await doReader.get(`/api/issues/${encodeURIComponent(id)}`);
-  if (!issue || pick(issue, 'visibility') === 'private') return NOT_FOUND_ISSUE(chrome);
+  if (!issue || issueHiddenFrom(session, issue)) return NOT_FOUND_ISSUE(chrome);
   const repoId = pick(issue, 'repository_id', 'repositoryId');
   const ref = repoId ? await resolveRepoRef(doReader, [repoId]) : null;
   if (!ref) return issuePage(id, null, url, session, doReader, viewer, chrome);
@@ -888,7 +926,10 @@ async function readSession(request: Request, env: UiEnv): Promise<Session | null
     );
     if (!ok) return null;
     const session = JSON.parse(new TextDecoder().decode(fromB64url(payload))) as Session;
-    if (!session.login || !session.actorId || session.exp < Math.floor(Date.now() / 1000)) return null;
+    if (!session.login || session.exp < Math.floor(Date.now() / 1000)) return null;
+    // A member names its actor; a viewer names none (an older worker rejects the empty id, so a
+    // viewer cookie can never act as a member there).
+    if (session.viewer === undefined ? !session.actorId : session.viewer !== true || session.actorId !== '') return null;
     return session;
   } catch {
     return null;

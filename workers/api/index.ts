@@ -19,6 +19,8 @@ interface Env {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   ALLOWED_GITHUB_USERS?: string;
+  // "true": GitHub users outside the allowlist sign in read-only (workers/api/ui.ts, docs/plans/viewer-signin-plan.md)
+  OPEN_VIEWER_SIGNIN?: string;
   // wrangler.toml [[analytics_engine_datasets]]; optional so a missing binding never fails a request
   ANALYTICS?: AnalyticsEngineDataset;
 }

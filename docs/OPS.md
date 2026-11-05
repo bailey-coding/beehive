@@ -165,8 +165,9 @@ app. `/`, `/about` and `/roadmap` are public; `/login` -> GitHub OAuth -> `/app`
 Code: `workers/api/ui.ts`, layout in `workers/api/ui-layout.ts` (M9). Every rendered `/app` GET page makes one extra
 Spec DO read (`GET /api/organizations`, for the org switcher; shared with the page's own read when it lists orgs);
 writes, refused writes and the cross-origin 403 add none. A failed read shows "Organizations unavailable" and never
-fails the page. UI only: no schema or route change, so a rollback needs no cleanup. Access is limited to `ALLOWED_GITHUB_USERS` (var in root
-`wrangler.toml`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
+fails the page. UI only: no schema or route change, so a rollback needs no cleanup. Members are `ALLOWED_GITHUB_USERS` (var in root
+`wrangler.toml`); with `OPEN_VIEWER_SIGNIN = "true"` (same file, off while unset) any other GitHub user signs in read-only:
+no actor row, GET/HEAD only, no token pages, no `internal` issues (`docs/plans/viewer-signin-plan.md`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
 Sessions are HMAC-signed with `API_AUTH_TOKEN` and carry their sign-in time (`iat`, M12; older cookies
 lack it and must sign in again before minting an API token at `/app/settings/tokens`). The React app in `ui/` is **not built or
 deployed** (no build config); don't assume it is live.
@@ -365,8 +366,8 @@ per actor (409 beyond), plaintext shown once, only the SHA-256 hash stored.
 5. **Revoke.** One: the settings page, or `POST /api/admin/user-tokens/<tokenId>/revoke` (idempotent;
    the first revocation is kept). All of an actor's: `POST /api/admin/user-tokens/revoke-all
    {"actorId":"<id>"}`. 401 from the next request (no edge cache).
-   **Removing a login from `ALLOWED_GITHUB_USERS` blocks UI sign-in only: also run `revoke-all` for that
-   actor.** A mistyped or service-actor `X-Actor-ID` on either revoke route is a 400/403 with the reason, and
+   **Removing a login from `ALLOWED_GITHUB_USERS` blocks UI sign-in only (with `OPEN_VIEWER_SIGNIN` on, the next
+   sign-in is read-only): also run `revoke-all` for that actor.** A mistyped or service-actor `X-Actor-ID` on either revoke route is a 400/403 with the reason, and
    nothing is revoked; 503 means the Spec DO could not answer.
 6. **Roll back push B** (a ref operation through the `cf` flow): redeploy the rollback floor `8de5485` or any later
    commit, **never anything earlier** (that is `Unknown schema_version 'm9'`, a full outage). Clients then see every
