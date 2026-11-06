@@ -264,8 +264,9 @@ Spine work: an agent plans it (independent agent review before code); start from
 
 - **Public anonymous read-only UI** (maintainer, 2026-11-06: planned, not scheduled). Follows viewer sign-in
   (`docs/plans/viewer-signin-plan.md`, section "Next: anonymous read"): `/app` GET pages without a session,
-  rendered exactly as a viewer sees them. Needs the viewer rate limit first, plus a decision on what anonymous
-  visitors may see (actor names, preview URLs) and on crawler indexing.
+  rendered as a viewer sees them. Decided 2026-11-06: Flagship flag as the switch (default off), Cloudflare
+  rate limiting and a short edge cache, `noindex`, preview URLs hidden. Probably needs a custom domain for the
+  cache (unverified, `docs/OPEN-QUESTIONS.md` 2026-11-06).
 
 - **WfP: Workers for Platforms Migration** — Migrate candidate execution to Workers for Platforms
   - Replace Artifacts-based candidate deployments with User Workers

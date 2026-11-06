@@ -56,13 +56,30 @@ non-member: a viewer can never act as a member on old code. Member cookies are u
 
 The maintainer wants `/app` to become publicly readable without sign-in later (2026-11-06; tracked in
 `docs/MILESTONES.md` Future / Optional). Viewer sessions are built so this is a small step: an anonymous
-request would render with the same viewer rules (`viewer: true`, no actor, GET/HEAD only, `issueHiddenFrom`).
-Before it ships:
-- The rate limit above, keyed per IP for anonymous requests (no GitHub identity to throttle on).
-- What anonymous visitors see: whether actor names, GitHub-linked logins and candidate preview URLs are
-  redacted or shown; `robots.txt` / `noindex` for crawlers.
-- Caching: anonymous pages are identical for everyone, so a short edge cache would take read load off the
-  Spec DO (a viewer page cannot be cached today because the account area names the login).
-- A switch like `OPEN_VIEWER_SIGNIN`, off by default, so the deploy and the opening are separate steps.
+request renders with the same viewer rules (`viewer: true`, no actor, GET/HEAD only, `issueHiddenFrom`).
+
+**Decisions (maintainer, 2026-11-06):**
+- **Switch: Cloudflare Flagship.** A boolean flag (e.g. `anonymous-read`) read through a `flagship` binding on
+  `beehive` with `getBooleanValue(key, false)`; Flagship returns the default on any evaluation error, so a
+  Flagship outage keeps anonymous read off (fail closed). Deploy and opening stay separate steps, and turning it
+  off needs no deploy. First Flagship use in Beehive (`docs/OPEN-QUESTIONS.md` 2026-10-18 entry was "deferred").
+  `OPEN_VIEWER_SIGNIN` stays a var for now; moving it to Flagship too is optional.
+- **Rate limiting and caching by Cloudflare,** not hand-rolled: a Workers rate-limiting binding keyed on the
+  client IP for anonymous requests (and on the login for viewer sessions), plus a short edge cache.
+- **Short edge cache** for anonymous pages only (they are identical for everyone): about 60 s, keyed on the URL,
+  never for a request with a session cookie, and the account area renders "Sign in" instead of a login so the
+  page carries nothing per user.
+- **No search engine indexing:** `X-Robots-Tag: noindex, nofollow` on every `/app` response and a `robots.txt`
+  disallowing `/app`.
+- **Candidate preview URLs hidden** from anonymous visitors (candidate and repo pages; ids still shown). Whether
+  to hide them from signed-in viewers too is open.
+
+**Unverified, check before planning the implementation** (`docs/OPEN-QUESTIONS.md` 2026-11-06):
+- The Cache API appears not to work on `*.workers.dev` (cache is per zone; a Cloudflare community answer, not
+  official docs). Production is `beehive.bz23711.workers.dev`, so the edge cache probably needs a custom domain.
+  The same goes for WAF rate-limiting rules; the Workers rate-limiting binding should not need a zone (confirm).
+- Flagship binding config and pricing on this account (`docs/ARTIFACTS-SETUP.md`-style setup note needed).
+
+**Still to decide:** whether anonymous visitors see actor names and GitHub logins.
 
 Tests: `workers/api/tests/ui-viewer.test.ts`.

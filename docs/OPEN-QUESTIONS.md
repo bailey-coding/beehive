@@ -681,6 +681,14 @@ M5a now closes the at-least-once double-write for all nine POST routes in `IDEMP
 
 **Decision**: Deferred. With no users yet, the urgency is low. Hardcoded booleans or Spec DO config suffice for now. Revisit when broken deploys become costly.
 
+**Update 2026-11-06**: First planned use: the switch for public anonymous read (`docs/plans/viewer-signin-plan.md`, "Next: anonymous read"). Not built yet.
+
+## 2026-11-06: edge cache and rate limiting on workers.dev (unverified)
+
+Planning anonymous read (`docs/plans/viewer-signin-plan.md`). A Cloudflare community answer says the Cache API is not enabled on `*.workers.dev` because the cache is scoped per zone; official docs only recommend a route or custom domain for production. `beehive` is served on `beehive.bz23711.workers.dev`, so a short edge cache for anonymous pages probably needs a custom domain (and so would WAF rate-limiting rules). The Workers rate-limiting binding is expected to work without a zone. Neither has been tested here.
+
+**Status**: Open. Verify with a throwaway worker (or `wrangler dev --remote`) before the implementation plan; the custom domain is a maintainer decision.
+
 ## 2026-10-30: promotion worker calls a gate route that does not exist
 
 `workers/promotion-worker/merge-train.ts:342` calls `GATE_WORKFLOW.fetch('/run', ...)` with a relative URL, and the gate worker has no `/run` route (only `/gates/pre-merge`, status and result routes), so the call answers 404. Found while reviewing `docs/M5A-2-IMPL-PLAN.md`; not changed there. Same class as the three nonexistent DO routes of 2026-10-16: check `Response.ok` and decide whether the merge train should call `/gates/pre-merge`.
