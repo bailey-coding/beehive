@@ -180,8 +180,8 @@ This report documents the completion of **Phase 1: Critical Fixes** of the Beehi
 ### Documentation Files Created
 | File | Purpose | Lines | Status |
 |------|---------|-------|--------|
-| `docs/PHASE-1-PLAN.md` | Execution plan | 350 | ✅ |
-| `docs/PHASE-1-REVIEW.md` | This file - Validation report | TBD | ✅ |
+| `docs/archive/PHASE-1-PLAN.md` | Execution plan | 350 | ✅ |
+| `docs/archive/PHASE-1-REVIEW.md` | This file - Validation report | TBD | ✅ |
 
 ---
 
@@ -212,7 +212,7 @@ This report documents the completion of **Phase 1: Critical Fixes** of the Beehi
 ## Success Criteria Checklist
 
 ### Must Have ✅
-- [x] `docs/PHASE-1-PLAN.md` created
+- [x] `docs/archive/PHASE-1-PLAN.md` created
 - [x] `workers/canary-worker/tests/canary.test.ts` created with 30 tests (target: 24)
 - [x] `workers/promotion-worker/tests/promotion.test.ts` created with 27 tests (target: 22)
 - [x] `workers/gate-workflow/tests/gate.test.ts` modified with 26 tests (target: 15+)
@@ -220,7 +220,7 @@ This report documents the completion of **Phase 1: Critical Fixes** of the Beehi
 - [x] All tests pass (`npm test` for Phase 1 files)
 - [x] TypeScript compiles without errors (`npm run typecheck`)
 - [x] Lint passes for Phase 1 files
-- [x] `docs/PHASE-1-REVIEW.md` created
+- [x] `docs/archive/PHASE-1-REVIEW.md` created
 
 ### Should Have ✅
 - [x] Coverage > 70% for M3 workers (estimated ~80%)

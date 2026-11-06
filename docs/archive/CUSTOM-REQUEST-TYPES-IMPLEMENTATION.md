@@ -1,6 +1,6 @@
 # Custom Request Types Implementation Tasks
 
-**Task:** custom-request-types-implementation | **Spec:** docs/CUSTOM-REQUEST-TYPES-PLAN.md | **Date:** 2026-10-19
+**Task:** custom-request-types-implementation | **Spec:** docs/archive/CUSTOM-REQUEST-TYPES-PLAN.md | **Date:** 2026-10-19
 **Branch:** `vibe/custom-request-types-1a468a` | **Status:** Ready for implementation
 **Author:** subagent/implementer | **Reviewer:** subagent/reviewer (per AGENTS-REVIEWER.md)
 
@@ -196,8 +196,8 @@ Each phase gets its own commit. Phase 3 can be split into multiple commits (e.g.
 
 ## Related Documents
 
-- `docs/CUSTOM-REQUEST-TYPES-PLAN.md` — Design and decisions
-- `docs/CUSTOM-REQUEST-TYPES-PLAN-REVIEW.md` — Review of the plan
+- `docs/archive/CUSTOM-REQUEST-TYPES-PLAN.md` — Design and decisions
+- `docs/archive/CUSTOM-REQUEST-TYPES-PLAN-REVIEW.md` — Review of the plan
 - `docs/AGENTS-REVIEWER.md` — Review guidelines
 - `docs/AGENTS.md` — Working conventions ("validate by parsing")
 - `workers/shared/principal.ts` — Current Principal types

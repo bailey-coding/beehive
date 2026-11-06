@@ -1453,7 +1453,7 @@ ctx.waitUntil(Statsig.flush());
 - [Statsig Metrics](https://docs.statsig.com/metrics)
 - [Cloudflare Workers Statsig Integration](https://developers.cloudflare.com/workers/examples/third-party/statsig/)
 - [Beehive AGENTS.md](../AGENTS.md)
-- [Beehive ARCHITECTURE.md](../ARCHITECTURE.md)
+- [Beehive ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
 

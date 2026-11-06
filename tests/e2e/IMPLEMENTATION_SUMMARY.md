@@ -666,7 +666,7 @@ The E2E test infrastructure for production URLs at `beehive.bz23711.workers.dev`
 ## References
 
 - [Production E2E Plan](PRODUCTION_E2E_PLAN.md)
-- [E2E Test README](../e2e/README.md)
+- [E2E Test README](README.md)
 - [Synthetic Monitoring Script](../../scripts/synthetic-monitoring-enhanced.sh)
 - [Vitest Documentation](https://vitest.dev/)
 - [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)

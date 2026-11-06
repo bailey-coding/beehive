@@ -68,10 +68,10 @@ Phase 4 has been successfully completed with all deliverables met and exceeded:
 
 | File | Description | Status |
 |------|-------------|--------|
-| `docs/PHASE-3-MERGE-REPORT.md` | Prerequisite verification | ✅ Created |
-| `docs/PHASE-4-PLAN.md` | Phase 4 plan | ✅ Created |
-| `docs/PHASE-4-REVIEW.md` | This review report | ✅ Created |
-| `docs/PHASE-4-MERGE-REPORT.md` | Merge report (next) | ⏳ Pending |
+| `docs/archive/PHASE-3-MERGE-REPORT.md` | Prerequisite verification | ✅ Created |
+| `docs/archive/PHASE-4-PLAN.md` | Phase 4 plan | ✅ Created |
+| `docs/archive/PHASE-4-REVIEW.md` | This review report | ✅ Created |
+| `docs/archive/PHASE-4-MERGE-REPORT.md` | Merge report (next) | ⏳ Pending |
 
 ---
 
@@ -408,9 +408,9 @@ $ ls -la scripts/synthetic-monitoring-enhanced.sh
   (34,706 bytes, executable)
 
 # Documentation exists
-$ ls -la docs/PHASE-3-MERGE-REPORT.md docs/PHASE-4-PLAN.md
-docs/PHASE-3-MERGE-REPORT.md (2,467 bytes)
-docs/PHASE-4-PLAN.md (9,493 bytes)
+$ ls -la docs/archive/PHASE-3-MERGE-REPORT.md docs/archive/PHASE-4-PLAN.md
+docs/archive/PHASE-3-MERGE-REPORT.md (2,467 bytes)
+docs/archive/PHASE-4-PLAN.md (9,493 bytes)
 ```
 
 ### Test Count Verification
@@ -447,8 +447,8 @@ Total: 156 tests ✅
 ## Dependencies and Prerequisites
 
 ### ✅ Phase 3 Completion
-- `docs/M3-MERGE-REPORT.md` exists and shows completion
-- `docs/PHASE-3-MERGE-REPORT.md` created to satisfy prerequisite
+- `docs/archive/M3-MERGE-REPORT.md` exists and shows completion
+- `docs/archive/PHASE-3-MERGE-REPORT.md` created to satisfy prerequisite
 - All M3 feature branches merged (canary, promotion, statsig)
 
 ### ✅ Infrastructure
@@ -505,12 +505,12 @@ Target: **75-80%** total test coverage
 
 All deliverables have been completed:
 1. ✅ Phase 3 verified complete
-2. ✅ docs/PHASE-4-PLAN.md created
+2. ✅ docs/archive/PHASE-4-PLAN.md created
 3. ✅ tests/integration/bindings.test.ts (57 tests)
 4. ✅ tests/e2e/oracle-ladder.test.ts (41 tests)
 5. ✅ tests/e2e/m3-features.test.ts (58 tests)
 6. ✅ scripts/synthetic-monitoring-enhanced.sh created
-7. ✅ docs/PHASE-4-REVIEW.md created
+7. ✅ docs/archive/PHASE-4-REVIEW.md created
 
 **Total: 156 tests** (269% of target)
 
@@ -519,7 +519,7 @@ All deliverables have been completed:
 1. **Execute tests** to verify all pass
 2. **Run coverage** to verify 75-80% target met
 3. **Commit all changes** to main branch
-4. **Create merge report** (docs/PHASE-4-MERGE-REPORT.md)
+4. **Create merge report** (docs/archive/PHASE-4-MERGE-REPORT.md)
 5. **Push to origin/main**
 
 ---

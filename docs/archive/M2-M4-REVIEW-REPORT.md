@@ -13,8 +13,8 @@ tags:
 **Date:** 2026-10-13
 **Reviewer:** M2/M4 Reviewer Agent
 **Files Reviewed:**
-- `docs/M2-VERIFICATION-RESULTS.md`
-- `docs/M4-IMPLEMENTATION-RESULTS.md`
+- `docs/archive/M2-VERIFICATION-RESULTS.md`
+- `docs/archive/M4-IMPLEMENTATION-RESULTS.md`
 
 ---
 

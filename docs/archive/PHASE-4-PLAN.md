@@ -31,7 +31,7 @@ Phase 4 is the final phase of the Beehive Test Implementation Plan. This phase f
 
 ## Prerequisites
 
-- [x] Phase 3 complete - docs/PHASE-3-MERGE-REPORT.md exists
+- [x] Phase 3 complete - docs/archive/PHASE-3-MERGE-REPORT.md exists
 - [x] All M3 feature branches merged (canary, promotion, statsig)
 - [x] All workers deployed and functional
 
@@ -66,9 +66,9 @@ Following the **DOCUMENT→CREATE→REVIEW→MERGE** pattern:
 
 ### Documentation
 
-- [ ] docs/PHASE-4-PLAN.md (✅ This document)
-- [ ] docs/PHASE-4-REVIEW.md
-- [ ] docs/PHASE-4-MERGE-REPORT.md
+- [ ] docs/archive/PHASE-4-PLAN.md (✅ This document)
+- [ ] docs/archive/PHASE-4-REVIEW.md
+- [ ] docs/archive/PHASE-4-MERGE-REPORT.md
 
 ---
 

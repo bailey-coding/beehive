@@ -27,8 +27,8 @@ This report documents the re-review of M3 implementations after the M3 Fix Agent
 ## Re-Review Process
 
 ### Phase 1: Read Reports
-- ✅ Read `docs/M3-IMPLEMENTATION-REVIEW.md` (original YELLOW status)
-- ✅ Read `docs/M3-FIX-REPORT.md` (confirmed all fixes applied)
+- ✅ Read `docs/archive/M3-IMPLEMENTATION-REVIEW.md` (original YELLOW status)
+- ✅ Read `docs/archive/M3-FIX-REPORT.md` (confirmed all fixes applied)
 
 ### Phase 2: Verify Fixes
 
@@ -54,7 +54,7 @@ This report documents the re-review of M3 implementations after the M3 Fix Agent
 - ✅ Verified all branches pushed to origin: feature/m3-canary, feature/m3-promotion, feature/m3-statsig
 
 ### Phase 4: Update Review Report
-- ✅ Updated `docs/M3-IMPLEMENTATION-REVIEW.md`
+- ✅ Updated `docs/archive/M3-IMPLEMENTATION-REVIEW.md`
   - Changed Overall Score from YELLOW to GREEN
   - Changed Recommendation from "FIX TYPESCRIPT ERRORS THEN MERGE" to "MERGE - ALL ERRORS RESOLVED"
   - Updated confidence from 0.85 to 0.95

@@ -189,10 +189,10 @@ API, CLI and UI agree, and remove calls to routes that do not exist. Source of t
 - **Sequencing:** CLI tasks share `cli/src/utils/api-client.ts` and `cli/src/index.ts`; run
   them serially, each branch cut from `main`.
 - **UI issue pages (plan):** `docs/M8-UI-ISSUES-PLAN.md`, reviewed in
-  `docs/M8-UI-ISSUES-PLAN-REVIEW.md`, `docs/M8-PR1-REVIEW.md`, `docs/M8-PR1-RECHECK.md`, `docs/M8-PR2-REVIEW.md` and, for the CLI actor stopgap, `docs/CLI-DEFAULT-ACTOR-REVIEW.md`. Two PRs: Spec DO changes first, then the UI (both done, see above).
+  `docs/archive/M8-UI-ISSUES-PLAN-REVIEW.md`, `docs/archive/M8-PR1-REVIEW.md`, `docs/archive/M8-PR1-RECHECK.md`, `docs/archive/M8-PR2-REVIEW.md` and, for the CLI actor stopgap, `docs/archive/CLI-DEFAULT-ACTOR-REVIEW.md`. Two PRs: Spec DO changes first, then the UI (both done, see above).
 
 **M9 — Site navigation (implemented 2026-10-17 on `agent/m9-nav`; not yet merged or deployed, independent review L9 pending).** Give the
-logged-in `/app` UI one shared layout with real navigation. Plan: `docs/M9-NAV-PLAN.md` (v2), reviewed in `docs/M9-NAV-PLAN-REVIEW.md`.
+logged-in `/app` UI one shared layout with real navigation. Plan: `docs/M9-NAV-PLAN.md` (v2), reviewed in `docs/archive/M9-NAV-PLAN-REVIEW.md`.
 Code: `workers/api/ui-layout.ts` (`appPage`, `statusPage`, trail builders, lazy chrome source).
 - **Navbar: done.** Brand link, org switcher (20 orgs, then "All organizations (N)"), Dashboard / Repositories / Specs
   (dashboard anchors), signed-in user and sign-out. "Issues" is contextual: it appears only inside a repo (no cross-repo
@@ -256,7 +256,7 @@ Spine work: an agent plans it (independent agent review before code); start from
   user without the master token (PR-C, implemented on `agent/m12-prc-impl`); (6) the master token can no longer forge a UI session (PR-D2).
 - **Documentation:** `docs/OPS.md` updated with "User tokens" section (mint, rotate, revoke, freshness scope, push B
   checks, stage-1 Workers Logs + AE query) and `docs/FOCUS.md` M12 follow-ups (`c623045`, 2026-10-19). Review docs
-  added: `docs/M12-PRB-REVIEW.md` with nits N1-N5 and fixes S1-S2 (`f1595c`, `a7308a2`, 2026-10-19).
+  added: `docs/archive/M12-PRB-REVIEW.md` with nits N1-N5 and fixes S1-S2 (`f1595c`, `a7308a2`, 2026-10-19).
 
 ---
 

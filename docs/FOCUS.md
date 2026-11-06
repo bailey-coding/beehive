@@ -94,8 +94,8 @@ deploy-config change with an independent agent before merging. Sonnet 5.5 medium
   `service_accounts`, `actors`, `entity`, `promotion` tables), and the `agent/m5a-idempotency-fix` branch
   merged. See `docs/rfos/2026-10-14-migration-failures.md` for context.
 - M9 (site navigation) is **merged to `main`** (`agent/m9-nav` is 0 commits ahead, checked 2026-10-23); **deployed** with the 2026-10-24
-  maintainer deploy of `main` at `831d9db` (not yet verified by an agent). The independent code review (L9, `docs/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
-  `docs/M9-NAV-PLAN.md`, `docs/M9-NAV-PLAN-REVIEW.md`. **Note:** schema m9 is now used by M5a idempotency
+  maintainer deploy of `main` at `831d9db` (not yet verified by an agent). The independent code review (L9, `docs/archive/M9-NAV-CODE-REVIEW.md`) approved with changes and its should-fixes are done. Plan and plan review:
+  `docs/M9-NAV-PLAN.md`, `docs/archive/M9-NAV-PLAN-REVIEW.md`. **Note:** schema m9 is now used by M5a idempotency
   (the idempotency keys table), so M12 references have been updated from m9 to m10.
 - Local checks on `main` (2026-10-23): typecheck clean, unit tests pass (excluding e2e); `tests/cli-behavior.test.ts` needs
   `npm ci` in `cli/` first. Last e2e run: 70 passed / 5 skipped / 0 failed on `agent/m9-nav` (2026-10-17, `E2E_UI=1`, `docs/SETUP.md`).

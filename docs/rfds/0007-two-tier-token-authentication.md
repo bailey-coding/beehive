@@ -202,7 +202,7 @@ From the git history:
 
 ## References
 
-- [RFD-0003: Service Tokens & OCAP](../rfds/0003-service-tokens-ocap.md) - User-facing token system
+- [RFD-0003: Service Tokens & OCAP](0003-service-tokens-ocap.md) - User-facing token system
 - [ADR-0002: Coordination State Storage](../decisions/0002-coordination-state.md) - Spec DO as authoritative store
 - [AGENTS.md](../../AGENTS.md#non-negotiable-architectural-rules) - Fail-closed auth requirement
 - [Commit 36c0716](https://github.com/bailey-coding/beehive/commit/36c0716) - Implementation commit

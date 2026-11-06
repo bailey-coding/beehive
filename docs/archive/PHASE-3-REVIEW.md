@@ -20,7 +20,7 @@ tags:
 
 **BLOCKER IDENTIFIED:** Phase 2 is NOT complete.
 
-- ❌ `docs/PHASE-2-MERGE-REPORT.md` DOES NOT EXIST
+- ❌ `docs/archive/PHASE-2-MERGE-REPORT.md` DOES NOT EXIST
 - ❌ `workers/beehive/tests/beehive.test.ts` DOES NOT EXIST
 - ❌ `workers/queue-consumer/tests/queue.test.ts` DOES NOT EXIST  
 - ❌ `tests/integration/bindings.test.ts` DOES NOT EXIST
@@ -127,7 +127,7 @@ tags:
 ## Issues Encountered
 
 ### 1. Phase 2 Not Complete
-**Issue:** Phase 2 prerequisite (docs/PHASE-2-MERGE-REPORT.md) does not exist.
+**Issue:** Phase 2 prerequisite (docs/archive/PHASE-2-MERGE-REPORT.md) does not exist.
 **Resolution:** Proceeded with Phase 3 per user's explicit instruction. The Phase 3 test files are independent and don't require Phase 2 tests to be complete.
 
 ### 2. TypeScript Type Mismatches
@@ -160,7 +160,7 @@ tags:
 
 | File | Lines | Tests | Status |
 |------|-------|-------|--------|
-| `docs/PHASE-3-PLAN.md` | ~160 | N/A | ✅ |
+| `docs/archive/PHASE-3-PLAN.md` | ~160 | N/A | ✅ |
 | `workers/shadow-router/tests/shadow.test.ts` | ~420 | 30 | ✅ |
 | `workers/scientist-comparator/tests/scientist.test.ts` | ~210 | 20 | ✅ |
 | `workers/preview-manager/tests/preview.test.ts` | ~230 | 22 | ✅ |
@@ -182,9 +182,9 @@ tags:
 1. Create `workers/beehive/tests/beehive.test.ts` (28 tests)
 2. Create `workers/queue-consumer/tests/queue.test.ts` (16 tests)
 3. Create `tests/integration/bindings.test.ts` (20+ tests)
-4. Create `docs/PHASE-2-PLAN.md`
-5. Create `docs/PHASE-2-REVIEW.md`
-6. Create `docs/PHASE-2-MERGE-REPORT.md`
+4. Create `docs/archive/PHASE-2-PLAN.md`
+5. Create `docs/archive/PHASE-2-REVIEW.md`
+6. Create `docs/archive/PHASE-2-MERGE-REPORT.md`
 7. Commit and push all changes to main
 
 ### For Phase 1 Completion
@@ -192,9 +192,9 @@ tags:
 2. Create `workers/promotion-worker/tests/promotion.test.ts` (400 lines)
 3. Complete any incomplete tests in `workers/gate-workflow/tests/gate.test.ts`
 4. Complete any incomplete tests in `workers/sandbox-runner/tests/sandbox.test.ts`
-5. Create `docs/PHASE-1-PLAN.md`
-6. Create `docs/PHASE-1-REVIEW.md`
-7. Create `docs/PHASE-1-MERGE-REPORT.md`
+5. Create `docs/archive/PHASE-1-PLAN.md`
+6. Create `docs/archive/PHASE-1-REVIEW.md`
+7. Create `docs/archive/PHASE-1-MERGE-REPORT.md`
 8. Commit and push all changes to main
 
 ### For Future Phases

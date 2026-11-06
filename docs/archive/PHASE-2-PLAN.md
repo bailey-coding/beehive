@@ -14,7 +14,7 @@ tags:
 - **Agent:** test-phase-2-core
 - **Start:** 2026-10-13T16:07:00Z
 - **Target completion:** 2026-10-23T16:07:00Z (10 days)
-- **Prerequisite:** Phase 1 complete ✅ (verified: docs/PHASE-1-MERGE-REPORT.md exists)
+- **Prerequisite:** Phase 1 complete ✅ (verified: docs/archive/PHASE-1-MERGE-REPORT.md exists)
 - **Milestone:** Phase 2: Core Workers
 - **Task:** test-phase-2
 - **Spec:** Testing
@@ -53,7 +53,7 @@ tags:
 
 ## Dependencies
 - ✅ **Phase 1 completion** (Blocker - VERIFIED)
-- ✅ `docs/PHASE-1-MERGE-REPORT.md` exists
+- ✅ `docs/archive/PHASE-1-MERGE-REPORT.md` exists
 - ✅ M3 workers have tests (canary-worker, promotion-worker)
 - ✅ Existing tests for gate-workflow and sandbox-runner are complete
 - ❌ No other dependencies
@@ -177,9 +177,9 @@ tests/
 
 ### Verified ✅
 - [x] Git is clean (no uncommitted changes to tracked files)
-- [x] `docs/PHASE-1-MERGE-REPORT.md` EXISTS
+- [x] `docs/archive/PHASE-1-MERGE-REPORT.md` EXISTS
 - [x] `docs/TEST-IMPLEMENTATION-PLAN.md` read
-- [x] `docs/TEST-AUDIT-REPORT.md` read
+- [x] `docs/archive/TEST-AUDIT-REPORT.md` read
 - [x] Phase 1 deliverables verified:
   - [x] `workers/canary-worker/tests/canary.test.ts` EXISTS
   - [x] `workers/promotion-worker/tests/promotion.test.ts` EXISTS
@@ -196,7 +196,7 @@ tests/
 ## Expected Deliverables
 
 ### New Files (3)
-1. `docs/PHASE-2-PLAN.md` - This document ✅
+1. `docs/archive/PHASE-2-PLAN.md` - This document ✅
 2. `workers/api/tests/api.test.ts` - Unit tests for API worker (~500 lines, 28 tests)
 3. `workers/queue-consumer/tests/queue.test.ts` - Unit tests for queue consumer (~300 lines, 16 tests)
 
@@ -204,8 +204,8 @@ tests/
 1. `tests/integration/bindings.test.ts` - Expanded with additional binding tests (20+ tests)
 
 ### Documentation Files (3)
-1. `docs/PHASE-2-REVIEW.md` - Validation report
-2. `docs/PHASE-2-MERGE-REPORT.md` - Merge report
+1. `docs/archive/PHASE-2-REVIEW.md` - Validation report
+2. `docs/archive/PHASE-2-MERGE-REPORT.md` - Merge report
 
 ---
 

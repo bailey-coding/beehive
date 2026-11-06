@@ -1,7 +1,7 @@
 # M9 plan (v2): site navigation for the `/app` UI
 
 Task `m9-plan` | spec: `docs/MILESTONES.md` M9 | v1 planned 2026-10-17 against `origin/main` 8f8f82c; v2 answers
-`docs/M9-NAV-PLAN-REVIEW.md` ("approve with changes", branch `origin/agent/m9-review`; see section 10). Plan only: no
+`docs/archive/M9-NAV-PLAN-REVIEW.md` ("approve with changes", branch `origin/agent/m9-review`; see section 10). Plan only: no
 implementation code. Line numbers are on 8f8f82c. UI only: `workers/api/` (the `beehive` worker). Not touched: Spec DO, schema, CLI, `ui/`.
 
 ## 1. Inventory: how each page renders today
@@ -209,7 +209,7 @@ Vitest only; no DOM library, so string/regex assertions (no new dev dependency).
 | L6 | Spec, candidate, trial: same (search form, `h3`->`h2`) | `ui-pages.ts`, `tests/ui.test.ts` | Default | L5 | trails incl. missing spec/org; XSS in names | No |
 | L7 | Cleanup: delete `subHeader`; `page()` becomes the pre-session shell (skip link, brand link to `/about`, `<main id=main>`, no navbar, no switcher, no `<h1>Beehive</h1>`); tick M9 ("Issues" is contextual), `FOCUS.md`, `OPS.md` | `ui-html.ts`, `ui-pages.ts`, docs | Light | L6 | grep: no `subHeader`; pre-session pages link brand to `/about`; `npm test` | No |
 | L8 | Local e2e `ui-nav.test.ts` (isLocal guard, own-prefix link following, 25-org cap by count) | `tests/e2e/ui-nav.test.ts` | Default | L6 | `npm run test:e2e:local` with `E2E_UI=1` | No |
-| L9 | Independent review of the whole diff (a11y, escaping, Response.ok, flash count, read counts) + manual visual checklist | `docs/M9-NAV-CODE-REVIEW.md` | Heavy (review only) | L7, L8 | review doc, findings closed | Yes: merge decision |
+| L9 | Independent review of the whole diff (a11y, escaping, Response.ok, flash count, read counts) + manual visual checklist | `docs/archive/M9-NAV-CODE-REVIEW.md` | Heavy (review only) | L7, L8 | review doc, findings closed | Yes: merge decision |
 
 None touches the spine. Review items map to tasks: B1 -> L2; S1, S2, S8, N5 -> L1; S3, S4 -> L3; S5 -> L5/L6; S6 -> L7; S7 -> L8.
 
@@ -233,7 +233,7 @@ The maintainer asked for the plan -> review -> implement -> review pipeline with
 | 8 | Manual visual checklist only. No Playwright (new tooling and CI cost need a maintainer decision). |
 | 9 | One PR for L1-L8, deployed once after merge by the maintainer's `cf` push; no intermediate deploys. |
 
-## 10. Review responses (`docs/M9-NAV-PLAN-REVIEW.md`; each finding re-checked against the code first)
+## 10. Review responses (`docs/archive/M9-NAV-PLAN-REVIEW.md`; each finding re-checked against the code first)
 
 | Finding | Verdict | Where / how |
 |---|---|---|

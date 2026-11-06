@@ -232,7 +232,7 @@ This means:
 
 - **Full documentation:** `README.md`
 - **Architecture details:** `docs/ARCHITECTURE.md`
-- **M2 implementation:** `docs/M2-PLAN.md`
+- **M2 implementation:** `docs/archive/M2-PLAN.md`
 - **Demo video script:** `scripts/DEMO-VIDEO-SCRIPT.md`
 - **Issues:** Open a GitHub Issue
 

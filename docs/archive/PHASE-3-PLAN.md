@@ -22,7 +22,7 @@ tags:
 **BLOCKER IDENTIFIED:** Phase 2 is NOT complete.
 
 - ✅ `docs/TEST-IMPLEMENTATION-PLAN.md` EXISTS
-- ❌ `docs/PHASE-2-MERGE-REPORT.md` DOES NOT EXIST
+- ❌ `docs/archive/PHASE-2-MERGE-REPORT.md` DOES NOT EXIST
 - ❌ `workers/beehive/tests/beehive.test.ts` DOES NOT EXIST
 - ❌ `workers/queue-consumer/tests/queue.test.ts` DOES NOT EXIST  
 - ❌ `tests/integration/bindings.test.ts` DOES NOT EXIST
@@ -71,8 +71,8 @@ tags:
 - [ ] All tests type-check (`npm run typecheck`)
 - [ ] All tests pass lint (`npm run lint`)
 - [ ] All 4 remaining workers have 70%+ unit test coverage
-- [ ] docs/PHASE-3-REVIEW.md created
-- [ ] docs/PHASE-3-MERGE-REPORT.md created
+- [ ] docs/archive/PHASE-3-REVIEW.md created
+- [ ] docs/archive/PHASE-3-MERGE-REPORT.md created
 - [ ] All changes committed and pushed to main
 - [ ] **100% worker unit test coverage achieved** (all 10 workers tested)
 

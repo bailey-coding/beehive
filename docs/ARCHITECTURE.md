@@ -655,20 +655,20 @@ max_batch_timeout = 30
 
 ## 🧩 Design Decisions
 
-For detailed rationales and the ADR (Architecture Decision Record) process, see [docs/decisions/README.md](docs/decisions/README.md):
+For detailed rationales and the ADR (Architecture Decision Record) process, see [docs/decisions/README.md](decisions/README.md):
 
 | ADR | Decision | Status |
 |-----|----------|--------|
-| [0001](./docs/decisions/0001-vcs-client-model.md) | VCS Client Model (Sapling-first) | Accepted |
-| [0002](./docs/decisions/0002-coordination-state.md) | Coordination State (DO SQLite) | Accepted |
-| [0003](./docs/decisions/0003-language.md) | Language (TypeScript) | Accepted |
-| [0004](./docs/decisions/0004-ci.md) | CI and Builds | Accepted |
-| [0005](./docs/decisions/0005-org-memory.md) | Organizational Memory | Proposed |
-| [0006](./docs/decisions/0006-deploy-path.md) | Deploy path: GitHub CI-only, one Artifacts push | Accepted |
-| [0007](./docs/decisions/0007-fail-closed-edge-auth.md) | Fail-closed edge authentication | Accepted |
-| [0008](./docs/decisions/0008-tombstone-then-purge.md) | Tombstone, then guarded purge | Accepted |
+| [0001](./decisions/0001-vcs-client-model.md) | VCS Client Model (Sapling-first) | Accepted |
+| [0002](./decisions/0002-coordination-state.md) | Coordination State (DO SQLite) | Accepted |
+| [0003](./decisions/0003-language.md) | Language (TypeScript) | Accepted |
+| [0004](./decisions/0004-ci.md) | CI and Builds | Accepted |
+| [0005](./decisions/0005-org-memory.md) | Organizational Memory | Proposed |
+| [0006](./decisions/0006-deploy-path.md) | Deploy path: GitHub CI-only, one Artifacts push | Accepted |
+| [0007](./decisions/0007-fail-closed-edge-auth.md) | Fail-closed edge authentication | Accepted |
+| [0008](./decisions/0008-tombstone-then-purge.md) | Tombstone, then guarded purge | Accepted |
 
-**Note:** For proposing new features or major changes, use the [RFD process](docs/rfds/README.md). For documenting learnings from incidents, use the [RFO process](docs/rfos/README.md).
+**Note:** For proposing new features or major changes, use the [RFD process](rfds/README.md). For documenting learnings from incidents, use the [RFO process](rfos/README.md).
 
 ---
 

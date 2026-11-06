@@ -1,6 +1,6 @@
 # Review: Custom Request Types Implementation Plan
 
-**Task:** custom-request-types-review | **Spec:** docs/CUSTOM-REQUEST-TYPES-PLAN.md | **Date:** 2026-10-19
+**Task:** custom-request-types-review | **Spec:** docs/archive/CUSTOM-REQUEST-TYPES-PLAN.md | **Date:** 2026-10-19
 **Subject:** `vibe/custom-request-types-1a468a` (new plan document)
 **Reviewer:** subagent/reviewer | **Confidence:** 0.95
 

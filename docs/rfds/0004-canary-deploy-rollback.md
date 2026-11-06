@@ -199,7 +199,7 @@ From the git history:
 
 ## References
 
-- [RFD-0001: Oracle Ladder Architecture](../rfds/0001-oracle-ladder-architecture.md) - The 5-rung ladder this implements
+- [RFD-0001: Oracle Ladder Architecture](0001-oracle-ladder-architecture.md) - The 5-rung ladder this implements
 - [MILESTONES.md](../MILESTONES.md) - M3 and M6.5 milestone details
 - [Commit c27628a](https://github.com/bailey-coding/beehive/commit/c27628a) - Implementation commit
 - [AGENTS.md](../../AGENTS.md#the-oracle-ladder-memorize) - Oracle ladder definition

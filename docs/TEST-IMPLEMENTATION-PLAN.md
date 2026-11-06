@@ -74,9 +74,9 @@ Each phase uses a **single agent** that performs all 4 steps:
 | 2 | `workers/promotion-worker/tests/promotion.test.ts` | ~400 | 80% | ✅ NEW |
 | 3 | `workers/gate-workflow/tests/gate.test.ts` | ~200 | 70% | ✅ FIXED |
 | 4 | `workers/sandbox-runner/tests/sandbox.test.ts` | ~200 | 70% | ✅ FIXED |
-| 5 | `docs/PHASE-1-PLAN.md` | ~100 | N/A | ✅ NEW |
-| 6 | `docs/PHASE-1-REVIEW.md` | ~150 | N/A | ✅ NEW |
-| 7 | `docs/PHASE-1-MERGE-REPORT.md` | ~100 | N/A | ✅ NEW |
+| 5 | `docs/archive/PHASE-1-PLAN.md` | ~100 | N/A | ✅ NEW |
+| 6 | `docs/archive/PHASE-1-REVIEW.md` | ~150 | N/A | ✅ NEW |
+| 7 | `docs/archive/PHASE-1-MERGE-REPORT.md` | ~100 | N/A | ✅ NEW |
 
 ### Test Cases for canary-worker
 ```typescript
@@ -155,9 +155,9 @@ Each phase uses a **single agent** that performs all 4 steps:
 | 1 | `workers/beehive/tests/beehive.test.ts` | ~500 | 80% | ✅ NEW |
 | 2 | `workers/queue-consumer/tests/queue.test.ts` | ~300 | 75% | ✅ NEW |
 | 3 | `tests/integration/bindings.test.ts` | ~200 | N/A | ✅ NEW |
-| 4 | `docs/PHASE-2-PLAN.md` | ~100 | N/A | ✅ NEW |
-| 5 | `docs/PHASE-2-REVIEW.md` | ~150 | N/A | ✅ NEW |
-| 6 | `docs/PHASE-2-MERGE-REPORT.md` | ~100 | N/A | ✅ NEW |
+| 4 | `docs/archive/PHASE-2-PLAN.md` | ~100 | N/A | ✅ NEW |
+| 5 | `docs/archive/PHASE-2-REVIEW.md` | ~150 | N/A | ✅ NEW |
+| 6 | `docs/archive/PHASE-2-MERGE-REPORT.md` | ~100 | N/A | ✅ NEW |
 
 ### Test Cases for beehive (main)
 ```typescript
@@ -227,9 +227,9 @@ Each phase uses a **single agent** that performs all 4 steps:
 | 2 | `workers/scientist-comparator/tests/scientist.test.ts` | ~200 | 70% | ✅ NEW |
 | 3 | `workers/preview-manager/tests/preview.test.ts` | ~200 | 70% | ✅ NEW |
 | 4 | `workers/candidate-service/tests/candidate.test.ts` | ~150 | 70% | ✅ NEW |
-| 5 | `docs/PHASE-3-PLAN.md` | ~80 | N/A | ✅ NEW |
-| 6 | `docs/PHASE-3-REVIEW.md` | ~120 | N/A | ✅ NEW |
-| 7 | `docs/PHASE-3-MERGE-REPORT.md` | ~80 | N/A | ✅ NEW |
+| 5 | `docs/archive/PHASE-3-PLAN.md` | ~80 | N/A | ✅ NEW |
+| 6 | `docs/archive/PHASE-3-REVIEW.md` | ~120 | N/A | ✅ NEW |
+| 7 | `docs/archive/PHASE-3-MERGE-REPORT.md` | ~80 | N/A | ✅ NEW |
 
 ### Test Cases for shadow-router
 ```typescript
@@ -312,9 +312,9 @@ Each phase uses a **single agent** that performs all 4 steps:
 | 2 | `tests/e2e/oracle-ladder.test.ts` | ~300 | N/A | ✅ NEW |
 | 3 | `tests/e2e/m3-features.test.ts` | ~300 | N/A | ✅ NEW |
 | 4 | `scripts/synthetic-monitoring-enhanced.sh` | ~500 | N/A | ✅ MODIFIED |
-| 5 | `docs/PHASE-4-PLAN.md` | ~120 | N/A | ✅ NEW |
-| 6 | `docs/PHASE-4-REVIEW.md` | ~180 | N/A | ✅ NEW |
-| 7 | `docs/PHASE-4-MERGE-REPORT.md` | ~120 | N/A | ✅ NEW |
+| 5 | `docs/archive/PHASE-4-PLAN.md` | ~120 | N/A | ✅ NEW |
+| 6 | `docs/archive/PHASE-4-REVIEW.md` | ~180 | N/A | ✅ NEW |
+| 7 | `docs/archive/PHASE-4-MERGE-REPORT.md` | ~120 | N/A | ✅ NEW |
 
 ### Integration Tests
 ```typescript
@@ -499,10 +499,10 @@ Create unit tests for M3 workers (canary-worker, promotion-worker) and
 complete existing incomplete tests (gate.test.ts, sandbox.test.ts).
 
 ## WORKFLOW
-1. DOCUMENT: Create docs/PHASE-1-PLAN.md
+1. DOCUMENT: Create docs/archive/PHASE-1-PLAN.md
 2. CREATE: Implement all test files
-3. REVIEW: Run tests, validate, create docs/PHASE-1-REVIEW.md
-4. MERGE: Commit, push, create docs/PHASE-1-MERGE-REPORT.md
+3. REVIEW: Run tests, validate, create docs/archive/PHASE-1-REVIEW.md
+4. MERGE: Commit, push, create docs/archive/PHASE-1-MERGE-REPORT.md
 
 ## SPECIFIC TASKS
 [Detailed list from above]
@@ -523,13 +523,13 @@ and integration tests for bindings.
 
 ## PREREQUISITES
 - Phase 1 must be complete
-- Check for docs/PHASE-1-MERGE-REPORT.md
+- Check for docs/archive/PHASE-1-MERGE-REPORT.md
 
 ## WORKFLOW
-1. DOCUMENT: Create docs/PHASE-2-PLAN.md
+1. DOCUMENT: Create docs/archive/PHASE-2-PLAN.md
 2. CREATE: Implement all test files
-3. REVIEW: Run tests, validate, create docs/PHASE-2-REVIEW.md
-4. MERGE: Commit, push, create docs/PHASE-2-MERGE-REPORT.md
+3. REVIEW: Run tests, validate, create docs/archive/PHASE-2-REVIEW.md
+4. MERGE: Commit, push, create docs/archive/PHASE-2-MERGE-REPORT.md
 ```
 
 ### Phase 3 Prompt Structure
@@ -542,13 +542,13 @@ preview-manager, candidate-service).
 
 ## PREREQUISITES
 - Phase 2 must be complete
-- Check for docs/PHASE-2-MERGE-REPORT.md
+- Check for docs/archive/PHASE-2-MERGE-REPORT.md
 
 ## WORKFLOW
-1. DOCUMENT: Create docs/PHASE-3-PLAN.md
+1. DOCUMENT: Create docs/archive/PHASE-3-PLAN.md
 2. CREATE: Implement all test files
-3. REVIEW: Run tests, validate, create docs/PHASE-3-REVIEW.md
-4. MERGE: Commit, push, create docs/PHASE-3-MERGE-REPORT.md
+3. REVIEW: Run tests, validate, create docs/archive/PHASE-3-REVIEW.md
+4. MERGE: Commit, push, create docs/archive/PHASE-3-MERGE-REPORT.md
 ```
 
 ### Phase 4 Prompt Structure
@@ -561,13 +561,13 @@ and enhance synthetic monitoring.
 
 ## PREREQUISITES
 - Phase 3 must be complete
-- Check for docs/PHASE-3-MERGE-REPORT.md
+- Check for docs/archive/PHASE-3-MERGE-REPORT.md
 
 ## WORKFLOW
-1. DOCUMENT: Create docs/PHASE-4-PLAN.md
+1. DOCUMENT: Create docs/archive/PHASE-4-PLAN.md
 2. CREATE: Implement all test files
-3. REVIEW: Run tests, validate, create docs/PHASE-4-REVIEW.md
-4. MERGE: Commit, push, create docs/PHASE-4-MERGE-REPORT.md
+3. REVIEW: Run tests, validate, create docs/archive/PHASE-4-REVIEW.md
+4. MERGE: Commit, push, create docs/archive/PHASE-4-MERGE-REPORT.md
 ```
 
 ---
@@ -580,28 +580,28 @@ and enhance synthetic monitoring.
 ```bash
 # Start Phase 1
 # Monitor completion
-# Review docs/PHASE-1-MERGE-REPORT.md
+# Review docs/archive/PHASE-1-MERGE-REPORT.md
 ```
 
 **Week 2-3:**
 ```bash
 # Start Phase 2 (after Phase 1 complete)
 # Monitor completion
-# Review docs/PHASE-2-MERGE-REPORT.md
+# Review docs/archive/PHASE-2-MERGE-REPORT.md
 ```
 
 **Week 4:**
 ```bash
 # Start Phase 3 (after Phase 2 complete)
 # Monitor completion
-# Review docs/PHASE-3-MERGE-REPORT.md
+# Review docs/archive/PHASE-3-MERGE-REPORT.md
 ```
 
 **Week 5-6:**
 ```bash
 # Start Phase 4 (after Phase 3 complete)
 # Monitor completion
-# Review docs/PHASE-4-MERGE-REPORT.md
+# Review docs/archive/PHASE-4-MERGE-REPORT.md
 ```
 
 ### Agent Lifecycle

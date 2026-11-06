@@ -1346,7 +1346,7 @@ npm install --save-dev dotenv
 
 ## References
 
-1. [Existing M3 Features Test](tests/e2e/m3-features.test.ts)
-2. [Synthetic Monitoring Script](scripts/synthetic-monitoring-enhanced.sh)
+1. [Existing M3 Features Test](m3-features.test.ts)
+2. [Synthetic Monitoring Script](../../scripts/synthetic-monitoring-enhanced.sh)
 3. [Vitest Documentation](https://vitest.dev/)
 4. [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)

@@ -473,7 +473,7 @@ M2 builds on M1 by adding:
 4. **Analytics Engine** — Per-candidate metrics collection
 5. **Service bindings** — Queue-to-worker communication infrastructure
 
-**See:** `docs/M2-PLAN.md` for detailed M2 implementation plan
+**See:** `docs/archive/M2-PLAN.md` for detailed M2 implementation plan
 
 ---
 

@@ -342,11 +342,11 @@ queue_name = "beehive-scientist-comparisons"
 
 ## Related Documentation
 
-- [SCIENTIST-COMPARATOR-PLAN.md](./SCIENTIST-COMPARATOR-PLAN.md) - Detailed design document
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - Overall system architecture
-- [MILESTONES.md](./MILESTONES.md) - Project milestones and phases
-- [AGENTS.md](../AGENTS.md) - Agent working conventions
-- [OPEN-QUESTIONS.md](./OPEN-QUESTIONS.md) - Findings and open questions
+- [SCIENTIST-COMPARATOR-PLAN.md](../SCIENTIST-COMPARATOR-PLAN.md) - Detailed design document
+- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system architecture
+- [MILESTONES.md](../MILESTONES.md) - Project milestones and phases
+- [AGENTS.md](../../AGENTS.md) - Agent working conventions
+- [OPEN-QUESTIONS.md](../OPEN-QUESTIONS.md) - Findings and open questions
 
 ---
 

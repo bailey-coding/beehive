@@ -290,7 +290,7 @@ From the git history:
 - [AGENTS.md](../../AGENTS.md#non-negotiable-architectural-rules) - Rule #4: Coordination state lives in Workers-native stores
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Technical architecture overview
 - [MILESTONES.md](../MILESTONES.md) - Project milestones and implementation phases
-- [Spec DO Implementation](../../workers/spec-do/) - The actual Durable Object code
+- [Spec DO Implementation](../../workers/spec-do) - The actual Durable Object code
 
 ---
 

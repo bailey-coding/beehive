@@ -210,7 +210,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
 
 **Risks**
 - R1 Spine authorship: agent-written auth and DO code. Mitigation: heavy tier with a plan per task, maintainer plus
-  independent review, mutation-style checks as in `docs/M8-PR1-REVIEW.md` (each S-row test must fail with its guard
+  independent review, mutation-style checks as in `docs/archive/M8-PR1-REVIEW.md` (each S-row test must fail with its guard
   removed).
 - R2 The master token is still all-powerful until stage 2 (a separate decision). M12 makes user writes verified, not master
   writes, and the internal tier-1 trust is unchanged (RFD non-goal).
@@ -246,7 +246,7 @@ key go back to `/login`. Optional afterwards: rotate `API_AUTH_TOKEN`, since a l
   later proves false: `invocation_logs = false` and trace header capture off on `beehive`, then rotate the exposed
   secrets (FOCUS task text).
 
-## 8. Review responses (`docs/M12-IMPL-PLAN-REVIEW.md` on `agent/m12-review`; each finding re-checked against the code)
+## 8. Review responses (`docs/archive/M12-IMPL-PLAN-REVIEW.md` on `agent/m12-review`; each finding re-checked against the code)
 
 | Finding | Response | Where |
 |---|---|---|

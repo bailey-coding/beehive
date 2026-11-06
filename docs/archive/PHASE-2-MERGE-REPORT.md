@@ -41,9 +41,9 @@ tags:
 
 | File | Purpose | Lines | Status |
 |------|---------|-------|--------|
-| `docs/PHASE-2-PLAN.md` | Execution plan | 330 | ✅ NEW |
-| `docs/PHASE-2-REVIEW.md` | Validation report | 200+ | ✅ NEW |
-| `docs/PHASE-2-MERGE-REPORT.md` | This file | 100+ | ✅ NEW |
+| `docs/archive/PHASE-2-PLAN.md` | Execution plan | 330 | ✅ NEW |
+| `docs/archive/PHASE-2-REVIEW.md` | Validation report | 200+ | ✅ NEW |
+| `docs/archive/PHASE-2-MERGE-REPORT.md` | This file | 100+ | ✅ NEW |
 
 ---
 
@@ -90,8 +90,8 @@ tags:
 ## Files Changed
 
 ### New Files (4)
-1. `docs/PHASE-2-PLAN.md` - Detailed execution plan
-2. `docs/PHASE-2-REVIEW.md` - Validation report
+1. `docs/archive/PHASE-2-PLAN.md` - Detailed execution plan
+2. `docs/archive/PHASE-2-REVIEW.md` - Validation report
 3. `workers/api/tests/api.test.ts` - Unit tests for API worker (28 tests)
 4. `workers/queue-consumer/tests/queue.test.ts` - Unit tests for queue consumer (18 tests)
 
@@ -105,7 +105,7 @@ None - all Phase 2 work is additive
 - **Phase:** 3
 - **Name:** Remaining Workers
 - **Agent:** test-phase-3-remaining
-- **Prerequisite:** docs/PHASE-2-MERGE-REPORT.md exists ✅
+- **Prerequisite:** docs/archive/PHASE-2-MERGE-REPORT.md exists ✅
 - **Start:** After this merge
 - **Scope:** Create unit tests for shadow-router, scientist-comparator, preview-manager, candidate-service
 

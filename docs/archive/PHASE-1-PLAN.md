@@ -155,7 +155,7 @@ This document outlines the detailed execution plan for **Phase 1: Critical Fixes
 ## Success Criteria
 
 ### Must Have
-- [ ] `docs/PHASE-1-PLAN.md` created (this file)
+- [ ] `docs/archive/PHASE-1-PLAN.md` created (this file)
 - [ ] `workers/canary-worker/tests/canary.test.ts` created with 24 tests
 - [ ] `workers/promotion-worker/tests/promotion.test.ts` created with 22 tests
 - [ ] `workers/gate-workflow/tests/gate.test.ts` modified with 15+ tests
@@ -163,8 +163,8 @@ This document outlines the detailed execution plan for **Phase 1: Critical Fixes
 - [ ] All tests pass (`npm test`)
 - [ ] TypeScript compiles without errors (`npm run typecheck`)
 - [ ] Lint passes without errors (`npm run lint`)
-- [ ] `docs/PHASE-1-REVIEW.md` created
-- [ ] `docs/PHASE-1-MERGE-REPORT.md` created
+- [ ] `docs/archive/PHASE-1-REVIEW.md` created
+- [ ] `docs/archive/PHASE-1-MERGE-REPORT.md` created
 - [ ] All changes committed and pushed to main
 
 ### Should Have
@@ -310,9 +310,9 @@ workers/sandbox-runner/tests/sandbox.test.ts      [MODIFY]
 
 ### Documentation Files
 ```
-docs/PHASE-1-PLAN.md              [THIS FILE]
-docs/PHASE-1-REVIEW.md             [NEW - Step 3]
-docs/PHASE-1-MERGE-REPORT.md       [NEW - Step 4]
+docs/archive/PHASE-1-PLAN.md              [THIS FILE]
+docs/archive/PHASE-1-REVIEW.md             [NEW - Step 3]
+docs/archive/PHASE-1-MERGE-REPORT.md       [NEW - Step 4]
 ```
 
 ---
@@ -400,7 +400,7 @@ cd workers/promotion-worker && npx tsc --noEmit tests/promotion.test.ts
 After Phase 1 completes:
 - **Phase 2:** Core Workers (beehive, queue-consumer)
 - **Agent:** test-phase-2-core
-- **Prerequisite:** docs/PHASE-1-MERGE-REPORT.md exists
+- **Prerequisite:** docs/archive/PHASE-1-MERGE-REPORT.md exists
 - **Start:** After this merge
 
 ---

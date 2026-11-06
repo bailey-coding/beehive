@@ -268,8 +268,8 @@ From the git history:
 
 ## References
 
-- [RFD-0001: Oracle Ladder Architecture](../rfds/0001-oracle-ladder-architecture.md) - The ladder this supports
-- [RFD-0004: Canary Deploy + Rollback](../rfds/0004-canary-deploy-rollback.md) - Canary deployment system
+- [RFD-0001: Oracle Ladder Architecture](0001-oracle-ladder-architecture.md) - The ladder this supports
+- [RFD-0004: Canary Deploy + Rollback](0004-canary-deploy-rollback.md) - Canary deployment system
 - [MILESTONES.md](../MILESTONES.md) - M2 and M3 milestone details
 - [Commit 746c42c](https://github.com/bailey-coding/beehive/commit/746c42c) - Implementation commit
 - [AGENTS.md](../../AGENTS.md#the-oracle-ladder) - Oracle ladder context

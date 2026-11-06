@@ -44,7 +44,7 @@ All claims verified by grep against workers/api/index.ts and workers/spec-do/ind
 **Task 3:** cli/src/commands/{promotion,trial}.ts, cli/src/types/api.ts, cli/src/utils/api-client.ts
 **Task 4:** cli/src/commands/{candidate,repo,spec,issue,trial,gate}.ts, cli/src/types/api.ts, tests/cli-smoke.test.ts
 **Task 5:** cli/src/index.ts, cli/src/types/definitions.ts, cli/src/utils/api-client.ts
-**Docs:** docs/OPEN-QUESTIONS.md, docs/PARITY-CLI-FIXES-REPORT.md
+**Docs:** docs/OPEN-QUESTIONS.md, docs/archive/PARITY-CLI-FIXES-REPORT.md
 
 ---
 

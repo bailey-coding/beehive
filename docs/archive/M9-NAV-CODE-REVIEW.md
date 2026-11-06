@@ -1,6 +1,6 @@
 # M9 code review (L9): site navigation
 
-Task `m9-code-review` | spec: `docs/M9-NAV-PLAN.md` v2 (sections 9, 10) and `docs/M9-NAV-PLAN-REVIEW.md` | subject:
+Task `m9-code-review` | spec: `docs/M9-NAV-PLAN.md` v2 (sections 9, 10) and `docs/archive/M9-NAV-PLAN-REVIEW.md` | subject:
 `origin/main...origin/agent/m9-nav` (1e4eef6, 8 commits L1-L8) | reviewed 2026-10-17 in worktree `agent/m9-codereview`.
 Nothing on the subject branch was changed. Line numbers are on 1e4eef6.
 
@@ -26,7 +26,7 @@ plan 2.4.2 calls this guard the defence for a future caller. Fix: render `appPag
 `//evil`, `/appx` (not last) and assert that no such `href=` appears and the label is still rendered as text.
 
 **S3. The docs name a review file that does not exist.** `docs/FOCUS.md:27` and `docs/M9-NAV-PLAN.md:212` point to
-`docs/M9-REVIEW.md`, but this review is `docs/M9-NAV-CODE-REVIEW.md`. Fix at merge: change both references. When this review is
+`docs/M9-REVIEW.md`, but this review is `docs/archive/M9-NAV-CODE-REVIEW.md`. Fix at merge: change both references. When this review is
 closed, FOCUS should also drop "review still to do".
 
 ### Nits

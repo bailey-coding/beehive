@@ -546,9 +546,9 @@ ui/src/
 
 ## Related Documents
 
-- [MILESTONES.md](../MILESTONES.md) — Overall project milestones
+- [MILESTONES.md](MILESTONES.md) — Overall project milestones
 - [AGENTS.md](../AGENTS.md) — Agent working conventions
-- [TYPES-CLEANUP-PLAN.md](../TYPES-CLEANUP-PLAN.md) — Type system cleanup
+- [TYPES-CLEANUP-PLAN.md](archive/TYPES-CLEANUP-PLAN.md) — Type system cleanup
 
 ---
 

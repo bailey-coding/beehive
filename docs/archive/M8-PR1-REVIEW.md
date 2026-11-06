@@ -2,7 +2,7 @@
 
 Task `m8-pr1-review` | reviewer: independent agent, 2026-10-17 | subject `git diff origin/main...origin/agent/m8-issues-do`
 (94860d4 D1, 37e16fd D2, bcca5bc D3, b88422a actor validation) | spec: `docs/M8-UI-ISSUES-PLAN.md` on `agent/ui-issues-plan-v2`
-(sections 4, 8, 9, 10; section 15 wins) and `docs/M8-UI-ISSUES-PLAN-REVIEW.md`. Line numbers are on the PR head (b88422a).
+(sections 4, 8, 9, 10; section 15 wins) and `docs/archive/M8-UI-ISSUES-PLAN-REVIEW.md`. Line numbers are on the PR head (b88422a).
 
 Ran it myself: `npm run typecheck` is clean; `npm test` (after `npm install` in `cli/`) gives **32 files, 645 passed, 0 failed**. The implementer's claim holds.
 

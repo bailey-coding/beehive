@@ -1,5 +1,7 @@
 # Beehive Documentation Index
 
+> **New here?** Start with [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (humans) or [`../AGENTS.md`](../AGENTS.md) (agents). Finished records live in [`archive/`](./archive/README.md).
+
 This directory contains all Beehive project documentation, organized for **human discovery** and **LLM retrieval**.
 
 ---
@@ -17,8 +19,8 @@ This directory contains all Beehive project documentation, organized for **human
 | **🤖 Agent Guidelines** | Review standards, efficiency tips | [AGENTS-REVIEWER.md](./AGENTS-REVIEWER.md) |
 | **🛠️ Setup & Deployment** | Environment, configuration, Cloudflare integration | [SETUP.md](./SETUP.md), [ARTIFACTS-SETUP.md](./ARTIFACTS-SETUP.md) |
 | **🔐 Auth & Integration** | OAuth, Statsig, external service wiring | [OAUTH-INTEGRATION.md](./OAUTH-INTEGRATION.md), [STATSIG-INTEGRATION.md](./STATSIG-INTEGRATION.md) |
-| **✅ Verification & Testing** | Test plans, audit reports, execution results | [VERIFICATION.md](./VERIFICATION.md), [TEST-AUDIT-REPORT.md](./TEST-AUDIT-REPORT.md) |
-| **📊 Phase Reports** | M1-M7 phase plans, reviews, merge reports | [M1-PLAN.md](./M1-PLAN.md), [M2-PLAN.md](./M2-PLAN.md), [M3-PLAN.md](./M3-PLAN.md), [M4-PLAN.md](./M4-PLAN.md), [M5-PLAN.md](./M5-PLAN.md) |
+| **✅ Verification & Testing** | Test plans, audit reports, execution results | [VERIFICATION.md](./VERIFICATION.md), [TEST-AUDIT-REPORT.md](./archive/TEST-AUDIT-REPORT.md) |
+| **📦 Archive** | Finished phase plans, reviews, merge reports, deprecated plans | [archive/README.md](./archive/README.md), [M3-PLAN.md](./M3-PLAN.md), [M5-PLAN.md](./M5-PLAN.md) |
 
 ---
 
@@ -94,9 +96,9 @@ Third-party service integrations.
 Quality assurance and validation documentation.
 
 - [VERIFICATION.md](./VERIFICATION.md) - *Verification approach and results*
-- [TEST-AUDIT-REPORT.md](./TEST-AUDIT-REPORT.md) - *Comprehensive test audit*
-- [CLOUDFLARE-DEPLOY-FAILURES-REPORT.md](./CLOUDFLARE-DEPLOY-FAILURES-REPORT.md) - *Deploy failure analysis*
-- [FINAL-SUBMISSION-REVIEW.md](./FINAL-SUBMISSION-REVIEW.md) - *Submission review checklist*
+- [TEST-AUDIT-REPORT.md](./archive/TEST-AUDIT-REPORT.md) - *Comprehensive test audit*
+- [CLOUDFLARE-DEPLOY-FAILURES-REPORT.md](./archive/CLOUDFLARE-DEPLOY-FAILURES-REPORT.md) - *Deploy failure analysis*
+- [FINAL-SUBMISSION-REVIEW.md](./archive/FINAL-SUBMISSION-REVIEW.md) - *Submission review checklist*
 
 ### 🤖 Agent Guidelines
 Standardized review processes and token-efficient patterns for code review agents.
@@ -108,22 +110,22 @@ Complete historical record of each milestone phase.
 
 Each phase has: **PLAN.md**, **REVIEW.md**, **MERGE-REPORT.md**, **IMPLEMENTATION-RESULTS.md**
 
-- **Phase 1:** [PLAN](./PHASE-1-PLAN.md) | [REVIEW](./PHASE-1-REVIEW.md) | [MERGE](./PHASE-1-MERGE-REPORT.md)
-- **Phase 2:** [PLAN](./PHASE-2-PLAN.md) | [REVIEW](./PHASE-2-REVIEW.md) | [MERGE](./PHASE-2-MERGE-REPORT.md)
-- **Phase 3:** [PLAN](./PHASE-3-PLAN.md) | [REVIEW](./PHASE-3-REVIEW.md) | [MERGE](./PHASE-3-MERGE-REPORT.md) | [IMPLEMENTATION](./M3-IMPLEMENTATION-REVIEW.md) | [FIX](./M3-FIX-REPORT.md)
-- **Phase 4:** [PLAN](./PHASE-4-PLAN.md) | [REVIEW](./PHASE-4-REVIEW.md) | [MERGE](./PHASE-4-MERGE-REPORT.md) | [IMPLEMENTATION](./M4-IMPLEMENTATION-RESULTS.md)
-- **M1:** [PLAN](./M1-PLAN.md)
-- **M2:** [PLAN](./M2-PLAN.md) | [REVIEW](./M2-M4-REVIEW-REPORT.md) | [VERIFICATION](./M2-VERIFICATION-RESULTS.md)
-- **M3:** [PLAN](./M3-PLAN.md) | [REVIEW](./M3-IMPLEMENTATION-REVIEW.md) | [MERGE](./M3-MERGE-REPORT.md) | [RE-REVIEW](./M3-RE-REVIEW-REPORT.md)
-- **M4:** [PLAN](./M4-PLAN.md)
+- **Phase 1:** [PLAN](./archive/PHASE-1-PLAN.md) | [REVIEW](./archive/PHASE-1-REVIEW.md) | [MERGE](./archive/PHASE-1-MERGE-REPORT.md)
+- **Phase 2:** [PLAN](./archive/PHASE-2-PLAN.md) | [REVIEW](./archive/PHASE-2-REVIEW.md) | [MERGE](./archive/PHASE-2-MERGE-REPORT.md)
+- **Phase 3:** [PLAN](./archive/PHASE-3-PLAN.md) | [REVIEW](./archive/PHASE-3-REVIEW.md) | [MERGE](./archive/PHASE-3-MERGE-REPORT.md) | [IMPLEMENTATION](./archive/M3-IMPLEMENTATION-REVIEW.md) | [FIX](./archive/M3-FIX-REPORT.md)
+- **Phase 4:** [PLAN](./archive/PHASE-4-PLAN.md) | [REVIEW](./archive/PHASE-4-REVIEW.md) | [MERGE](./archive/PHASE-4-MERGE-REPORT.md) | [IMPLEMENTATION](./archive/M4-IMPLEMENTATION-RESULTS.md)
+- **M1:** [PLAN](./archive/M1-PLAN.md)
+- **M2:** [PLAN](./archive/M2-PLAN.md) | [REVIEW](./archive/M2-M4-REVIEW-REPORT.md) | [VERIFICATION](./archive/M2-VERIFICATION-RESULTS.md)
+- **M3:** [PLAN](./M3-PLAN.md) | [REVIEW](./archive/M3-IMPLEMENTATION-REVIEW.md) | [MERGE](./archive/M3-MERGE-REPORT.md) | [RE-REVIEW](./archive/M3-RE-REVIEW-REPORT.md)
+- **M4:** [PLAN](./archive/M4-PLAN.md)
 - **M5:** [PLAN](./M5-PLAN.md)
 
 ### 🗑️ Deprecated / To Review
 Documents that may be outdated or need consolidation.
 
-- [REMOVE-ANY-PLAN.md](./REMOVE-ANY-PLAN.md)
-- [TYPES-CLEANUP-PLAN.md](./TYPES-CLEANUP-PLAN.md)
-- [ZOD-MIGRATION.md](./ZOD-MIGRATION.md)
+- [REMOVE-ANY-PLAN.md](./archive/REMOVE-ANY-PLAN.md)
+- [TYPES-CLEANUP-PLAN.md](./archive/TYPES-CLEANUP-PLAN.md)
+- [ZOD-MIGRATION.md](./archive/ZOD-MIGRATION.md)
 
 ---
 

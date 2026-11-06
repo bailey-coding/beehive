@@ -1,7 +1,7 @@
 # M8 plan (v2): make the repo issue pages reachable and correct
 
 Task `ui-issues-plan-v2` | spec: `docs/MILESTONES.md` M8 | v1 planned 2026-10-17 against `origin/main` 11d0816; v2 answers
-`docs/M8-UI-ISSUES-PLAN-REVIEW.md` ("approve with changes") and the maintainer decisions in section 12.
+`docs/archive/M8-UI-ISSUES-PLAN-REVIEW.md` ("approve with changes") and the maintainer decisions in section 12.
 Plan only: no implementation code. Line numbers are on this branch (`origin/main` + docs).
 
 **Ownership (maintainer decision, 2026-10-17).** The Spec DO tasks are spine (AGENTS.md rule 2). An agent writes them; the

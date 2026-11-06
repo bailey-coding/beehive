@@ -255,15 +255,15 @@ The only minor issue (hardcoded accountId in create-repo.js) is in a development
 ---
 
 ## Files Reviewed
-- `docs/M2-VERIFICATION-RESULTS.md` - GREEN, all components verified
-- `docs/M4-IMPLEMENTATION-RESULTS.md` - GREEN, all claims now accurate
-- `docs/M2-M4-REVIEW-REPORT.md` - YELLOW (historical), all issues resolved
+- `docs/archive/M2-VERIFICATION-RESULTS.md` - GREEN, all components verified
+- `docs/archive/M4-IMPLEMENTATION-RESULTS.md` - GREEN, all claims now accurate
+- `docs/archive/M2-M4-REVIEW-REPORT.md` - YELLOW (historical), all issues resolved
 - `LICENSE` - GREEN, copyright fixed to "2026 Beehive"
 - `docs/MILESTONES.md` - GREEN, all milestones documented
-- `docs/M1-PLAN.md` - GREEN, exists and comprehensive
-- `docs/M2-PLAN.md` - GREEN, exists and comprehensive
+- `docs/archive/M1-PLAN.md` - GREEN, exists and comprehensive
+- `docs/archive/M2-PLAN.md` - GREEN, exists and comprehensive
 - `docs/M3-PLAN.md` - GREEN, exists and comprehensive
-- `docs/M4-PLAN.md` - GREEN, exists and comprehensive
+- `docs/archive/M4-PLAN.md` - GREEN, exists and comprehensive
 - `docs/M5-PLAN.md` - GREEN, exists and comprehensive
 - `docs/FOCUS.md` - GREEN, current focus and status documented
 - `README.md` - GREEN, project description with demo section

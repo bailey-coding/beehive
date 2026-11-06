@@ -1,6 +1,6 @@
 # Review: Custom Request Types Implementation
 
-**Task:** custom-request-types-implementation-review | **Spec:** docs/CUSTOM-REQUEST-TYPES-IMPLEMENTATION.md | **Date:** 2026-10-19
+**Task:** custom-request-types-implementation-review | **Spec:** docs/archive/CUSTOM-REQUEST-TYPES-IMPLEMENTATION.md | **Date:** 2026-10-19
 **Subject:** `vibe/custom-request-types-1a468a` (commits `b5b9be2` through `2b05953`)
 **Reviewer:** subagent/reviewer | **Confidence:** 0.98
 
@@ -161,6 +161,6 @@ Per `docs/AGENTS-REVIEWER.md`:
 | `workers/shared/principal.ts` | Added type definitions and wrappers |
 | `workers/shared/principal.test-d.ts` | Added type-level tests |
 | `workers/api/index.ts` | Wrapped requests, migrated all handlers, removed redundant lookups |
-| `docs/CUSTOM-REQUEST-TYPES-PLAN.md` | Design document |
-| `docs/CUSTOM-REQUEST-TYPES-PLAN-REVIEW.md` | Plan review |
-| `docs/CUSTOM-REQUEST-TYPES-IMPLEMENTATION.md` | Task breakdown |
+| `docs/archive/CUSTOM-REQUEST-TYPES-PLAN.md` | Design document |
+| `docs/archive/CUSTOM-REQUEST-TYPES-PLAN-REVIEW.md` | Plan review |
+| `docs/archive/CUSTOM-REQUEST-TYPES-IMPLEMENTATION.md` | Task breakdown |

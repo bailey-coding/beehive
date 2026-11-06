@@ -1,7 +1,7 @@
 # M8 PR 1 re-review: fixes on `agent/m8-issues-do`
 
 Task `m8-pr1-recheck` | independent re-reviewer, 2026-10-17 | subject `git diff b88422a..origin/agent/m8-issues-do` (6babb2c B1, 65ab327 S1,
-3add3dd S2, a3848d2 transaction test, 0526df5 empty commit) | prior review: `docs/M8-PR1-REVIEW.md` on `agent/m8-do-review`. Line numbers are on head 0526df5.
+3add3dd S2, a3848d2 transaction test, 0526df5 empty commit) | prior review: `docs/archive/M8-PR1-REVIEW.md` on `agent/m8-do-review`. Line numbers are on head 0526df5.
 
 Ran it myself: `npm install` in `cli/` and the root, then `npm run typecheck` is clean and `npm test` gives **32 files, 666 passed, 0 failed**
 (was 645; +21 new cases). The diff touches 5 files: `spec-do/index.ts`, three test files, `OPEN-QUESTIONS.md`. Nothing in `workers/shared`, `api/index.ts` or `cli/`.

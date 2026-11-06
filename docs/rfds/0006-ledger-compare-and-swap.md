@@ -220,8 +220,8 @@ This finding is related - it shows the importance of proper error handling when 
 
 ## References
 
-- [RFD-0001: Oracle Ladder Architecture](../rfds/0001-oracle-ladder-architecture.md) - The ladder context
-- [RFD-0004: Canary Deploy + Rollback](../rfds/0004-canary-deploy-rollback.md) - Related deployment flow
+- [RFD-0001: Oracle Ladder Architecture](0001-oracle-ladder-architecture.md) - The ladder context
+- [RFD-0004: Canary Deploy + Rollback](0004-canary-deploy-rollback.md) - Related deployment flow
 - [MILESTONES.md](../MILESTONES.md) - M7 and M8 milestone details
 - [Commit fbc9fb5](https://github.com/bailey-coding/beehive/commit/fbc9fb5) - Implementation commit
 - [Commit 8ef8b61](https://github.com/bailey-coding/beehive/commit/8ef8b61) - Related session learnings

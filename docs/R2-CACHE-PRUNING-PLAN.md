@@ -11,7 +11,7 @@ This document outlines the implementation plan for R2 cache pruning in Beehive C
 
 **Related**:
 - [CI-BEEHIVE.md](./CI-BEEHIVE.md) - Overall Beehive CI architecture
-- [ci-enhanced.yml](../.github/workflows/ci-enhanced.yml) - Current CI workflow
+- [ci-enhanced.yml](../.github/workflows/ci.yml) - Current CI workflow
 - Issue: No CI clean-install build (addressed by ci-enhanced.yml)
 
 ## Problem Statement
@@ -363,7 +363,7 @@ docs/
 - [Workers Scheduled Triggers](https://developers.cloudflare.com/workers/platform/triggers/cron/)
 
 ### Related Code
-- [ci-enhanced.yml](../.github/workflows/ci-enhanced.yml)
+- [ci-enhanced.yml](../.github/workflows/ci.yml)
 - [CI-BEEHIVE.md](./CI-BEEHIVE.md)
 
 ## Appendix A: Sample Code

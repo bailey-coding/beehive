@@ -15,7 +15,7 @@ tags:
 - **Start:** 2026-10-13T16:07:00Z
 - **End:** 2026-10-13T16:22:00Z
 - **Duration:** 15 minutes
-- **Prerequisite:** Phase 1 complete ✅ (verified: docs/PHASE-1-MERGE-REPORT.md exists)
+- **Prerequisite:** Phase 1 complete ✅ (verified: docs/archive/PHASE-1-MERGE-REPORT.md exists)
 
 ---
 
@@ -79,7 +79,7 @@ tags:
 
 | File | Lines | Tests | Status |
 |------|-------|-------|--------|
-| `docs/PHASE-2-PLAN.md` | 330 | N/A | ✅ Created |
+| `docs/archive/PHASE-2-PLAN.md` | 330 | N/A | ✅ Created |
 | `workers/api/tests/api.test.ts` | 604 | 28 | ✅ Created |
 | `workers/queue-consumer/tests/queue.test.ts` | 754 | 18 | ✅ Created |
 | `tests/integration/bindings.test.ts` | 1839 | 57 | ✅ Pre-existing (verified) |
@@ -194,7 +194,7 @@ grep -c "it('" tests/integration/bindings.test.ts  # 57 tests (pre-existing)
 
 ## Success Criteria Status
 
-- ✅ `docs/PHASE-2-PLAN.md` created
+- ✅ `docs/archive/PHASE-2-PLAN.md` created
 - ✅ `workers/api/tests/api.test.ts` created (~600 lines, 28 tests)
 - ✅ `workers/queue-consumer/tests/queue.test.ts` created (~750 lines, 18 tests)
 - ✅ tests/integration/bindings.test.ts verified (pre-existing, 57 tests)
@@ -219,9 +219,9 @@ grep -c "it('" tests/integration/bindings.test.ts  # 57 tests (pre-existing)
 
 ## Files Ready for Commit
 
-1. `docs/PHASE-2-PLAN.md`
-2. `docs/PHASE-2-REVIEW.md` (this file)
+1. `docs/archive/PHASE-2-PLAN.md`
+2. `docs/archive/PHASE-2-REVIEW.md` (this file)
 3. `workers/api/tests/api.test.ts`
 4. `workers/queue-consumer/tests/queue.test.ts`
 
-**Note:** docs/PHASE-2-MERGE-REPORT.md will be created in the MERGE phase.
+**Note:** docs/archive/PHASE-2-MERGE-REPORT.md will be created in the MERGE phase.

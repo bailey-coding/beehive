@@ -475,7 +475,7 @@ npm test 2>&1 | head -20
 ## File Changes Required for M4
 
 ### Files to Create
-- [x] `docs/M4-PLAN.md` (this document)
+- [x] `docs/archive/M4-PLAN.md` (this document)
 
 ### Files to Modify
 - [ ] `create-repo.js` - Remove hardcoded API token (CRITICAL)
@@ -493,7 +493,7 @@ npm test 2>&1 | head -20
 ## References
 
 - `docs/MILESTONES.md` - M4 section for requirements
-- `docs/M2-PLAN.md` - Template and structure reference
+- `docs/archive/M2-PLAN.md` - Template and structure reference
 - `docs/FOCUS.md` - Today's focus on demo video
 - `scripts/DEMO-VIDEO-SCRIPT.md` - Complete video recording guide
 - `scripts/DEMO-QUICK-START.md` - Quick reference for demo
@@ -552,7 +552,7 @@ step: <component> | task: m4-<feature> | spec: n/a | confidence: <0-1>
 
 | File | Action | Status | Priority |
 |------|--------|--------|----------|
-| `docs/M4-PLAN.md` | Create | ✅ Done | High |
+| `docs/archive/M4-PLAN.md` | Create | ✅ Done | High |
 | `create-repo.js` | Modify (remove token) | ⏳ Pending | Critical |
 | `LICENSE` | Verify | ✅ Done | High |
 | Demo video | Create | ⏳ Pending | Critical |

@@ -297,7 +297,7 @@ Fields: id, commitHash, repoId, orgId, timestamp, author, message, classificatio
 
 ## Related Documents
 
-- [MILESTONES.md](../MILESTONES.md) - Overall project milestones
-- [UI-DASHBOARD-PLAN.md](../UI-DASHBOARD-PLAN.md) - Dashboard-specific semantic features
-- [M4-PLAN.md](../M4-PLAN.md) - Submission package with semantic search integration
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system architecture
+- [MILESTONES.md](MILESTONES.md) - Overall project milestones
+- [UI-DASHBOARD-PLAN.md](UI-DASHBOARD-PLAN.md) - Dashboard-specific semantic features
+- [M4-PLAN.md](archive/M4-PLAN.md) - Submission package with semantic search integration
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Overall system architecture
