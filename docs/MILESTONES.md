@@ -262,6 +262,11 @@ Spine work: an agent plans it (independent agent review before code); start from
 
 ## Future / Optional
 
+- **Public anonymous read-only UI** (maintainer, 2026-11-06: planned, not scheduled). Follows viewer sign-in
+  (`docs/plans/viewer-signin-plan.md`, section "Next: anonymous read"): `/app` GET pages without a session,
+  rendered exactly as a viewer sees them. Needs the viewer rate limit first, plus a decision on what anonymous
+  visitors may see (actor names, preview URLs) and on crawler indexing.
+
 - **WfP: Workers for Platforms Migration** — Migrate candidate execution to Workers for Platforms
   - Replace Artifacts-based candidate deployments with User Workers
   - Use dynamic dispatch Worker for Shadow/Canary/Train routing

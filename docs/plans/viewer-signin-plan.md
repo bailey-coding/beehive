@@ -52,4 +52,17 @@ non-member: a viewer can never act as a member on old code. Member cookies are u
   ids and preview URLs, gate verdicts. No mirrored request bodies are rendered in the UI today; keep it so.
 - REST API access for viewers (a read-only user token) is out of scope; tokens need an actor row.
 
+## Next: anonymous read (planned, not scheduled)
+
+The maintainer wants `/app` to become publicly readable without sign-in later (2026-11-06; tracked in
+`docs/MILESTONES.md` Future / Optional). Viewer sessions are built so this is a small step: an anonymous
+request would render with the same viewer rules (`viewer: true`, no actor, GET/HEAD only, `issueHiddenFrom`).
+Before it ships:
+- The rate limit above, keyed per IP for anonymous requests (no GitHub identity to throttle on).
+- What anonymous visitors see: whether actor names, GitHub-linked logins and candidate preview URLs are
+  redacted or shown; `robots.txt` / `noindex` for crawlers.
+- Caching: anonymous pages are identical for everyone, so a short edge cache would take read load off the
+  Spec DO (a viewer page cannot be cached today because the account area names the login).
+- A switch like `OPEN_VIEWER_SIGNIN`, off by default, so the deploy and the opening are separate steps.
+
 Tests: `workers/api/tests/ui-viewer.test.ts`.
