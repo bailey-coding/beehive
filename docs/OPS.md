@@ -366,8 +366,8 @@ per actor (409 beyond), plaintext shown once, only the SHA-256 hash stored.
 5. **Revoke.** One: the settings page, or `POST /api/admin/user-tokens/<tokenId>/revoke` (idempotent;
    the first revocation is kept). All of an actor's: `POST /api/admin/user-tokens/revoke-all
    {"actorId":"<id>"}`. 401 from the next request (no edge cache).
-   **Removing a login from `ALLOWED_GITHUB_USERS` blocks UI sign-in only (with `OPEN_VIEWER_SIGNIN` on, the next
-   sign-in is read-only): also run `revoke-all` for that actor.** A mistyped or service-actor `X-Actor-ID` on either revoke route is a 400/403 with the reason, and
+   **Removing a login from `ALLOWED_GITHUB_USERS` ends its UI session on the next request (it signs in again,
+   read-only if `OPEN_VIEWER_SIGNIN` is on) but does not touch API tokens: also run `revoke-all` for that actor.** A mistyped or service-actor `X-Actor-ID` on either revoke route is a 400/403 with the reason, and
    nothing is revoked; 503 means the Spec DO could not answer.
 6. **Roll back push B** (a ref operation through the `cf` flow): redeploy the rollback floor `8de5485` or any later
    commit, **never anything earlier** (that is `Unknown schema_version 'm9'`, a full outage). Clients then see every

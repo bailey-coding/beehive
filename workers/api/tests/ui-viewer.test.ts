@@ -22,6 +22,7 @@ let spec: SpecDO;
 let calls: Request[];
 let repoId: string;
 let memberId: string;
+let orgId: string;
 
 const stub = {
   async fetch(req: Request): Promise<Response> {
@@ -36,6 +37,11 @@ async function viewerCookie(login = 'stranger', extra: Record<string, unknown> =
   const now = Math.floor(Date.now() / 1000);
   const s = await signSession({ login, actorId: '', viewer: true, iat: now, exp: now + 3600, ...extra } as never, TOKEN);
   return `__Host-beehive_session=${s}`;
+}
+
+async function memberCookie(): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return `__Host-beehive_session=${await signSession({ login: 'member', actorId: memberId, iat: now, exp: now + 3600 }, TOKEN)}`;
 }
 
 async function ui(path: string, opts: { cookie: string; method?: string; form?: Record<string, string>; env?: UiEnv }): Promise<Response> {
@@ -73,7 +79,7 @@ beforeEach(async () => {
   await spec.init();
   calls = [];
   memberId = spec.createActor('human', 'member').id;
-  const orgId = spec.createOrganization('acme', 'artifacts').id;
+  orgId = spec.createOrganization('acme', 'artifacts').id;
   repoId = spec.createRepository('widgets', orgId, 'baseline', undefined, undefined, 'https://example.invalid/w.git', 'acme').id;
 });
 
@@ -192,20 +198,58 @@ describe('viewer session', () => {
     expect((await ui(`${REPO}/issues/${priv}`, { cookie })).status).toBe(404);
     expect((await ui(`/app/issues/${internal}`, { cookie })).status).toBe(404);
 
-    // Search and changelog on the repo and org pages leave hidden issues out too.
-    for (const page of [`${REPO}?q=bug`, `/app/repos/${repoId}?tab=issues`]) {
-      const text = await (await ui(page, { cookie })).text();
-      expect(text).not.toContain('internal bug');
-      expect(text).not.toContain('private bug');
+  });
+
+  it('the changelog on repo, org and spec pages counts public issues only for a viewer, and never private ones', async () => {
+    // The changelog renders issues as `Issue "<name>" reported` (issues have no name, so it is empty: a separate,
+    // pre-existing bug), so count entries rather than match titles.
+    const specId = spec.createSpec('shortener', 'd', '{"endpoints":[]}', [], orgId, memberId).id;
+    const linked = spec.createRepository('linked', orgId, 'baseline', specId, undefined, 'https://example.invalid/l.git', 'acme').id;
+    for (const visibility of ['public', 'internal', 'private']) {
+      const id = spec.createIssue(undefined, linked, `${visibility} bug`, 'details', memberId).id;
+      store.raw.prepare(`UPDATE issues SET visibility = ? WHERE id = ?`).run(visibility, id);
     }
+    const issueEntries = (html: string) => (html.match(/<p class="summary">Issue &quot;/g) ?? []).length;
+    const viewer = await viewerCookie();
+    const member = await memberCookie();
+    for (const page of ['/app/repos/acme/linked', `/app/orgs/${orgId}`, `/app/specs/${specId}`]) {
+      const asViewer = await ui(page, { cookie: viewer });
+      expect(asViewer.status, page).toBe(200);
+      expect(issueEntries(await asViewer.text()), page).toBe(1);
+      const asMember = await ui(page, { cookie: member });
+      expect(asMember.status, page).toBe(200);
+      expect(issueEntries(await asMember.text()), page).toBe(2);
+    }
+  });
+
+  it('HEAD reads like GET, and the token page is 403 for HEAD too', async () => {
+    const pub = spec.createIssue(undefined, repoId, 'public bug', 'details', memberId).id;
+    expect((await ui(`${REPO}/issues/${pub}`, { cookie: await viewerCookie(), method: 'HEAD' })).status).toBe(200);
+    calls = [];
+    expect((await ui('/app/settings/tokens', { cookie: await viewerCookie(), method: 'HEAD' })).status).toBe(403);
+    expect(calls).toEqual([]);
+  });
+
+  it('the files tab makes no Artifacts API call for a viewer (placeholder tree), but does for a member', async () => {
+    const remote = 'https://0123456789abcdef0123456789abcdef.artifacts.cloudflare.net/git/acme/src.git';
+    spec.createRepository('src', orgId, 'baseline', undefined, undefined, remote, 'acme');
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      fetched.push(String(input));
+      return Response.json({ success: false }, { status: 404 });
+    });
+    const env = { ...OPEN_ENV, CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', CLOUDFLARE_API_TOKEN: 'cf-token' };
+    const asViewer = await ui('/app/repos/acme/src?tab=files', { cookie: await viewerCookie(), env });
+    expect(asViewer.status).toBe(200);
+    expect(fetched).toEqual([]);
+    await ui('/app/repos/acme/src?tab=files', { cookie: await memberCookie(), env });
+    expect(fetched.length).toBeGreaterThan(0);
   });
 
   it('a member still sees internal issues', async () => {
     const internal = spec.createIssue(undefined, repoId, 'internal bug', 'details', memberId).id;
     store.raw.prepare(`UPDATE issues SET visibility = 'internal' WHERE id = ?`).run(internal);
-    const now = Math.floor(Date.now() / 1000);
-    const member = `__Host-beehive_session=${await signSession({ login: 'member', actorId: memberId, iat: now, exp: now + 3600 }, TOKEN)}`;
-    expect((await ui(`${REPO}/issues/${internal}`, { cookie: member })).status).toBe(200);
+    expect((await ui(`${REPO}/issues/${internal}`, { cookie: await memberCookie() })).status).toBe(200);
   });
 });
 
@@ -232,6 +276,14 @@ describe('viewer cookie validity', () => {
     const res = await ui('/app', { cookie: await viewerCookie('stranger', extra) });
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBe('/login');
+    expect(calls).toEqual([]);
+  });
+
+  it('drops a member cookie once the login is removed from the allowlist', async () => {
+    const res = await ui('/app', { cookie: await memberCookie(), env: { ...OPEN_ENV, ALLOWED_GITHUB_USERS: 'someone-else' } });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe('/login');
+    expect(res.headers.get('Set-Cookie')).toMatch(/__Host-beehive_session=;/);
     expect(calls).toEqual([]);
   });
 

@@ -24,7 +24,9 @@ PR-G/PR-H, `docs/FOCUS.md`).
 - **Cookie validity** (`readSession`). A member cookie needs a non-empty `actorId` and no `viewer`; a
   viewer cookie needs `viewer === true` and `actorId === ''`. Anything else is signed out. A viewer
   cookie is also dropped (redirect to `/login`, cookie cleared) when the switch is off or the login is
-  now on the allowlist, so a promoted user signs in again and gets an actor row.
+  now on the allowlist, so a promoted user signs in again and gets an actor row. A member cookie is dropped
+  when its login is no longer on the allowlist (review finding 2: before, a removed member kept writing for
+  up to 12 h).
 - **Read-only enforcement** (`handleUi`). Before any Spec DO call or body read: every non-GET/HEAD
   request and every `/app/settings/tokens` route is 403 "Read-only access". The new-issue form is 403.
   Viewers skip the actor lookup, and their DO reads carry no `X-Actor-ID`.
@@ -36,12 +38,17 @@ PR-G/PR-H, `docs/FOCUS.md`).
 - **Pages.** Viewers see "(read-only)" next to their login, no API tokens link, no create forms on the
   dashboard, no "New Issue" button, no comment or close/reopen form, and a note on how to become a
   contributor.
+- **Artifacts.** Viewers get the placeholder file tree on the repo "files" tab: no Artifacts API call with
+  the platform token per viewer page view (review finding 1), and repo source is not exposed to strangers
+  yet. Revisit with the rate limit; showing real code is what a community would want.
 
 ## Mixed-version window
 
 UI-only; no schema, DO route or service-binding change. An older `beehive` worker reading a viewer
 cookie rejects it (empty `actorId`) and sends the browser to `/login`, where the old code refuses a
-non-member: a viewer can never act as a member on old code. Member cookies are unchanged.
+non-member: a viewer can never act as a member on old code. Member cookies are unchanged. During the window
+a viewer can bounce between `/login` on an old worker (which does not clear the cookie) and `/app` on a new
+one until the deploy settles: harmless, no privilege gain.
 
 ## Not covered / follow-ups
 
@@ -76,6 +83,12 @@ request renders with the same viewer rules (`viewer: true`, no actor, GET/HEAD o
 - **Actor names and GitHub logins are shown** to anonymous visitors.
 - **Custom domain: longer term.** Until then anonymous read runs on `workers.dev`, which may mean no edge cache
   (see below); the rate limit must hold the load on its own in that case.
+
+**Cache rules (review 2026-11-06):** never cache a request carrying `?ok=` / `?error=` flash parameters (or
+strip them from the key, else one visitor's flash is served to others), any request with a cookie, or any
+response that sets one. Anonymous requests must not trigger Artifacts API calls (placeholder tree, as for
+viewers). Hiding preview URLs keeps them from crawlers and drive-by visitors only: any free GitHub account
+sees them as a viewer, so this is not secrecy.
 
 **Unverified, check before planning the implementation** (`docs/OPEN-QUESTIONS.md` 2026-11-06):
 - The Cache API appears not to work on `*.workers.dev` (cache is per zone; a Cloudflare community answer, not

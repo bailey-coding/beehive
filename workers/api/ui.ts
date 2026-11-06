@@ -122,10 +122,12 @@ export async function handleUi(
 
   if (!session) return redirect('/login');
 
-  // A viewer cookie is honoured only while open sign-in is on and the login is still not a member;
-  // a login added to the allowlist signs in again to get its actor row.
+  // Membership is re-checked on every request. A viewer cookie is honoured only while open sign-in is on
+  // and the login is still not a member (a login added to the allowlist signs in again to get its actor
+  // row); a member cookie only while the login is still on the allowlist (a removed member signs in
+  // again, as a viewer if open sign-in is on).
   const isViewer = session.viewer === true;
-  if (isViewer && (!viewerSigninOpen(env) || isMember(env, session.login))) {
+  if (isViewer ? !viewerSigninOpen(env) || isMember(env, session.login) : !isMember(env, session.login)) {
     return redirect('/login', [clearCookie(SESSION_COOKIE)]);
   }
   // Viewers write nothing: every non-GET/HEAD request and the token pages are refused before any
@@ -669,7 +671,7 @@ async function handleRepoIssues(
         if (!isValidId(issueId)) return INVALID_ISSUE_ID(chrome);
         const issue = await doReader.get(`/api/issues/${encodeURIComponent(issueId)}`);
         // Private or out-of-repo issues are 404 before anything is written or disclosed.
-        if (!issue || pick(issue, 'repository_id', 'repositoryId') !== pick(ref.repo, 'id') || pick(issue, 'visibility') === 'private') {
+        if (!issue || pick(issue, 'repository_id', 'repositoryId') !== pick(ref.repo, 'id') || issueHiddenFrom(session, issue)) {
           return NOT_FOUND_ISSUE(chrome);
         }
         const form = await readForm(request);
@@ -798,7 +800,7 @@ async function legacyIssueComment(form: FormData, session: Session, doReader: Do
   if (!isValidId(issueId)) return back('error', 'Comment needs an issue.');
   try {
     const issue = await doReader.get(`/api/issues/${encodeURIComponent(issueId)}`);
-    if (!issue || pick(issue, 'visibility') === 'private') return back('error', 'Issue not found.');
+    if (!issue || issueHiddenFrom(session, issue)) return back('error', 'Issue not found.');
     const repoId = pick(issue, 'repository_id', 'repositoryId');
     const ref = repoId ? await resolveRepoRef(doReader, [repoId]) : null;
     if (!ref) return back('error', 'Issue not found.');

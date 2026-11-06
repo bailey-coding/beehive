@@ -370,7 +370,9 @@ export async function repoPage(
   
   const commits = mockCommits(id, linkedSpec ? getId(linkedSpec) : undefined, Date.now(), 8);
   
-  const tabContent = await renderRepoTab(activeTab, repo, repoOrg, linkedSpec, repoIssues, repoCandidates, repoSpecs, commits, trials, promotions, env);
+  // Viewers get the placeholder file tree: no Artifacts API call with the platform token per page view
+  // until viewer rate limiting lands (docs/plans/viewer-signin-plan.md, "Not covered / follow-ups").
+  const tabContent = await renderRepoTab(activeTab, repo, repoOrg, linkedSpec, repoIssues, repoCandidates, repoSpecs, commits, trials, promotions, session.viewer ? undefined : env);
   
   const body = `
     <section class="details-section">
