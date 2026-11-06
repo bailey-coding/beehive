@@ -15,6 +15,8 @@ export interface UiEnv {
   ALLOWED_GITHUB_USERS?: string;
   /** "true" lets GitHub users outside ALLOWED_GITHUB_USERS sign in read-only. Anything else: refused. */
   OPEN_VIEWER_SIGNIN?: string;
+  /** wrangler.toml [[ratelimits]]: per-login limit on viewer sessions. Missing = viewers are refused (503). */
+  VIEWER_RATE_LIMITER?: RateLimit;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
 }
@@ -129,6 +131,13 @@ export async function handleUi(
   const isViewer = session.viewer === true;
   if (isViewer ? !viewerSigninOpen(env) || isMember(env, session.login) : !isMember(env, session.login)) {
     return redirect('/login', [clearCookie(SESSION_COOKIE)]);
+  }
+  // Viewers are rate limited per login before anything else, and fail closed: no limiter (or a limiter
+  // error) means no viewer access, never unthrottled access. The binding is loose (per location,
+  // eventually consistent): it stops scraping, not a determined client. Members are not limited here.
+  if (isViewer) {
+    const limited = await viewerRateLimit(env, session.login);
+    if (limited) return limited;
   }
   // Viewers write nothing: every non-GET/HEAD request and the token pages are refused before any
   // DO call or body read. The light chrome (non-GET) reads nothing either.
@@ -379,6 +388,28 @@ function isMember(env: UiEnv, login: string): boolean {
 
 function viewerSigninOpen(env: UiEnv): boolean {
   return env.OPEN_VIEWER_SIGNIN === 'true';
+}
+
+/** Seconds a limited viewer is told to wait: the limiter's period (wrangler.toml [[ratelimits]]). */
+export const VIEWER_RETRY_AFTER_SECONDS = 60;
+
+/** null = go ahead; otherwise the 429 or 503 to send. Never reads the Spec DO. */
+async function viewerRateLimit(env: UiEnv, login: string): Promise<Response | null> {
+  if (!env.VIEWER_RATE_LIMITER) {
+    console.error('viewer_rate_limiter_missing: VIEWER_RATE_LIMITER binding absent, refusing viewer session');
+    return page('Service unavailable', '<p>Read-only access is not available right now.</p>', 503);
+  }
+  let ok: boolean;
+  try {
+    ok = (await env.VIEWER_RATE_LIMITER.limit({ key: `viewer:${login.toLowerCase()}` })).success === true;
+  } catch (error) {
+    console.error('viewer_rate_limiter_error:', error);
+    return page('Service unavailable', '<p>Read-only access is not available right now.</p>', 503);
+  }
+  if (ok) return null;
+  const res = page('Too many requests', '<p>You are browsing faster than read-only access allows. Wait a minute and try again.</p>', 429);
+  res.headers.set('Retry-After', String(VIEWER_RETRY_AFTER_SECONDS));
+  return res;
 }
 
 type SessionActor = { state: 'found'; row: Row } | { state: 'missing' } | { state: 'error' };

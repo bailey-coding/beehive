@@ -21,6 +21,8 @@ interface Env {
   ALLOWED_GITHUB_USERS?: string;
   // "true": GitHub users outside the allowlist sign in read-only (workers/api/ui.ts, docs/plans/viewer-signin-plan.md)
   OPEN_VIEWER_SIGNIN?: string;
+  // wrangler.toml [[ratelimits]]; viewer sessions are refused while it is missing
+  VIEWER_RATE_LIMITER?: RateLimit;
   // wrangler.toml [[analytics_engine_datasets]]; optional so a missing binding never fails a request
   ANALYTICS?: AnalyticsEngineDataset;
 }

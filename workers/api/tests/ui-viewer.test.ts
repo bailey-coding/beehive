@@ -13,7 +13,10 @@ import { handleUi, signSession, type UiEnv } from '../ui';
 
 const TOKEN = 'test-auth-token';
 const BASE_ENV: UiEnv = { API_AUTH_TOKEN: TOKEN, GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret', ALLOWED_GITHUB_USERS: 'member' };
-const OPEN_ENV: UiEnv = { ...BASE_ENV, OPEN_VIEWER_SIGNIN: 'true' };
+/** A limiter that admits every request but records the keys it was asked about. */
+const limiterKeys: string[] = [];
+const OPEN_LIMITER = { limit: async ({ key }: { key: string }) => (limiterKeys.push(key), { success: true }) };
+const OPEN_ENV: UiEnv = { ...BASE_ENV, OPEN_VIEWER_SIGNIN: 'true', VIEWER_RATE_LIMITER: OPEN_LIMITER };
 const ORIGIN = 'http://localhost';
 const REPO = '/app/repos/acme/widgets';
 
@@ -78,6 +81,7 @@ beforeEach(async () => {
   spec = makeSpecDo(store);
   await spec.init();
   calls = [];
+  limiterKeys.length = 0;
   memberId = spec.createActor('human', 'member').id;
   orgId = spec.createOrganization('acme', 'artifacts').id;
   repoId = spec.createRepository('widgets', orgId, 'baseline', undefined, undefined, 'https://example.invalid/w.git', 'acme').id;
@@ -257,6 +261,59 @@ describe('viewer session', () => {
     const internal = spec.createIssue(undefined, repoId, 'internal bug', 'details', memberId).id;
     store.raw.prepare(`UPDATE issues SET visibility = 'internal' WHERE id = ?`).run(internal);
     expect((await ui(`${REPO}/issues/${internal}`, { cookie: await memberCookie() })).status).toBe(200);
+  });
+});
+
+describe('viewer rate limit', () => {
+  /** Admits the first `n` requests per key, like the binding's per-key window. */
+  function limiter(n: number) {
+    const seen = new Map<string, number>();
+    return {
+      limit: async ({ key }: { key: string }) => {
+        seen.set(key, (seen.get(key) ?? 0) + 1);
+        return { success: (seen.get(key) as number) <= n };
+      },
+    };
+  }
+
+  it('limits each viewer by login (case-insensitive) with a 429 and Retry-After, before any Spec DO call', async () => {
+    const env = { ...OPEN_ENV, VIEWER_RATE_LIMITER: limiter(2) };
+    expect((await ui('/app', { cookie: await viewerCookie('Stranger'), env })).status).toBe(200);
+    expect((await ui('/app', { cookie: await viewerCookie('stranger'), env })).status).toBe(200);
+    calls = [];
+    const limited = await ui('/app', { cookie: await viewerCookie('STRANGER'), env });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('Retry-After')).toBe('60');
+    expect(calls).toEqual([]);
+    // Another viewer has its own budget.
+    expect((await ui('/app', { cookie: await viewerCookie('someone'), env })).status).toBe(200);
+  });
+
+  it('counts refused writes too (the limit runs before the read-only 403)', async () => {
+    const env = { ...OPEN_ENV, VIEWER_RATE_LIMITER: limiter(1) };
+    expect((await ui('/app/organizations', { cookie: await viewerCookie(), form: { name: 'x' }, env })).status).toBe(403);
+    expect((await ui('/app', { cookie: await viewerCookie(), env })).status).toBe(429);
+  });
+
+  it('uses the key viewer:<login>', async () => {
+    await ui('/app', { cookie: await viewerCookie('MixedCase') });
+    expect(limiterKeys).toEqual(['viewer:mixedcase']);
+  });
+
+  it('fails closed: a missing binding or a limiter error is a 503 for viewers, with no Spec DO call', async () => {
+    const missing = await ui('/app', { cookie: await viewerCookie(), env: { ...OPEN_ENV, VIEWER_RATE_LIMITER: undefined } });
+    expect(missing.status).toBe(503);
+    const throwing = { limit: async () => { throw new Error('limiter down'); } };
+    const errored = await ui('/app', { cookie: await viewerCookie(), env: { ...OPEN_ENV, VIEWER_RATE_LIMITER: throwing } });
+    expect(errored.status).toBe(503);
+    expect(calls).toEqual([]);
+  });
+
+  it('never limits members, even with the binding missing', async () => {
+    const res = await ui('/app', { cookie: await memberCookie(), env: { ...OPEN_ENV, VIEWER_RATE_LIMITER: undefined } });
+    expect(res.status).toBe(200);
+    await ui('/app', { cookie: await memberCookie() });
+    expect(limiterKeys).toEqual([]);
   });
 });
 

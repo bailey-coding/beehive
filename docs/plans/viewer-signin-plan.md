@@ -52,9 +52,15 @@ one until the deploy settles: harmless, no privilege gain.
 
 ## Not covered / follow-ups
 
-- **Read load.** Every viewer page fans out several 500-row list reads on the single Spec DO, and GitHub
-  sign-in is the only throttle. Before announcing the instance widely, add a Workers rate-limiting
-  binding on `/app` for viewer sessions (the `bh_usr_` limiter is per isolate, best effort).
+- **Read load: done (2026-11-06).** Every viewer page fans out several 500-row list reads on the single
+  Spec DO. The `VIEWER_RATE_LIMITER` binding (`[[ratelimits]]` in root `wrangler.toml`, namespace `4101`,
+  60 requests / 60 s) limits each viewer session by `viewer:<login lowercased>` before any Spec DO call,
+  refused writes included; over the limit is a 429 with `Retry-After: 60`. It fails closed: a missing
+  binding or a limiter error is a 503 for viewers (logged `viewer_rate_limiter_missing` /
+  `viewer_rate_limiter_error`), never unthrottled access. Members are not limited. The binding is loose
+  (per Cloudflare location, eventually consistent): it stops scraping, not a determined client. Not
+  limited: the OAuth callback (`/auth/callback` writes nothing for non-members but calls GitHub twice);
+  add a per-IP key there with anonymous read.
 - **Data shown.** Viewers see what members see minus internal/private issues: actor names, candidate
   ids and preview URLs, gate verdicts. No mirrored request bodies are rendered in the UI today; keep it so.
 - REST API access for viewers (a read-only user token) is out of scope; tokens need an actor row.

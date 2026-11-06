@@ -167,7 +167,8 @@ Spec DO read (`GET /api/organizations`, for the org switcher; shared with the pa
 writes, refused writes and the cross-origin 403 add none. A failed read shows "Organizations unavailable" and never
 fails the page. UI only: no schema or route change, so a rollback needs no cleanup. Members are `ALLOWED_GITHUB_USERS` (var in root
 `wrangler.toml`); with `OPEN_VIEWER_SIGNIN = "true"` (same file, off while unset) any other GitHub user signs in read-only:
-no actor row, GET/HEAD only, no token pages, no `internal` issues (`docs/plans/viewer-signin-plan.md`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
+no actor row, GET/HEAD only, no token pages, no `internal` issues, 60 requests per minute per login via the
+`VIEWER_RATE_LIMITER` binding (429 over it; viewers get a 503 if the binding is missing) (`docs/plans/viewer-signin-plan.md`); secrets `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set on `beehive`.
 Sessions are HMAC-signed with `API_AUTH_TOKEN` and carry their sign-in time (`iat`, M12; older cookies
 lack it and must sign in again before minting an API token at `/app/settings/tokens`). The React app in `ui/` is **not built or
 deployed** (no build config); don't assume it is live.

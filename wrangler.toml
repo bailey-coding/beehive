@@ -27,6 +27,14 @@ ALLOWED_GITHUB_USERS = "bailey-coding, OliverVermeulen"
 # "true" lets any other GitHub user sign in read-only (no actor row, no writes; docs/plans/viewer-signin-plan.md). Off while unset.
 # OPEN_VIEWER_SIGNIN = "true"
 
+# Per-login rate limit on read-only viewer sessions (workers/api/ui.ts viewerRateLimit). Viewers are refused
+# with a 503 while this binding is missing. namespace_id must be unique in the account (shared ids share
+# counters). period is 10 or 60 s; keep it in step with VIEWER_RETRY_AFTER_SECONDS.
+[[ratelimits]]
+name = "VIEWER_RATE_LIMITER"
+namespace_id = "4101"
+simple = { limit = 60, period = 60 }
+
 # Durable Object for Spec coordination (class exported by this script)
 [[durable_objects.bindings]]
 name = "SPEC_DO"
