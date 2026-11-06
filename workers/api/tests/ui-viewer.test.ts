@@ -201,8 +201,7 @@ describe('viewer session', () => {
   });
 
   it('the changelog on repo, org and spec pages counts public issues only for a viewer, and never private ones', async () => {
-    // The changelog renders issues as `Issue "<name>" reported` (issues have no name, so it is empty: a separate,
-    // pre-existing bug), so count entries rather than match titles.
+    // The changelog renders issues as `Issue "<title>" reported`.
     const specId = spec.createSpec('shortener', 'd', '{"endpoints":[]}', [], orgId, memberId).id;
     const linked = spec.createRepository('linked', orgId, 'baseline', specId, undefined, 'https://example.invalid/l.git', 'acme').id;
     for (const visibility of ['public', 'internal', 'private']) {
@@ -215,11 +214,19 @@ describe('viewer session', () => {
     for (const page of ['/app/repos/acme/linked', `/app/orgs/${orgId}`, `/app/specs/${specId}`]) {
       const asViewer = await ui(page, { cookie: viewer });
       expect(asViewer.status, page).toBe(200);
-      expect(issueEntries(await asViewer.text()), page).toBe(1);
+      const viewerHtml = await asViewer.text();
+      expect(issueEntries(viewerHtml), page).toBe(1);
+      expect(viewerHtml, page).toContain('Issue &quot;public bug&quot; reported');
       const asMember = await ui(page, { cookie: member });
       expect(asMember.status, page).toBe(200);
       expect(issueEntries(await asMember.text()), page).toBe(2);
     }
+    // The repo page's search finds issues by title, and not hidden ones.
+    const page = await (await ui('/app/repos/acme/linked?q=bug', { cookie: viewer })).text();
+    const search = page.slice(page.indexOf('id="search"'), page.indexOf('</section>', page.indexOf('id="search"')));
+    expect(search).toContain('public bug');
+    expect(search).not.toContain('internal bug');
+    expect(search).not.toContain('private bug');
   });
 
   it('HEAD reads like GET, and the token page is 403 for HEAD too', async () => {

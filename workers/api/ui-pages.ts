@@ -295,6 +295,7 @@ function toChangelogEntity(kind: 'spec' | 'candidate' | 'trial' | 'promotion' | 
   } else if (kind === 'promotion') {
     entity.candidateId = pick(row, 'candidate_id', 'candidateId');
   } else if (kind === 'issue') {
+    entity.name = getIssueTitle(row); // issues have a title, not a name
     entity.repositoryId = getRepositoryId(row);
     entity.changeType = pick(row, 'change_type', 'changeType');
     entity.stage = getStage(row);
@@ -353,7 +354,7 @@ export async function repoPage(
   // Build searchable entities
   const searchableEntities = [
     ...repoSpecs.map((s) => ({ kind: 'spec' as const, id: getId(s), name: getName(s), description: getDescription(s) || undefined })),
-    ...repoIssues.map((i) => ({ kind: 'issue' as const, id: getId(i), name: getName(i), description: getDescription(i) || undefined })),
+    ...repoIssues.map((i) => ({ kind: 'issue' as const, id: getId(i), name: getIssueTitle(i), description: getDescription(i) || undefined })),
   ];
   
   const query = url.searchParams.get('q') || '';
