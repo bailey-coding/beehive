@@ -1,0 +1,21 @@
+name: Documentation
+description: A doc is wrong, missing, stale or confusing.
+labels: ["documentation"]
+body:
+  - type: input
+    id: file
+    attributes:
+      label: Which doc
+      placeholder: "docs/SETUP.md, section 1"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix (optional)

@@ -1,0 +1,48 @@
+name: Bug report
+description: Something broke, or setup or a doc did not match what happened.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Setup problems and wrong docs count as bugs too.
+        For a security problem, do not file here: contact the maintainer privately (CONTRIBUTING.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. git clone ... && npm install
+        2. npm test
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: The 20-30 lines that matter, not the whole log. Remove any tokens or secrets.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Commit and environment
+      placeholder: "git rev-parse --short HEAD, node --version, OS"
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - Local setup or tests
+        - Web UI
+        - CLI
+        - REST API
+        - Documentation
+        - Other

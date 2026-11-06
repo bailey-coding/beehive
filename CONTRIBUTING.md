@@ -1,205 +1,112 @@
 # Contributing to Beehive
 
-Thank you for contributing to Beehive! This document explains how to contribute to the project.
+Thanks for looking. This page is for **people**. If you are an AI agent, read [`AGENTS.md`](AGENTS.md) instead:
+it has the rules agents must follow, and they are stricter than the ones here.
 
 ---
 
-## 🚀 Getting Started
+## What Beehive is, in one minute
 
-### Prerequisites
+Beehive is an experiment in version control for a world where agents write most of the code. Several agents
+implement the same machine-readable **spec** independently; each implementation (a **candidate**) climbs an
+**oracle ladder** (tests, then mirrored shadow traffic, then a small live canary) and the one that clears every
+rung is promoted. Rollback is a ref move, as cheap as promotion. It runs on Cloudflare Workers, Durable Objects
+and Artifacts. The [README](README.md) tells the story; [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) has the design.
 
-- Node.js 22+
-- Wrangler 4.149+
-- Cloudflare CLI (`cf`)
-- Cloudflare account with Workers + Artifacts access
-- API token with: Workers Scripts:Edit, Workers Queues:Edit
+### What is real today, and what is not
 
-### Local Development
+Honest status, so you know what you are walking into (details in [`docs/MILESTONES.md`](docs/MILESTONES.md)):
+
+| Real and running | Simulated or not built yet |
+|---|---|
+| Spec Durable Object ledger: orgs, repos, specs, candidates, trials, issues, audit history | The pre-merge gate: test results are placeholders ([`docs/REAL-GATE-IMPL-PLAN.md`](docs/REAL-GATE-IMPL-PLAN.md)) |
+| Web UI with GitHub sign-in, issue pages, API tokens; read-only sign-in for non-members (off by default) | Canary SLOs read mirrored shadow traffic, not real canary traffic |
+| CLI (`cli/`) with user tokens | The "semantic" search, changelog and commit views are mocked |
+| Shadow traffic mirroring and the Scientist comparator | The merge-request flow ([`docs/MR-FLOW-PLAN.md`](docs/MR-FLOW-PLAN.md)) |
+| Canary deploy and automatic rollback as ref operations; candidate builds in a sandbox container | Governance: approvals and the two-person rule ([`docs/M5A-2-GOVERNANCE-PLAN.md`](docs/M5A-2-GOVERNANCE-PLAN.md)) |
+
+---
+
+## Get it running (no Cloudflare account needed)
+
+You need **Node.js 22+** and git. Everything below runs locally against Miniflare; nothing touches Cloudflare.
 
 ```bash
-# Clone the repo
 git clone https://github.com/bailey-coding/beehive.git
 cd beehive
+npm install                # package-lock.json is gitignored, so not `npm ci`
+(cd cli && npm install)    # the CLI tests run the CLI through its own tsx
 
-# Install dependencies
-npm install
-
-# Set up environment
-cp .env.example .env
-# Edit .env with your Cloudflare credentials
-
-# For local dev (Miniflare), set dev vars
-cp .dev.vars.example .dev.vars
-# Edit .dev.vars with local API_AUTH_TOKEN
-
-# Start the main worker (includes Spec DO)
-npm run dev
-
-# In separate terminals, start the other workers
-npm run dev:gate      # Gate Workflow
-npm run dev:sandbox   # Sandbox Runner  
-npm run dev:queue     # Queue Consumer
+npm run typecheck
+npm test                   # ~2,000 unit tests, about a minute; this is what CI runs
 ```
 
-### Deployment
+To run the end-to-end suite against real local workers (real HTTP, no mocks):
 
 ```bash
-# Create the queue
-npm run queue:create
+scripts/start-e2e-workers.sh   # starts six local workers on ports 8787-8792; no .dev.vars needed
+npm run test:e2e:local
+scripts/stop-e2e-workers.sh
+```
 
-# Set secrets on all workers
-wrangler secret put API_AUTH_TOKEN -n beehive
-wrangler secret put API_AUTH_TOKEN -n beehive-gate-workflow
-wrangler secret put API_AUTH_TOKEN -n beehive-sandbox-runner
-wrangler secret put API_AUTH_TOKEN -n beehive-queue-consumer
+More detail, ports and troubleshooting: [`docs/SETUP.md`](docs/SETUP.md) and [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
+Deploying your own copy needs a Cloudflare account with Artifacts access: [`docs/SETUP.md`](docs/SETUP.md) section 2.
 
-# Set Cloudflare credentials for Artifacts integration
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive
+---
 
-# Deploy all workers
-npm run deploy
-npm run deploy:gate
-npm run deploy:sandbox
-npm run deploy:queue
+## Ways to help
+
+- **Pick up a starter issue.** Issues labelled [`good first issue`](https://github.com/bailey-coding/beehive/labels/good%20first%20issue)
+  are small, scoped, and say how to check you are done.
+- **Report what confused you.** If setup failed or a doc was wrong, that is a bug: open an issue with the
+  "Bug report" template. Fresh eyes are the only way we find these.
+- **Propose a spec.** Beehive is about specs that several implementations compete on. Got a small, stateless
+  service in mind (a URL shortener, a price calculator)? Use the "Spec proposal" template.
+- **Improve the docs.** [`docs/README.md`](docs/README.md) is the index; finished records are in
+  [`docs/archive/`](docs/archive/README.md) and do not need editing.
+- **Look at open findings.** [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) lists known problems, each with a status.
+
+---
+
+## Making a change
+
+1. **Fork and branch.** Never push to someone else's branch. (Beehive's rule is "fork, don't contend".)
+2. **Keep it small.** One change per pull request. If it touches several workers or the Spec DO schema,
+   open an issue first and describe the plan; the ledger, promotion train and workflow sequencing are
+   the "spine" and get a written plan and an extra review before code.
+3. **Run the checks** before you push: `npm run typecheck` and `npm test`. `npm run lint` currently reports
+   6 known errors on `main` and CI does not run it yet (fixing both is a starter issue); just add no new ones.
+4. **Open a pull request** and say what you changed and how you checked it. CI runs the same checks
+   plus the local e2e suite.
+
+**Things that bite** (each happened at least twice):
+- Check `response.ok` on every fetch to the Spec DO or another worker. A 404 is an error, never "empty".
+- One push deploys all ten workers in no fixed order, so every change must work while old and new
+  versions run side by side: additive schema changes, callers that cope with an old or new peer.
+- In `wrangler.toml`, service bindings use `binding = "..."`, never `name = "..."`; queue consumers
+  use `[[queues.consumers]]`.
+
+**Never** run `wrangler deploy` (a `--dry-run` is fine) or run e2e against production. Deploying is
+the maintainer's job ([`docs/OPS.md`](docs/OPS.md)).
+
+### Commit messages
+
+Write a clear message in your own words; that is enough for people. Agents must use the structured format
+below, and you are welcome to use it too:
+
+```
+step: <what changed> | task: <id or area> | spec: <doc or clause, or n/a> | confidence: <0-1>
 ```
 
 ---
 
-## 📝 Commit Message Format
+## Getting help
 
-All commits must follow this format:
+- **Questions and ideas:** open an issue. Search first: the answer may be in `docs/` (try `docs/README.md`).
+- **Security problems:** please do not open a public issue. Contact the maintainer,
+  [bailey-coding](https://github.com/bailey-coding), privately first.
+- **Conduct:** everyone here follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-```
-step: <description> | task: <id> | spec: <clause> | confidence: <0-1>
-```
+## License
 
-**Example:**
-```
-step: implement artifacts integration | task: artifacts-integration | spec: n/a | confidence: 0.95
-step: fix wrangler configs | task: worker-auth-and-deploy-config | spec: n/a | confidence: 0.9
-step: advance phase status from SPIKE to M1 | task: knowledge-capture | spec: n/a | confidence: 1.0
-```
-
-**Fields:**
-- `step`: What changed (imperative, present tense)
-- `task`: Task identifier or category
-- `spec`: Relevant spec clause (or `n/a`)
-- `confidence`: 0.0-1.0, your confidence in the change
-
----
-
-## 🤖 Agent Working Conventions
-
-If you're an AI agent contributing to Beehive, follow these rules:
-
-### Before Writing Code
-
-1. **Reference first, generate later** - Always read:
-   - `AGENTS.md` (agent conventions)
-   - `docs/ARCHITECTURE.md` (technical design)
-   - Relevant ADRs in `docs/decisions/`
-
-2. **Use grep before asking** - Search existing docs, decisions, and open questions
-
-3. **Leverage the milestone plan** - Check `docs/MILESTONES.md` for current phase
-
-### During Development
-
-1. **Follow the sequencing rule:**
-   - Agents write candidates and glue
-   - **Agents may write the orchestration spine** (Spec schema, DO ledger, promotion train, workflow sequencing) under plan + review: a written plan reviewed by an independent agent before code, and an independent agent review of the implementation before merge
-   - If a task touches spine code, say so in the plan and PR
-
-2. **Follow non-negotiable rules:**
-   - TypeScript everywhere
-   - Orchestration spine is agent-written under plan + review
-   - Fork, don't contend (never many agents push one repo/branch)
-   - Coordination state in Workers-native stores (not in repo)
-   - Always-pushed invariant (every task ends with a push)
-   - No external CI
-   - Rollback is a ref operation
-
-3. **Document surprises immediately:**
-   - Any undocumented Artifacts behavior → `docs/OPEN-QUESTIONS.md`
-   - Never implement silent workarounds
-
-4. **Keep candidates small and stateless** (price calculator / URL shortener shape)
-
-5. **Ensure reachability:** Every module must be reachable from a Workflow, Queue consumer, or the edge router
-
-### Code Quality
-
-- **Batch edits** - Group related changes into single commits
-- **Prefer search_replace over rewrite** - Edit files in-place
-- **Avoid redundant summaries** - State facts, decisions, actionable items only
-- **Match existing style** - Indentation, naming, error handling density
-- **Minimal diff** - Don't touch what wasn't asked
-
-### Testing
-
-- Run `npm run typecheck` before committing
-- Run `npm run lint` before committing
-- Tests should pass (when applicable)
-
----
-
-## 🏗️ Architecture Guidelines
-
-### What to Read First
-
-1. **README.md** - Project overview, core thesis, quick start
-2. **AGENTS.md** - Agent conventions, non-negotiable rules
-3. **docs/ARCHITECTURE.md** - Technical deep dive
-4. **docs/MILESTONES.md** - Project phases and current status
-5. **docs/OPEN-QUESTIONS.md** - Known issues and findings
-
-### Where to Store Data
-
-| Purpose | Storage | When to Use |
-|---------|---------|-------------|
-| Coordination state | Spec DO (SQLite) | Scores, verdicts, train state |
-| Cross-spec queries | D1 | Queries spanning multiple specs |
-| Metric streams | Analytics Engine | Performance and telemetry |
-| Provenance | Git notes | Portable history stamps |
-| Candidate repos | Cloudflare Artifacts | All implementation repos |
-
-### Service Bindings
-
-- Use `binding` (never `name`) for service bindings
-- Queue consumers use `[[queues.consumers]]` (not `[[queues]]`)
-- Cross-script DO bindings need `script_name` in the binding entry
-
----
-
-## 📊 Current Project Status
-
-| Milestone | Status | Target | Exit Criteria |
-|-----------|--------|--------|----------------|
-| **SPIKE** | ✅ Complete | 2026-10-11 | 3 forks, 3 pushes, 3 events, 0 manual steps |
-| **M1** | 🚧 In Progress | ~Oct 10 | Spec trials, no live traffic |
-| **M2** | ⬜ Planned | Stretch | Empirical oracle (shadow mode) |
-| **M3** | ⬜ Planned | Post-deadline | Promotion train + canary |
-| **M4** | ⬜ Planned | Submission | Demo video, cleanup |
-
-**Recent Progress:**
-- ✅ All 4 workers deployed with fail-closed auth
-- ✅ Local validation: 13/13 spike checks passed
-- ✅ Remote Artifacts validation: concurrent ordering verified
-- ✅ Spec DO SQLite storage working
-- ✅ Full REST API for all entities
-- ✅ Artifacts integration for spec claim
-- ✅ Queue-gate wiring complete
-
----
-
-## 🤝 Reporting Issues
-
-- **Bugs/Features**: GitHub Issues
-- **Undocumented Artifacts behavior**: Add to `docs/OPEN-QUESTIONS.md` immediately
-- **Questions**: Check existing docs first, then ask
-
----
-
-## 📄 License
-
-By contributing, you agree that your contributions will be licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).

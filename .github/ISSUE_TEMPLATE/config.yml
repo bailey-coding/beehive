@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How to contribute
+    url: https://github.com/bailey-coding/beehive/blob/main/CONTRIBUTING.md
+    about: Setup without a Cloudflare account, ways to help, and how changes are made.

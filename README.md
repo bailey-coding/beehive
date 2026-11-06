@@ -89,6 +89,10 @@ More depth: design decisions in [`docs/decisions/`](docs/decisions/README.md) (A
 
 ## 🚀 Quick Start
 
+> **Just want to try it or contribute?** You do not need a Cloudflare account: `npm install`, `npm test` and the
+> local end-to-end suite all run on your machine. See [CONTRIBUTING.md](CONTRIBUTING.md). The steps below are for
+> running and deploying your own copy.
+
 ### Prerequisites
 
 - Node.js 22+

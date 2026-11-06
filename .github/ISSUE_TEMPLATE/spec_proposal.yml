@@ -1,0 +1,35 @@
+name: Spec proposal
+description: Propose a small service for several agents to implement and compete on.
+labels: ["spec-proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A spec is a contract several candidate implementations are held to. Good first specs are small and
+        stateless, like a URL shortener or a price calculator. See docs/specs/ for the format.
+  - type: input
+    id: name
+    attributes:
+      label: Service name
+      placeholder: "short-link expiry"
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Behaviour
+      description: What the service does, as endpoints with example requests and responses.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: How to tell a correct implementation
+      description: Acceptance checks. What must always hold? What is allowed to differ between candidates?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this one
+      description: What would we learn from agents competing on it?
