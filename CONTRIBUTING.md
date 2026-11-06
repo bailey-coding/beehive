@@ -56,8 +56,11 @@ Deploying your own copy needs a Cloudflare account with Artifacts access: [`docs
 
 ## Ways to help
 
-- **Pick up a starter task.** Small, scoped starter issues are being set up. Until they are listed here,
-  open an issue saying what you would like to work on, or start with the lint errors below.
+- **Pick up a starter task.** Beehive tracks its own work in Beehive: the starter issues (labelled
+  `good first issue`, each saying how to check you are done) are on
+  [`beehive/beehive`](https://beehive.bz23711.workers.dev/app/repos/beehive/beehive/issues). Signing in there is
+  limited to contributors for now (read-only sign-in for everyone is built but not switched on yet); until it is,
+  open a GitHub issue saying what you would like to work on and we will add you or point you at one.
 - **Report what confused you.** If setup failed or a doc was wrong, that is a bug: open an issue with the
   "Bug report" template. Fresh eyes are the only way we find these.
 - **Propose a spec.** Beehive is about specs that several implementations compete on. Got a small, stateless

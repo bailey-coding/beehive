@@ -40,6 +40,7 @@ This guide captures real learnings from end-to-end verification. Check here firs
 | `KV namespaces ... Authentication error` from `wrangler delete` | Harmless | [Deploy and ledger-wipe errors](#deploy-and-ledger-wipe-errors) |
 | `ECONNREFUSED` on 8787-8790 in local e2e | Local workers not running | [Local dev and e2e](#local-dev-and-e2e) |
 | 401 from a local worker / every local e2e call | Missing or mismatched `.dev.vars` token, or client sends no bearer | [Local dev and e2e](#local-dev-and-e2e) |
+| 403 `error code: 1010` from the deployed API | Cloudflare's bot check rejects the client's default `User-Agent` | [Error 1010 from scripts](#error-1010-from-scripts) |
 
 ---
 
@@ -221,6 +222,19 @@ curl -s -X POST http://localhost:8788/gates/pre-merge \
 ```
 
 **Note:** In our verification, the real Cloudflare webhook DID fire and the queue consumer DID process it automatically in local dev. The pipeline worked end-to-end without manual triggering.
+
+---
+
+### Error 1010 from scripts
+
+**Symptom:** a script calling `https://beehive.bz23711.workers.dev` gets `403` with the plain body `error code: 1010`.
+Nothing reaches the worker (Beehive's own errors are JSON). Seen 2026-11-06 with Python `urllib`; `curl` and the CLI work.
+
+**Root cause:** Cloudflare's browser-integrity / bot check in front of the worker blocks some default client
+`User-Agent` strings (Python's `Python-urllib/3.x`).
+
+**Solution:** send a plain, descriptive `User-Agent` (for example `beehive-<script-name>/1.0`). No account or
+token change is needed.
 
 ---
 
