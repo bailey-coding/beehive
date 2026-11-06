@@ -1,9 +1,14 @@
-# Docs-only pull requests skip ci.yml (paths-ignore: docs/**, **.md), and they are the ones most likely to break
-# a link. This runs only the link check on them. Pushes already run it through ci.yml's unit tests.
+# ci.yml skips docs-only pushes and pull requests (paths-ignore: docs/**, **.md), and those are the changes most
+# likely to break a link. This runs only the link check on them. Code changes run it in ci.yml's unit tests.
 name: Docs links
 
 on:
   pull_request:
+    paths:
+      - 'docs/**'
+      - '**.md'
+  push:
+    branches: ['**']
     paths:
       - 'docs/**'
       - '**.md'
