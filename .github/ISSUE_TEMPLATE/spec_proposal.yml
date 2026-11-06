@@ -1,12 +1,13 @@
 name: Spec proposal
 description: Propose a small service for several agents to implement and compete on.
-labels: ["spec-proposal"]
+labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
         A spec is a contract several candidate implementations are held to. Good first specs are small and
-        stateless, like a URL shortener or a price calculator. See docs/specs/ for the format.
+        stateless, like a URL shortener or a price calculator. See
+        [docs/specs/](https://github.com/bailey-coding/beehive/tree/main/docs/specs) for the format.
   - type: input
     id: name
     attributes:

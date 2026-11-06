@@ -191,7 +191,7 @@ An "approve with changes" verdict is not approval of the fixes. The author fixes
 
 ## 6. Examples from Archived Reviews
 
-### Pattern: Mutation Testing (from M9-NAV-CODE-REVIEW.md)
+### Pattern: Mutation Testing (from docs/archive/M9-NAV-CODE-REVIEW.md)
 ```
 Mutation: change `isAppHref(c.href) ?` to `c.href ?` in renderBreadcrumbs.
 All 320 workers/api tests still pass.
@@ -199,14 +199,14 @@ The test "accepts only /app hrefs" exercises `isAppHref` alone.
 Fix: render appPage with crumbs {label:'x', href:'javascript:alert(1)'} and assert.
 ```
 
-### Pattern: Invariant Verification (from M12-PRA-REVIEW.md)
+### Pattern: Invariant Verification (from docs/archive/M12-PRA-REVIEW.md)
 ```
 Verified: T0 session check → GET /api/actors → .find returns newest.
 Old DO ignores filter but still returns newest (fallback matches).
 No fail-open path exists.
 ```
 
-### Pattern: Mixed-Version Analysis (from M12-IMPL-PLAN-REVIEW.md)
+### Pattern: Mixed-Version Analysis (from docs/archive/M12-IMPL-PLAN-REVIEW.md)
 ```
 New UI + old DO: by-id route exists, filter ignored, .find sees 500 newest.
 Old UI + new DO: no filter sent, unchanged.
@@ -215,4 +215,4 @@ Rollback B→A: bh_usr_ gives 401, user_tokens sits idle, A ignores it.
 
 ---
 
-*This document extracts patterns from archived Claude reviewer agents (f4831168-4c7d-4b67-8f1c-18bac651310c, a4a7d0fb-9dc7-434e-9c38-9e723a5be85c) and review documents (M12-PRA-REVIEW.md, M12-IMPL-PLAN-REVIEW.md, M9-NAV-CODE-REVIEW.md).*
+*This document extracts patterns from archived Claude reviewer agents (f4831168-4c7d-4b67-8f1c-18bac651310c, a4a7d0fb-9dc7-434e-9c38-9e723a5be85c) and review documents (docs/archive/M12-PRA-REVIEW.md, docs/archive/M12-IMPL-PLAN-REVIEW.md, docs/archive/M9-NAV-CODE-REVIEW.md).*

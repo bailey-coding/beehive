@@ -20,7 +20,7 @@ function relativeTargets(markdown: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(LINK)) {
     const target = m[1];
-    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('#') || target.startsWith('/')) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('#') || target.startsWith('//')) continue;
     const path = target.split('#')[0];
     if (path) out.push(path);
   }
@@ -28,7 +28,7 @@ function relativeTargets(markdown: string): string[] {
 }
 
 describe('relativeTargets', () => {
-  it('keeps relative paths, drops anchors, URLs, absolute paths and fenced code', () => {
+  it('keeps relative and repo-root (/...) paths, drops anchors, URLs and fenced code', () => {
     const md = [
       '[a](./a.md) [b](../b.md#part) [c](https://x.test) [d](#top) [e](mailto:x@y.test) [f](/abs)',
       '```',
@@ -36,7 +36,7 @@ describe('relativeTargets', () => {
       '```',
       '[h](dir/ "title")',
     ].join('\n');
-    expect(relativeTargets(md)).toEqual(['./a.md', '../b.md', 'dir/']);
+    expect(relativeTargets(md)).toEqual(['./a.md', '../b.md', '/abs', 'dir/']);
   });
 });
 
@@ -58,7 +58,9 @@ describe('Markdown links', () => {
         } catch {
           // keep the raw target
         }
-        if (!existsSync(normalize(join(dirname(abs), decoded)))) broken.push(`${file} -> ${target}`);
+        // GitHub resolves a leading `/` against the repository root.
+        const base = decoded.startsWith('/') ? ROOT : dirname(abs);
+        if (!existsSync(normalize(join(base, decoded)))) broken.push(`${file} -> ${target}`);
       }
     }
     expect(broken).toEqual([]);

@@ -34,7 +34,7 @@ You need **Node.js 22+** and git. Everything below runs locally against Miniflar
 ```bash
 git clone https://github.com/bailey-coding/beehive.git
 cd beehive
-npm install                # package-lock.json is gitignored, so not `npm ci`
+npm install                # what CI uses
 (cd cli && npm install)    # the CLI tests run the CLI through its own tsx
 
 npm run typecheck
@@ -56,8 +56,8 @@ Deploying your own copy needs a Cloudflare account with Artifacts access: [`docs
 
 ## Ways to help
 
-- **Pick up a starter issue.** Issues labelled [`good first issue`](https://github.com/bailey-coding/beehive/labels/good%20first%20issue)
-  are small, scoped, and say how to check you are done.
+- **Pick up a starter task.** Small, scoped starter issues are being set up. Until they are listed here,
+  open an issue saying what you would like to work on, or start with the lint errors below.
 - **Report what confused you.** If setup failed or a doc was wrong, that is a bug: open an issue with the
   "Bug report" template. Fresh eyes are the only way we find these.
 - **Propose a spec.** Beehive is about specs that several implementations compete on. Got a small, stateless
@@ -75,9 +75,9 @@ Deploying your own copy needs a Cloudflare account with Artifacts access: [`docs
    open an issue first and describe the plan; the ledger, promotion train and workflow sequencing are
    the "spine" and get a written plan and an extra review before code.
 3. **Run the checks** before you push: `npm run typecheck` and `npm test`. `npm run lint` currently reports
-   6 known errors on `main` and CI does not run it yet (fixing both is a starter issue); just add no new ones.
-4. **Open a pull request** and say what you changed and how you checked it. CI runs the same checks
-   plus the local e2e suite.
+   6 known errors on `main` and CI does not run it yet (fixing both is a good first task); just add no new ones.
+4. **Open a pull request** and say what you changed and how you checked it. For code changes CI runs the
+   same checks plus the local e2e suite; a docs-only pull request runs just the Markdown link check.
 
 **Things that bite** (each happened at least twice):
 - Check `response.ok` on every fetch to the Spec DO or another worker. A 404 is an error, never "empty".

@@ -15,7 +15,7 @@ checked without a fresh Cloudflare account.
 ## 1. Local development
 
 ```bash
-npm install        # package-lock.json is gitignored, so `npm ci` has nothing to use
+npm install        # what CI uses
 (cd cli && npm install)  # tests/cli-behavior.test.ts runs the CLI via cli/node_modules/.bin/tsx; without this, `npm test` fails all of that file's tests with a "tsx is missing" error
 npm run typecheck        # clean as of 2026-10-15; CI runs it
 npm test                 # unit tests (excludes tests/e2e, which need running workers); this is what CI runs

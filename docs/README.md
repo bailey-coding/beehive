@@ -20,7 +20,7 @@ This directory contains all Beehive project documentation, organized for **human
 | **🛠️ Setup & Deployment** | Environment, configuration, Cloudflare integration | [SETUP.md](./SETUP.md), [ARTIFACTS-SETUP.md](./ARTIFACTS-SETUP.md) |
 | **🔐 Auth & Integration** | OAuth, Statsig, external service wiring | [OAUTH-INTEGRATION.md](./OAUTH-INTEGRATION.md), [STATSIG-INTEGRATION.md](./STATSIG-INTEGRATION.md) |
 | **✅ Verification & Testing** | Test plans, audit reports, execution results | [VERIFICATION.md](./VERIFICATION.md), [TEST-AUDIT-REPORT.md](./archive/TEST-AUDIT-REPORT.md) |
-| **📦 Archive** | Finished phase plans, reviews, merge reports, deprecated plans | [archive/README.md](./archive/README.md), [M3-PLAN.md](./M3-PLAN.md), [M5-PLAN.md](./M5-PLAN.md) |
+| **📦 Archive** | Finished phase plans, reviews, merge reports, deprecated plans | [archive/README.md](./archive/README.md) |
 
 ---
 

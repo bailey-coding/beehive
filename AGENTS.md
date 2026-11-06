@@ -146,7 +146,7 @@ Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missi
 which must match `.dev.vars`.
 
 Local e2e (`npm run test:e2e:local`) makes real HTTP calls: start the workers on ports
-8787–8790 first (`docs/SETUP.md`). Before marking a milestone item done, grep for the
+8787–8792 first (`scripts/start-e2e-workers.sh`, `docs/SETUP.md`). Before marking a milestone item done, grep for the
 implementation; docs have drifted from code before.
 
 See `docs/OPEN-QUESTIONS.md` for dated findings (Artifacts behavior, wrangler config
