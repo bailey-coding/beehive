@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { makeSqliteState, makeSpecDo, type SqliteState } from '../../spec-do/tests/sqlite-state';
 import type { SpecDO } from '../../spec-do/index';
-import { handleUi, signSession, type UiEnv } from '../ui';
+import { readFileSync } from 'node:fs';
+import { handleUi, signSession, VIEWER_RETRY_AFTER_SECONDS, type UiEnv } from '../ui';
 
 const TOKEN = 'test-auth-token';
 const BASE_ENV: UiEnv = { API_AUTH_TOKEN: TOKEN, GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret', ALLOWED_GITHUB_USERS: 'member' };
@@ -307,6 +308,28 @@ describe('viewer rate limit', () => {
     const errored = await ui('/app', { cookie: await viewerCookie(), env: { ...OPEN_ENV, VIEWER_RATE_LIMITER: throwing } });
     expect(errored.status).toBe(503);
     expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ['an empty result', {}],
+    ['a string success', { success: 'true' }],
+    ['a truthy number', { success: 1 }],
+  ])('treats %s from the limiter as limited (429), never as allowed', async (_n, result) => {
+    const odd = { limit: async () => result as never };
+    const res = await ui('/app', { cookie: await viewerCookie(), env: { ...OPEN_ENV, VIEWER_RATE_LIMITER: odd } });
+    expect(res.status).toBe(429);
+    expect(calls).toEqual([]);
+  });
+
+  it('limits HEAD requests too', async () => {
+    const env = { ...OPEN_ENV, VIEWER_RATE_LIMITER: limiter(0) };
+    expect((await ui('/app', { cookie: await viewerCookie(), method: 'HEAD', env })).status).toBe(429);
+  });
+
+  it('wrangler.toml period matches the Retry-After the code sends', () => {
+    const toml = readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8');
+    const block = toml.slice(toml.indexOf('name = "VIEWER_RATE_LIMITER"'));
+    expect(Number(/period\s*=\s*(\d+)/.exec(block)?.[1])).toBe(VIEWER_RETRY_AFTER_SECONDS);
   });
 
   it('never limits members, even with the binding missing', async () => {
