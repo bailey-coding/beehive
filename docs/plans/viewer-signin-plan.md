@@ -71,15 +71,16 @@ request renders with the same viewer rules (`viewer: true`, no actor, GET/HEAD o
   page carries nothing per user.
 - **No search engine indexing:** `X-Robots-Tag: noindex, nofollow` on every `/app` response and a `robots.txt`
   disallowing `/app`.
-- **Candidate preview URLs hidden** from anonymous visitors (candidate and repo pages; ids still shown). Whether
-  to hide them from signed-in viewers too is open.
+- **Candidate preview URLs hidden** from anonymous visitors (candidate and repo pages; ids still shown).
+  Signed-in viewers keep seeing them.
+- **Actor names and GitHub logins are shown** to anonymous visitors.
+- **Custom domain: longer term.** Until then anonymous read runs on `workers.dev`, which may mean no edge cache
+  (see below); the rate limit must hold the load on its own in that case.
 
 **Unverified, check before planning the implementation** (`docs/OPEN-QUESTIONS.md` 2026-11-06):
 - The Cache API appears not to work on `*.workers.dev` (cache is per zone; a Cloudflare community answer, not
   official docs). Production is `beehive.bz23711.workers.dev`, so the edge cache probably needs a custom domain.
   The same goes for WAF rate-limiting rules; the Workers rate-limiting binding should not need a zone (confirm).
 - Flagship binding config and pricing on this account (`docs/ARTIFACTS-SETUP.md`-style setup note needed).
-
-**Still to decide:** whether anonymous visitors see actor names and GitHub logins.
 
 Tests: `workers/api/tests/ui-viewer.test.ts`.

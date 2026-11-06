@@ -687,7 +687,7 @@ M5a now closes the at-least-once double-write for all nine POST routes in `IDEMP
 
 Planning anonymous read (`docs/plans/viewer-signin-plan.md`). A Cloudflare community answer says the Cache API is not enabled on `*.workers.dev` because the cache is scoped per zone; official docs only recommend a route or custom domain for production. `beehive` is served on `beehive.bz23711.workers.dev`, so a short edge cache for anonymous pages probably needs a custom domain (and so would WAF rate-limiting rules). The Workers rate-limiting binding is expected to work without a zone. Neither has been tested here.
 
-**Status**: Open. Verify with a throwaway worker (or `wrangler dev --remote`) before the implementation plan; the custom domain is a maintainer decision.
+**Status**: Open. Verify with a throwaway worker (or `wrangler dev --remote`) before the implementation plan. Maintainer (2026-11-06): a custom domain is the longer-term plan, not a prerequisite.
 
 ## 2026-10-30: promotion worker calls a gate route that does not exist
 
