@@ -43,8 +43,17 @@ maintainer's write-scope user token as a network secret (sessions on it act as `
 revoke at `/app/settings/tokens`). Scripts against the deployed API need a plain `User-Agent` (Cloudflare error 1010,
 `docs/TROUBLESHOOTING.md`).
 
-**Next (agreed 2026-11-07):** a local, watchable tournament demo (`npm run demo`, no Cloudflare account), then D2
-canary ping-pong (2026-11-02 handoff item 1).
+- **`npm run demo`** (`scripts/demo/tournament.ts`, plan `docs/plans/demo-tournament-plan.md` rev 2): one local
+  tournament, no Cloudflare account; every step labelled REAL / STUB / SCRIPTED, ends with "Known gaps"; tested by
+  `tests/e2e/demo.test.ts` in CI's local e2e job; typechecked via `tsconfig.scripts.json`. Old shell demos marked
+  superseded (deleting them is the maintainer's call).
+- **Found while building it** (`docs/OPEN-QUESTIONS.md` 2026-11-07): shadow scores never reach the ledger (the
+  comparator PATCHes a missing `/api/candidates/:id/shadow` route), so the tournament picks by arrival order; `/promote`
+  checks no gate verdict or trial and trusts the caller's `fromRung`; `full` moves no deploy ref; two create routes
+  answer 500 for invalid bodies. `start-e2e-workers.sh` now keeps its PID file on a refused restart.
+
+**Next:** D2 canary ping-pong (2026-11-02 handoff item 1; spine, plan + review). Candidates after it: the promotion
+gaps above (spine, one plan), the 500s as a starter issue, real traffic for `full`.
 
 **How we worked:** every code change was mutation-checked (break the fix, see a test fail) and independently reviewed
 by an agent before going to `main`; the maintainer approved each push to `main` in chat.

@@ -145,46 +145,51 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
 
   // 5. Pre-merge gate
   step('Rung 1, pre-merge: tests and spec conformance', 'REAL record, SCRIPTED input',
-    'The gate records a verdict per candidate. C never checks the TTL, so the conformance test for 410 fails and C\n' +
-    'never boards the train. (Today the gate\'s test results are simulated: docs/REAL-GATE-IMPL-PLAN.md.)');
+    'The gate records a verdict per candidate. C never checks the TTL, so the conformance test for 410 fails.\n' +
+    '(Today the gate\'s test results are simulated: docs/REAL-GATE-IMPL-PLAN.md.) The demo stops C here; Beehive does\n' +
+    'not enforce that yet: the promotion worker does not read gate verdicts (see "Known gaps" at the end).');
   const verdict = (candidateId: string, status: 'pass' | 'fail', score: number, notes: string) =>
     call(urls.api, '/api/gate-verdicts', { candidateId, gate: 'pre-merge', status, score, complexityDelta: 0, notes }, maintainer);
   await verdict(a, 'pass', 96, 'all contract tests pass');
   await verdict(b, 'pass', 91, 'all contract tests pass');
   await verdict(c, 'fail', 40, 'GET /:code returns 302 for an expired code (expected 410)');
-  done('A pass (96), B pass (91), C fail (40): C stops here');
+  done('A pass (96), B pass (91), C fail (40): the demo takes C no further');
 
   // 6. Shadow trial
   step('Rung 2, shadow: mirrored traffic, responses compared', 'REAL record, SCRIPTED input',
-    'In production, real requests are copied to A and B and their answers thrown away; only the differences are kept.\n' +
-    'A changes only what the spec declared. B also adds a "Cache-Control" header nobody asked for: an undeclared\n' +
-    'change. The ledger records the trial and its winner. (The comparison numbers here are supplied by the demo.)');
+    'The design: the shadow router copies real requests to A and B, throws their answers away, and the Scientist\n' +
+    'comparator diffs them against the declared delta surface. (Today those results do not reach the ledger; here the\n' +
+    'demo supplies the comparison.) A changes only what the spec declared; B also adds a "Cache-Control" header\n' +
+    'nobody asked for, an undeclared change. The ledger records the trial and its winner.');
   const trialId = id(await call(urls.api, '/api/trials', { specId, candidateAId: a, candidateBId: b }, maintainer));
   await call(urls.api, `/api/trials/${trialId}/decide`, {
     winnerId: a,
     comparisonMetrics: { conformance_score: { a: 100, b: 83 }, performance: { a: 42, b: 39 }, complexity_delta: { a: 12, b: 15 } },
   }, maintainer);
-  done(`trial ${short(trialId)}: A wins (declared-surface conformance 100 vs 83). B is dropped; its verdict stays on record.`);
+  done(`trial ${short(trialId)}: A wins (declared-surface conformance 100 vs 83). The trial stays on record; B goes no further.`);
 
   // 7. Climb
-  step('A climbs the ladder', 'REAL',
-    'The promotion worker records each move and refuses any move back down the ladder.');
+  step('A climbs the ladder', 'REAL record',
+    'The promotion worker records each move and refuses any move back down the ladder. It takes the starting rung\n' +
+    'from the caller and does not check gate verdicts or trials, so the order of moves here is the demo\'s choice.');
   for (const [from, to] of [['pre-merge', 'shadow'], ['shadow', 'train'], ['train', 'canary']]) {
     await call(urls.promotion, '/promote', { candidateId: a, specId, fromRung: from, toRung: to, actorId: maintainer });
     done(`${from} -> ${to}`);
   }
 
   // 8. Canary
-  step('Rung 4, canary: a small slice of live traffic', 'REAL',
+  step('Rung 4, canary: a small slice of live traffic', 'REAL ref move, STUB build',
     'A is deployed as a canary taking 10% of traffic. The spec\'s canary ref now points at A; the shadow router reads\n' +
-    'that ref to split traffic. (Locally the deploy is a stub version: nothing calls the Cloudflare API.)');
+    'that ref to split traffic. (Locally the build is a stub version from the preview manager: nothing is built and\n' +
+    'nothing calls the Cloudflare API.)');
   const deployA = (await call(urls.canary, '/deploy-canary', { candidateId: a, specId, trafficPercentage: 10, holdoutPercentage: 5 })).deployment as Json;
   done(`canary deployment ${short(String(deployA.id))} for A at 10%`);
 
   // 9. Regression and rollback
   step('A follow-up regresses, and rollback is a ref move', 'REAL ref move, SCRIPTED breach',
     'agent-a ships a follow-up, A2, and it takes the canary. Its error rate jumps to 7% against a 1% SLO.\n' +
-    '(The breach is supplied by the demo; locally there is no live traffic.) Rolling back does not rebuild or redeploy\n' +
+    '(The breach is supplied by the demo: the rollback request carries the numbers, but nothing evaluates them here;\n' +
+    'Beehive\'s SLO loop reads mirrored traffic and there is none locally.) Rolling back does not rebuild or redeploy\n' +
     'anything: the canary ref moves back to A. Promotion and rollback cost the same.');
   const a2 = await candidate(agents.a, 'e');
   const deployA2 = (await call(urls.canary, '/deploy-canary', { candidateId: a2, specId, trafficPercentage: 10, holdoutPercentage: 5 })).deployment as Json;
@@ -206,7 +211,7 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
   };
   const started = Date.now();
   let liveCanaries = await ours();
-  while (!(liveCanaries.includes(a) && !liveCanaries.includes(a2)) && Date.now() - started < 12_000) {
+  while (!(liveCanaries.includes(a) && !liveCanaries.includes(a2)) && Date.now() - started < 15_000) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     liveCanaries = await ours();
   }
@@ -216,7 +221,9 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
     : `the shadow router still shows ${liveCanaries.length ? liveCanaries.map((k) => (k === a ? 'A' : 'A2')).join(', ') : 'no canary'} after ${waited} s`);
 
   // 10. Full
-  step('Rung 5, full: A ships', 'REAL', 'A has cleared every rung. It is promoted to 100% of traffic.');
+  step('Rung 5, full: A is recorded as shipped', 'REAL record',
+    'The promotion worker records A at "full". Nothing moves traffic yet: there is no full deploy ref, so A\'s 10%\n' +
+    'canary is still the live split. Moving 100% of traffic is not built.');
   await call(urls.promotion, '/promote', { candidateId: a, specId, fromRung: 'canary', toRung: 'full', actorId: maintainer });
   const state = (await call(urls.promotion, `/promote/${a}`)).state as Json;
   done(`A is at "${state.currentRung}" (${state.status})`);
@@ -225,14 +232,18 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
   log('');
   log('── What happened, from the ledger');
   log(`   issue #${issue.number} -> spec ${short(specId)} -> 3 candidates`);
-  log(`   C: failed pre-merge.  B: lost the shadow trial.  A: won, canaried, shipped.  A2: rolled back by a ref move.`);
+  log(`   C: failed pre-merge.  B: lost the shadow trial.  A: won, canaried, recorded at full.  A2: rolled back by a ref move.`);
   log(`   live canary splits for this spec: ${liveCanaries.map((k) => (k === a ? 'A' : 'A2')).join(', ') || 'none'}`);
   log('');
   log('── What was simulated');
-  log('   Agents writing code (placeholder commits), the test gate\'s results, the shadow comparison numbers, live');
-  log('   traffic and the SLO breach. The ledger records, the promotion state machine, the canary deploy refs and the');
-  log('   rollback are Beehive\'s real code. Known gaps: today\'s tournament scoring ignores shadow results, and a');
-  log('   candidate\'s ledger stage is not updated by promotions yet (docs/OPEN-QUESTIONS.md, 2026-11-07).');
+  log('   Agents writing code (placeholder commits), the test gate\'s results, the shadow comparison, the canary build');
+  log('   (a stub), live traffic and the SLO breach. Real Beehive code: the ledger records, the promotion records, the');
+  log('   canary deploy refs, the rollback ref move and the shadow router following it.');
+  log('');
+  log('── Known gaps (docs/OPEN-QUESTIONS.md, 2026-11-07)');
+  log('   - Promotion does not check gate verdicts or trial winners, and trusts the caller\'s starting rung.');
+  log('   - Shadow results never reach the ledger, so the promotion worker\'s own tournament picks by arrival order.');
+  log('   - "full" is a record only: there is no full deploy ref; a candidate\'s ledger stage is not updated either.');
   log('');
   log('── Look around');
   log(`   curl -s -H "Authorization: Bearer ${token}" ${urls.api}/api/candidates/${a} | jq .`);
@@ -257,6 +268,9 @@ async function healthy(url: string, token: string): Promise<boolean> {
 async function main(): Promise<void> {
   const { spawn } = await import('node:child_process');
   const { openSync, readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  // Resolve everything from the repo root, so running the file from another directory works too.
+  const root = fileURLToPath(new URL('../..', import.meta.url));
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
     console.log('Usage: npm run demo [-- --no-start]\n  --no-start  use workers already running on 8787-8791 (scripts/start-e2e-workers.sh)');
@@ -273,15 +287,15 @@ async function main(): Promise<void> {
     }
     // The start script ends with `wait` (it lives as long as the workers), so run it detached with its output in a
     // log and poll health, the way CI does (.github/workflows/ci.yml "Start local workers").
-    const logPath = 'demo-workers.log';
+    const logPath = `${root}demo-workers.log`;
     console.log(`Starting the local Beehive workers (about a minute the first time; log: ${logPath})...`);
     const out = openSync(logPath, 'w');
-    spawn('bash', ['scripts/start-e2e-workers.sh'], { detached: true, stdio: ['ignore', out, out] }).unref();
+    spawn('bash', [`${root}scripts/start-e2e-workers.sh`], { cwd: root, detached: true, stdio: ['ignore', out, out] }).unref();
     const deadline = Date.now() + 180_000;
     for (;;) {
       const log = readFileSync(logPath, 'utf8');
       if (log.includes('All workers started successfully') && (await allUp())) break;
-      if (/not healthy|already in use/.test(log) || Date.now() > deadline) {
+      if (/not healthy|already in use|No such file/.test(log) || Date.now() > deadline) {
         console.error(`Could not start the workers. Last lines of ${logPath}:\n${log.trim().split('\n').slice(-15).join('\n')}`);
         console.error('See docs/TROUBLESHOOTING.md; stop anything left with scripts/stop-e2e-workers.sh.');
         process.exit(1);
@@ -301,6 +315,10 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run main() only when executed directly (not when imported by the e2e test). Compare real paths as URLs, so spaces,
+// symlinks (macOS /tmp) and Windows paths still match.
+const { pathToFileURL } = await import('node:url');
+const { realpathSync } = await import('node:fs');
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   void main();
 }

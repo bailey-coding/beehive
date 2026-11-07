@@ -22,11 +22,12 @@ running, then tells the story step by step:
 8. **Canary:** A takes 10% of traffic.
 9. A follow-up, A2, takes the canary, breaches the SLO, and is **rolled back with a ref move**; the shadow router
    follows within its cache TTL.
-10. **Full:** A ships.
+10. **Full:** the ledger records A at `full`. (Moving 100% of traffic is not built yet: the demo says so.)
 
-Each step is labelled **REAL** (Beehive's own code decides or records it) or **SCRIPTED** (the demo supplies what
-agents, the test gate or live traffic would supply in production), and the run ends with a list of what was
-simulated. The workers keep running so you can inspect the ledger with the printed `curl` commands; stop them with
+Each step is labelled **REAL** (Beehive's own code decides or records it), **STUB** or **SCRIPTED** (the demo
+supplies what agents, the test gate or live traffic would supply in production), and the run ends with what was
+simulated and the known gaps: promotion does not check gate verdicts or trials yet, shadow results never reach the
+ledger, and `full` is a record only. Needs Node 22.6+ and bash (Linux or macOS; WSL on Windows). The workers keep running so you can inspect the ledger with the printed `curl` commands; stop them with
 `scripts/stop-e2e-workers.sh`. `npm run demo -- --no-start` reuses workers you started yourself.
 
 The demo is tested by `tests/e2e/demo.test.ts` in CI's local e2e job. Design and known gaps:

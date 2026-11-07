@@ -28,7 +28,7 @@
     "deploy:all": "npm run deploy && npm run deploy:gate && npm run deploy:sandbox && npm run deploy:queue && npm run deploy:shadow && npm run deploy:scientist && npm run deploy:preview && npm run deploy:candidate && npm run deploy:canary && npm run deploy:promotion",
     "queue:create": "wrangler queues create beehive-artifacts-push",
     "tail": "wrangler tail",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
     "lint": "eslint 'workers/**/*.ts'",
     "demo": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/demo/tournament.ts",
     "test": "vitest run --exclude 'tests/e2e/**'",
@@ -61,7 +61,7 @@
     "wrangler": "^4.149.0"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.6.0"
   },
   "keywords": [
     "cloudflare",

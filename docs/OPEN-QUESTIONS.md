@@ -1209,19 +1209,24 @@ copy (per-worker `npm install`, then `wrangler deploy --dry-run` builds both). N
 
 Found while building `npm run demo` (`docs/plans/demo-tournament-plan.md`). The promotion worker's tournament scores
 each candidate from the ledger's `candidates.shadow_score` (`workers/promotion-worker/tournament.ts`
-`getCandidateMetrics`), defaulting to 80. Nothing in the codebase writes `shadow_score` (grep: only the schema, the
-row mapping and the response view), and the `/compare` call has no route (2026-11-02 entry), so every comparison uses
+`getCandidateMetrics`), defaulting to 80. The intended writer is the Scientist comparator's
+`updateCandidateShadowMetrics` (`workers/scientist-comparator/storage/spec-do.ts`, called from its `index.ts`), but it
+PATCHes `/api/candidates/:id/shadow`, a route the Spec DO does not have, and turns the 404 into a silent `false`
+(another "a 404 is never empty" case, AGENTS.md). So no shadow score ever lands, and the `/compare` call has no route
+either (2026-11-02 entry), so every comparison uses
 `fallbackCompareCandidates`, which compares two equal scores and picks the first candidate (`scoreDiff >= 0`). The
 tournament winner is whichever candidate joined first. Related: `POST /promote` answers "Added to tournament. Waiting
 for more candidates." even when a lone candidate's move succeeded (the promotion state does advance to the target
-rung), and promotions never update the candidate's ledger `stage` (the open item "who writes `passed_premerge`",
-2026-11-02 handoff).
+rung), promotions never update the candidate's ledger `stage` (the open item "who writes `passed_premerge`",
+2026-11-02 handoff), `/promote` checks no gate verdict or trial and trusts the caller's `fromRung` (only a move down
+is refused), and promoting to `full` writes a promotion record but moves no deploy ref.
 
 The demo therefore records its shadow decision as a ledger trial (`POST /api/trials`, `/decide`) and promotes only the
 winner; it does not present the tournament as evidence-based.
 
 **Status**: Open. Spine (promotion train): a fix needs a plan reviewed before code. Starter issue #6 on `beehive/beehive`
-covers `/compare`; the shadow-score writer belongs in the same plan.
+covers `/compare`; the missing `/api/candidates/:id/shadow` route (or pointing the comparator at an existing one) belongs
+in the same plan.
 
 ## 2026-11-07: invalid create bodies are 500s, not 400s (specs, issue-spec links)
 

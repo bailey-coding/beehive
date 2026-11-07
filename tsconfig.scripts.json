@@ -1,0 +1,14 @@
+{
+  "//": "Typechecks the Node-run scripts and their e2e test (the root tsconfig covers workers/ only). npm run typecheck runs both.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node", "vitest/globals"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["scripts/demo/**/*.ts", "tests/e2e/demo.test.ts"]
+}

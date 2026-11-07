@@ -39,7 +39,7 @@ the test gate or live traffic would supply in production.
 The demo prints one short paragraph per step: what happened, why it matters, and the label. It ends with "what was
 simulated" in one list, pointing at `docs/REAL-GATE-IMPL-PLAN.md` and the canary-traffic note in `docs/MILESTONES.md`.
 
-## Files
+## Files (rev 1; rev 2 below supersedes the tsx and "stops what it started" details)
 
 - `scripts/demo/tournament.ts`: the story as an exported `runDemo({ baseUrls, token, log })`, plus a CLI entry that
   starts the workers (unless `--no-start`), runs it and stops what it started. Uses `fetch`, checks `response.ok`
@@ -63,6 +63,11 @@ simulated" in one list, pointing at `docs/REAL-GATE-IMPL-PLAN.md` and the canary
 - **Workers are left running** after the demo, so the printed `curl` commands work; it prints how to stop them.
 - **Runs under plain Node 22** (`--experimental-strip-types`), no new dependency. `npm run demo`.
 - Two 500s for invalid create bodies found on the way (`docs/OPEN-QUESTIONS.md` 2026-11-07).
+- **Independent review (2026-11-07) fixes:** labels match behaviour (step 7 and 10 are "REAL record": `/promote`
+  does not check verdicts, trials or the caller's starting rung, and `full` moves no traffic; step 8 is a stub build);
+  a "Known gaps" summary; the CLI entry check works with spaces, symlinks and Windows paths; paths resolve from the
+  repo root; `start-e2e-workers.sh` keeps its PID file on a refused restart; `tsconfig.scripts.json` typechecks the
+  demo in `npm run typecheck`; engines `node >=22.6.0`.
 
 ## To verify while implementing (all checked 2026-11-07)
 

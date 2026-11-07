@@ -38,7 +38,6 @@ rand_hex() { head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 DO_INTERNAL_TOKEN="${SPEC_DO_INTERNAL_TOKEN:-e2e-internal-$(rand_hex)}"
 DO_ADMIN_TOKEN="${SPEC_DO_ADMIN_TOKEN:-e2e-admin-$(rand_hex)}"
 PID_FILE="$REPO_ROOT/.e2e-workers.pids"
-: > "$PID_FILE"
 
 # Refuse to start over anything already listening: e2e would hit the wrong process
 for port in 8787 8788 8789 8790 8791 8792; do
@@ -47,6 +46,8 @@ for port in 8787 8788 8789 8790 8791 8792; do
         exit 1
     fi
 done
+# Truncate only after the port check: a refused restart must keep the running workers' PIDs for stop-e2e-workers.sh.
+: > "$PID_FILE"
 
 # Wait until URL answers 2xx (curl -f fails on 4xx/5xx, e.g. 503 when API_AUTH_TOKEN is missing)
 wait_healthy() {
