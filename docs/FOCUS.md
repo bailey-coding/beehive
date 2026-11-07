@@ -8,9 +8,48 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-11-02
+**Last updated:** 2026-11-07
 
-## Handoff (2026-11-02, end of session): start here
+## Handoff (2026-11-07): start here
+
+**Read first:** this section, then the 2026-11-02 handoff below (its "Next" list, open questions and maintainer
+decisions all still stand).
+
+**Theme of this session: make Beehive usable by people other than the maintainer.** All of it is on `main`
+(head `da0c5b8`, CI green) and **none of it is deployed** (production still runs `523291b`, 2026-10-28).
+- **Read-only viewer sign-in** (`docs/plans/viewer-signin-plan.md`): with `OPEN_VIEWER_SIGNIN = "true"` (unset =
+  off) any GitHub user outside `ALLOWED_GITHUB_USERS` signs in read-only: no actor row, GET/HEAD only, no token pages,
+  no `internal` issues, placeholder file tree (no Artifacts API calls). Member cookies are now re-checked against
+  the allowlist on every request (a removed member is signed out at once). Tests: `workers/api/tests/ui-viewer.test.ts`.
+- **Viewer rate limit:** `VIEWER_RATE_LIMITER` (`[[ratelimits]]` in root `wrangler.toml`, namespace `4101`, 60/60 s
+  per login, 429 + `Retry-After`, fails closed with a 503). Members are not limited.
+- **Issue titles** now show in the changelog and repo search (they read a nonexistent `name` field).
+- **Docs front door:** 44 finished records moved to `docs/archive/` (`docs/archive/README.md`; backtest data keeps
+  the old paths on purpose); human-first `CONTRIBUTING.md` (real vs simulated, setup with no Cloudflare account);
+  issue forms in `.github/ISSUE_TEMPLATE/`; `tests/docs-links.test.ts` plus `.github/workflows/docs-links.yml`
+  (ci.yml skips docs-only pushes and PRs, so the link check runs there).
+- **Starter issues are filed in Beehive itself:** `beehive/beehive` issues #1-#6 in production (5 `good first issue`,
+  #6 `help wanted` = the tournament `/compare` route). `CONTRIBUTING.md` points there.
+- **Planned, not built:** public anonymous read (plan section "Next: anonymous read": Flagship flag, Cloudflare rate
+  limit and short edge cache, `noindex`, preview URLs hidden from anonymous only, custom domain longer term). Open:
+  the Cache API probably does not work on `*.workers.dev` (`docs/OPEN-QUESTIONS.md` 2026-11-06, unverified).
+
+**Deploy steps for the maintainer:** check namespace `4101` is free in the account; push `main` to the Artifacts repo
+(also ships m14 and the rest of the 2026-11-02 list; run its deploy checks); then set `OPEN_VIEWER_SIGNIN = "true"`
+when ready.
+
+**Environment:** a personal cloud environment `beehive` allows `beehive.bz23711.workers.dev` and holds the
+maintainer's write-scope user token as a network secret (sessions on it act as `bailey-coding` in production;
+revoke at `/app/settings/tokens`). Scripts against the deployed API need a plain `User-Agent` (Cloudflare error 1010,
+`docs/TROUBLESHOOTING.md`).
+
+**Next (agreed 2026-11-07):** a local, watchable tournament demo (`npm run demo`, no Cloudflare account), then D2
+canary ping-pong (2026-11-02 handoff item 1).
+
+**How we worked:** every code change was mutation-checked (break the fix, see a test fail) and independently reviewed
+by an agent before going to `main`; the maintainer approved each push to `main` in chat.
+
+## Handoff (2026-11-02, end of session): previous
 
 **Read first:** `AGENTS.md` (rule 2 now lets agents write the spine under plan + independent review), this section, then `docs/M5A-2-GOVERNANCE-PLAN.md` by section (rev 5; "Rev 3/4/5 amendments", "PR-A/PR-B/PR-S status") and `docs/GOVERNANCE-STATE-MACHINES.md`.
 
