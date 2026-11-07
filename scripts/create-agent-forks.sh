@@ -1,4 +1,5 @@
 #!/bin/bash
+# SUPERSEDED by `npm run demo` (scripts/demo/tournament.ts), which needs no forks; not checked since.
 # Create Agent Forks Script
 # 
 # Creates 3 simulated agent forks for demo purposes.

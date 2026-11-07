@@ -1,4 +1,5 @@
 #!/bin/bash
+# SUPERSEDED by `npm run demo` (scripts/demo/tournament.ts); not checked since. See docs/plans/demo-tournament-plan.md.
 # Demo: Multi-Agent Beehive Workflow
 # Usage: ./scripts/demo-multi-agent.sh [--local|--remote]
 # 

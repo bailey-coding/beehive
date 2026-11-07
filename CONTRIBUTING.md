@@ -41,6 +41,11 @@ npm run typecheck
 npm test                   # ~2,000 unit tests, about a minute; this is what CI runs
 ```
 
+**Watch it work:** `npm run demo` starts the local workers and runs one tournament: an issue becomes a spec, three
+agents' candidates compete, one fails the gate, one loses the shadow trial, the winner is canaried, a regression is
+rolled back with a ref move, and the winner ships. Each step says what is real Beehive code and what the demo
+supplies. About a minute the first time.
+
 To run the end-to-end suite against real local workers (real HTTP, no mocks):
 
 ```bash

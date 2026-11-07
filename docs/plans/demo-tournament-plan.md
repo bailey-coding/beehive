@@ -1,6 +1,6 @@
 ---
 category: planning
-status: draft (rev 1, 2026-11-07)
+status: implemented (rev 2, 2026-11-07)
 audience: human,agent
 ---
 
@@ -30,7 +30,7 @@ the test gate or live traffic would supply in production.
 | 4 | Three candidates, one per agent | `POST /api/candidates` (commit SHAs are placeholders: no agent writes code in the demo) | REAL records, SCRIPTED code |
 | 5 | Pre-merge gate: A and B pass, C fails conformance (no expiry check) | `POST /api/gate-verdicts` | REAL records, SCRIPTED results (the gate is simulated today) |
 | 6 | Shadow trial A vs B: A matches the declared delta surface, B diverges on an undeclared field | `POST /api/trials` | REAL record, SCRIPTED comparison |
-| 7 | A climbs pre-merge -> shadow -> train -> canary | promotion worker `POST /promote` | REAL state machine |
+| 7 | A climbs pre-merge -> shadow -> train -> canary | promotion worker `POST /promote` (only the trial winner; see rev 2) | REAL state machine |
 | 8 | A goes to canary at 10% | canary worker `POST /deploy-canary` (preview-manager stub version, no Cloudflare API) | REAL deploy ref |
 | 9 | Agent A ships a follow-up A2 to canary; its error rate breaches the SLO; rollback | `/deploy-canary` for A2, then `POST /rollback` | REAL ref move, SCRIPTED breach |
 | 10 | A is promoted to full | `POST /promote` canary -> full | REAL |
@@ -53,7 +53,18 @@ simulated" in one list, pointing at `docs/REAL-GATE-IMPL-PLAN.md` and the canary
 - Old demo: `scripts/demo-end-to-end.sh`, `demo-multi-agent.sh`, `create-agent-forks.sh` get a header saying they are
   superseded and broken locally; deleting them is the maintainer's call.
 
-## To verify while implementing (stop and revise the plan if any is false)
+## Rev 2 (implementation findings, 2026-11-07)
+
+- **The tournament is not used to pick the winner.** Its scores come from `candidates.shadow_score`, which nothing
+  writes, so it decides by arrival order (`docs/OPEN-QUESTIONS.md` 2026-11-07). Letting it "decide" would present
+  arrival order as evidence. The shadow decision is the ledger trial (step 6); only A is promoted.
+- **The shadow router caches deploy refs** (5 s TTL, worst case 2 x TTL). After the rollback the demo polls
+  `/statsig/config` for up to 12 s and reports how long the router took to follow the ref move.
+- **Workers are left running** after the demo, so the printed `curl` commands work; it prints how to stop them.
+- **Runs under plain Node 22** (`--experimental-strip-types`), no new dependency. `npm run demo`.
+- Two 500s for invalid create bodies found on the way (`docs/OPEN-QUESTIONS.md` 2026-11-07).
+
+## To verify while implementing (all checked 2026-11-07)
 
 - The exact request bodies for gate verdicts, trials and issue-spec links (zod schemas in `workers/shared/`).
 - Whether `/promote` in tournament mode needs a second candidate in the same spec to complete, and what A's

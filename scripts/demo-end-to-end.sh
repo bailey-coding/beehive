@@ -1,4 +1,6 @@
 #!/bin/bash
+# SUPERSEDED by `npm run demo` (scripts/demo/tournament.ts). Broken locally (2026-11-07): starts beehive without
+# API_AUTH_TOKEN (every call 503) and runs `pkill -f "wrangler dev"`. See docs/plans/demo-tournament-plan.md.
 # Beehive End-to-End Demo Script
 # 
 # Demonstrates the complete M2 flow:

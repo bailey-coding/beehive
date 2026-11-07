@@ -1204,3 +1204,30 @@ pre-install shared, or should assert that every worker importing a zod-using sha
 copy (per-worker `npm install`, then `wrangler deploy --dry-run` builds both). Not yet pushed to `cf`.
 
 **Status**: Fix on a branch, not merged or deployed; CI gap open.
+
+## 2026-11-07: tournament winners are decided by arrival order (no writer for `shadow_score`)
+
+Found while building `npm run demo` (`docs/plans/demo-tournament-plan.md`). The promotion worker's tournament scores
+each candidate from the ledger's `candidates.shadow_score` (`workers/promotion-worker/tournament.ts`
+`getCandidateMetrics`), defaulting to 80. Nothing in the codebase writes `shadow_score` (grep: only the schema, the
+row mapping and the response view), and the `/compare` call has no route (2026-11-02 entry), so every comparison uses
+`fallbackCompareCandidates`, which compares two equal scores and picks the first candidate (`scoreDiff >= 0`). The
+tournament winner is whichever candidate joined first. Related: `POST /promote` answers "Added to tournament. Waiting
+for more candidates." even when a lone candidate's move succeeded (the promotion state does advance to the target
+rung), and promotions never update the candidate's ledger `stage` (the open item "who writes `passed_premerge`",
+2026-11-02 handoff).
+
+The demo therefore records its shadow decision as a ledger trial (`POST /api/trials`, `/decide`) and promotes only the
+winner; it does not present the tournament as evidence-based.
+
+**Status**: Open. Spine (promotion train): a fix needs a plan reviewed before code. Starter issue #6 on `beehive/beehive`
+covers `/compare`; the shadow-score writer belongs in the same plan.
+
+## 2026-11-07: invalid create bodies are 500s, not 400s (specs, issue-spec links)
+
+`POST /api/specs` without `declaredDeltaSurface` answers 500 `NOT NULL constraint failed: specs.declared_delta_surface`
+(the zod schema defaults it to `[]`, but the default never reaches the insert). `POST /api/issue-spec-links` with a
+`relationship` outside `requests-new | requests-change | reports-bug` answers 500 `CHECK constraint failed`. Both should
+be 400s with the reason; a 500 reads as an outage.
+
+**Status**: Open. Small, non-spine: a good starter issue.

@@ -30,6 +30,7 @@
     "tail": "wrangler tail",
     "typecheck": "tsc --noEmit",
     "lint": "eslint 'workers/**/*.ts'",
+    "demo": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/demo/tournament.ts",
     "test": "vitest run --exclude 'tests/e2e/**'",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
