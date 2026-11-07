@@ -259,14 +259,16 @@ async function main(): Promise<void> {
   const { openSync, readFileSync } = await import('node:fs');
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('Usage: npm run demo [-- --no-start]\n  --no-start  use workers already running on 8787-8790 (scripts/start-e2e-workers.sh)');
+    console.log('Usage: npm run demo [-- --no-start]\n  --no-start  use workers already running on 8787-8791 (scripts/start-e2e-workers.sh)');
     return;
   }
-  const allUp = async () => (await Promise.all(Object.values(LOCAL_URLS).map((u) => healthy(u, LOCAL_TOKEN)))).every(Boolean);
+  // The canary worker builds through the preview manager (8791), so it must be up too, not only the four we call.
+  const needed = [...Object.values(LOCAL_URLS), 'http://localhost:8791'];
+  const allUp = async () => (await Promise.all(needed.map((u) => healthy(u, LOCAL_TOKEN)))).every(Boolean);
 
   if (!(await allUp())) {
     if (args.includes('--no-start')) {
-      console.error('The local workers are not running. Start them with scripts/start-e2e-workers.sh, or drop --no-start.');
+      console.error('The local workers are not all running (8787-8791). Start them with scripts/start-e2e-workers.sh, or drop --no-start.');
       process.exit(1);
     }
     // The start script ends with `wait` (it lives as long as the workers), so run it detached with its output in a
@@ -277,8 +279,8 @@ async function main(): Promise<void> {
     spawn('bash', ['scripts/start-e2e-workers.sh'], { detached: true, stdio: ['ignore', out, out] }).unref();
     const deadline = Date.now() + 180_000;
     for (;;) {
-      if (await allUp()) break;
       const log = readFileSync(logPath, 'utf8');
+      if (log.includes('All workers started successfully') && (await allUp())) break;
       if (/not healthy|already in use/.test(log) || Date.now() > deadline) {
         console.error(`Could not start the workers. Last lines of ${logPath}:\n${log.trim().split('\n').slice(-15).join('\n')}`);
         console.error('See docs/TROUBLESHOOTING.md; stop anything left with scripts/stop-e2e-workers.sh.');
