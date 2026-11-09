@@ -2,7 +2,8 @@
 
 Task: `promotion-gaps` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-07: tournament winners are decided by arrival order (no
 writer for `shadow_score`)" | Tier: heavy (AGENTS.md rule 2 spine: Spec DO schema, promotion train).
-Status: **rev 1, maintainer decisions recorded (section 9), awaiting independent review. No code written.**
+Status: **rev 2: Review 1 (independent agent, 2026-11-09) approve with changes, B1-B5 and N1-N8 applied in section 11, which
+supersedes conflicting text above. Maintainer decisions in section 9. No code written.**
 
 The oracle ladder says a candidate is promotable only when it clears every rung, and the Spec DO is the single
 serialization point for that decision (AGENTS.md). Today no rung's result is checked on promotion, and the one oracle
@@ -244,3 +245,67 @@ comparator; (B) `advance` route + DO tests; (C) promotion worker on `advance`, t
   promotion-state write?
 - Mixed-version: is failing closed (503) on an old DO acceptable for the deploy window?
 - Anything in the comparator path (F3-F5) I read wrong; F5 is unverified at runtime.
+
+## 11. Review 1 dispositions (independent agent, 2026-11-09: approve with changes, 5 blockers; supersede conflicting text above)
+
+Each blocker was re-checked against the code before accepting.
+
+- **B1 (accepted): shadow evidence is `log`, not `enforce`.** The shadow router mirrors only static targets
+  (`workers/shadow-router/config.ts:123,149`) and live canary-ref candidates (`:237-252`), so a `passed_premerge`
+  candidate gets no samples; the baseline is a placeholder (`status: 200`, `workers/shadow-router/index.ts:446-452`) and
+  candidate bodies are `undefined` (`:463`). Enforcing shadow would block every candidate. Shadow joins train under
+  decision 5's reasoning: the `advance` table marks it `log` (a `governance_events` `evidence_missing` row, no refusal)
+  until (a) the router mirrors shadow-rung candidates and (b) the baseline is a real production response. Both are a new
+  OPEN-QUESTIONS entry, owner: the next shadow-router plan. Samples, the verdict and the tournament's use of scores are
+  still built (3.1-3.3): e2e and the demo seed them, and they are ready when the router is. Section 8's body-mode risk
+  is replaced by this. Enforced from day one: pre-merge (gate verdict), canary (live head, soaked), rung order, fromRung.
+- **B2 (accepted): comparator ack and retry.** `queue()` swallows every error (`scientist-comparator/index.ts:113-137`),
+  so 3.3's "throws so the queue retries" was false. Per message: skip candidate ids that are not ledger ids (the static
+  `beehive-main` targets); ack on a 404 for an unknown candidate; `message.retry()` only on 5xx or a network error;
+  `message.ack()` otherwise; no `ackAll()`. `max_retries` is unset (`wrangler.toml:29-36`), so the platform default
+  applies; the PR sets it explicitly to 3, matching the queue consumer's bounded retries.
+- **B3 (accepted): purge fit.** `shadow_scores` gets `id TEXT PRIMARY KEY` and `candidate_id TEXT NOT NULL UNIQUE`, no FK
+  (rollback floor). Added to `ORG_PURGE_ORDER` before `candidates`, with the orphan sweep `gate_runs`/`near_misses`
+  have (`spec-do/index.ts:2789-2795`), since an older build purges candidates without knowing the table. **Not** on the
+  tombstone list (no `deleted_at`); the candidate's tombstone plus the route's 404 is enough. Tests: `schema-sync`, the
+  fresh-ledger `initSchema` exec, purge with a row and with an orphan.
+- **B4 (accepted): verdict actor.** `gate_verdicts.decided_by` references `actors(id)` with foreign keys on; the
+  fallback actor is `'unknown'` (`index.ts:4124`). m15 inserts a reserved service actor `scientist-comparator` with
+  `INSERT OR IGNORE` (the `resolveMinter` pattern, `:838-846`), and `shadow-samples` uses it for the verdict regardless
+  of the header. Test with `foreign_keys` ON. The same latent bug for merge-train's `actorId: 'promotion-worker'` into
+  the gate workflow (`merge-train.ts:406`) goes to OPEN-QUESTIONS, not this plan.
+- **B5 (accepted): `advance` 404s are told apart.** An unknown or tombstoned candidate answers 404 with
+  `code: 'candidate_not_found'`; the worker maps only a code-less `Not found` (an old DO's router) to 503
+  `ledger_too_old` (the `USER_TOKEN_NOT_FOUND` pattern, `shared/spec-do-auth.ts:33`).
+- **N1:** `shadowMatch = matched_count = sample_count`, coerced to a boolean; `shadowMetrics` stays a JSON string in
+  today's `ShadowMetrics` shape (`shared/schemas.ts:205-207`). Test: the response passes the zod schema.
+- **N2:** soak is measured from `deploy_refs.moved_at` of the canary head pointing at this candidate, not a
+  `deployed_at` (no such column), so a restored deployment counts only its current live time. Decision 3 stays 15
+  minutes; a DO var `CANARY_MIN_SOAK_MINUTES` read only when `DEV = 'local'` lets e2e and the demo use 0.
+- **N3:** samples reach the DO from e2e and the demo through a new maintainer-tier edge route
+  `POST /api/candidates/:id/shadow-samples` (refused for user and viewer tiers). Like `canary-metrics`, a tier-1 holder
+  can forge samples (M5A-2 C2); recorded in the PR.
+- **N4:** registered as `/^POST \/api\/candidates\/[^\/]+\/shadow-samples$/`; a keyed body must hold exactly one sample
+  (400 otherwise). Storage: one idempotency row per mirrored request per candidate on the `main` DO; the comparator
+  caps samples at `SHADOW_MAX_SAMPLES = 1000` per candidate (further samples are acked and dropped, logged once), and
+  OPS notes the growth.
+- **N5:** `advance` stays the decision point (the dry run is advisory; the write re-checks in one transaction).
+  Specified: a 409 from the winner's `advance` records the tournament failed (retryable) and the winner's promotion
+  state failed with the code; a 409 on a merged car's `advance` leaves its promotion state failed, not completed;
+  `retryPromotion` omits `fromRung`; the **losing** tournament entrant gets `outcome: 'eliminated'` and a promotion state
+  completed at its starting rung, like the waiting one.
+- **N6:** `advance` is added to the M5A-2 B2 inventory of `promoted` writers and is named as the
+  `assertPromotionApprovals` site; refusing entry into `passed_shadow` for ineligible real data (M5A-2 rev 5) belongs in
+  it later. `SHADOW_MIN_SAMPLES` is the default of the whitelisted policy key `governance.min_shadow_samples`, not a
+  second constant.
+- **N7:** no change (stage reading confirmed).
+- **N8:** section 4 gains two rows: new comparator with an old DO (404 code-less: ack and log
+  `shadow_samples_unsupported`, no retry storm), and the old tournament reading real scores through `|| 80` (harmless).
+- **Fact corrections:** F3's envelope is at `index.ts:4390`; the router also sends `specId: ''`
+  (`shadow-router/index.ts:458`), so the comparator takes `specId` from the DO candidate. F5 fails three ways
+  (unvalidated cast at `:4441`, `complexityDelta` undefined, `decided_by = 'unknown'`); `classifyScore` is at
+  `:304-310`. The CLI `promote` action is a stub that calls nothing (`cli/src/utils/command-factory.ts:438-442`).
+
+**Tests added to section 5:** `foreign_keys` ON for the verdict upsert; purge with a row and an orphan; non-ledger ids
+in a comparator batch; per-message retry vs ack; the losing entrant's state; `retryPromotion` without `fromRung`; the
+two `advance` 404s; the response-shape zod parse; the local soak override.
