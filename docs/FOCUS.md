@@ -52,8 +52,8 @@ revoke at `/app/settings/tokens`). Scripts against the deployed API need a plain
   checks no gate verdict or trial and trusts the caller's `fromRung`; `full` moves no deploy ref; two create routes
   answer 500 for invalid bodies. `start-e2e-workers.sh` now keeps its PID file on a refused restart.
 
-**Next:** the promotion gaps above (spine): plan `docs/plans/promotion-gaps-plan.md` rev 1 (2026-11-09), awaiting
-independent review. D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
+**Next:** the promotion gaps above (spine): plan `docs/plans/promotion-gaps-plan.md` rev 2 (2026-11-09, reviewed: approve with changes), ready for
+implementation (PR A first). D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
 Candidates after it: the 500s as a starter issue, real traffic for `full`.
 
 **How we worked:** every code change was mutation-checked (break the fix, see a test fail) and independently reviewed
