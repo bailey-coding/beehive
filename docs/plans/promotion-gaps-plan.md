@@ -2,7 +2,7 @@
 
 Task: `promotion-gaps` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-07: tournament winners are decided by arrival order (no
 writer for `shadow_score`)" | Tier: heavy (AGENTS.md rule 2 spine: Spec DO schema, promotion train).
-Status: **rev 1, draft, awaiting independent review. No code written.**
+Status: **rev 1, maintainer decisions recorded (section 9), awaiting independent review. No code written.**
 
 The oracle ladder says a candidate is promotable only when it clears every rung, and the Spec DO is the single
 serialization point for that decision (AGENTS.md). Today no rung's result is checked on promotion, and the one oracle
@@ -227,7 +227,7 @@ comparator; (B) `advance` route + DO tests; (C) promotion worker on `advance`, t
 - **Off-by-one stage semantics change** (F11). Existing rows written under the old mapping (e.g. a `passed_train`
   candidate that never ran the train) are not repaired; production has only test candidates.
 
-## 9. Open decisions for the maintainer
+## 9. Maintainer decisions (2026-11-09: all five accepted as proposed; do not re-litigate)
 
 1. `SHADOW_MIN_SAMPLES` (proposed 20) and `SHADOW_PASS_SCORE` (proposed 80).
 2. Tournament tie: fail with `tie` (proposed) or tie-break on error-severity diffs.
