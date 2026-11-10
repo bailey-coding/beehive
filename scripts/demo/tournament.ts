@@ -29,6 +29,8 @@ export interface DemoResult {
   specId: string;
   candidates: { a: string; b: string; c: string; a2: string };
   trialId: string;
+  /** What the promotion worker answered when asked to move C (it failed pre-merge) */
+  refusedC: { status: number; code: string };
   winnerRung: string;
   liveCanaries: string[];
   canaryStatus: { a: string; a2: string };
@@ -74,6 +76,15 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
       throw new DemoError(`${base}${path} answered ${res.status}: ${JSON.stringify(json).slice(0, 300)}`);
     }
     return json;
+  }
+  /** A call whose refusal is the point: returns the status and body instead of throwing on a non-2xx. */
+  async function attempt(base: string, path: string, body: unknown): Promise<{ status: number; json: Json }> {
+    const res = await fetch(base + path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, json: (await res.json()) as Json };
   }
   const data = (j: Json) => j.data as Json;
   const id = (j: Json) => String(data(j).id);
@@ -146,36 +157,51 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
   // 5. Pre-merge gate
   step('Rung 1, pre-merge: tests and spec conformance', 'REAL record, SCRIPTED input',
     'The gate records a verdict per candidate. C never checks the TTL, so the conformance test for 410 fails.\n' +
-    '(Today the gate\'s test results are simulated: docs/REAL-GATE-IMPL-PLAN.md.) The demo stops C here; Beehive does\n' +
-    'not enforce that yet: the promotion worker does not read gate verdicts (see "Known gaps" at the end).');
+    '(Today the gate\'s test results are simulated: docs/REAL-GATE-IMPL-PLAN.md.) Then each agent asks the promotion worker\n' +
+    'to move its candidate to the shadow rung. Beehive decides: it moves A and B, and refuses C because there is no passing verdict.');
   const verdict = (candidateId: string, status: 'pass' | 'fail', score: number, notes: string) =>
     call(urls.api, '/api/gate-verdicts', { candidateId, gate: 'pre-merge', status, score, complexityDelta: 0, notes }, maintainer);
   await verdict(a, 'pass', 96, 'all contract tests pass');
   await verdict(b, 'pass', 91, 'all contract tests pass');
   await verdict(c, 'fail', 40, 'GET /:code returns 302 for an expired code (expected 410)');
-  done('A pass (96), B pass (91), C fail (40): the demo takes C no further');
+  const toShadow = (candidateId: string) => attempt(urls.promotion, '/promote', { candidateId, specId, toRung: 'shadow', actorId: maintainer });
+  const movedA = await toShadow(a);
+  const movedB = await toShadow(b);
+  const refused = await toShadow(c);
+  if (movedA.status !== 200 || movedB.status !== 200) {
+    throw new DemoError(`A or B could not move to shadow: ${JSON.stringify([movedA, movedB]).slice(0, 300)}`);
+  }
+  if (refused.status !== 409) throw new DemoError(`C should have been refused (409) but the promotion worker answered ${refused.status}`);
+  const refusedC = { status: refused.status, code: String(refused.json.code) };
+  done(`A and B moved to shadow; C was refused: ${refused.status} ${refusedC.code} ("${String(refused.json.message ?? refused.json.error).slice(0, 80)}")`);
 
-  // 6. Shadow trial
-  step('Rung 2, shadow: mirrored traffic, responses compared', 'REAL record, SCRIPTED input',
-    'The design: the shadow router copies real requests to A and B, throws their answers away, and the Scientist\n' +
-    'comparator diffs them against the declared delta surface. (Today those results do not reach the ledger; here the\n' +
-    'demo supplies the comparison.) A changes only what the spec declared; B also adds a "Cache-Control" header\n' +
-    'nobody asked for, an undeclared change. The ledger records the trial and its winner.');
-  const trialId = id(await call(urls.api, '/api/trials', { specId, candidateAId: a, candidateBId: b }, maintainer));
-  await call(urls.api, `/api/trials/${trialId}/decide`, {
-    winnerId: a,
-    comparisonMetrics: { conformance_score: { a: 100, b: 83 }, performance: { a: 42, b: 39 }, complexity_delta: { a: 12, b: 15 } },
-  }, maintainer);
-  done(`trial ${short(trialId)}: A wins (declared-surface conformance 100 vs 83). The trial stays on record; B goes no further.`);
+  // 6. Shadow tournament
+  step('Rung 2, shadow: mirrored traffic, responses compared, one winner', 'REAL record, SCRIPTED input',
+    'The design: the shadow router copies real requests to A and B, throws their answers away, and the Scientist comparator\n' +
+    'scores each against the declared delta surface. The Spec DO sums those scores per candidate. (Today the router does not\n' +
+    'mirror candidates that have not reached a canary, so the demo posts the samples itself, through a maintainer-only route.)\n' +
+    'A changes only what the spec declared; B also adds a "Cache-Control" header nobody asked for. Both ask to move to train:\n' +
+    'the promotion worker runs a tournament, reads both scores from the ledger, records the decision as a trial, and advances the winner.');
+  const samples = (score: number) => ({
+    samples: Array.from({ length: 20 }, (_, i) => ({ requestId: `demo-${suffix}-${score}-${i}`, score, matched: score >= 100, diffs: [] })),
+  });
+  await call(urls.api, `/api/candidates/${a}/shadow-samples`, samples(98), maintainer);
+  await call(urls.api, `/api/candidates/${b}/shadow-samples`, samples(83), maintainer);
+  const joinA = await call(urls.promotion, '/promote', { candidateId: a, specId, toRung: 'train', actorId: maintainer });
+  const decided = await call(urls.promotion, '/promote', { candidateId: b, specId, toRung: 'train', actorId: maintainer });
+  const details = decided.details as Json;
+  const trialId = String(details.trialId);
+  const scores = details.scores as Record<string, number>;
+  done(`A joined and waited (${String(joinA.outcome)}); B asked, the tournament decided, and B was ${String(decided.outcome)}. Shadow scores: A ${scores[a]}, B ${scores[b]}`);
+  done(`trial ${short(trialId)}: A wins the shadow score (98 vs 83). B goes no further; the trial stays on record.`);
 
   // 7. Climb
-  step('A climbs the ladder', 'REAL record',
-    'The promotion worker records each move and refuses any move back down the ladder. It takes the starting rung\n' +
-    'from the caller and does not check gate verdicts or trials, so the order of moves here is the demo\'s choice.');
-  for (const [from, to] of [['pre-merge', 'shadow'], ['shadow', 'train'], ['train', 'canary']]) {
-    await call(urls.promotion, '/promote', { candidateId: a, specId, fromRung: from, toRung: to, actorId: maintainer });
-    done(`${from} -> ${to}`);
-  }
+  step('A leaves the train rung', 'REAL record',
+    'A is on the train rung. The promotion worker asks the Spec DO to advance it to the canary rung. The Spec DO\n' +
+    'checks the move is the next one and looks for a merged merge-train car; in tournament mode there is none, and that\n' +
+    'evidence is only logged for now (docs/OPS.md "Advance"), so the move lands.');
+  await call(urls.promotion, '/promote', { candidateId: a, specId, fromRung: 'train', toRung: 'canary', actorId: maintainer });
+  done('train -> canary');
 
   // 8. Canary
   step('Rung 4, canary: a small slice of live traffic', 'REAL ref move, STUB build',
@@ -222,35 +248,37 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
 
   // 10. Full
   step('Rung 5, full: A is recorded as shipped', 'REAL record',
-    'The promotion worker records A at "full". Nothing moves traffic yet: there is no full deploy ref, so A\'s 10%\n' +
-    'canary is still the live split. Moving 100% of traffic is not built.');
+    'The Spec DO moves A to "promoted" only if A is the live canary and has been for the soak time (15 minutes; the local\n' +
+    'workers shorten it to zero). A is, because the rollback put the ref back on A. Nothing moves traffic yet: there is no\n' +
+    'full deploy ref, so A\'s 10% canary is still the live split. Moving 100% of traffic is not built.');
   await call(urls.promotion, '/promote', { candidateId: a, specId, fromRung: 'canary', toRung: 'full', actorId: maintainer });
   const state = (await call(urls.promotion, `/promote/${a}`)).state as Json;
-  done(`A is at "${state.currentRung}" (${state.status})`);
+  done(`A is at "${state.currentRung}" (${state.status}), stage "${String(data(await call(urls.api, `/api/candidates/${a}`)).stage)}"`);
 
   // 11. Summary
   log('');
   log('── What happened, from the ledger');
   log(`   issue #${issue.number} -> spec ${short(specId)} -> 3 candidates`);
-  log(`   C: failed pre-merge.  B: lost the shadow trial.  A: won, canaried, recorded at full.  A2: rolled back by a ref move.`);
+  log(`   C: refused at pre-merge.  B: lost the shadow tournament.  A: won, canaried, promoted.  A2: rolled back by a ref move.`);
   log(`   live canary splits for this spec: ${liveCanaries.map((k) => (k === a ? 'A' : 'A2')).join(', ') || 'none'}`);
   log('');
   log('── What was simulated');
-  log('   Agents writing code (placeholder commits), the test gate\'s results, the shadow comparison, the canary build');
+  log('   Agents writing code (placeholder commits), the test gate\'s results, the shadow samples, the canary build');
   log('   (a stub), live traffic and the SLO breach. Real Beehive code: the ledger records, the promotion records, the');
   log('   canary deploy refs, the rollback ref move and the shadow router following it.');
   log('');
-  log('── Known gaps (docs/OPEN-QUESTIONS.md, 2026-11-07)');
-  log('   - Promotion does not check gate verdicts or trial winners, and trusts the caller\'s starting rung.');
-  log('   - Shadow results never reach the ledger, so the promotion worker\'s own tournament picks by arrival order.');
-  log('   - "full" is a record only: there is no full deploy ref; a candidate\'s ledger stage is not updated either.');
+  log('── Known gaps (docs/OPEN-QUESTIONS.md, 2026-11-10)');
+  log('   - Shadow and train evidence are log-only: a missing shadow verdict or merged car is recorded as a governance event, not refused.');
+  log('   - In production the tournament has no shadow scores to read (the router does not mirror candidates before canary), so it');
+  log('     refuses with no_shadow_evidence; the demo supplies the samples. The shadow-router follow-up changes that.');
+  log('   - "full" is a record and a stage only: there is no full deploy ref and no traffic moves.');
   log('');
   log('── Look around');
   log(`   curl -s -H "Authorization: Bearer ${token}" ${urls.api}/api/candidates/${a} | jq .`);
   log(`   curl -s -H "Authorization: Bearer ${token}" ${urls.api}/api/trials/${trialId} | jq .`);
   log(`   curl -s -H "Authorization: Bearer ${token}" ${urls.promotion}/promote/${a} | jq .`);
 
-  return { specId, candidates: { a, b, c, a2 }, trialId, winnerRung: String(state.currentRung), liveCanaries, canaryStatus };
+  return { specId, candidates: { a, b, c, a2 }, trialId, refusedC, winnerRung: String(state.currentRung), liveCanaries, canaryStatus };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

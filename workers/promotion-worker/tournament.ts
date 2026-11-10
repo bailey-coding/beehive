@@ -176,7 +176,8 @@ export class TournamentManager {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[Tournament] Error: ${errorMessage}`);
-      if (runningId) await this.recordTournamentFailure(runningId, errorMessage);
+      // The ledger's failure reason leads with the code, so `tie` / `no_shadow_evidence` / an advance refusal is searchable there
+      if (runningId) await this.recordTournamentFailure(runningId, error instanceof TournamentRefusal ? `${error.code}: ${errorMessage}` : errorMessage);
 
       return result({
         success: false,

@@ -1,7 +1,7 @@
 /**
- * The promotion worker records tournament winners and merge-train rollbacks on the candidate through
- * routes the Spec DO serves (PATCH /api/candidates/:id/stage, GET /api/candidates/:id). It once called
- * routes that do not exist and never noticed (docs/OPEN-QUESTIONS.md 2026-10-16).
+ * The promotion worker reads and moves candidates only through routes the Spec DO serves: GET /api/candidates/:id, POST
+ * /api/candidates/:id/advance (a tournament winner; docs/plans/promotion-gaps-plan.md PR C) and PATCH /api/candidates/:id/stage (a
+ * merge-train rollback, which is never gated). It once called routes that do not exist and never noticed (docs/OPEN-QUESTIONS.md 2026-10-16).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { TournamentManager } from '../../workers/promotion-worker/tournament';
@@ -45,53 +45,71 @@ describe('tournament candidate routes', () => {
     expect(metrics.latencyP95).toBe(7);
   });
 
-  it('falls back to defaults when the candidate read is rejected', async () => {
+  it('a rejected candidate read is an error, never defaults (a 404 is not "empty")', async () => {
     const { env } = envWith(() => json({ success: false }, 404));
-    const metrics = await (new TournamentManager(env) as any).getCandidateMetrics('c1');
-    expect(metrics.score).toBe(80);
+    await expect((new TournamentManager(env) as any).getCandidateMetrics('c1')).rejects.toThrow(/404/);
+    await expect((new TournamentManager(env) as any).readShadowScore('c1')).rejects.toThrow(/404/);
   });
 
-  it('records the winner with PATCH /api/candidates/:id/stage', async () => {
-    const { env, calls } = envWith(() => json({ success: true, data: {} }));
+  it('a candidate with no shadow score reads as null, and a score of 0 as 0', async () => {
+    const answers: Record<string, unknown> = { c1: { id: 'c1' }, c2: { id: 'c2', shadowScore: 0 } };
+    const { env } = envWith((request) => json({ success: true, data: answers[new URL(request.url).pathname.split('/').pop()!] }));
     const manager = new TournamentManager(env) as any;
-    const update = vi.spyOn(manager, 'updateTournament').mockResolvedValue(undefined);
-    await manager.promoteTournamentWinner({ candidateId: 'c1' }, 'canary', tournament);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].method).toBe('PATCH');
-    expect(new URL(calls[0].url).pathname).toBe('/api/candidates/c1/stage');
-    expect(calls[0].headers.get('X-Actor-ID')).toBe('promotion-worker');
-    expect(await calls[0].json()).toMatchObject({ stage: 'passed_canary' });
-    expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ winner: 'c1' }));
+    expect(await manager.readShadowScore('c1')).toBeNull();
+    expect(await manager.readShadowScore('c2')).toBe(0);
   });
 
-  it('maps the full rung to the promoted stage', async () => {
-    const { env, calls } = envWith(() => json({ success: true, data: {} }));
-    const manager = new TournamentManager(env) as any;
-    vi.spyOn(manager, 'updateTournament').mockResolvedValue(undefined);
-    await manager.promoteTournamentWinner({ candidateId: 'c1' }, 'full', tournament);
-    expect(await calls[0].json()).toMatchObject({ stage: 'promoted' });
-  });
-
-  it('fails the tournament when the winner promotion is rejected', async () => {
-    const { env } = envWith(() => json({ success: false, error: 'Not found' }, 404));
+  const run = (respond: (request: Request) => Response) => {
+    const { env, calls } = envWith(respond);
     const manager = new TournamentManager(env) as any;
     vi.spyOn(manager, 'getOrCreateTournament').mockResolvedValue(tournament);
     vi.spyOn(manager, 'addCandidateToTournament').mockResolvedValue(tournament);
-    vi.spyOn(manager, 'runTournamentComparisons').mockResolvedValue([]);
-    vi.spyOn(manager, 'determineTournamentWinner').mockReturnValue({ candidateId: 'c1' });
     const update = vi.spyOn(manager, 'updateTournament').mockResolvedValue(undefined);
-    const complete = vi.spyOn(manager, 'completeTournament').mockResolvedValue(undefined);
+    const execute = () =>
+      manager.executeTournament({ candidateId: 'c2', specId: 's1', fromRung: 'shadow', toRung: 'train', actorId: 'agent-1' });
+    return { calls, update, execute };
+  };
+  const advanced = { fromRung: 'shadow', toRung: 'train', stage: 'passed_shadow', previousStage: 'passed_premerge', noop: false, dryRun: false, writes: ['passed_shadow'], evidence: [] };
+  const route = (overrides: Record<string, (request: Request) => Response> = {}) => (request: Request): Response => {
+    const path = `${request.method} ${new URL(request.url).pathname}`;
+    if (overrides[path]) return overrides[path](request);
+    if (path === 'GET /api/candidates/c1') return json({ success: true, data: { shadowScore: 90 } });
+    if (path === 'GET /api/candidates/c2') return json({ success: true, data: { shadowScore: 50 } });
+    if (path === 'POST /api/trials') return json({ success: true, data: { id: 'tr1' } }, 201);
+    if (path === 'POST /api/trials/tr1/decide') return json({ success: true, data: {} });
+    if (path === 'POST /api/candidates/c1/advance') return json({ success: true, data: advanced });
+    return json({ success: false, error: `unexpected ${path}` }, 500);
+  };
 
-    const result = await manager.executeTournament({
-      candidateId: 'c1', specId: 's1', fromRung: 'shadow', toRung: 'canary',
-    });
+  it('moves the winner with POST /api/candidates/:id/advance, never the stage PATCH, and never /compare', async () => {
+    const { calls, update, execute } = run(route());
+    const result = await execute();
+    expect(result).toMatchObject({ success: true, outcome: 'eliminated', moves: [{ candidateId: 'c1', fromRung: 'shadow', toRung: 'train' }] });
+    const paths = calls.map((c) => `${c.method} ${new URL(c.url).pathname}`);
+    expect(paths).toEqual([
+      'GET /api/candidates/c1', 'GET /api/candidates/c2', 'POST /api/trials', 'POST /api/trials/tr1/decide', 'POST /api/candidates/c1/advance',
+    ]);
+    const adv = calls[4];
+    expect(adv.headers.get('X-Actor-ID')).toBe('agent-1');
+    expect(await adv.json()).toMatchObject({ toRung: 'train', fromRung: 'shadow' });
+    expect(calls[2].headers.get('Idempotency-Key')).toBe('tournament:t1:c1');
+    expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ winner: 'c1' }));
+    expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'completed', winner: 'c1' }));
+  });
 
-    expect(result.success).toBe(false);
-    expect(complete).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith(
-      't1',
-      expect.objectContaining({ status: 'failed', failureReason: expect.stringContaining('404') })
-    );
+  it("fails the tournament, retryably, when the winner's advance is rejected, and relays the Spec DO's code", async () => {
+    const { update, execute } = run(route({
+      'POST /api/candidates/c1/advance': () => json({ success: false, error: 'Cannot move to train from stage failed', code: 'not_next_rung' }, 409),
+    }));
+    const result = await execute();
+    expect(result).toMatchObject({ success: false, code: 'not_next_rung' });
+    expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'failed', failureReason: expect.stringContaining('not_next_rung') }));
+    expect(update).not.toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'completed' }));
+  });
+
+  it('an older Spec DO without the advance route fails the tournament as ledger_too_old, not as an unknown candidate', async () => {
+    const { execute } = run(route({ 'POST /api/candidates/c1/advance': () => json({ success: false, error: 'Not found' }, 404) }));
+    expect(await execute()).toMatchObject({ success: false, code: 'ledger_too_old' });
   });
 });
 
