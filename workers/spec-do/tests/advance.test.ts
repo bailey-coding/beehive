@@ -463,6 +463,9 @@ describe('review fixes (PR B review: F1-F8)', () => {
     expect(decideAdvance('passed_canary', 'full', 'full').kind).toBe('go');
     expect(decideAdvance('passed_canary', 'full', 'train')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
     expect(decideAdvance('passed_train', 'full', 'full')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
+    // the leniency is only for passed_canary: from any other stage a caller saying `canary` for a move to full is stale, not leniently accepted
+    expect(decideAdvance('passed_premerge', 'full', 'canary')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
+    expect(decideAdvance('pending', 'full', 'canary')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
     const { c, spec: s } = seed();
     setStage(c.id, 'passed_canary');
     await deployCanary(c.id, s.id);
