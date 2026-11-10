@@ -2,8 +2,8 @@
 
 Task: `promotion-gaps` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-07: tournament winners are decided by arrival order (no
 writer for `shadow_score`)" | Tier: heavy (AGENTS.md rule 2 spine: Spec DO schema, promotion train).
-Status: **rev 2: Review 1 (independent agent, 2026-11-09) approve with changes, B1-B5 and N1-N8 applied in section 11, which
-supersedes conflicting text above. Maintainer decisions in section 9. No code written.**
+Status: **rev 3: Review 2 (verification, 2026-11-09, approve with changes) applied in section 12; Review 1 in section 11. Sections 12 then 11
+supersede conflicting text above. PR A may start; PR B and C wait on V1-V4 (section 12). Maintainer decisions in section 9. No code written.**
 
 The oracle ladder says a candidate is promotable only when it clears every rung, and the Spec DO is the single
 serialization point for that decision (AGENTS.md). Today no rung's result is checked on promotion, and the one oracle
@@ -309,3 +309,79 @@ Each blocker was re-checked against the code before accepting.
 **Tests added to section 5:** `foreign_keys` ON for the verdict upsert; purge with a row and an orphan; non-ledger ids
 in a comparator batch; per-message retry vs ack; the losing entrant's state; `retryPromotion` without `fromRung`; the
 two `advance` 404s; the response-shape zod parse; the local soak override.
+
+## 12. Review 2 dispositions (verification pass, 2026-11-09: approve with changes; sections 12, then 11, supersede earlier text)
+
+**PR A is unblocked by V5-V7, V9, V10, V13 (its rows) and the flip-readiness list below. V1-V4 gate PR B/C.**
+
+- **V1 (accepted, needs the maintainer before PR C): the tournament's scope.** Default mode is `tournament`
+  (`workers/promotion-worker/spec-do.ts:69`); every `/promote` at every rung goes through one tournament per spec
+  (`promotion.ts:88-90`, `tournament.ts:38,187`) and a completed one refuses later promotes (`tournament.ts:44-55`). The demo
+  climbs only because F8 marks a waiting entrant as moved. Proposed: the tournament decides only `shadow -> train` (the
+  competitive rung); every other transition calls `advance` directly in both modes; the tournament is keyed by
+  (spec, fromRung). Decision 6 below.
+- **V2 (accepted, needs the maintainer before PR C): tournament depends on shadow evidence.** Under B1 no pre-canary
+  candidate gets production samples, so a tournament is null vs null. Specified: null-vs-null and null-vs-score fail with
+  code `no_shadow_evidence` (distinct from `tie`); an explicit shadow `fail` verdict under `log` mode is `evidence_failed`,
+  logged for `advance`, but a failed candidate does not enter a tournament. Consequence, stated plainly: **in production,
+  competitive promotion past `shadow` stays blocked until the shadow-router follow-up (option 2)**; the demo and e2e seed
+  samples. Decision 6 below.
+- **V3 (accepted): the soak override.** `DEV` is set nowhere (`scripts/start-e2e-workers.sh:92` passes no such var) and
+  would trigger `seedDatabase` (`index.ts:678-680`). Use a dedicated var `CANARY_MIN_SOAK_MINUTES`, passed like
+  `PURGE_MIN_AGE_HOURS:0` in the e2e start script (the Spec DO runs in the `beehive` worker); production guard: the
+  value is honored only when `<` the default and the wrangler config for the deployed worker never sets it (OPS check).
+- **V4 (confirmed): the tournament's trial write.** `trials.decided_by` references `actors(id)` and the trial route
+  uses `body.decidedBy || X-Actor-ID`. The tournament sends the `/promote` caller's `actorId` (an existing actor, as the
+  demo does); if absent, no trial is written and the tournament records `trial: skipped`. Test with foreign keys ON.
+- **V5 (accepted): stale text, rewritten here.** DDL: `shadow_scores(id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL UNIQUE,
+  sample_count, score_sum, matched_count, diffs_json, last_request_id, updated_at, baseline TEXT NOT NULL)`, no FK. It goes in
+  `ORG_PURGE_ORDER` (`index.ts:165-184`) before `candidates`, with the orphan sweep; it is not tombstoned. 3.1/3.3
+  "throws, so the queue retries" and "any non-OK is an error" are void: a 404 is a distinct not-found result, 5xx/network
+  retry (B2). 3.2's header actor is void (B4). 3.4: the `passed_premerge` row's shadow evidence is `log`; canary soak is
+  the head ref's `moved_at` (N2), not `status`. Section 4 row 2 follows N8; section 8 risks 2-3 follow B1/N2.
+- **V6 (accepted): the service actor.** Inserted lazily inside the route's transaction (`INSERT OR IGNORE`, `type = 'agent'`
+  because `actors.type` allows only `human|agent`, `schema-inline.ts:71`), the `resolveMinter` pattern (`index.ts:838-846`),
+  not in the m15 step, so a fresh ledger (`initSchema`) is covered. Same for the trial-write fallback.
+- **V7 (accepted): the policy key.** No `governance.min_shadow_samples` key exists in code (only `governance.m14_epoch`,
+  `index.ts:1265`) and the M5A-2 plan's default is 100 vs this plan's 20. One exported constant `SHADOW_MIN_SAMPLES = 20`
+  in `workers/shared/shadow-verdict.ts` behind a `shadowMinSamples()` helper; `docs/M5A-2-GOVERNANCE-PLAN.md:56` gets a
+  dated note pointing at it.
+- **V8 (accepted): coded 404.** The router's 404s are code-less (`index.ts:4401,4853`), so the new routes build the 404 body
+  explicitly from a shared constant `CANDIDATE_NOT_FOUND = 'candidate_not_found'` in `workers/shared/` (the
+  `USER_TOKEN_NOT_FOUND` pattern, `spec-do-auth.ts:34`, discriminating on the `error` string). The worker treats any 404
+  without that code as `ledger_too_old` (503).
+- **V9 (accepted): idempotency and the cap.** "Exactly one sample when keyed" is a handler check on `idem !== null`,
+  thrown before the key insert; unkeyed calls open their own `transactionSync` (`idempotent()` opens none without a key).
+  `SHADOW_MAX_SAMPLES = 1000` lives in the DO (the edge route bypasses the comparator); over the cap the route answers 200
+  with `capped: true` and records nothing.
+- **V10 (accepted): comparator queue handling.** Per-message `ack()`/`retry()` are supported by the global
+  `MessageBatch` type (`queue-consumer/index.ts:442` already uses `retry`); delete the local shim
+  (`scientist-comparator/types.ts:516-531`), remove `allSettled` + `ackAll` (`index.ts:136-142`), and set `max_retries = 4` on
+  both consumers (`queue-consumer/wrangler.toml:40` uses 4, not 3).
+- **V11:** soak source confirmed (`deploy_refs.moved_at`, read the head row directly).
+- **V12 (accepted): `advance` step order.** Same-stage replay (step 5) is checked before `not_next_rung` (step 3), so a
+  redelivery is a 200 no-op. The `mode?` body field is removed: log versus enforce is the DO's constant table only.
+- **V13 (accepted): mixed-version rows added.** Old promotion worker with new DO: it writes off-by-one stages
+  (`promotion-worker/spec-do.ts:73-79`) that the new DO reads one rung ahead; accepted for the window (the stage PATCH is
+  unchanged and still logged by PR-S), recorded in OPS. New edge with old DO on `shadow-samples`: 503 `ledger_too_old`.
+  The edge route list is explicit (`api/index.ts:223-255`): `advance` is not exposed; a test keeps it so.
+- **V14:** router line numbers corrected (`shadow-router/index.ts:447-453,458,464`).
+
+**Flip-readiness (log -> enforce is one constant in the DO).** Table shape: `evidence[]` entries `{ rung, status, mode }`;
+workers branch on `evidence_missing`, never on the rung; tests run the shadow row under both modes from PR B. e2e and the demo seed a
+real shadow pass (20 samples, average >= 80). **Placeholder-baseline guard:** each sample carries `baseline`
+(`'placeholder' | 'production'`, the comparator sends `'placeholder'` until the router follow-up); the verdict counts only
+`'production'` samples toward `SHADOW_MIN_SAMPLES` in enforce mode, and in log mode reports both counts, so scores taken
+against today's fake `200` can never become enforced evidence and the 1000-sample cap cannot freeze them. Candidates that
+passed shadow during the log period are grandfathered: the flip PR changes the constant and nothing else.
+
+**Decision 6 (maintainer, before PR C):** (a) tournament scope as in V1; (b) accept that competitive promotion past `shadow`
+is blocked in production (null-vs-null fails `no_shadow_evidence`) until option 2 lands, with the demo and e2e seeding
+samples. Alternative to (b) if unwanted: a tournament may decide on `pre-merge` verdict score alone while shadow is `log`.
+
+**Follow-up plan (option 2), scope from Review 2:** mirror `passed_premerge` candidates (DO read route, cached like
+`live-refs-cache.ts`); per-candidate preview deployment via the preview manager (`isAcceptableCanaryUrl`); capture the real
+production response as the baseline (`shadow-router/index.ts:447-453`); capped and redacted bodies (M5A-2 rev 5 path h) and
+`MIRROR_BODY_MODE` for POST routes; fill `specId` (`:458`); `baseline: 'production'` marker; then the flip PR. Risks:
+mirrored load and cost, untrusted candidate output in queues and Analytics Engine, mirrored write side effects, sample
+rate against the 20-sample minimum. Mixed-version: old comparator with new message fields, old router with new DO.
