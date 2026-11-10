@@ -410,3 +410,11 @@ rate against the 20-sample minimum. Mixed-version: old comparator with new messa
   flip, not live; `shadow_scores` is the live source). **N4:** `message.retry` backs off by `30 s x attempts` (at most 300). **N5:** the dead
   `shadow_*` mapping in `rowToCandidate` is gone. **N6:** OPS.md says plainly that the edge accepts `baseline: 'production'` from any tier-1
   holder, so `production_count` is trustworthy only while that route stays maintainer-only and unused for forged data.
+
+**Verification pass (2026-11-10, independent agent: approve with changes, no blockers).** It confirmed S1-S5, the hashed key, `message.attempts`,
+prototype-key safety and the edge 503 (including a JSON body with no `error`). Four non-blocking items, all closed: F1 a test for a batch that
+mixes baselines across the placeholder cap (`continue` to `break` now fails a test); F2 `parseShadowDiffs` keeps only finite numbers, so a
+hand-corrupted value is dropped and the next sample repairs the aggregate instead of concatenating a string; F3 a test listing 105+ candidates
+with a shadow row on the last, with the test SQL shim now enforcing the Workers limit of 100 bound parameters (any unchunked query fails in
+tests as it would in production); F4 the retry-delay ceiling and the no-attempt-count fallback are tested. Each was mutation-checked; two
+survivors (F3 and the F4 fallback) were test defects, fixed and re-checked.

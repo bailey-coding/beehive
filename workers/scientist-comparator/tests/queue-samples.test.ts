@@ -75,8 +75,9 @@ function message(requestId: string, candidateIds: string[]): ScientistQueueMessa
   };
 }
 
-function batch(bodies: ScientistQueueMessage[], attempts: number | undefined = 1) {
-  const messages = bodies.map((body, i) => ({ id: `m${i}`, timestamp: new Date(), body, attempts, ack: vi.fn(), retry: vi.fn() }));
+// attempts: null means a message with no attempt count (a default parameter would swallow undefined)
+function batch(bodies: ScientistQueueMessage[], attempts: number | null = 1) {
+  const messages = bodies.map((body, i) => ({ id: `m${i}`, timestamp: new Date(), body, attempts: attempts === null ? undefined : attempts, ack: vi.fn(), retry: vi.fn() }));
   const b = { queue: 'beehive-scientist-comparisons', messages, ackAll: vi.fn(), retryAll: vi.fn() };
   return b;
 }
@@ -181,7 +182,7 @@ describe('ack and retry, per message', () => {
     fake.post = () => json(503, { success: false });
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const delays: Array<number | undefined> = [];
-    for (const attempts of [3, 20, undefined]) {
+    for (const attempts of [3, 20, null]) {
       const b = batch([message(`req-f4-${attempts}`, [C1])], attempts);
       await run(b);
       delays.push((b.messages[0].retry.mock.calls[0][0] as { delaySeconds: number }).delaySeconds);
