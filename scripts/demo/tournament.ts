@@ -50,7 +50,7 @@ type Json = Record<string, unknown>;
 
 class DemoError extends Error {}
 
-export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
+async function runDemoSteps(opts: DemoOptions): Promise<DemoResult> {
   const { urls, token, log } = opts;
   const suffix = opts.suffix ?? Date.now().toString(36);
 
@@ -279,6 +279,31 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
   log(`   curl -s -H "Authorization: Bearer ${token}" ${urls.promotion}/promote/${a} | jq .`);
 
   return { specId, candidates: { a, b, c, a2 }, trialId, refusedC, winnerRung: String(state.currentRung), liveCanaries, canaryStatus };
+}
+
+/**
+ * The story is the tournament's (shadow -> train is decided by shadow score), so the promotion worker must be in tournament mode while it runs.
+ * The mode is global ledger state: set it for the run and put the original back, so a worker left in merge-train mode (or another test flipping
+ * it) cannot turn the narration into something that did not happen.
+ */
+export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
+  const { urls, token } = opts;
+  const mode = async (body?: unknown): Promise<string> => {
+    const res = await fetch(`${urls.promotion}/mode`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) throw new DemoError(`${urls.promotion}/mode answered ${res.status}`);
+    return String(((await res.json()) as Json).mode);
+  };
+  const original = await mode();
+  if (original !== 'tournament') await mode({ mode: 'tournament' });
+  try {
+    return await runDemoSteps(opts);
+  } finally {
+    if (original !== 'tournament') await mode({ mode: original }).catch(() => undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

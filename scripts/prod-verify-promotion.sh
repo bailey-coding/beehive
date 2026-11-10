@@ -10,7 +10,7 @@
 #   1. creates test-org-e2e-prodcheck-<ts> -> repo -> spec -> two candidates (a real tree: the winner is recorded
 #      on a real candidate, so made-up ids would correctly fail)
 #   2. places both candidates on the shadow rung (the master-tier stage PATCH, the documented break-glass) and gives them shadow scores
-#      (60 and 90) through the maintainer-only edge route: production candidates have none until the shadow-router follow-up
+#      (85 and 95; 20 samples is the verdict minimum and an average under 80 is a failing verdict that keeps a candidate out) through the maintainer-only edge route: production candidates have none until the shadow-router follow-up
 #      (docs/plans/promotion-gaps-plan.md), and the tournament refuses without them
 #   3. sets the promotion mode to tournament, asks to promote both to train (first 202 waiting, second 200 decided), restores the mode
 #   4. checks the tournament is `completed` and that the HIGHER score won (not the first arrival) with stage `passed_shadow`
@@ -71,7 +71,7 @@ for c in "$C1" "$C2"; do
   [ "$(call PATCH "$API" "/api/candidates/$c/stage" '{"stage":"passed_premerge","notes":"prod-verify fixture"}' "$ACTOR" | jq -r '.data.stage // empty')" = "passed_premerge" ] || fail "could not place $c on the shadow rung"
 done
 samples() { jq -nc --arg p "$1" --argjson s "$2" '{samples: [range(0;20) | {requestId: ($p + "-" + (. | tostring)), score: $s, matched: false, diffs: []}]}'; }
-for pair in "$C1:60" "$C2:90"; do
+for pair in "$C1:85" "$C2:95"; do
   c="${pair%%:*}"; score="${pair##*:}"
   [ "$(call POST "$API" "/api/candidates/$c/shadow-samples" "$(samples "prodcheck-$TS-$c" "$score")" "$ACTOR" | jq -r '.data.sampleCount // empty')" = "20" ] || fail "could not post shadow samples for $c"
 done
@@ -92,7 +92,7 @@ STATUS="$(echo "$T" | jq -r '.status // empty')"; WINNER="$(echo "$T" | jq -r '.
 echo "tournament: status=$STATUS winner=$WINNER"
 [ "$STATUS" = "completed" ] || fail "tournament status is '$STATUS', expected completed"
 [ -n "$WINNER" ] || fail "tournament has no winner"
-[ "$WINNER" = "$C2" ] || fail "the winner is $WINNER, expected $C2 (the higher shadow score, 90, which arrived second)"
+[ "$WINNER" = "$C2" ] || fail "the winner is $WINNER, expected $C2 (the higher shadow score, 95, which arrived second)"
 if [ -n "$WINNER" ]; then
   STAGE="$(call GET "$API" "/api/candidates/$WINNER" | jq -r '.data.stage // empty')"
   echo "winner stage: $STAGE"

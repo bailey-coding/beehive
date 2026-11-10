@@ -441,8 +441,9 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       // Participants are real candidates on the shadow rung with shadow scores in the ledger: the tournament ranks by those scores
       const w = await seedWorld('tournament');
       const candidateIds = [await candidateAt(w, 'passed_premerge'), await candidateAt(w, 'passed_premerge')];
-      await shadowScore(w, candidateIds[0], 60);
-      await shadowScore(w, candidateIds[1], 90);
+      // 20 samples is the minimum for a verdict, and an average under 80 is a failing one (which would keep that candidate out of the contest)
+      await shadowScore(w, candidateIds[0], 85);
+      await shadowScore(w, candidateIds[1], 95);
 
       try {
         const modeRes = await fetch(`${WORKER_URLS.promotion}/mode`, {
