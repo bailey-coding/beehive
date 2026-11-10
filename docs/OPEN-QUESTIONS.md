@@ -1175,6 +1175,7 @@ repos are capped at 1 GB, so M3 item 9 should be conditional on measured repo si
   needs Go for `go install`). Check with `ls /dev/fuse` in a Sandbox (the existing `GET /sandbox/probe` is the place).
 
 Still open: partial-clone support, FUSE in the Sandbox image, async-mount credentials. M3 item 9 stays conditional on measured repo size.
+- **Retry moves have no promotion state.** A car retried through `POST /merge/retry` that merges and advances moves the candidate, but only `POST /promote` records promotion states, so the promotion ledger does not show that move (the candidate's stage history and the train ledger do). Route the retry through the same reconcile step.
 
 **Status**: Open.
 
