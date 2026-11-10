@@ -29,11 +29,29 @@ import type { PromotionMode, Rung } from '../shared/promotion-ledger';
 export interface PromotionRequest {
   candidateId: string;
   specId: string;
-  fromRung: Rung;
+  /** Optional: the Spec DO derives the rung a candidate is on from its stage. When given, a mismatch is a 409 stale_from_rung */
+  fromRung?: Rung;
   toRung: Rung;
   actorId?: string;
   timestamp?: string;
 }
+
+/**
+ * What a successful promotion call did for the requesting candidate. `moved` is the only outcome that advanced its stage;
+ * `waiting` (alone in a tournament), `eliminated` (lost the tournament) and `queued` (a merge-train car not yet merged) finished
+ * without moving it, and `noop` means it was already there. docs/plans/promotion-gaps-plan.md sections 3.5, 11 (N5), 12 (V1).
+ */
+export type PromotionOutcome = 'moved' | 'waiting' | 'eliminated' | 'queued' | 'noop';
+
+/** A candidate whose stage this call advanced (not always the requester: a tournament winner, a merged car) */
+export interface PromotionMove {
+  candidateId: string;
+  fromRung: Rung;
+  toRung: Rung;
+}
+
+/** A request whose from-rung has been resolved (the Spec DO derives it from the candidate's stage) */
+export type ResolvedPromotionRequest = PromotionRequest & { fromRung: Rung };
 
 // Promotion result
 export interface PromotionResult {
@@ -46,6 +64,12 @@ export interface PromotionResult {
   timestamp: string;
   mode?: PromotionMode;
   details?: Record<string, unknown>;
+  /** Set on success */
+  outcome?: PromotionOutcome;
+  /** Set on failure: a stable reason (stale_from_rung, not_next_rung, evidence_missing, candidate_not_found, ledger_too_old, tie, no_shadow_evidence, ...) */
+  code?: string;
+  /** Candidates whose stage was advanced by this call */
+  moves?: PromotionMove[];
 }
 
 // ============================================================================

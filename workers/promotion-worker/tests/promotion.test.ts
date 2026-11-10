@@ -28,7 +28,7 @@ import { VERSION_CONFLICT } from '../../shared/ledger-state-machine';
 import { GateWorkflowRequestSchema, GATE_WORKFLOW_ORIGIN, GATE_PRE_MERGE_PATH } from '../../shared/schemas';
 import { getPromotionLedger } from '../spec-do';
 import { makeSpecDo } from '../../spec-do/tests/sqlite-state';
-import { TEST_INTERNAL_ONLY } from '../../spec-do/tests/do-tokens';
+import { TEST_INTERNAL_ONLY, authedDo } from '../../spec-do/tests/do-tokens';
 
 // The gate worker's real answer shape for POST /gates/pre-merge: 201 {success, verdictId, result:{status,...}}
 // even when the verdict is fail (workers/gate-workflow/index.ts returns success:true with result.status)
@@ -604,106 +604,122 @@ describe('Spec DO promotion ledger wiring', () => {
     return { spec, env };
   }
 
-  const request = (candidateId: string, specId = 'spec-1'): PromotionRequest => ({
-    candidateId,
-    specId,
-    fromRung: 'shadow',
-    toRung: 'train',
-    actorId: 'agent-1',
-  });
+  // Real candidate rows: the worker asks the Spec DO's advance route whether each move is legal (docs/plans/promotion-gaps-plan.md PR C),
+  // so a synthetic candidate id is a 404. Shadow scores reach the ledger through the Spec DO's shadow-samples route.
+  async function realWorld(mode: PromotionMode) {
+    const { spec, env } = await ledgerEnv(mode);
+    const agent = spec.createActor('agent', 'agent-1').id;
+    const org = spec.createOrganization('org-lw', 'artifacts');
+    const repo = spec.createRepository('repo-lw', org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'ns');
+    const s = spec.createSpec('spec-lw', 'd', 'contract', [], org.id, agent);
+    const candidate = (stage: string) => {
+      const c = spec.createCandidate(s.id, repo.id, 'sha1', 'base', agent);
+      spec.transitionCandidate(c.id, stage as never, 'test');
+      return c.id;
+    };
+    const score = async (id: string, value: number) => {
+      const res = await authedDo(spec).fetch(
+        new Request(`https://spec-do.internal/api/candidates/${id}/shadow-samples`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Actor-ID': 'scientist-comparator' },
+          body: JSON.stringify({ samples: [{ requestId: `r-${id}`, score: value, matched: true, diffs: [] }] }),
+        })
+      );
+      expect(res.status).toBe(200);
+    };
+    const request = (candidateId: string): PromotionRequest => ({ candidateId, specId: s.id, fromRung: 'shadow', toRung: 'train', actorId: agent });
+    return { spec, env, specId: s.id, agent, candidate, score, request };
+  }
 
   it('tournament mode: records the promotion state and the tournament in the DO', async () => {
-    const { spec, env } = await ledgerEnv('tournament');
+    const { spec, env, specId, candidate, request } = await realWorld('tournament');
     const worker = new PromotionWorker(env);
+    const c1 = candidate('passed_premerge');
 
-    const response = await worker.promoteCandidate(request('cand-1'));
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as PromotionResult).success).toBe(true);
+    const response = await worker.promoteCandidate(request(c1));
+    // Alone in the tournament: accepted, not moved
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as PromotionResult;
+    expect(body).toMatchObject({ success: true, outcome: 'waiting' });
 
-    const states = spec.listPromotionStates('cand-1');
+    const states = spec.listPromotionStates(c1);
     expect(states).toHaveLength(1);
-    expect(states[0]).toMatchObject({ status: 'completed', mode: 'tournament', currentRung: 'train', targetRung: 'train' });
+    expect(states[0]).toMatchObject({ status: 'completed', mode: 'tournament', currentRung: 'shadow', targetRung: 'train' });
 
-    const tournaments = spec.listTournaments('spec-1');
+    const tournaments = spec.listTournaments(specId);
     expect(tournaments).toHaveLength(1);
-    expect(tournaments[0].candidates.map((c) => c.candidateId)).toEqual(['cand-1']);
+    expect(tournaments[0].candidates.map((c) => c.candidateId)).toEqual([c1]);
   });
 
-  it('tournament mode: a second candidate completes the tournament via PATCH', async () => {
-    const { spec, env } = await ledgerEnv('tournament');
-    // The winner is recorded on a real candidate row (PATCH /api/candidates/:id/stage)
-    const agent = spec.createActor('agent', 'agent-1').id;
-    const org = spec.createOrganization('org', 'artifacts');
-    const repo = spec.createRepository('repo', org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'ns');
-    const s = spec.createSpec('spec', 'd', 'contract', [], org.id, agent);
-    const c1 = spec.createCandidate(s.id, repo.id, 'sha1', 'base', agent);
-    const c2 = spec.createCandidate(s.id, repo.id, 'sha2', 'base', agent);
-    mockShadowRouter.fetch.mockResolvedValue(
-      new Response(JSON.stringify({ winner: c2.id, score: 90 }), { status: 200 })
-    );
+  it('tournament mode: a second candidate completes the tournament and the higher shadow score wins', async () => {
+    const { spec, env, specId, candidate, score, request } = await realWorld('tournament');
+    const c1 = candidate('passed_premerge');
+    const c2 = candidate('passed_premerge');
+    await score(c1, 60);
+    await score(c2, 90);
     const worker = new PromotionWorker(env);
 
-    await worker.promoteCandidate(request(c1.id, s.id));
-    const response = await worker.promoteCandidate(request(c2.id, s.id));
+    await worker.promoteCandidate(request(c1));
+    const response = await worker.promoteCandidate(request(c2));
     expect(response.status).toBe(200);
 
-    const [tournament] = spec.listTournaments(s.id);
+    const [tournament] = spec.listTournaments(specId);
     expect(tournament.status).toBe('completed');
-    expect(tournament.winner).toBeDefined();
+    expect(tournament.winner).toBe(c2);
     expect(tournament.candidates).toHaveLength(2);
-    expect(spec.getCandidate(tournament.winner!)?.stage).toBe('passed_train');
-    // Characterization (PR-S, log-only): today's winner write skips the ladder (pending -> passed_train), so it is
-    // recorded as one invalid_transition. The enforce PR must change the worker first (docs/MILESTONES.md M5a-2).
+    expect(spec.getCandidate(c2)?.stage).toBe('passed_shadow');
+    expect(spec.getCandidate(c1)?.stage).toBe('passed_premerge');
+    // The winner is written by the Spec DO's advance, one rung at a time: no skip-ahead, so PR-S has nothing to log
+    // (this was a recorded invalid_transition on every tournament run before PR C; docs/MILESTONES.md PR-S prerequisite (a))
     const rows = (spec as unknown as { queryAll(sql: string): Record<string, unknown>[] }).queryAll(
       `SELECT subject, reason, detail FROM governance_events WHERE event = 'invalid_transition'`
     );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ subject: `candidate:${tournament.winner}`, reason: 'candidate_stage:pending->passed_train' });
-    expect(JSON.parse(rows[0].detail as string)).toMatchObject({ rule: 'skip_ahead', source: 'stage_patch' });
+    expect(rows).toHaveLength(0);
   });
 
   it('merge-train mode: records the train and the merged car in the DO', async () => {
-    const { spec, env } = await ledgerEnv('merge-train');
-    // The train's gate call reads the candidate row for its shas, so the candidate must be a real DO row
-    const agent = spec.createActor('agent', 'agent-mt-ledger').id;
-    const org = spec.createOrganization('org-mt-ledger', 'artifacts');
-    const repo = spec.createRepository('repo-mt-ledger', org.id, 'baseline', undefined, undefined, 'https://example.invalid/r.git', 'ns');
-    const s = spec.createSpec('spec-mt-ledger', 'd', 'contract', [], org.id, agent);
-    const c = spec.createCandidate(s.id, repo.id, 'sha1', 'base', agent);
+    const { spec, env, specId, candidate } = await realWorld('merge-train');
+    const c = candidate('passed_shadow');
     mockGateWorkflow.fetch.mockResolvedValue(gateVerdictResponse('pass'));
     const worker = new PromotionWorker(env);
 
-    const response = await worker.promoteCandidate(request(c.id, s.id));
+    const response = await worker.promoteCandidate({ candidateId: c, specId, fromRung: 'train', toRung: 'canary', actorId: 'agent-1' });
     expect(response.status).toBe(200);
 
-    const [train] = spec.listMergeTrains(s.id);
+    const [train] = spec.listMergeTrains(specId);
     expect(train.candidates).toEqual([
-      expect.objectContaining({ candidateId: c.id, position: 1, status: 'merged' }),
+      expect.objectContaining({ candidateId: c, position: 1, status: 'merged' }),
     ]);
     expect(train.status).toBe('idle');
     expect(train.nextMerge).toBeNull();
-    expect(spec.listPromotionStates(c.id)[0].status).toBe('completed');
+    expect(spec.listPromotionStates(c)[0].status).toBe('completed');
+    // The merged car is what moves the stage (docs/MILESTONES.md PR-S prerequisite (b))
+    expect(spec.getCandidate(c)?.stage).toBe('passed_train');
   });
 
   it('candidate status reads the latest state from the DO', async () => {
-    const { env } = await ledgerEnv('tournament');
+    const { env, candidate, request } = await realWorld('tournament');
     const worker = new PromotionWorker(env);
-    await worker.promoteCandidate(request('cand-1'));
+    const c = candidate('passed_premerge');
+    await worker.promoteCandidate(request(c));
 
-    const body = (await (await worker.getCandidatePromotionStatus('cand-1')).json()) as { state: PromotionState };
-    expect(body.state).toMatchObject({ candidateId: 'cand-1', status: 'completed' });
+    const body = (await (await worker.getCandidatePromotionStatus(c)).json()) as { state: PromotionState };
+    expect(body.state).toMatchObject({ candidateId: c, status: 'completed' });
 
     const none = (await (await worker.getCandidatePromotionStatus('cand-x')).json()) as { status: string };
     expect(none.status).toBe('not_started');
   });
 
   it('a second promotion of a candidate is allowed once the first completed', async () => {
-    const { spec, env } = await ledgerEnv('tournament');
+    const { spec, env, specId, candidate, agent } = await realWorld('tournament');
     const worker = new PromotionWorker(env);
-    await worker.promoteCandidate(request('cand-1'));
-    const second = await worker.promoteCandidate({ ...request('cand-1'), fromRung: 'train', toRung: 'canary' });
-    expect(second.status).toBe(200);
-    expect(spec.listPromotionStates('cand-1').map((s) => s.targetRung)).toEqual(['canary', 'train']);
+    const c = candidate('pending');
+    spec.createGateVerdict(c, 'pre-merge', 'pass', 90, 0, agent);
+    const first = await worker.promoteCandidate({ candidateId: c, specId, toRung: 'shadow', actorId: agent });
+    expect(first.status).toBe(200);
+    const second = await worker.promoteCandidate({ candidateId: c, specId, toRung: 'train', actorId: agent });
+    expect(second.status).toBe(202); // alone in the tournament: waiting
+    expect(spec.listPromotionStates(c).map((s) => s.targetRung)).toEqual(['train', 'shadow']);
   });
 
   it('currentRung advances to targetRung on completion and stays the start rung on failure', async () => {
