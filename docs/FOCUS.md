@@ -54,8 +54,8 @@ revoke at `/app/settings/tokens`). Scripts against the deployed API need a plain
 
 **Next:** the promotion gaps above (spine): plan `docs/plans/promotion-gaps-plan.md` rev 3 (2026-11-09, two independent reviews). **PR A is
 implemented** (2026-11-10, branch `claude/pr1-review-lmgqik`, not merged to `main`, not deployed): m15 `shadow_scores`, the shadow-samples route and
-verdict, comparator ack/retry fixes, a maintainer-only edge route; full unit suite green, every guard mutation-checked. **PR B** (`advance`, 2026-11-10: Spec DO route, internal, nothing calls it yet) is implemented and awaiting independent review; **PR C** waits on the maintainer's decision 6 (tournament scope, and that competitive promotion past `shadow` stays blocked in production until the
-shadow-router follow-up; plan section 12). Shadow evidence is log-only until that follow-up (OPEN-QUESTIONS 2026-11-10). D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
+verdict, comparator ack/retry fixes, a maintainer-only edge route; full unit suite green, every guard mutation-checked. **PR B** (`advance`, 2026-11-10) is implemented, reviewed and verified. **PR C** (the promotion worker on `advance`: tournament by ledger shadow score, merge-train success advances, stable result codes, retry fixed, e2e and demo on real candidates; maintainer decision 6 accepted as option 1) is implemented and awaiting independent review; once deployed, competitive promotion past `shadow` is refused in production (`no_shadow_evidence`) until the
+shadow-router follow-up (plan section 12). Shadow and train evidence are log-only until then (OPEN-QUESTIONS 2026-11-10). D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
 Candidates after it: the 500s as a starter issue, real traffic for `full`.
 
 **How we worked:** every code change was mutation-checked (break the fix, see a test fail) and independently reviewed
