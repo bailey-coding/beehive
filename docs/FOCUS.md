@@ -52,8 +52,11 @@ revoke at `/app/settings/tokens`). Scripts against the deployed API need a plain
   checks no gate verdict or trial and trusts the caller's `fromRung`; `full` moves no deploy ref; two create routes
   answer 500 for invalid bodies. `start-e2e-workers.sh` now keeps its PID file on a refused restart.
 
-**Next:** the promotion gaps above (spine): plan `docs/plans/promotion-gaps-plan.md` rev 2 (2026-11-09, reviewed: approve with changes), ready for
-implementation (PR A first). D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
+**Next:** the promotion gaps above (spine): plan `docs/plans/promotion-gaps-plan.md` rev 3 (2026-11-09, two independent reviews). **PR A is
+implemented** (2026-11-10, branch `claude/pr1-review-lmgqik`, not merged to `main`, not deployed): m15 `shadow_scores`, the shadow-samples route and
+verdict, comparator ack/retry fixes, a maintainer-only edge route; full unit suite green, every guard mutation-checked. **PR B** (`advance`) can
+start; **PR C** waits on the maintainer's decision 6 (tournament scope, and that competitive promotion past `shadow` stays blocked in production until the
+shadow-router follow-up; plan section 12). Shadow evidence is log-only until that follow-up (OPEN-QUESTIONS 2026-11-10). D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
 Candidates after it: the 500s as a starter issue, real traffic for `full`.
 
 **How we worked:** every code change was mutation-checked (break the fix, see a test fail) and independently reviewed
