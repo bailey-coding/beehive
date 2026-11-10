@@ -220,7 +220,8 @@ export class TournamentManager {
       const won = decision.winnerId === request.candidateId;
       return result({
         success: true,
-        outcome: won ? 'moved' : 'eliminated',
+        // A winner whose advance was a no-op (it had already moved by the time the real call ran) is not a move
+        outcome: won ? (advanced.data.noop ? 'noop' : 'moved') : 'eliminated',
         message: `Tournament winner: ${decision.winnerId} promoted to ${request.toRung}`,
         moves: advanced.data.noop ? [] : [{ candidateId: decision.winnerId, fromRung: request.fromRung, toRung: request.toRung }],
         details: {
