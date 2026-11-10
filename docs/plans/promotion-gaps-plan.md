@@ -2,7 +2,7 @@
 
 Task: `promotion-gaps` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-07: tournament winners are decided by arrival order (no
 writer for `shadow_score`)" | Tier: heavy (AGENTS.md rule 2 spine: Spec DO schema, promotion train).
-Status: **rev 3: Review 2 (verification, 2026-11-09, approve with changes) applied in section 12; Review 1 in section 11. Sections 12 then 11
+Status: **rev 3: Review 2 (verification, 2026-11-09, approve with changes) applied in section 12; Review 1 in section 11; PR A code review in section 13. Sections 13, 12 then 11
 supersede conflicting text above. PR A may start; PR B and C wait on V1-V4 (section 12). Maintainer decisions in section 9. No code written.**
 
 The oracle ladder says a candidate is promotable only when it clears every rung, and the Spec DO is the single
@@ -385,3 +385,28 @@ production response as the baseline (`shadow-router/index.ts:447-453`); capped a
 `MIRROR_BODY_MODE` for POST routes; fill `specId` (`:458`); `baseline: 'production'` marker; then the flip PR. Risks:
 mirrored load and cost, untrusted candidate output in queues and Analytics Engine, mirrored write side effects, sample
 rate against the 20-sample minimum. Mixed-version: old comparator with new message fields, old router with new DO.
+
+## 13. PR A code review dispositions (independent agent, 2026-11-10: approve with changes, no blockers; fixes in 5b06d0c)
+
+- **S1 (accepted): the cap is per baseline.** A total-count cap froze placeholder evidence and would have forced a reset at the flip.
+  `recordShadowSamples` now caps placeholder and production samples separately at 1000 each; a candidate can reach 2000 rows' worth of
+  samples in the aggregate. Tests: 1000 placeholder then a production sample is recorded; production has its own cap.
+- **S2 (accepted): the edge maps an older Spec DO to 503.** Any 404 from `shadow-samples` whose `error` is not `candidate_not_found` (a
+  code-less or non-JSON 404) is a 503, never "unknown candidate" (V13). Tests in `workers/api/tests/shadow-samples-edge.test.ts`.
+- **S3 (accepted): list responses use one query.** `shadowFieldsForMany` fetches the page's rows with one `IN (...)` query (chunked at the
+  bound-parameter limit); single-candidate reads keep the point query. (The plan said LEFT JOIN; a second query is equivalent here and avoids
+  changing `listCandidates`.)
+- **S4 (accepted): comparator reads are memoized per client.** One client serves one batch; candidate and spec reads are cached as promises,
+  a failure is evicted, a 404 (null) is cached. A 100-message batch no longer fans out one read per message.
+- **S5 (accepted): `diffs[].type` is the comparator's four kinds** (`status|header|body|performance`), so `byType` cannot grow without bound.
+- **S6 (accepted): tests.** Added: fail to pass; keyed rollback leaves no key, actor or sample; a contract test that runs the comparator's real
+  request (keyed, header actor not yet an actor row) against the real Spec DO and parses it with the zod schema; a key over 255 characters is
+  hashed and a redelivery still replays; a replay of the m14 to m15 step over an existing row; a corrupt `diffs_json` (`{"byType":null}`, `not
+  json`) reads as empty diffs and the next sample repairs it (it was a permanent 500); two-decimal rounding; memo eviction.
+- **N1 (accepted):** the DDL has no `baseline` column; the split is `production_count` / `production_score_sum` (the rest of `sample_count` is
+  placeholder). V5's DDL line is amended accordingly and the schema comment (both byte-synced files) now says so.
+- **N2:** a malformed percent-escape in the id is a 400. **N3:** keyed and unkeyed answers both carry `timestamp`; the stored verdict score is
+  floored so a failing 79.6 is not recorded as 80 (the verdict's score and notes are written at a status change, so they are the figures at the
+  flip, not live; `shadow_scores` is the live source). **N4:** `message.retry` backs off by `30 s x attempts` (at most 300). **N5:** the dead
+  `shadow_*` mapping in `rowToCandidate` is gone. **N6:** OPS.md says plainly that the edge accepts `baseline: 'production'` from any tier-1
+  holder, so `production_count` is trustworthy only while that route stays maintainer-only and unused for forged data.

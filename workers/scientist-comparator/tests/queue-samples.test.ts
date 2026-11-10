@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import handler from '../index';
 import type { ScientistEnv, ScientistQueueMessage } from '../types';
 import { CANDIDATE_NOT_FOUND } from '../../shared/shadow-verdict';
+import { SpecDOClient, SpecDoTransientError } from '../storage/spec-do';
 
 const C1 = '11111111-1111-4111-8111-111111111111';
 const C2 = '22222222-2222-4222-8222-222222222222';
@@ -123,16 +124,19 @@ describe('fan-out (review S4)', () => {
     expect(posts()).toHaveLength(5); // the samples themselves are never memoized
   });
 
-  it('a failed read is not memoized, so the next message in the batch asks again', async () => {
+  it('a failed read is evicted from the memo, so the same client asks again; a 404 (null) is memoized like any answer', async () => {
     let n = 0;
     fake.candidate = (id) => (n++ === 0 ? json(500, { success: false }) : json(200, { success: true, data: { id, specId: SPEC } }));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const b = batch([message('req-d', [C1])]);
-    await run(b);
-    expect(b.messages[0].retry).toHaveBeenCalledTimes(1);
-    const b2 = batch([message('req-d', [C1])]);
-    await run(b2); // a new batch has a new client in any case
-    expect(b2.messages[0].ack).toHaveBeenCalledTimes(1);
+    const client = new SpecDOClient(makeEnv(fake) as never);
+    await expect(client.getCandidate(C1)).rejects.toBeInstanceOf(SpecDoTransientError);
+    expect(await client.getCandidate(C1)).toMatchObject({ id: C1, specId: SPEC });
+    expect(await client.getCandidate(C1)).toMatchObject({ id: C1 });
+    expect(fake.calls.filter((c) => c.path === `/api/candidates/${C1}`)).toHaveLength(2);
+
+    fake.candidate = () => json(404, { success: false, error: 'Not found' });
+    expect(await client.getCandidate(C2)).toBeNull();
+    expect(await client.getCandidate(C2)).toBeNull();
+    expect(fake.calls.filter((c) => c.path === `/api/candidates/${C2}`)).toHaveLength(1);
   });
 });
 
