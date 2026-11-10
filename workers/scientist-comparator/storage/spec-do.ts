@@ -34,6 +34,11 @@ export const SAMPLE_BASELINE: ShadowSample['baseline'] = 'placeholder';
 
 const IDEMPOTENCY_KEY_MAX = 255;
 
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** A Spec DO answer body, which is { success, data } on success; a bare body is accepted too */
 function unwrap<T>(body: unknown): T {
   if (body && typeof body === 'object' && 'data' in body) return (body as { data: T }).data;
@@ -45,6 +50,10 @@ function unwrap<T>(body: unknown): T {
  */
 export class SpecDOClient {
   private readonly env: SpecDoCallerEnv;
+  // One client serves one queue batch. Candidate -> spec and spec lookups repeat across the batch's messages (a hot candidate is
+  // in most of them), and an unmemoized 100-message batch of 3 candidates is about 900 concurrent subrequests, near the limit
+  // (review S4). Promises are cached so concurrent callers share one call; a failure is evicted so a retry asks again.
+  private readonly memo = new Map<string, Promise<unknown>>();
 
   constructor(env: SpecDoCallerEnv) {
     this.env = env;
@@ -68,8 +77,19 @@ export class SpecDOClient {
     }
   }
 
+  /** Memoized read: see `memo` */
+  private read<T>(path: string): Promise<T | null> {
+    let cached = this.memo.get(path) as Promise<T | null> | undefined;
+    if (!cached) {
+      cached = this.readUncached<T>(path);
+      this.memo.set(path, cached);
+      cached.catch(() => this.memo.delete(path));
+    }
+    return cached;
+  }
+
   /** null on 404; throws SpecDoTransientError on any other non-OK answer */
-  private async read<T>(path: string): Promise<T | null> {
+  private async readUncached<T>(path: string): Promise<T | null> {
     const response = await this.send(path, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
     if (response.status === 404) return null;
     if (!response.ok) throw new SpecDoTransientError(`Spec DO answered ${response.status} for GET ${path}`);
@@ -121,7 +141,9 @@ export class SpecDOClient {
    * candidate failed) a replay, never a second count. Throws SpecDoTransientError on 5xx or a network error only.
    */
   async postShadowSample(candidateId: string, result: CandidateComparisonResult): Promise<ShadowPostOutcome> {
-    const key = `${result.requestId}:${candidateId}`;
+    const rawKey = `${result.requestId}:${candidateId}`;
+    // A key over the DO's limit would be a 400 and a redelivery would then double-count: hash it (hex SHA-256 is 64 characters)
+    const key = rawKey.length <= IDEMPOTENCY_KEY_MAX ? rawKey : `sha256:${await sha256Hex(rawKey)}`;
     const sample: ShadowSample = {
       requestId: result.requestId.slice(0, 200),
       score: Math.min(100, Math.max(0, Number.isFinite(result.score) ? result.score : 0)),
@@ -130,8 +152,7 @@ export class SpecDOClient {
       baseline: SAMPLE_BASELINE,
     };
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Actor-ID': 'scientist-comparator' };
-    // A key over the DO's limit would be a 400; the sample is still worth counting, and without a key a redelivery is the only risk
-    if (key.length <= IDEMPOTENCY_KEY_MAX) headers['Idempotency-Key'] = key;
+    headers['Idempotency-Key'] = key;
     const response = await this.send(SHADOW_SAMPLES_PATH(candidateId), {
       method: 'POST',
       headers,

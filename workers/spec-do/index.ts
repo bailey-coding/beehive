@@ -2309,9 +2309,6 @@ export class SpecDO {
       preview_url: row.preview_url as string | undefined,
       preview_worker_name: row.preview_worker_name as string | undefined,
       preview_created_at: row.preview_created_at as number | undefined,
-      shadow_match: row.shadow_match as boolean | undefined,
-      shadow_score: row.shadow_score as number | undefined,
-      shadow_metrics: row.shadow_metrics as string | undefined,
       ...tombstoneFieldsOf(row),
     };
   }
@@ -2319,7 +2316,7 @@ export class SpecDO {
   /**
    * Convert internal CandidateRow (snake_case) to API CandidateResponse (camelCase)
    */
-  private candidateRowToResponse(row: CandidateRow): CandidateResponse {
+  private candidateRowToResponse(row: CandidateRow, shadow?: Map<string, ReturnType<SpecDO['shadowFieldsFor']>>): CandidateResponse {
     return {
       id: row.id,
       specId: row.spec_id,
@@ -2332,7 +2329,7 @@ export class SpecDO {
       previewUrl: row.preview_url,
       previewWorkerName: row.preview_worker_name,
       previewCreatedAt: row.preview_created_at,
-      ...this.shadowFieldsFor(row.id),
+      ...(shadow ? shadow.get(row.id) ?? {} : this.shadowFieldsFor(row.id)),
       ...(row.deleted_at != null
         ? { deletedAt: row.deleted_at, deletedBy: row.deleted_by, deleteReason: row.delete_reason }
         : {}),
@@ -4392,7 +4389,9 @@ export class SpecDO {
         const agentId = url.searchParams.get('agentId') ?? undefined;
         const stage = url.searchParams.get('stage') ?? undefined;
         const candidates = this.listCandidates(limit, offset, specId, agentId, stage, includeDeleted);
-        return new Response(JSON.stringify({ success: true, data: candidates.map(c => this.candidateRowToResponse(c)), timestamp: Date.now() }), {
+        // One query for the page, not one per row (queue-consumer and preview-manager list with limit=100)
+        const shadowByCandidate = this.shadowFieldsForMany(candidates.map(c => c.id));
+        return new Response(JSON.stringify({ success: true, data: candidates.map(c => this.candidateRowToResponse(c, shadowByCandidate)), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
@@ -4451,7 +4450,13 @@ export class SpecDO {
       // Shadow samples (m15): the scientist comparator's per-request scores, one aggregate row per candidate
       const shadowMatch = path.match(/^\/api\/candidates\/([^\/]+)\/shadow-samples$/);
       if (shadowMatch && method === 'POST') {
-        return await this.handleShadowSamples(request, decodeURIComponent(shadowMatch[1]), idem);
+        let candidateId: string;
+        try {
+          candidateId = decodeURIComponent(shadowMatch[1]);
+        } catch {
+          return new Response(JSON.stringify({ success: false, error: 'Malformed candidate id', timestamp: now() }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        return await this.handleShadowSamples(request, candidateId, idem);
       }
 
       // Gate runs: zod-validated, unlike the verdict routes below
@@ -4895,17 +4900,42 @@ export class SpecDO {
   // production baseline (the `baseline` split in the row keeps placeholder-scored samples from ever becoming enforced evidence).
   // ============================================================================
 
+  /** diffs_json if it has the shape the writer produces, else null (never throws: one bad row must not 500 a candidate for good) */
+  private parseShadowDiffs(raw: unknown): { total: number; byType: Record<string, number>; bySeverity: Record<string, number> } | null {
+    try {
+      const v = JSON.parse(String(raw));
+      const isCounts = (o: unknown) => !!o && typeof o === 'object' && !Array.isArray(o);
+      if (isCounts(v) && typeof v.total === 'number' && isCounts(v.byType) && isCounts(v.bySeverity)) {
+        return { total: v.total, byType: { ...v.byType }, bySeverity: { error: 0, warning: 0, info: 0, ...v.bySeverity } };
+      }
+    } catch {
+      // fall through
+    }
+    return null;
+  }
+
+  /** shadow fields for many candidates in one query (list responses), keyed by candidate id */
+  private shadowFieldsForMany(candidateIds: string[]): Map<string, ReturnType<SpecDO['shadowFieldsFor']>> {
+    const out = new Map<string, ReturnType<SpecDO['shadowFieldsFor']>>();
+    for (const ids of chunk(candidateIds, MAX_BOUND_PARAMS)) {
+      for (const r of this.queryAll(`SELECT * FROM shadow_scores WHERE candidate_id IN (${placeholders(ids.length)})`, ...ids)) {
+        out.set(String(r.candidate_id), this.shadowFieldsFromRow(r));
+      }
+    }
+    return out;
+  }
+
   /** The candidate response's shadow fields from shadow_scores. Absent until a sample lands, as before m15 (the columns never existed). */
   private shadowFieldsFor(candidateId: string): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string } {
     const [row] = this.queryAll('SELECT * FROM shadow_scores WHERE candidate_id = ?', candidateId);
-    if (!row || !(Number(row.sample_count) > 0)) return {};
+    return row ? this.shadowFieldsFromRow(row) : {};
+  }
+
+  private shadowFieldsFromRow(row: Record<string, unknown>): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string } {
     const count = Number(row.sample_count);
-    let aggregate: Record<string, unknown> = {};
-    try {
-      aggregate = JSON.parse(String(row.diffs_json));
-    } catch {
-      // a corrupt aggregate reads as empty diffs; the score and counts stay right
-    }
+    if (!(count > 0)) return {};
+    // A corrupt aggregate reads as empty diffs; the score and counts stay right
+    const aggregate = this.parseShadowDiffs(row.diffs_json) ?? { total: 0, byType: {}, bySeverity: { error: 0, warning: 0, info: 0 } };
     const metrics = {
       averageScore: Number(row.score_sum) / count,
       totalRequests: count,
@@ -4939,7 +4969,7 @@ export class SpecDO {
     // Coded 404: the caller tells it from an older Spec DO's code-less "Not found" (plan B5/V8). Nothing awaits between this check and the write.
     if (!this.getCandidate(candidateId)) return respond(404, { success: false, error: CANDIDATE_NOT_FOUND });
 
-    const mutate = () => ({ success: true, data: this.recordShadowSamples(candidateId, parsed.data.samples) });
+    const mutate = () => ({ success: true, data: this.recordShadowSamples(candidateId, parsed.data.samples), timestamp: now() });
     if (idem) return this.idempotent(idem, 200, mutate);
     // idempotent() opens no transaction without a key
     return respond(200, this.state.storage.transactionSync(mutate));
@@ -4962,19 +4992,16 @@ export class SpecDO {
     let matched = row ? Number(row.matched_count) : 0;
     let lastRequestId = row ? String(row.last_request_id) : '';
     let diffs = { total: 0, byType: {} as Record<string, number>, bySeverity: { error: 0, warning: 0, info: 0 } as Record<string, number> };
-    if (row) {
-      try {
-        diffs = { ...diffs, ...JSON.parse(String(row.diffs_json)) };
-      } catch {
-        // restart from empty diffs; counts and scores are separate columns
-      }
-    }
+    if (row) diffs = this.parseShadowDiffs(row.diffs_json) ?? diffs;
 
+    // The cap is per baseline: a candidate full of placeholder-scored samples must still be able to record production ones,
+    // or the cap would freeze placeholder evidence in place and the log-to-enforce flip would need a reset (plan section 12)
     let capped = false;
     for (const sample of samples) {
-      if (count >= SHADOW_MAX_SAMPLES) {
+      const isProduction = sample.baseline === 'production';
+      if ((isProduction ? productionCount : count - productionCount) >= SHADOW_MAX_SAMPLES) {
         capped = true;
-        break;
+        continue;
       }
       count += 1;
       sum += sample.score;
@@ -5020,7 +5047,8 @@ export class SpecDO {
           candidateId,
           'shadow',
           status,
-          Math.round(average),
+          // floor, not round: a failing 79.6 must not be stored as a score of 80, the pass line
+          Math.floor(average),
           0,
           SCIENTIST_COMPARATOR_ACTOR,
           `Shadow: ${count} samples (${productionCount} against production), average ${average.toFixed(1)}, ${matched}/${count} matched`

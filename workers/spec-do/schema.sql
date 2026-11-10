@@ -737,9 +737,10 @@ CREATE INDEX IF NOT EXISTS idx_governance_events_created ON governance_events(cr
 -- score_sum / sample_count with no re-averaging drift. candidate_id is a LOGICAL reference (UNIQUE, no foreign key): a
 -- foreign key to candidates would make an m14-floor build's purge fail while rolled back (docs/OPS.md rollback floor). The
 -- purge removes a candidate's row first and sweeps orphans left by a floor-build purge. Not tombstoned (no deleted_at):
--- the candidate's tombstone plus the route's 404 is enough. baseline says what the samples were scored against:
--- 'placeholder' (the shadow router's fake 200) or 'production'; only 'production' samples may become enforced evidence
--- (docs/plans/promotion-gaps-plan.md sections 11-12). placeholder_count / production_count split sample_count by baseline.
+-- the candidate's tombstone plus the route's 404 is enough. production_count / production_score_sum are the part of
+-- sample_count / score_sum scored against a real production response; the rest were scored against the shadow router's
+-- placeholder 200 (the sample's baseline). Only the production part may become enforced evidence
+-- (docs/plans/promotion-gaps-plan.md sections 11-12).
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS shadow_scores (

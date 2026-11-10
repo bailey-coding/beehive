@@ -42,7 +42,8 @@ export const ShadowSampleSchema = z
       .array(
         z
           .object({
-            type: z.string().min(1).max(64),
+            // The comparator's four diff kinds: an open string would let one caller grow byType without bound (review S5)
+            type: z.enum(['status', 'header', 'body', 'performance']),
             severity: z.enum(['error', 'warning', 'info']),
           })
           .strict()

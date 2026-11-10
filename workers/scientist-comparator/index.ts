@@ -132,7 +132,8 @@ const scientistHandler = {
       } catch (error) {
         if (error instanceof SpecDoTransientError) {
           logger.error(`[${queueName}] Spec DO unavailable for message ${message.id}, retrying: ${error.message}`);
-          message.retry();
+          // Back off with the attempt number so 4 retries span a short outage instead of burning through at once
+          message.retry({ delaySeconds: Math.min(300, 30 * Math.max(1, message.attempts ?? 1)) });
         } else {
           logger.error(`[${queueName}] Message ${message.id} failed and will not be retried: ${error}`);
           message.ack();

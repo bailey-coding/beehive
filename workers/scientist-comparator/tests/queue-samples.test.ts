@@ -113,6 +113,29 @@ describe('samples', () => {
   });
 });
 
+describe('fan-out (review S4)', () => {
+  it('looks a candidate and its spec up once per batch, however many messages mention them', async () => {
+    const b = batch([message('req-a', [C1, C2]), message('req-b', [C1, C2]), message('req-c', [C1])]);
+    await run(b);
+    expect(fake.calls.filter((c) => c.method === 'GET' && c.path === `/api/candidates/${C1}`)).toHaveLength(1);
+    expect(fake.calls.filter((c) => c.method === 'GET' && c.path === `/api/candidates/${C2}`)).toHaveLength(1);
+    expect(fake.calls.filter((c) => c.path === `/api/specs/${SPEC}`)).toHaveLength(1);
+    expect(posts()).toHaveLength(5); // the samples themselves are never memoized
+  });
+
+  it('a failed read is not memoized, so the next message in the batch asks again', async () => {
+    let n = 0;
+    fake.candidate = (id) => (n++ === 0 ? json(500, { success: false }) : json(200, { success: true, data: { id, specId: SPEC } }));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const b = batch([message('req-d', [C1])]);
+    await run(b);
+    expect(b.messages[0].retry).toHaveBeenCalledTimes(1);
+    const b2 = batch([message('req-d', [C1])]);
+    await run(b2); // a new batch has a new client in any case
+    expect(b2.messages[0].ack).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ack and retry, per message', () => {
   it("the Spec DO's coded 404 (unknown or tombstoned candidate) is acked, never retried", async () => {
     fake.post = () => json(404, { success: false, error: CANDIDATE_NOT_FOUND });
@@ -144,6 +167,8 @@ describe('ack and retry, per message', () => {
     const b = batch([message('req-6', [C1])]);
     await run(b);
     expect(b.messages[0].retry).toHaveBeenCalledTimes(1);
+    // backs off with the attempt number (attempts = 1 here)
+    expect(b.messages[0].retry).toHaveBeenCalledWith({ delaySeconds: 30 });
     expect(b.messages[0].ack).not.toHaveBeenCalled();
     expect(b.ackAll).not.toHaveBeenCalled();
   });

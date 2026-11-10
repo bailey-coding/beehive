@@ -27,6 +27,7 @@ interface Env {
   ANALYTICS?: AnalyticsEngineDataset;
 }
 
+import { CANDIDATE_NOT_FOUND } from '../shared/shadow-verdict';
 import { authenticate, authorize } from './principal';
 import { ACTOR_ID_MAX_CHARS, withAuth, withActor } from '../shared/principal';
 import { routeRetired, EXECUTE_RETIRED_MESSAGE } from '../shared/retired-route';
@@ -1784,7 +1785,19 @@ async function handleRecordShadowSamples(
   } catch {
     return makeErrorResponse('Body must be JSON', 400);
   }
-  return sendToSpecDo(stub, `/api/candidates/${id}/shadow-samples`, 'POST', body, request.actorId, key);
+  const response = await sendToSpecDo(stub, `/api/candidates/${id}/shadow-samples`, 'POST', body, request.actorId, key);
+  // Only the Spec DO's coded 404 means "no such candidate". An older Spec DO has no route and answers a code-less 404, which must
+  // not read as "unknown candidate" (the same 503 the near-misses read gives; plan V13).
+  if (response.status === 404) {
+    let code: unknown;
+    try {
+      code = ((await response.clone().json()) as { error?: unknown }).error;
+    } catch {
+      // a non-JSON 404 is not the coded one
+    }
+    if (code !== CANDIDATE_NOT_FOUND) return makeErrorResponse('Shadow samples are not available yet (the Spec DO is older than this edge)', 503);
+  }
+  return response;
 }
 
 // ============================================================================

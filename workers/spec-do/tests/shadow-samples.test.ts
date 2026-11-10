@@ -10,6 +10,10 @@ import type { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
 import { loadLegacyLedger, readVersion, LATEST_VERSION, freshLedger } from './legacy-ledger';
 import { CandidateResponseSchema } from '../../shared/schemas';
+import { SpecDOClient } from '../../scientist-comparator/storage/spec-do';
+import type { CandidateComparisonResult } from '../../scientist-comparator/types';
+import { ShadowSamplesRequestSchema } from '../../shared/shadow-verdict';
+import { TEST_INTERNAL_TOKEN } from './do-tokens';
 import {
   CANDIDATE_NOT_FOUND,
   SCIENTIST_COMPARATOR_ACTOR,
@@ -174,7 +178,8 @@ describe('POST /api/candidates/:id/shadow-samples', () => {
       ['an unknown sample field', { samples: [{ ...sample('a', 1), extra: 1 }] }],
       ['a score over 100', { samples: [sample('a', 101)] }],
       ['a negative score', { samples: [sample('a', -1)] }],
-      ['a bad severity', { samples: [sample('a', 1, { diffs: [{ type: 't', severity: 'fatal' }] })] }],
+      ['a diff type outside the four kinds', { samples: [sample('a', 1, { diffs: [{ type: 'whatever', severity: 'error' }] })] }],
+      ['a bad severity', { samples: [sample('a', 1, { diffs: [{ type: 'status', severity: 'fatal' }] })] }],
       ['an unknown baseline', { samples: [sample('a', 1, { baseline: 'fake' })] }],
       ['more than 100 samples', { samples: many(101, 1) }],
     ])('rejects %s with a 400 and records nothing', async (_name, body) => {
@@ -258,6 +263,127 @@ describe('POST /api/candidates/:id/shadow-samples', () => {
   });
 });
 
+
+describe('review fixes (PR A review: S1, S3, S5, S6, N2, N3)', () => {
+  it('S1: the cap is per baseline, so 1000 placeholder samples do not stop a production sample being recorded', async () => {
+    const { c1 } = seed();
+    for (let i = 0; i < SHADOW_MAX_SAMPLES / 100; i++) await post(c1.id, many(100, 100, `p${i}`));
+    expect((await post(c1.id, [sample('over', 0)])).json.data.capped).toBe(true);
+    const prod = await post(c1.id, [sample('prod-1', 50, { baseline: 'production' })]);
+    expect(prod.json.data).toMatchObject({ capped: false, sampleCount: SHADOW_MAX_SAMPLES + 1, productionCount: 1, productionAverageScore: 50 });
+    expect(row(c1.id)).toMatchObject({ sample_count: SHADOW_MAX_SAMPLES + 1, production_count: 1, production_score_sum: 50 });
+  });
+
+  it('S1: production samples have their own cap', async () => {
+    const { c1 } = seed();
+    for (let i = 0; i < SHADOW_MAX_SAMPLES / 100; i++) await post(c1.id, many(100, 100, `q${i}`).map((x) => ({ ...x, baseline: 'production' })));
+    const over = await post(c1.id, [sample('over', 0, { baseline: 'production' })]);
+    expect(over.json.data).toMatchObject({ capped: true, productionCount: SHADOW_MAX_SAMPLES });
+  });
+
+  it('flips fail to pass in place too', async () => {
+    const { c1 } = seed();
+    await post(c1.id, many(SHADOW_MIN_SAMPLES, 0));
+    expect(verdictRows(c1.id)[0].status).toBe('fail');
+    await post(c1.id, many(SHADOW_MIN_SAMPLES * 4, 100, 'hi'));
+    const rows = verdictRows(c1.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('pass');
+  });
+
+  it('the stored verdict score is floored, so a failing 79.6 is never recorded as the pass line', async () => {
+    const { c1 } = seed();
+    const scores = [...Array(18).fill(80), 76, 76]; // sum 1592, average 79.6
+    await post(c1.id, scores.map((sc, i) => sample(`f${i}`, sc)));
+    expect(verdictRows(c1.id)[0]).toMatchObject({ status: 'fail', score: 79 });
+  });
+
+  it('the score is rounded to two decimals', async () => {
+    const { c1 } = seed();
+    await post(c1.id, [sample('a', 100), sample('b', 100), sample('c', 0)]);
+    expect((await call(`/api/candidates/${c1.id}`)).json.data.shadowScore).toBe(66.67);
+  });
+
+  it('S3: a list response carries each candidate its own shadow fields and none for a candidate with no row', async () => {
+    const { c1, c2 } = seed();
+    await post(c1.id, [sample('a', 100)]);
+    const list = (await call('/api/candidates?limit=100')).json.data as any[];
+    expect(list.find((c) => c.id === c1.id)).toMatchObject({ shadowScore: 100, shadowMatch: true });
+    expect(list.find((c) => c.id === c2.id).shadowScore).toBeUndefined();
+  });
+
+  it('a corrupt diffs_json never makes a candidate a permanent 500: it reads as empty diffs and the next sample repairs it', async () => {
+    const { c1 } = seed();
+    await post(c1.id, [sample('a', 100)]);
+    store.raw.prepare("UPDATE shadow_scores SET diffs_json = '{\"byType\":null}' WHERE candidate_id = ?").run(c1.id);
+    const got = (await call(`/api/candidates/${c1.id}`)).json.data;
+    expect(JSON.parse(got.shadowMetrics).aggregateDiffs).toEqual({ total: 0, byType: {}, bySeverity: { error: 0, warning: 0, info: 0 } });
+    const again = await post(c1.id, [sample('b', 100, { diffs: [{ type: 'body', severity: 'warning' }] })]);
+    expect(again.status).toBe(200);
+    expect(JSON.parse(String(row(c1.id)!.diffs_json))).toMatchObject({ total: 1, byType: { body: 1 } });
+    store.raw.prepare("UPDATE shadow_scores SET diffs_json = 'not json' WHERE candidate_id = ?").run(c1.id);
+    expect((await call(`/api/candidates/${c1.id}`)).status).toBe(200);
+  });
+
+  it('N2: a malformed percent-escape in the candidate id is a 400, not a 500', async () => {
+    const res = await call('/api/candidates/%E0%A4%A/shadow-samples', 'POST', { samples: [sample('a', 1)] });
+    expect(res.status).toBe(400);
+  });
+
+  it('N3: keyed and unkeyed answers both carry a timestamp', async () => {
+    const { c1 } = seed();
+    expect(typeof (await post(c1.id, [sample('a', 1)])).json.timestamp).toBe('number');
+    expect(typeof (await post(c1.id, [sample('b', 1)], { 'Idempotency-Key': 'k-ts' })).json.timestamp).toBe('number');
+  });
+
+  it('S6: the keyed path rolls back too: a failing verdict step leaves no samples, no actor and no idempotency key behind', async () => {
+    const { c1 } = seed();
+    store.raw.exec('DROP TABLE gate_verdicts');
+    const key = { 'Idempotency-Key': `req-1:${c1.id}`, 'X-Actor-ID': SCIENTIST_COMPARATOR_ACTOR };
+    const res = await post(c1.id, [sample('req-1', 100)], key);
+    expect(res.status).toBe(500);
+    expect(row(c1.id)).toBeUndefined();
+    expect(store.raw.prepare('SELECT COUNT(*) AS n FROM actors WHERE id = ?').get(SCIENTIST_COMPARATOR_ACTOR)).toEqual({ n: 0 });
+    expect(store.raw.prepare('SELECT COUNT(*) AS n FROM idempotency_keys').get()).toEqual({ n: 0 });
+  });
+
+  it("S6: the comparator's real request (keyed, header actor not yet an actor row) is accepted by the real Spec DO and parses against the zod schema", async () => {
+    const { c1 } = seed();
+    const bodies: any[] = [];
+    const env = {
+      SPEC_DO: {
+        idFromName: () => 'main',
+        get: () => ({
+          fetch: async (input: Request) => {
+            if (input.method === 'POST') bodies.push(await input.clone().json());
+            return spec.fetch(input);
+          },
+        }),
+      },
+      SPEC_DO_INTERNAL_TOKEN: TEST_INTERNAL_TOKEN,
+    };
+    const client = new SpecDOClient(env as never);
+    const result = {
+      requestId: 'req-1', candidateId: c1.id, specId: '', path: '/x', method: 'GET', timestamp: 1, score: 90, matched: false, errors: 1, warnings: 0,
+      diffs: [{ type: 'status', severity: 'error', message: 'status differs' }],
+    } as unknown as CandidateComparisonResult;
+    expect(store.raw.prepare('SELECT COUNT(*) AS n FROM actors WHERE id = ?').get(SCIENTIST_COMPARATOR_ACTOR)).toEqual({ n: 0 });
+    expect(await client.postShadowSample(c1.id, result)).toBe('recorded');
+    expect(ShadowSamplesRequestSchema.safeParse(bodies[0]).success).toBe(true);
+    expect(row(c1.id)).toMatchObject({ sample_count: 1, score_sum: 90, production_count: 0 });
+    // a redelivery replays
+    expect(await client.postShadowSample(c1.id, result)).toBe('recorded');
+    expect(row(c1.id)).toMatchObject({ sample_count: 1 });
+    // an unknown candidate is the coded not_found
+    expect(await client.postShadowSample('c-nope', result)).toBe('not_found');
+    // a key over 255 characters is hashed, so a redelivery still replays
+    const long = { ...result, requestId: 'r'.repeat(300) };
+    expect(await client.postShadowSample(c1.id, long)).toBe('recorded');
+    expect(await client.postShadowSample(c1.id, long)).toBe('recorded');
+    expect(row(c1.id)).toMatchObject({ sample_count: 2 });
+  });
+});
+
 describe('purge', () => {
   it('an organization purge deletes its shadow_scores row, and sweeps an orphan an older build left', async () => {
     const x = seed('purge-org');
@@ -301,5 +427,16 @@ describe('migration m15', () => {
     expect(fresh.raw.prepare('SELECT COUNT(*) AS n FROM shadow_scores').get()).toEqual({ n: 0 });
     expect(fresh.raw.prepare('SELECT COUNT(*) AS n FROM metadata').get()).toEqual(before);
     expect(fresh.raw.prepare('PRAGMA foreign_key_list(shadow_scores)').all()).toEqual([]);
+  });
+
+  it('replaying the step over a ledger that already has shadow_scores rows keeps them', async () => {
+    const fresh = await freshLedger();
+    fresh.raw
+      .prepare("INSERT INTO shadow_scores (id, candidate_id, sample_count, score_sum, matched_count, diffs_json, last_request_id, updated_at) VALUES ('r1', 'c-1', 3, 270, 3, '{}', 'req', 5)")
+      .run();
+    fresh.raw.exec("UPDATE metadata SET value = 'm14' WHERE key = 'schema_version'");
+    await makeSpecDo(fresh).init();
+    expect(readVersion(fresh)).toBe(LATEST_VERSION);
+    expect(fresh.raw.prepare('SELECT id, sample_count, score_sum FROM shadow_scores').all()).toEqual([{ id: 'r1', sample_count: 3, score_sum: 270 }]);
   });
 });
