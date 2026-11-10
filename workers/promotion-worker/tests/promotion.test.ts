@@ -871,6 +871,7 @@ describe('Merge train: a car is (position, candidateId)', () => {
     const { spec, env, direct, addCandidate } = await trainEnv();
     const manager = new MergeTrainManager(env);
     const a = addCandidate();
+    spec.transitionCandidate(a, 'passed_shadow', 'test'); // on the train rung, so the retried car's merge can advance it
     gate('pass');
     const old = car(a, 1, 'failed', { failedAt: '2026-10-01T00:00:00.000Z', failureReason: 'old' });
     await seed(direct, [old, car(a, 2, 'failed', { failedAt: '2026-10-02T00:00:00.000Z', failureReason: 'new' })]);
@@ -882,6 +883,7 @@ describe('Merge train: a car is (position, candidateId)', () => {
     const refused = await manager.retryFailedMerge(a, SPEC);
     expect(refused.success).toBe(false);
     expect(refused.message).toContain('not in a failed state (current: merged)');
+    expect(refused.code).toBe('car_not_failed');
     expect(trainOf(spec).candidates[0]).toEqual(old);
   });
 

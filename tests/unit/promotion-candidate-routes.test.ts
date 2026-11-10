@@ -9,7 +9,7 @@ import { MergeTrainManager } from '../../workers/promotion-worker/merge-train';
 
 const TOKEN = 'worker-tier1-token';
 
-function envWith(respond: (request: Request) => Response) {
+function envWith(respond: (request: Request) => Response | Promise<Response>) {
   const calls: Request[] = [];
   const stub = {
     fetch: async (request: Request) => {
@@ -59,7 +59,7 @@ describe('tournament candidate routes', () => {
     expect(await manager.readShadowScore('c2')).toBe(0);
   });
 
-  const run = (respond: (request: Request) => Response) => {
+  const run = (respond: (request: Request) => Response | Promise<Response>) => {
     const { env, calls } = envWith(respond);
     const manager = new TournamentManager(env) as any;
     vi.spyOn(manager, 'getOrCreateTournament').mockResolvedValue(tournament);
@@ -70,14 +70,15 @@ describe('tournament candidate routes', () => {
     return { calls, update, execute };
   };
   const advanced = { fromRung: 'shadow', toRung: 'train', stage: 'passed_shadow', previousStage: 'passed_premerge', noop: false, dryRun: false, writes: ['passed_shadow'], evidence: [] };
-  const route = (overrides: Record<string, (request: Request) => Response> = {}) => (request: Request): Response => {
+  const route = (overrides: Record<string, (request: Request) => Response | Promise<Response>> = {}) => (request: Request): Response | Promise<Response> => {
     const path = `${request.method} ${new URL(request.url).pathname}`;
     if (overrides[path]) return overrides[path](request);
     if (path === 'GET /api/candidates/c1') return json({ success: true, data: { shadowScore: 90 } });
     if (path === 'GET /api/candidates/c2') return json({ success: true, data: { shadowScore: 50 } });
     if (path === 'POST /api/trials') return json({ success: true, data: { id: 'tr1' } }, 201);
     if (path === 'POST /api/trials/tr1/decide') return json({ success: true, data: {} });
-    if (path === 'POST /api/candidates/c1/advance') return json({ success: true, data: advanced });
+    // Every entrant's dry run, and the winner's real advance
+    if (path === 'POST /api/candidates/c1/advance' || path === 'POST /api/candidates/c2/advance') return json({ success: true, data: advanced });
     return json({ success: false, error: `unexpected ${path}` }, 500);
   };
 
@@ -86,20 +87,28 @@ describe('tournament candidate routes', () => {
     const result = await execute();
     expect(result).toMatchObject({ success: true, outcome: 'eliminated', moves: [{ candidateId: 'c1', fromRung: 'shadow', toRung: 'train' }] });
     const paths = calls.map((c) => `${c.method} ${new URL(c.url).pathname}`);
+    // dry-run each entrant, read both scores, advance the winner, THEN record the trial
     expect(paths).toEqual([
-      'GET /api/candidates/c1', 'GET /api/candidates/c2', 'POST /api/trials', 'POST /api/trials/tr1/decide', 'POST /api/candidates/c1/advance',
+      'POST /api/candidates/c1/advance', 'POST /api/candidates/c2/advance', 'GET /api/candidates/c1', 'GET /api/candidates/c2',
+      'POST /api/candidates/c1/advance', 'POST /api/trials', 'POST /api/trials/tr1/decide',
     ]);
+    expect(await calls[0].json()).toMatchObject({ dryRun: true, toRung: 'train', fromRung: 'shadow' });
     const adv = calls[4];
     expect(adv.headers.get('X-Actor-ID')).toBe('agent-1');
     expect(await adv.json()).toMatchObject({ toRung: 'train', fromRung: 'shadow' });
-    expect(calls[2].headers.get('Idempotency-Key')).toBe('tournament:t1:c1');
+    expect(calls[4].method + calls[4].url).not.toContain('dryRun');
+    expect(calls[5].headers.get('Idempotency-Key')).toBe('tournament:t1:c1:c2');
     expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ winner: 'c1' }));
     expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'completed', winner: 'c1' }));
   });
 
   it("fails the tournament, retryably, when the winner's advance is rejected, and relays the Spec DO's code", async () => {
+    // The dry runs pass (the entrants are eligible); the real advance of the winner is refused
     const { update, execute } = run(route({
-      'POST /api/candidates/c1/advance': () => json({ success: false, error: 'Cannot move to train from stage failed', code: 'not_next_rung' }, 409),
+      'POST /api/candidates/c1/advance': async (request) =>
+        ((await request.clone().json()) as { dryRun?: boolean }).dryRun
+          ? json({ success: true, data: advanced })
+          : json({ success: false, error: 'Cannot move to train from stage failed', code: 'not_next_rung' }, 409),
     }));
     const result = await execute();
     expect(result).toMatchObject({ success: false, code: 'not_next_rung' });
@@ -107,9 +116,14 @@ describe('tournament candidate routes', () => {
     expect(update).not.toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'completed' }));
   });
 
-  it('an older Spec DO without the advance route fails the tournament as ledger_too_old, not as an unknown candidate', async () => {
-    const { execute } = run(route({ 'POST /api/candidates/c1/advance': () => json({ success: false, error: 'Not found' }, 404) }));
-    expect(await execute()).toMatchObject({ success: false, code: 'ledger_too_old' });
+  it('an older Spec DO without the advance route disqualifies nobody into a win: the tournament refuses, naming ledger_too_old', async () => {
+    const { execute } = run(route({
+      'POST /api/candidates/c1/advance': () => json({ success: false, error: 'Not found' }, 404),
+      'POST /api/candidates/c2/advance': () => json({ success: false, error: 'Not found' }, 404),
+    }));
+    const result = await execute();
+    expect(result).toMatchObject({ success: false, code: 'not_enough_entrants' });
+    expect(result.message).toContain('ledger_too_old');
   });
 });
 

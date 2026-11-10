@@ -6,7 +6,7 @@
  * It handles both HTTP requests and queue messages for candidate promotion.
  */
 
-import { PromotionWorker } from './promotion';
+import { PromotionWorker, statusFor } from './promotion';
 import { TournamentManager } from './tournament';
 import { MergeTrainManager } from './merge-train';
 import { authGate, AuthEnv } from '../shared/auth';
@@ -239,7 +239,7 @@ async function handleFetch(
 
       const result = await mergeTrain.retryFailedMerge(candidateId, specId);
       return new Response(JSON.stringify(result), {
-        status: 200,
+        status: statusFor(result),
         headers: { 'Content-Type': 'application/json' }
       });
     } catch (error) {

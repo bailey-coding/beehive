@@ -15,14 +15,14 @@ import {
 import { TournamentManager, TOURNAMENT_TO_RUNG } from './tournament';
 import { MergeTrainManager } from './merge-train';
 import { PromotionStateManager } from './state';
-import { resolvePromotionMode, advanceCandidate, type AdvanceOutcome } from './spec-do';
+import { resolvePromotionMode, advanceCandidate, getCandidate, type AdvanceOutcome } from './spec-do';
 import { AdvanceToRungSchema } from '../shared/promotion-advance';
 
 /** In merge-train mode the train is the step that leaves the train rung (train -> canary); every other move is a direct advance */
 const MERGE_TRAIN_TO_RUNG: Rung = 'canary';
 
 /** HTTP status for a promotion result: a stable code maps to a status, never a blanket 500 (docs/plans/promotion-gaps-plan.md section 3.5) */
-function statusFor(result: PromotionResult): number {
+export function statusFor(result: PromotionResult): number {
   if (result.success) return result.outcome === 'waiting' || result.outcome === 'queued' ? 202 : 200;
   switch (result.code) {
     case 'candidate_not_found':
@@ -33,6 +33,12 @@ function statusFor(result: PromotionResult): number {
     case 'no_shadow_evidence':
     case 'tie':
     case 'tournament_completed':
+    case 'tournament_exhausted':
+    case 'not_enough_entrants':
+    case 'evidence_failed':
+    case 'spec_mismatch':
+    case 'train_full':
+    case 'car_not_failed':
     case 'gate_failed':
       return 409;
     case 'ledger_too_old':
@@ -87,6 +93,26 @@ export class PromotionWorker {
       if (!check.ok) {
         const refused = this.refusal(request, check, mode);
         return json(statusFor(refused), { ...refused, error: refused.message, ...(check.evidence ? { evidence: check.evidence } : {}) });
+      }
+      // The caller names the spec; the candidate's own spec is the truth. A mismatch would let a candidate compete, or queue, under a spec that is not its own.
+      const row = await getCandidate(this.env, request.candidateId).catch((error: unknown) => error as Error);
+      if (row instanceof Error) {
+        const failed = this.base(request, request.fromRung ?? 'pre-merge', mode, { success: false, code: 'ledger_error', message: row.message });
+        return json(statusFor(failed), { ...failed, error: failed.message });
+      }
+      const ownSpec = (row.specId ?? row.spec_id) as string | undefined;
+      if (ownSpec !== request.specId) {
+        const failed = this.base(request, request.fromRung ?? 'pre-merge', mode, {
+          success: false, code: 'spec_mismatch', message: `Candidate ${request.candidateId} belongs to spec ${ownSpec ?? 'unknown'}, not ${request.specId}`,
+        });
+        return json(statusFor(failed), { ...failed, error: failed.message });
+      }
+      // A candidate whose shadow verdict failed does not enter the competitive step (plan V2). Under log mode the dry run lets it through, so this is the worker's refusal.
+      if (mode === 'tournament' && request.toRung === TOURNAMENT_TO_RUNG && check.data.evidence.some((e) => e.rung === 'shadow' && e.status === 'failed')) {
+        const failed = this.base(request, check.data.fromRung ?? request.fromRung ?? 'pre-merge', mode, {
+          success: false, code: 'evidence_failed', message: `Candidate ${request.candidateId} has a failing shadow verdict and cannot enter the tournament`,
+        });
+        return json(statusFor(failed), { ...failed, error: failed.message });
       }
       if (check.data.noop) {
         const done = this.base(request, check.data.fromRung ?? request.fromRung ?? 'pre-merge', mode, { success: true, outcome: 'noop' as const, message: `Candidate ${request.candidateId} is already past ${request.toRung}` });

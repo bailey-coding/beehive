@@ -172,7 +172,7 @@ deploy-config change with an independent agent before merging. Sonnet 5.5 medium
    `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys.
 3. Heads-up (promotion-routes-fix, deployed 2026-10-16 22:08 UTC, all ten workers verified): tournament mode now
    records the winner on a real candidate and fails the tournament when that is rejected, so a request naming a
-   candidate the Spec DO does not know ends `failed`. That is intended. Verified in production 2026-10-18 with `scripts/prod-verify-promotion.sh`: a two-candidate tournament completed, the winner's stage is `passed_train`, the promotion mode was restored. It left a tombstoned `test-org-e2e-prodcheck-*` org (purge by prefix after `PURGE_MIN_AGE_HOURS`, `docs/OPS.md`).
+   candidate the Spec DO does not know ends `failed`. That is intended. Verified in production 2026-10-18 with `scripts/prod-verify-promotion.sh`: a two-candidate tournament completed, the winner's stage is `passed_train`, the promotion mode was restored. (The script was rewritten 2026-11-10 for the `advance` contract: it now seeds shadow scores and expects the higher score to win and reach `passed_shadow`.) It left a tombstoned `test-org-e2e-prodcheck-*` org (purge by prefix after `PURGE_MIN_AGE_HOURS`, `docs/OPS.md`).
 
 ## Post-deploy checks (maintainer deployed `main` at `831d9db` on 2026-10-24; none confirmed yet)
 
