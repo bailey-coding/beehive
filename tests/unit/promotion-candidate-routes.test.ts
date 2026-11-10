@@ -157,3 +157,22 @@ describe('merge train rollback', () => {
     expect(result.message).toContain('500');
   });
 });
+
+describe('merge train capacity', () => {
+  it('the capacity check inside the compare-and-swap write (a car added between the check and the write) is the same coded refusal as the check before it', async () => {
+    const { env } = envWith(() => json({ success: true, data: {} }));
+    const manager = new MergeTrainManager({ ...(env as object), MAX_CONCURRENT_CANDIDATES: '1' } as never) as any;
+    vi.spyOn(manager, 'getOrCreateMergeTrain').mockResolvedValue({ id: 'm1', specId: 's1', candidates: [], currentPosition: 0, status: 'idle' });
+    vi.spyOn(manager, 'modifyMergeTrain').mockRejectedValue(new Error('Maximum concurrent candidates (1) reached. Please wait.'));
+    const result = await manager.executeMergeTrain({ candidateId: 'c1', specId: 's1', fromRung: 'train', toRung: 'canary' });
+    expect(result).toMatchObject({ success: false, code: 'train_full' });
+  });
+
+  it('any other error is merge_train_error', async () => {
+    const { env } = envWith(() => json({ success: true, data: {} }));
+    const manager = new MergeTrainManager(env) as any;
+    vi.spyOn(manager, 'getOrCreateMergeTrain').mockRejectedValue(new Error('ledger exploded'));
+    const result = await manager.executeMergeTrain({ candidateId: 'c1', specId: 's1', fromRung: 'train', toRung: 'canary' });
+    expect(result).toMatchObject({ success: false, code: 'merge_train_error' });
+  });
+});
