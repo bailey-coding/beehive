@@ -404,6 +404,17 @@ import {
   EXPECTED_HEAD_HEADER,
 } from '../shared/deploy-refs';
 import {
+  AdvanceRequestSchema,
+  EVIDENCE_MODE,
+  EVIDENCE_MISSING_EVENT,
+  decideAdvance,
+  currentRungOf,
+  type AdvanceRequest,
+  type AdvanceResult,
+  type EvidenceResult,
+  type EvidenceRung,
+} from '../shared/promotion-advance';
+import {
   ShadowSamplesRequestSchema,
   type ShadowSample,
   type ShadowSamplesResult,
@@ -481,6 +492,8 @@ interface Env {
   WORKERS_SUBDOMAIN?: string;
   // Minimum tombstone age before purge may hard-delete (hours, default 24). Local e2e sets 0.
   PURGE_MIN_AGE_HOURS?: string;
+  // Minutes a canary must have been the live head before `advance` lets it move to full. Honored only below the default (15); local e2e sets 0.
+  CANARY_MIN_SOAK_MINUTES?: string;
   // Producer for canary SLO ticks (docs/M3-CANARY-SLO-PLAN.md). Optional: an unbound DO still arms and re-arms.
   CANARY_SLO_TICKS?: { send(message: unknown): Promise<void> };
 }
@@ -4459,6 +4472,18 @@ export class SpecDO {
         return await this.handleShadowSamples(request, candidateId, idem);
       }
 
+      // advance (promotion-gaps PR B): the one place a candidate moves up the ladder. Internal only: the edge does not route it.
+      const advanceMatch = path.match(/^\/api\/candidates\/([^\/]+)\/advance$/);
+      if (advanceMatch && method === 'POST') {
+        let candidateId: string;
+        try {
+          candidateId = decodeURIComponent(advanceMatch[1]);
+        } catch {
+          return new Response(JSON.stringify({ success: false, error: 'Malformed candidate id', timestamp: now() }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        return await this.handleAdvance(request, candidateId, actorId);
+      }
+
       // Gate runs: zod-validated, unlike the verdict routes below
       const gateRunResponse = await this.handleGateRuns(request, url, path, method, actorId, idem);
       if (gateRunResponse) return gateRunResponse;
@@ -4890,6 +4915,134 @@ export class SpecDO {
         JSON.stringify({ success: false, error: message, timestamp: Date.now() }),
         { status: error instanceof ConflictError ? 409 : 500, headers: { 'Content-Type': 'application/json' } }
       );
+    }
+  }
+
+  // ============================================================================
+  // ADVANCE (docs/plans/promotion-gaps-plan.md section 3.4; reviews in sections 11-13)
+  // The Spec DO is the single serialization point for promotion decisions (AGENTS.md): the stage check, the evidence check and the
+  // stage writes happen in one transactionSync. A dry run does everything except write (no stage, no history, no governance event).
+  // This is also the site where PR-D's assertPromotionApprovals hooks entering `promoted` (docs/M5A-2-GOVERNANCE-PLAN.md).
+  // ============================================================================
+
+  private async handleAdvance(request: Request, candidateId: string, actorId: string): Promise<Response> {
+    const respond = (status: number, body: Record<string, unknown>) =>
+      new Response(JSON.stringify({ ...body, timestamp: now() }), { status, headers: { 'Content-Type': 'application/json' } });
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return respond(400, { success: false, error: 'Body must be JSON' });
+    }
+    const parsed = AdvanceRequestSchema.safeParse(raw);
+    if (!parsed.success) return respond(400, { success: false, error: `Invalid advance request: ${zodMessage(parsed.error)}` });
+
+    const out = this.state.storage.transactionSync(() => this.advanceCandidate(candidateId, parsed.data, actorId));
+    if (out.ok) return respond(200, { success: true, data: out.data });
+    return respond(out.status, { success: false, error: out.error, ...(out.code ? { code: out.code } : {}), ...(out.evidence ? { evidence: out.evidence } : {}) });
+  }
+
+  /** Inside a transaction. Refusals return before any write, so nothing needs rolling back. */
+  private advanceCandidate(
+    candidateId: string,
+    req: AdvanceRequest,
+    actorId: string
+  ):
+    | { ok: true; data: AdvanceResult }
+    | { ok: false; status: number; error: string; code?: string; evidence?: EvidenceResult[] } {
+    // Coded 404: the caller tells it from an older Spec DO's code-less "Not found" (plan B5/V8)
+    const candidate = this.getCandidate(candidateId);
+    if (!candidate) return { ok: false, status: 404, error: CANDIDATE_NOT_FOUND };
+
+    const dryRun = req.dryRun === true;
+    const previousStage = candidate.stage as string;
+    const fromRung = currentRungOf(previousStage);
+    const base = { fromRung, toRung: req.toRung, previousStage, dryRun };
+
+    const decision = decideAdvance(previousStage, req.toRung, req.fromRung);
+    if (decision.kind === 'noop') return { ok: true, data: { ...base, stage: previousStage, noop: true, writes: [], evidence: [] } };
+    if (decision.kind === 'refuse') return { ok: false, status: 409, error: decision.message, code: decision.code };
+
+    const evidence = [this.evaluateEvidence(candidate, decision.leaving)];
+    const missing = evidence.filter((e) => e.status !== 'met');
+    const enforced = missing.filter((e) => e.mode === 'enforce');
+    if (enforced.length) {
+      const e = enforced[0];
+      return { ok: false, status: 409, error: `Cannot leave rung ${e.rung}: ${e.detail ?? e.status}`, code: 'evidence_missing', evidence };
+    }
+    if (!dryRun) for (const e of missing) this.logEvidenceMissing(candidate.id, candidate.spec_id, previousStage, req.toRung, e, actorId);
+    if (dryRun) return { ok: true, data: { ...base, stage: previousStage, noop: false, writes: decision.writes, evidence } };
+
+    // Each write goes through transitionCandidate, so history rows and the PR-S table (c) log are exactly as for a stage PATCH
+    for (const stage of decision.writes) {
+      this.transitionCandidate(candidate.id, stage, actorId, req.notes ?? `advance to ${req.toRung}`);
+    }
+    return { ok: true, data: { ...base, stage: decision.writes[decision.writes.length - 1], noop: false, writes: decision.writes, evidence } };
+  }
+
+  /** The evidence for the rung a candidate is leaving. Reads only. */
+  private evaluateEvidence(candidate: CandidateRow, rung: EvidenceRung): EvidenceResult {
+    const mode = EVIDENCE_MODE[rung];
+    const id = candidate.id;
+    if (rung === 'pre-merge' || rung === 'shadow') {
+      const v = this.getGateVerdict(id, rung);
+      if (!v) return { rung, status: 'missing', mode, detail: `no ${rung} gate verdict` };
+      if (v.status === 'pass') return { rung, status: 'met', mode };
+      if (v.status === 'fail') return { rung, status: 'failed', mode, detail: `${rung} gate verdict is fail (score ${v.score})` };
+      return { rung, status: 'missing', mode, detail: `${rung} gate verdict is still pending` };
+    }
+    if (rung === 'train') {
+      for (const t of this.queryAll('SELECT candidates FROM merge_trains WHERE spec_id = ?', candidate.spec_id)) {
+        try {
+          const cars = JSON.parse(String(t.candidates)) as Array<{ candidateId?: unknown; status?: unknown }>;
+          if (Array.isArray(cars) && cars.some((c) => c && c.candidateId === id && c.status === 'merged')) return { rung, status: 'met', mode };
+        } catch {
+          // an unreadable train row is no evidence
+        }
+      }
+      return { rung, status: 'missing', mode, detail: 'no merged merge-train car for this candidate' };
+    }
+    // canary: this candidate is the live canary head, and has been for the soak time
+    const head = this.deployHead(candidate.spec_id, 'canary');
+    if (!head || head.candidateId !== id) return { rung, status: 'missing', mode, detail: 'this candidate is not the live canary of its spec' };
+    const soak = this.canarySoakMinutes();
+    const liveMinutes = Math.floor((now() - head.movedAt) / 60_000);
+    if (liveMinutes < soak) return { rung, status: 'missing', mode, detail: `canary has been live ${liveMinutes} of ${soak} minutes` };
+    return { rung, status: 'met', mode };
+  }
+
+  /** Minutes a canary must have been live. The env override (local e2e) is honored only below the default, so it can only shorten the soak in a dev setup. */
+  private canarySoakMinutes(): number {
+    const raw = this.env?.CANARY_MIN_SOAK_MINUTES;
+    if (raw === undefined || raw.trim() === '') return CANARY_METRICS_DEFAULT_WINDOW_MINUTES;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 && n < CANARY_METRICS_DEFAULT_WINDOW_MINUTES ? n : CANARY_METRICS_DEFAULT_WINDOW_MINUTES;
+  }
+
+  /**
+   * A governance_events row for log-mode evidence that is not met. LOG-ONLY like invalid_transition: never throws, never refuses.
+   * Flood control as for invalid_transition: one row per (candidate, rung) per trailing hour, at most INVALID_TRANSITION_CAP_PER_WINDOW rows an hour.
+   */
+  private logEvidenceMissing(candidateId: string, specId: string, fromStage: string, toRung: string, e: EvidenceResult, actorId: string): void {
+    try {
+      const subject = `candidate:${candidateId}`.slice(0, MAX_GOVERNANCE_SUBJECT_CHARS);
+      const reason = `${e.rung}:${e.status}`;
+      const at = now();
+      const w = this.queryAll(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN subject = ? AND reason = ? THEN 1 ELSE 0 END), 0) AS same
+           FROM governance_events WHERE event = ? AND created_at >= ?`,
+        subject, reason, EVIDENCE_MISSING_EVENT, at - INVALID_TRANSITION_WINDOW_MS
+      )[0];
+      if (Number(w?.same ?? 0) > 0 || Number(w?.total ?? 0) >= INVALID_TRANSITION_CAP_PER_WINDOW) return;
+      let detail = JSON.stringify({ v: 1, candidateId, specId, rung: e.rung, status: e.status, mode: e.mode, detail: e.detail, fromStage, toRung });
+      if (new TextEncoder().encode(detail).length > MAX_GOVERNANCE_DETAIL_BYTES) detail = JSON.stringify({ v: 1, truncated: true });
+      this.run(
+        `INSERT INTO governance_events (id, event, actor_id, asserted_actor_id, subject, reason, detail, created_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        generateId(), EVIDENCE_MISSING_EVENT, actorId, subject, reason, detail, at
+      );
+    } catch (err) {
+      console.error('[SpecDO] evidence_missing log failed', candidateId, err instanceof Error ? err.message : String(err));
     }
   }
 
