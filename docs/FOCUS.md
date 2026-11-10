@@ -8,7 +8,7 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-11-07
+**Last updated:** 2026-11-09
 
 ## Handoff (2026-11-07): start here
 
@@ -52,8 +52,11 @@ revoke at `/app/settings/tokens`). Scripts against the deployed API need a plain
   checks no gate verdict or trial and trusts the caller's `fromRung`; `full` moves no deploy ref; two create routes
   answer 500 for invalid bodies. `start-e2e-workers.sh` now keeps its PID file on a refused restart.
 
-**Next:** D2 canary ping-pong (2026-11-02 handoff item 1; spine, plan + review). Candidates after it: the promotion
-gaps above (spine, one plan), the 500s as a starter issue, real traffic for `full`.
+**Next:** the promotion gaps above (spine): plan `docs/plans/promotion-gaps-plan.md` rev 3 (2026-11-09, two independent reviews). **PR A is
+implemented** (2026-11-10, branch `claude/pr1-review-lmgqik`, not merged to `main`, not deployed): m15 `shadow_scores`, the shadow-samples route and
+verdict, comparator ack/retry fixes, a maintainer-only edge route; full unit suite green, every guard mutation-checked. **PR B** (`advance`, 2026-11-10) is implemented, reviewed and verified. **PR C** (the promotion worker on `advance`: tournament by ledger shadow score, merge-train success advances, stable result codes, retry fixed, e2e and demo on real candidates; maintainer decision 6 accepted as option 1) is implemented and awaiting independent review; once deployed, competitive promotion past `shadow` is refused in production (`no_shadow_evidence`) until the
+shadow-router follow-up (plan section 12). Shadow and train evidence are log-only until then (OPEN-QUESTIONS 2026-11-10). D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
+Candidates after it: the 500s as a starter issue, real traffic for `full`.
 
 **How we worked:** every code change was mutation-checked (break the fix, see a test fail) and independently reviewed
 by an agent before going to `main`; the maintainer approved each push to `main` in chat.
@@ -169,7 +172,7 @@ deploy-config change with an independent agent before merging. Sonnet 5.5 medium
    `CLOUDFLARE_ACCOUNT_ID` and `WORKERS_SUBDOMAIN` live for deploys.
 3. Heads-up (promotion-routes-fix, deployed 2026-10-16 22:08 UTC, all ten workers verified): tournament mode now
    records the winner on a real candidate and fails the tournament when that is rejected, so a request naming a
-   candidate the Spec DO does not know ends `failed`. That is intended. Verified in production 2026-10-18 with `scripts/prod-verify-promotion.sh`: a two-candidate tournament completed, the winner's stage is `passed_train`, the promotion mode was restored. It left a tombstoned `test-org-e2e-prodcheck-*` org (purge by prefix after `PURGE_MIN_AGE_HOURS`, `docs/OPS.md`).
+   candidate the Spec DO does not know ends `failed`. That is intended. Verified in production 2026-10-18 with `scripts/prod-verify-promotion.sh`: a two-candidate tournament completed, the winner's stage is `passed_train`, the promotion mode was restored. (The script was rewritten 2026-11-10 for the `advance` contract: it now seeds shadow scores and expects the higher score to win and reach `passed_shadow`.) It left a tombstoned `test-org-e2e-prodcheck-*` org (purge by prefix after `PURGE_MIN_AGE_HOURS`, `docs/OPS.md`).
 
 ## Post-deploy checks (maintainer deployed `main` at `831d9db` on 2026-10-24; none confirmed yet)
 

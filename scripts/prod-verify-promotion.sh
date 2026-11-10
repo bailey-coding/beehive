@@ -9,9 +9,12 @@
 # What it does (AGENTS.md: no production e2e without human approval, the ledger has tombstone + purge now):
 #   1. creates test-org-e2e-prodcheck-<ts> -> repo -> spec -> two candidates (a real tree: the winner is recorded
 #      on a real candidate, so made-up ids would correctly fail)
-#   2. sets the promotion mode to tournament, promotes both candidates, restores the original mode
-#   3. checks the spec's tournament is `completed` with a winner and that the winner's stage is `passed_train`
-#   4. tombstones the test org (maintainer-only). Purge by prefix later, after PURGE_MIN_AGE_HOURS (docs/OPS.md).
+#   2. places both candidates on the shadow rung (the master-tier stage PATCH, the documented break-glass) and gives them shadow scores
+#      (85 and 95; 20 samples is the verdict minimum and an average under 80 is a failing verdict that keeps a candidate out) through the maintainer-only edge route: production candidates have none until the shadow-router follow-up
+#      (docs/plans/promotion-gaps-plan.md), and the tournament refuses without them
+#   3. sets the promotion mode to tournament, asks to promote both to train (first 202 waiting, second 200 decided), restores the mode
+#   4. checks the tournament is `completed` and that the HIGHER score won (not the first arrival) with stage `passed_shadow`
+#   5. tombstones the test org (maintainer-only). Purge by prefix later, after PURGE_MIN_AGE_HOURS (docs/OPS.md).
 # The token goes to curl through stdin, not argv. Exit 0 = PASS.
 
 set -u
@@ -63,13 +66,24 @@ C2="$(call POST "$API" /api/candidates "{\"specId\":\"$SPEC\",\"repositoryId\":\
 [ -n "$REPO" ] && [ -n "$SPEC" ] && [ -n "$C1" ] && [ -n "$C2" ] || { fail "seed incomplete (repo=$REPO spec=$SPEC c1=$C1 c2=$C2)"; exit 1; }
 echo "org=$ORG spec=$SPEC candidates=$C1 $C2"
 
-echo "== promote in tournament mode"
+echo "== place the candidates on the shadow rung and give them shadow scores"
+for c in "$C1" "$C2"; do
+  [ "$(call PATCH "$API" "/api/candidates/$c/stage" '{"stage":"passed_premerge","notes":"prod-verify fixture"}' "$ACTOR" | jq -r '.data.stage // empty')" = "passed_premerge" ] || fail "could not place $c on the shadow rung"
+done
+samples() { jq -nc --arg p "$1" --argjson s "$2" '{samples: [range(0;20) | {requestId: ($p + "-" + (. | tostring)), score: $s, matched: false, diffs: []}]}'; }
+for pair in "$C1:85" "$C2:95"; do
+  c="${pair%%:*}"; score="${pair##*:}"
+  [ "$(call POST "$API" "/api/candidates/$c/shadow-samples" "$(samples "prodcheck-$TS-$c" "$score")" "$ACTOR" | jq -r '.data.sampleCount // empty')" = "20" ] || fail "could not post shadow samples for $c"
+done
+
+echo "== promote in tournament mode (shadow -> train)"
 ORIGINAL_MODE="$(call GET "$PROMO" /mode | jq -r '.mode // empty')"
 echo "original mode: ${ORIGINAL_MODE:-unknown}"
+[ -n "$ORIGINAL_MODE" ] || { fail "could not read the promotion mode, so it could not be restored; stopping before changing it"; exit 1; }
 [ "$(call POST "$PROMO" /mode '{"mode":"tournament"}' | jq -r '.mode // empty')" = "tournament" ] || fail "could not set tournament mode"
 for c in "$C1" "$C2"; do
-  r="$(call POST "$PROMO" /promote "{\"candidateId\":\"$c\",\"specId\":\"$SPEC\",\"fromRung\":\"shadow\",\"toRung\":\"train\",\"actorId\":\"$ACTOR\"}")"
-  echo "promote $c: $(echo "$r" | jq -c '{success, message}' 2>/dev/null || echo "$r")"
+  r="$(call POST "$PROMO" /promote "{\"candidateId\":\"$c\",\"specId\":\"$SPEC\",\"toRung\":\"train\",\"actorId\":\"$ACTOR\"}")"
+  echo "promote $c: $(echo "$r" | jq -c '{success, outcome, code, message}' 2>/dev/null || echo "$r")"
   [ "$(echo "$r" | jq -r '.success // false')" = "true" ] || fail "promote $c did not succeed"
 done
 
@@ -79,12 +93,15 @@ STATUS="$(echo "$T" | jq -r '.status // empty')"; WINNER="$(echo "$T" | jq -r '.
 echo "tournament: status=$STATUS winner=$WINNER"
 [ "$STATUS" = "completed" ] || fail "tournament status is '$STATUS', expected completed"
 [ -n "$WINNER" ] || fail "tournament has no winner"
+[ "$WINNER" = "$C2" ] || fail "the winner is $WINNER, expected $C2 (the higher shadow score, 95, which arrived second)"
 if [ -n "$WINNER" ]; then
   STAGE="$(call GET "$API" "/api/candidates/$WINNER" | jq -r '.data.stage // empty')"
   echo "winner stage: $STAGE"
-  [ "$STAGE" = "passed_train" ] || fail "winner stage is '$STAGE', expected passed_train"
+  [ "$STAGE" = "passed_shadow" ] || fail "winner stage is '$STAGE', expected passed_shadow"
 fi
+LOSER_STAGE="$(call GET "$API" "/api/candidates/$C1" | jq -r '.data.stage // empty')"
+[ "$LOSER_STAGE" = "passed_premerge" ] || fail "the loser's stage is '$LOSER_STAGE', expected passed_premerge"
 
 echo
-[ "$RESULT" -eq 0 ] && echo "PASS: tournament completed and the winner is recorded on the candidate." || echo "FAILED: see messages above."
+[ "$RESULT" -eq 0 ] && echo "PASS: the higher shadow score won the tournament and only the winner moved." || echo "FAILED: see messages above."
 exit "$RESULT"

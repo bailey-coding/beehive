@@ -274,3 +274,7 @@ Trust calibration and the full capability model (M5b / M6.2), cost attribution a
 3. Does the two-approval semantics match M5-PLAN and the bootstrap marker rule unambiguously (one row vs two)?
 4. Attack the replacement continuity design: can critical delivery still be frozen or bypassed by one maintainer, including by manipulating "active" or the approval window?
 5. Mixed-version and rollback-floor: anything else m14 or the new routes must update?
+
+> **Note (2026-11-10, promotion-gaps PR A):** the whitelisted policy key `governance.min_shadow_samples` named above does not exist in code (only `governance.m14_epoch` does). Until the policy route lands, the minimum shadow sample count is the constant `SHADOW_MIN_SAMPLES = 20` behind `shadowMinSamples()` in `workers/shared/shadow-verdict.ts` (docs/plans/promotion-gaps-plan.md section 12, V7); this plan's default of 100 is superseded for the shadow verdict by that value until the policy key is built.
+
+> **Note (2026-11-10, promotion-gaps PR B):** `POST /api/candidates/:id/advance` (Spec DO) is a new writer of `candidates.stage = 'promoted'` (and of the earlier forward stages). Add it to the B2 inventory of paths to `promoted` and to its allowlist test, and make it the call site of `assertPromotionApprovals` (the `promoted` write in `advanceCandidate`, `workers/spec-do/index.ts`). Refusing entry into `passed_shadow` for ineligible real data (rev 5) belongs in the same function. See `docs/plans/promotion-gaps-plan.md` sections 11 (N6) and 14.

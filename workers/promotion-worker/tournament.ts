@@ -6,19 +6,61 @@
 import { 
   TournamentStatus, 
   TournamentCandidate, 
-  CandidateComparison, 
-  PromotionRequest, 
+  ResolvedPromotionRequest,
   PromotionResult,
   CandidateMetrics,
   Rung,
   Env,
 } from './types';
-import { getCandidate, setCandidateStage, getPromotionLedger, CANDIDATE_STAGE_FOR_RUNG } from './spec-do';
+import { getCandidate, getPromotionLedger, advanceCandidate, recordDecidedTrial } from './spec-do';
 
 /**
  * Extended tournament type with ID
  */
 type TournamentWithId = TournamentStatus & { id: string };
+
+/**
+ * The tournament is the competitive step of the ladder: it decides shadow -> train (docs/plans/promotion-gaps-plan.md section 12, V1).
+ * Every other move calls `advance` directly. It ranks candidates by their shadow score in the ledger (`shadow_scores`, summed by the Spec
+ * DO from the comparator's samples), read when the tournament decides, never a default and never arrival order. A candidate without a
+ * score, or a tie for first, is a refusal the caller can see (V2): production candidates carry no score until the shadow router follow-up.
+ */
+export const TOURNAMENT_FROM_RUNG: Rung = 'shadow';
+export const TOURNAMENT_TO_RUNG: Rung = 'train';
+
+export type TournamentRefusalCode = 'no_shadow_evidence' | 'tie' | 'tournament_completed' | 'not_enough_entrants' | 'tournament_exhausted';
+
+/** A decision that cannot be made, with a stable code. Before a winner exists it only reads (no attempt is spent); after, the tournament is recorded failed (retryable). The caller gets the code. */
+export class TournamentRefusal extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+  }
+}
+
+export type TournamentDecision =
+  | { kind: 'winner'; winnerId: string; runnerUpId: string; scores: Record<string, number> }
+  | { kind: 'refused'; code: 'no_shadow_evidence' | 'tie'; message: string };
+
+/** Pure. `score: null` means the ledger holds no shadow score for the candidate. */
+export function decideTournament(entrants: Array<{ candidateId: string; score: number | null }>): TournamentDecision {
+  const unscored = entrants.filter((e) => e.score === null).map((e) => e.candidateId);
+  if (unscored.length > 0) {
+    return { kind: 'refused', code: 'no_shadow_evidence', message: `No shadow score in the ledger for: ${unscored.join(', ')}` };
+  }
+  const ranked = entrants.map((e) => ({ candidateId: e.candidateId, score: e.score as number })).sort((a, b) => b.score - a.score);
+  if (ranked.length < 2) {
+    return { kind: 'refused', code: 'no_shadow_evidence', message: 'A tournament needs at least two scored candidates' };
+  }
+  if (ranked[0].score === ranked[1].score) {
+    return { kind: 'refused', code: 'tie', message: `Tie for first at ${ranked[0].score}: ${ranked[0].candidateId} and ${ranked[1].candidateId}` };
+  }
+  return {
+    kind: 'winner',
+    winnerId: ranked[0].candidateId,
+    runnerUpId: ranked[1].candidateId,
+    scores: Object.fromEntries(ranked.map((r) => [r.candidateId, r.score])),
+  };
+}
 
 /**
  * Manages tournament-style promotion where multiple candidates compete
@@ -27,11 +69,25 @@ export class TournamentManager {
   constructor(private env: Env) {}
 
   /**
-   * Execute tournament promotion for a candidate
+   * Execute the tournament step for a candidate (shadow -> train). The caller (PromotionWorker) has already asked the Spec DO whether the
+   * candidate may make this move, so every entrant is a candidate the ledger says is on the shadow rung.
+   *
+   * Outcomes: `waiting` (alone), `moved` (this candidate won and `advance` wrote its stage), `eliminated` (another won), or a refusal
+   * with a code. Evidence refusals (`no_shadow_evidence`, `tie`, `not_enough_entrants`) only read and spend no attempt; an `advance` refusal for the
+   * winner records the tournament failed, retryable up to the ledger's cap (`tournament_exhausted` after).
    */
-  async executeTournament(request: PromotionRequest): Promise<PromotionResult> {
-    // Set once the tournament is in_progress: only then does a failure belong in the ledger
+  async executeTournament(request: ResolvedPromotionRequest): Promise<PromotionResult> {
+    // Set once a winner exists and the tournament goes in_progress: only then does a failure belong in the ledger
     let runningId: string | null = null;
+    const result = (r: Pick<PromotionResult, 'success' | 'message'> & Partial<PromotionResult>): PromotionResult => ({
+      candidateId: request.candidateId,
+      specId: request.specId,
+      fromRung: request.fromRung,
+      toRung: request.toRung,
+      timestamp: new Date().toISOString(),
+      mode: 'tournament',
+      ...r,
+    });
     try {
       console.log(`[Tournament] Starting tournament promotion for candidate ${request.candidateId}`);
 
@@ -42,16 +98,11 @@ export class TournamentManager {
       }
 
       if (tournament.winner && tournament.status === 'completed') {
-        return {
+        return result({
           success: false,
-          candidateId: request.candidateId,
-          specId: request.specId,
-          fromRung: request.fromRung,
-          toRung: request.toRung,
+          code: 'tournament_completed',
           message: `Tournament for spec ${request.specId} already completed with winner ${tournament.winner}`,
-          timestamp: new Date().toISOString(),
-          mode: 'tournament',
-        };
+        });
       }
 
       const updatedTournament = await this.addCandidateToTournament(
@@ -60,70 +111,139 @@ export class TournamentManager {
         request.fromRung
       );
 
-      if (updatedTournament.candidates.length < 2) {
+      // Competing entrants only: a disqualified one beside a lone entrant leaves that entrant waiting, not refused
+      if (updatedTournament.candidates.filter((c) => c.status === 'competing').length < 2) {
         await this.updateTournamentStatus(updatedTournament.id, {
           status: 'pending',
         });
 
-        return {
-          success: true,
-          candidateId: request.candidateId,
-          specId: request.specId,
-          fromRung: request.fromRung,
-          toRung: request.toRung,
-          message: `Added to tournament. Waiting for more candidates.`,
-          timestamp: new Date().toISOString(),
-          mode: 'tournament',
-        };
+        // Not a move: the caller records this attempt as finished at the rung it started from
+        return result({ success: true, outcome: 'waiting', message: `Added to tournament. Waiting for more candidates.` });
       }
 
-      if (updatedTournament.status !== 'in_progress') {
-        await this.startTournament(updatedTournament.id);
+      // Everything below up to the winner's advance only READS: an evidence refusal (no score, a tie, too few eligible entrants) must not move the
+      // tournament to in_progress or burn one of its few attempts (MAX_TOURNAMENT_ATTEMPTS), or three refusals would kill a spec's tournament for good.
+      // Entrants are re-checked now, not trusted from when they joined: one that can no longer make this move (it failed, was tombstoned, changed
+      // stage) or whose shadow verdict failed does not compete (plan V2), and is marked disqualified so it cannot block the next attempt.
+      const eligible: TournamentCandidate[] = [];
+      const ineligible = new Map<string, string>(); // disqualified: cannot make this move
+      const pastRung = new Map<string, string>(); // already moved on: not in the contest, and not a loss either
+      // Only a definite "this candidate cannot make this move" disqualifies. A ledger error or an older Spec DO says nothing about the candidate:
+      // it stops the attempt (before anything is written) and the entrant stays in, or a transient 5xx would knock a healthy entrant out for good.
+      const DISQUALIFYING = new Set(['candidate_not_found', 'stale_from_rung', 'not_next_rung', 'evidence_missing']);
+      for (const c of updatedTournament.candidates.filter((x) => x.status === 'competing')) {
+        const check = await advanceCandidate(
+          this.env,
+          c.candidateId,
+          { toRung: TOURNAMENT_TO_RUNG as 'train', fromRung: TOURNAMENT_FROM_RUNG, dryRun: true },
+          request.actorId
+        );
+        if (!check.ok) {
+          if (!DISQUALIFYING.has(check.code)) throw new TournamentRefusal(check.code, `Could not check entrant ${c.candidateId}: ${check.message}`);
+          ineligible.set(c.candidateId, `${check.code}: ${check.message}`);
+        } else if (check.data.noop) {
+          pastRung.set(c.candidateId, 'already past the shadow rung');
+        } else if (check.data.evidence.some((e) => e.rung === 'shadow' && e.status === 'failed')) {
+          ineligible.set(c.candidateId, 'evidence_failed: its shadow verdict is fail');
+        } else {
+          eligible.push(c);
+        }
       }
-      runningId = updatedTournament.id;
+      let current = updatedTournament;
+      if (ineligible.size > 0) {
+        console.warn(`[Tournament] Disqualifying ${[...ineligible].map(([id, why]) => `${id} (${why})`).join('; ')}`);
+        // On the record as saved now, so an entrant that joined meanwhile is kept (the Spec DO writes a tournament_loss near-miss for each disqualified entrant)
+        const saved = await getPromotionLedger(this.env).modifyTournament(request.specId, (cur) => ({
+          ...cur,
+          candidates: cur.candidates.map((c) => (ineligible.has(c.candidateId) && c.status === 'competing' ? { ...c, status: 'disqualified' as const } : c)),
+        }));
+        if (!saved) throw new Error(`Tournament for spec ${request.specId} disappeared while disqualifying`);
+        current = saved as TournamentWithId;
+      }
+      if (eligible.length < 2) {
+        const why = [...ineligible.values(), ...[...pastRung].map(([id, w]) => `${id}: ${w}`)];
+        throw new TournamentRefusal('not_enough_entrants', `A tournament needs two eligible entrants; ${eligible.length} left${why.length ? ` (${why.join('; ')})` : ''}`);
+      }
+      const contested = new Set(eligible.map((c) => c.candidateId));
 
-      const comparisons = await this.runTournamentComparisons(updatedTournament);
-      const winner = this.determineTournamentWinner(updatedTournament.candidates, comparisons);
+      // Scores are read now, for every eligible entrant, from the ledger: a score that landed after a candidate joined counts, and a missing
+      // score is "no evidence", never a default
+      const entrants: Array<{ candidateId: string; score: number | null }> = [];
+      for (const c of eligible) entrants.push({ candidateId: c.candidateId, score: await this.readShadowScore(c.candidateId) });
+      const decision = decideTournament(entrants);
+      if (decision.kind === 'refused') throw new TournamentRefusal(decision.code, decision.message);
 
-      if (!winner) {
-        throw new Error('Could not determine tournament winner');
+      // A winner exists: now the tournament really runs
+      if (current.status !== 'in_progress') {
+        await this.startTournament(current.id);
+      }
+      runningId = current.id;
+
+      // The Spec DO decides whether the winner may move; a refusal here (the verdict flipped, the stage changed) fails the tournament, retryably
+      const advanced = await advanceCandidate(
+        this.env,
+        decision.winnerId,
+        { toRung: TOURNAMENT_TO_RUNG as 'train', fromRung: TOURNAMENT_FROM_RUNG, notes: `Tournament ${current.id} winner` },
+        request.actorId
+      );
+      if (!advanced.ok) throw new TournamentRefusal(advanced.code, `Winner ${decision.winnerId} could not advance: ${advanced.message}`);
+
+      await this.recordWinner(decision.winnerId, current, contested);
+
+      // The decision as ledger evidence, AFTER the winner moved (a trial and a near-miss for the loser say somebody won). Best effort: the stage is
+      // the truth, so a trial that cannot be written (an actorId that is no actor row is a foreign-key failure) is reported, not a failed tournament.
+      let trial: { trialId: string } | { trial: string };
+      if (!request.actorId) {
+        trial = { trial: 'skipped: no actorId on the request' };
+      } else {
+        try {
+          trial = {
+            trialId: await recordDecidedTrial(this.env, {
+              specId: request.specId,
+              candidateAId: decision.winnerId,
+              candidateBId: decision.runnerUpId,
+              winnerId: decision.winnerId,
+              comparisonMetrics: { basis: 'shadow_score', tournamentId: current.id, scores: decision.scores },
+              actorId: request.actorId,
+              idempotencyKey: `tournament:${current.id}:${decision.winnerId}:${decision.runnerUpId}`,
+            }),
+          };
+        } catch (trialError) {
+          const why = trialError instanceof Error ? trialError.message : String(trialError);
+          console.error(`[Tournament] Winner ${decision.winnerId} moved but its trial was not recorded: ${why}`);
+          trial = { trial: `not recorded: ${why.slice(0, 200)}` };
+        }
       }
 
-      await this.promoteTournamentWinner(winner, request.toRung, updatedTournament);
-      await this.completeTournament(updatedTournament.id, winner.candidateId, comparisons);
+      console.log(`[Tournament] Tournament completed. Winner: ${decision.winnerId}`);
 
-      console.log(`[Tournament] Tournament completed. Winner: ${winner.candidateId}`);
-
-      return {
+      const won = decision.winnerId === request.candidateId;
+      return result({
         success: true,
-        candidateId: winner.candidateId,
-        specId: request.specId,
-        fromRung: request.fromRung,
-        toRung: request.toRung,
-        message: `Tournament winner: ${winner.candidateId} promoted to ${request.toRung}`,
-        timestamp: new Date().toISOString(),
-        mode: 'tournament',
+        // A winner whose advance was a no-op (it had already moved by the time the real call ran) is not a move
+        outcome: won ? (advanced.data.noop ? 'noop' : 'moved') : 'eliminated',
+        message: `Tournament winner: ${decision.winnerId} promoted to ${request.toRung}`,
+        moves: advanced.data.noop ? [] : [{ candidateId: decision.winnerId, fromRung: request.fromRung, toRung: request.toRung }],
         details: {
-          tournamentId: updatedTournament.id,
-          comparisons: comparisons.length,
-          winner: winner.candidateId,
+          tournamentId: current.id,
+          winner: decision.winnerId,
+          scores: decision.scores,
+          ...(ineligible.size ? { disqualified: Object.fromEntries(ineligible) } : {}),
+          ...trial,
         },
-      };
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[Tournament] Error: ${errorMessage}`);
-      if (runningId) await this.recordTournamentFailure(runningId, errorMessage);
+      // The ledger's failure reason leads with the code, so `tie` / `no_shadow_evidence` / an advance refusal is searchable there
+      if (runningId) await this.recordTournamentFailure(runningId, error instanceof TournamentRefusal ? `${error.code}: ${errorMessage}` : errorMessage);
 
-      return {
+      return result({
         success: false,
-        candidateId: request.candidateId,
-        specId: request.specId,
-        fromRung: request.fromRung,
-        toRung: request.toRung,
+        // The ledger refuses a tournament that has failed too many times (retries_exhausted): a stable 409, not an unexplained 500
+        code: error instanceof TournamentRefusal ? error.code : /retries_exhausted/.test(errorMessage) ? 'tournament_exhausted' : 'tournament_error',
         message: errorMessage,
-        timestamp: new Date().toISOString(),
-        mode: 'tournament',
-      };
+      });
     }
   }
 
@@ -299,43 +419,45 @@ export class TournamentManager {
   }
 
   /**
-   * Get candidate metrics from Spec DO and Shadow Router
+   * The candidate's shadow score in the ledger, or null when it has none. Throws on any non-2xx (a 404 included), never "no score".
+   * A score of 0 is a real score.
    */
-  private async getCandidateMetrics(candidateId: string): Promise<CandidateMetrics> {
-    const defaultMetrics: CandidateMetrics = {
-      passRate: 1.0,
-      failureRate: 0.0,
-      latencyP95: 100,
-      latencyP50: 50,
-      errorRate: 0.0,
-      throughput: 100,
-      score: 80,
-      conformanceScore: 100,
-      complexityDelta: 0,
-      stability: 1.0,
-    };
-
-    try {
-      const candidate = await getCandidate(this.env, candidateId) as {
-        shadowScore?: number;
-        shadowMetrics?: string;
-      };
-      const metrics = candidate.shadowMetrics
-        ? JSON.parse(candidate.shadowMetrics) as Partial<CandidateMetrics>
-        : {};
-      return {
-        ...defaultMetrics,
-        ...metrics,
-        score: candidate.shadowScore || defaultMetrics.score,
-      };
-    } catch (error) {
-      console.error(`[Tournament] Failed to get metrics for ${candidateId}:`, error);
-      return defaultMetrics;
-    }
+  private async readShadowScore(candidateId: string): Promise<number | null> {
+    const row = (await getCandidate(this.env, candidateId)) as { shadowScore?: unknown };
+    return typeof row.shadowScore === 'number' ? row.shadowScore : null;
   }
 
   /**
-   * Start tournament comparisons
+   * Metrics recorded when a candidate joins: a snapshot for the tournament record, not what decides it (decideTournament reads fresh scores).
+   * Throws on a failed read instead of recording defaults.
+   */
+  private async getCandidateMetrics(candidateId: string): Promise<CandidateMetrics> {
+    const row = (await getCandidate(this.env, candidateId)) as { shadowScore?: unknown; shadowMetrics?: unknown };
+    let recorded: Partial<CandidateMetrics> = {};
+    if (typeof row.shadowMetrics === 'string') {
+      try {
+        recorded = JSON.parse(row.shadowMetrics) as Partial<CandidateMetrics>;
+      } catch {
+        // an unreadable snapshot is simply empty; the score below is what matters
+      }
+    }
+    return {
+      passRate: 0,
+      failureRate: 0,
+      latencyP95: 0,
+      latencyP50: 0,
+      errorRate: 0,
+      throughput: 0,
+      conformanceScore: 0,
+      complexityDelta: 0,
+      stability: 0,
+      ...recorded,
+      score: typeof row.shadowScore === 'number' ? row.shadowScore : 0,
+    };
+  }
+
+  /**
+   * Mark the tournament in progress
    */
   private async startTournament(tournamentId: string): Promise<void> {
     await this.updateTournamentStatus(tournamentId, {
@@ -345,190 +467,24 @@ export class TournamentManager {
   }
 
   /**
-   * Run comparisons between all competing candidates
+   * Record the winner and the eliminated entrants, then complete the tournament. The winner's stage was already written by `advance`.
    */
-  private async runTournamentComparisons(
-    tournament: TournamentWithId
-  ): Promise<CandidateComparison[]> {
-    const comparisons: CandidateComparison[] = [];
-    const competingCandidates = tournament.candidates.filter(
-      c => c.status === 'competing'
-    );
-
-    console.log(`[Tournament] Running comparisons for ${competingCandidates.length} candidates`);
-
-    for (let i = 0; i < competingCandidates.length; i++) {
-      for (let j = i + 1; j < competingCandidates.length; j++) {
-        const candidateA = competingCandidates[i];
-        const candidateB = competingCandidates[j];
-
-        try {
-          const comparison = await this.compareCandidates(candidateA, candidateB);
-          comparisons.push(comparison);
-        } catch (error) {
-          console.error(
-            `[Tournament] Failed to compare ${candidateA.candidateId} vs ${candidateB.candidateId}:`,
-            error
-          );
-        }
-      }
-    }
-
-    return comparisons;
-  }
-
-  /**
-   * Compare two candidates
-   */
-  private async compareCandidates(
-    candidateA: TournamentCandidate,
-    candidateB: TournamentCandidate
-  ): Promise<CandidateComparison> {
-    try {
-      const response = await this.env.SHADOW_ROUTER.fetch(
-        '/compare',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            candidate1: candidateA.candidateId,
-            candidate2: candidateB.candidateId,
-            specId: candidateA.specId,
-          }),
-        }
-      );
-
-      if (response.ok) {
-        const result = await response.json() as { winner?: string; score?: number };
-        if (result.winner) {
-          return {
-            candidate1: candidateA.candidateId,
-            candidate2: candidateB.candidateId,
-            winner: result.winner,
-            comparisonScore: result.score || Math.abs(candidateA.score - candidateB.score),
-            comparedAt: new Date().toISOString(),
-          };
-        }
-      }
-
-      console.log(`[Tournament] Using fallback comparison`);
-      return this.fallbackCompareCandidates(candidateA, candidateB);
-    } catch (error) {
-      console.warn(`[Tournament] Comparison failed, using fallback:`, error);
-      return this.fallbackCompareCandidates(candidateA, candidateB);
-    }
-  }
-
-  /**
-   * Fallback comparison when Scientist Comparator is unavailable
-   */
-  private fallbackCompareCandidates(
-    candidateA: TournamentCandidate,
-    candidateB: TournamentCandidate
-  ): CandidateComparison {
-    const scoreDiff = candidateA.score - candidateB.score;
-    const winner = scoreDiff >= 0 ? candidateA.candidateId : candidateB.candidateId;
-    
-    return {
-      candidate1: candidateA.candidateId,
-      candidate2: candidateB.candidateId,
-      winner,
-      comparisonScore: Math.abs(scoreDiff),
-      comparedAt: new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Determine tournament winner from candidates and comparisons
-   */
-  private determineTournamentWinner(
-    candidates: TournamentCandidate[],
-    comparisons: CandidateComparison[]
-  ): TournamentCandidate | null {
-    if (candidates.length === 0) {
-      return null;
-    }
-
-    if (candidates.length === 1) {
-      return candidates[0];
-    }
-
-    const wins: Record<string, number> = {};
-    for (const candidate of candidates) {
-      wins[candidate.candidateId] = 0;
-    }
-
-    for (const comparison of comparisons) {
-      wins[comparison.winner] = (wins[comparison.winner] || 0) + 1;
-    }
-
-    const scores: Record<string, number> = {};
-    const maxWins = Math.max(...Object.values(wins), 1);
-
-    for (const candidate of candidates) {
-      const winScore = (wins[candidate.candidateId] / maxWins) * 40;
-      const directScore = candidate.score * 0.6;
-      scores[candidate.candidateId] = winScore + directScore;
-    }
-
-    let maxScore = -Infinity;
-    let winner: TournamentCandidate | null = null;
-
-    for (const candidate of candidates) {
-      const score = scores[candidate.candidateId] || 0;
-      if (score > maxScore) {
-        maxScore = score;
-        winner = candidate;
-      }
-    }
-
-    return winner;
-  }
-
-  /**
-   * Promote tournament winner to target rung
-   */
-  private async promoteTournamentWinner(
-    winner: TournamentCandidate,
-    toRung: Rung,
-    tournament: TournamentWithId
-  ): Promise<void> {
-    console.log(`[Tournament] Promoting winner ${winner.candidateId} to ${toRung}`);
-
-    // Throws on !ok: the tournament is then recorded failed (recordTournamentFailure) and can be retried
-    await setCandidateStage(
-      this.env,
-      winner.candidateId,
-      CANDIDATE_STAGE_FOR_RUNG[toRung],
-      `Tournament winner ${tournament.id} promoted to ${toRung}`
-    );
-
+  private async recordWinner(winnerId: string, tournament: TournamentWithId, contested: Set<string>): Promise<void> {
+    const at = new Date().toISOString();
+    // Only the entrants that took part in this contest are decided; a disqualified one stays disqualified and one that joined mid-decision stays competing
     const updatedCandidates = tournament.candidates.map(c =>
-      c.candidateId === winner.candidateId
-        ? { ...c, status: 'winner' as const, promotedAt: new Date().toISOString() }
-        : { ...c, status: 'eliminated' as const }
+      c.candidateId === winnerId
+        ? { ...c, status: 'winner' as const, promotedAt: at }
+        : c.status === 'competing' && contested.has(c.candidateId) ? { ...c, status: 'eliminated' as const } : c
     );
 
+    // One write: winner, candidate statuses and completion together, or a failure between two writes would leave a failed tournament with
+    // no competing entrant to ever decide it again
     await this.updateTournament(tournament.id, {
-      winner: winner.candidateId,
-      candidates: updatedCandidates,
-    });
-  }
-
-  /**
-   * Complete tournament
-   */
-  private async completeTournament(
-    tournamentId: string,
-    winnerId: string,
-    comparisons: CandidateComparison[]
-  ): Promise<void> {
-    await this.updateTournament(tournamentId, {
       status: 'completed',
       winner: winnerId,
-      completedAt: new Date().toISOString(),
+      candidates: updatedCandidates,
+      completedAt: at,
     });
-
-    console.log(`[Tournament] Completed tournament ${tournamentId}. Winner: ${winnerId}`);
   }
 }

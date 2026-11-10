@@ -6,12 +6,12 @@
 import { 
   MergeTrainStatus, 
   MergeTrainCandidate, 
-  PromotionRequest, 
+  ResolvedPromotionRequest,
   PromotionResult,
   Rung,
   Env,
 } from './types';
-import { setCandidateStage, getPromotionLedger, getCandidate } from './spec-do';
+import { setCandidateStage, getPromotionLedger, getCandidate, advanceCandidate, type AdvanceOutcome } from './spec-do';
 import { GATE_WORKFLOW_ORIGIN, GATE_PRE_MERGE_PATH } from '../shared/schemas';
 
 /**
@@ -53,6 +53,19 @@ function nextPosition(cars: MergeTrainCandidate[]): number {
 }
 
 /**
+ * What one processMergeTrain run did: which car it claimed (not always the requester's), whether its gate passed, and whether `advance`
+ * then wrote the candidate's stage. null from processMergeTrain means nothing was claimed.
+ */
+interface MergeProcessed {
+  car: MergeTrainCandidate;
+  /** The outcome write landed and the gate passed */
+  merged: boolean;
+  failureReason: string | null;
+  /** Set when merged: the Spec DO's answer to advancing the candidate to canary (train passed) */
+  advance?: AdvanceOutcome;
+}
+
+/**
  * Manages merge-train-style promotion where candidates are merged sequentially
  */
 export class MergeTrainManager {
@@ -61,7 +74,7 @@ export class MergeTrainManager {
   /**
    * Execute merge-train promotion for a candidate
    */
-  async executeMergeTrain(request: PromotionRequest): Promise<PromotionResult> {
+  async executeMergeTrain(request: ResolvedPromotionRequest): Promise<PromotionResult> {
     try {
       console.log(`[MergeTrain] Processing merge-train promotion for candidate ${request.candidateId}`);
 
@@ -86,6 +99,7 @@ export class MergeTrainManager {
           message: `Maximum concurrent candidates (${maxConcurrent}) reached. Please wait.`,
           timestamp: new Date().toISOString(),
           mode: 'merge-train',
+          code: 'train_full',
         };
       }
 
@@ -112,7 +126,7 @@ export class MergeTrainManager {
       });
       console.log(`[MergeTrain] Added candidate ${request.candidateId} to position ${updatedTrain.currentPosition}`);
 
-      await this.processMergeTrain(updatedTrain);
+      const processed = await this.processMergeTrain(updatedTrain);
 
       // The car this call added: the add set currentPosition to its position
       const candidateInTrain = updatedTrain.candidates.find(c =>
@@ -123,22 +137,18 @@ export class MergeTrainManager {
         throw new Error('Candidate not found in merge train after processing');
       }
 
-      return {
-        success: true,
-        candidateId: request.candidateId,
-        specId: request.specId,
-        fromRung: request.fromRung,
-        toRung: request.toRung,
-        message: `Candidate added to merge train at position ${candidateInTrain.position}. Status: ${candidateInTrain.status}`,
-        timestamp: new Date().toISOString(),
-        mode: 'merge-train',
-        details: {
-          trainId: updatedTrain.id,
-          position: candidateInTrain.position,
-          status: candidateInTrain.status,
-          mergedAt: candidateInTrain.mergedAt,
+      return this.runResult(
+        {
+          candidateId: request.candidateId,
+          specId: request.specId,
+          fromRung: request.fromRung,
+          toRung: request.toRung,
+          timestamp: new Date().toISOString(),
+          mode: 'merge-train' as const,
         },
-      };
+        processed,
+        { trainId: updatedTrain.id, position: candidateInTrain.position, status: candidateInTrain.status }
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[MergeTrain] Error: ${errorMessage}`);
@@ -152,8 +162,51 @@ export class MergeTrainManager {
         message: errorMessage,
         timestamp: new Date().toISOString(),
         mode: 'merge-train',
+        // The capacity check inside the CAS write throws; it is the same refusal as the check before it
+        code: /^Maximum concurrent candidates/.test(errorMessage) ? 'train_full' : 'merge_train_error',
       };
     }
+  }
+
+  /**
+   * The result of one train run for the candidate that asked. The run claims the first waiting car, which is not always the requester's, so
+   * "own" means the claimed car belongs to the requester (any of its cars: a candidate can be on the train twice). Moves list whoever merged AND
+   * actually advanced in this run; an `advance` that was a no-op (already past the rung) is not a move.
+   */
+  private runResult(
+    base: Pick<PromotionResult, 'candidateId' | 'specId' | 'fromRung' | 'toRung' | 'timestamp' | 'mode'>,
+    processed: MergeProcessed | null,
+    queued: { trainId: string; position: number; status: string }
+  ): PromotionResult {
+    const own = processed !== null && processed.car.candidateId === base.candidateId;
+    const advanced = processed?.merged && processed.advance?.ok ? processed.advance.data : null;
+    const moves = processed && advanced && !advanced.noop
+      ? [{ candidateId: processed.car.candidateId, fromRung: 'train' as Rung, toRung: 'canary' as Rung }]
+      : [];
+    if (processed?.merged && processed.advance && !processed.advance.ok && !own) {
+      console.error(`[MergeTrain] Candidate ${processed.car.candidateId} merged but could not advance: ${processed.advance.code}: ${processed.advance.message}`);
+    }
+    const details = { trainId: queued.trainId, position: own ? processed.car.position : queued.position };
+
+    if (own && processed.failureReason !== null) {
+      return { ...base, success: false, code: 'gate_failed', message: `Merge gate failed for ${base.candidateId}: ${processed.failureReason}`, details: { ...details, status: 'failed' } };
+    }
+    if (own && processed.merged && processed.advance && !processed.advance.ok) {
+      // The car merged (its gate passed) but the Spec DO refused the stage move: not a promotion, and the car is not undone (rule 7 is about rollback)
+      return { ...base, success: false, code: processed.advance.code, message: `Merged ${base.candidateId} but could not advance it: ${processed.advance.message}`, details: { ...details, status: 'merged' } };
+    }
+    if (own && processed.merged) {
+      return {
+        ...base,
+        success: true,
+        outcome: moves.length ? 'moved' : 'noop',
+        moves,
+        message: moves.length ? `Candidate merged at position ${details.position} and advanced to ${base.toRung}` : `Candidate merged at position ${details.position}; it was already past ${base.toRung}`,
+        details: { ...details, status: 'merged' },
+      };
+    }
+    // Added but not merged in this call: another candidate's car was first in line, nothing could be claimed, or it is waiting its turn
+    return { ...base, success: true, outcome: 'queued', moves, message: `Candidate added to merge train at position ${queued.position}. Status: ${queued.status}`, details: { trainId: queued.trainId, position: queued.position, status: queued.status } };
   }
 
   /**
@@ -275,7 +328,7 @@ export class MergeTrainManager {
    * each one CAS write (re-read on a conflict, so a car added meanwhile is kept), and both touch only the claimed car.
    * No I/O happens inside a mutate.
    */
-  private async processMergeTrain(train: MergeTrainWithId): Promise<void> {
+  private async processMergeTrain(train: MergeTrainWithId): Promise<MergeProcessed | null> {
     console.log(`[MergeTrain] Processing train ${train.id} with ${train.candidates.length} candidates`);
 
     // Set only by the mutate attempt that returns a write: casLoop returns the current record when mutate returns
@@ -298,13 +351,13 @@ export class MergeTrainManager {
       // The car stays waiting for the next run; the add itself succeeded
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[MergeTrain] Could not claim a car in train ${train.id}: ${errorMessage}`);
-      return;
+      return null;
     }
 
     const car = claim.car;
     if (!car) {
       console.log(`[MergeTrain] No waiting candidates in train ${train.id}`);
-      return;
+      return null;
     }
 
     console.log(`[MergeTrain] Starting merge for candidate ${car.candidateId} (position ${car.position})`);
@@ -358,11 +411,22 @@ export class MergeTrainManager {
 
     if (!written) {
       console.warn(`[MergeTrain] Car ${car.candidateId} (position ${car.position}) is no longer merging; outcome not recorded`);
-    } else if (failureReason !== null) {
-      console.error(`[MergeTrain] Failed to merge candidate ${car.candidateId}: ${failureReason}`);
-    } else {
-      console.log(`[MergeTrain] Successfully merged candidate ${car.candidateId}`);
+      // Someone else owns the car's state now; nothing of this run is recorded, so it is neither merged nor failed here
+      return { car, merged: false, failureReason: null };
     }
+    if (failureReason !== null) {
+      console.error(`[MergeTrain] Failed to merge candidate ${car.candidateId}: ${failureReason}`);
+      return { car, merged: false, failureReason };
+    }
+    console.log(`[MergeTrain] Successfully merged candidate ${car.candidateId}`);
+    // The car is merged in the ledger, so the Spec DO finds its train evidence; it decides whether the candidate may leave the train rung.
+    // A refusal is reported to the caller, never swallowed, and the merged car is left as it is.
+    const advance = await advanceCandidate(
+      this.env,
+      car.candidateId,
+      { toRung: 'canary', fromRung: 'train', notes: `Merge train ${train.id}, position ${car.position}` }
+    );
+    return { car, merged: true, failureReason: null, advance };
   }
 
   /**
@@ -445,6 +509,7 @@ export class MergeTrainManager {
    * Retry failed merge
    */
   async retryFailedMerge(candidateId: string, specId: string): Promise<PromotionResult> {
+    let retriedPosition = 0;
     try {
       const updatedTrain = await this.modifyMergeTrain(specId, (train) => {
         // Only the candidate's latest car: an older failed car was superseded by a re-add
@@ -458,6 +523,7 @@ export class MergeTrainManager {
           throw new Error(`Candidate ${candidateId} is not in a failed state (current: ${candidate.status})`);
         }
 
+        retriedPosition = candidate.position;
         return {
           ...train,
           candidates: updateCar(train.candidates, candidate, c => ({
@@ -469,18 +535,14 @@ export class MergeTrainManager {
           status: 'processing',
         };
       });
-      await this.processMergeTrain(updatedTrain);
+      const processed = await this.processMergeTrain(updatedTrain);
 
-      return {
-        success: true,
-        candidateId,
-        specId,
-        fromRung: 'train' as Rung,
-        toRung: 'train' as Rung,
-        message: `Retrying merge for candidate ${candidateId}`,
-        timestamp: new Date().toISOString(),
-        mode: 'merge-train',
-      };
+      // What the run did, not "Retrying": the gate may have failed again, or the merged car may have been refused its stage move
+      return this.runResult(
+        { candidateId, specId, fromRung: 'train' as Rung, toRung: 'canary' as Rung, timestamp: new Date().toISOString(), mode: 'merge-train' as const },
+        processed,
+        { trainId: updatedTrain.id, position: retriedPosition, status: 'waiting' }
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       
@@ -493,6 +555,8 @@ export class MergeTrainManager {
         message: errorMessage,
         timestamp: new Date().toISOString(),
         mode: 'merge-train',
+        // Stable reasons for the two refusals the CAS write throws; anything else is an unexpected error
+        code: /not found in merge train|No merge train found/.test(errorMessage) ? 'candidate_not_found' : /is not in a failed state/.test(errorMessage) ? 'car_not_failed' : 'merge_train_error',
       };
     }
   }

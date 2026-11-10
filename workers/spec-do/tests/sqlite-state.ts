@@ -48,6 +48,8 @@ export function makeSqliteState(
       },
       sql: {
         exec(query: string, ...bindings: unknown[]) {
+          // The Workers Durable Object SQLite refuses more than 100 bound parameters in one statement (MAX_BOUND_PARAMS in index.ts)
+          if (bindings.length > 100) throw new Error(`too many SQL variables: ${bindings.length} bound (Workers limit is 100)`);
           if (bindings.length === 0 && /;\s*\S/.test(query.trim())) {
             raw.exec(query);
             return { next: () => ({ done: true as const }), columnNames: [] };

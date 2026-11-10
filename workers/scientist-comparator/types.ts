@@ -505,30 +505,5 @@ export type JsonPathSegment = string | number;
  */
 export type JsonPath = JsonPathSegment[];
 
-// ============================================================================
-// Cloudflare Workers Queue Types
-// ============================================================================
-
-/**
- * Cloudflare Queue Message type (from workers-types)
- * This is a simplified version for our use case
- */
-export interface Message<Body = unknown> {
-  id: string;
-  timestamp: Date;
-  body: Body;
-  retryCount: number;
-}
-
-/**
- * Message batch for queue consumers
- */
-export interface MessageBatch<Body = unknown> {
-  readonly messages: readonly Message<Body>[];
-  readonly queue: string;
-  retryAll(options?: { delaySeconds?: number }): void;
-  ackAll(): void;
-}
-
 // Export z for creating custom schemas
 export { z };

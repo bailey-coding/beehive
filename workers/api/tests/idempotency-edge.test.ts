@@ -30,6 +30,7 @@ const KEYED_ROUTES = [
   '/api/gate-verdicts',
   '/api/trials',
   '/api/promotions',
+  '/api/candidates/c-1/shadow-samples',
 ];
 
 describe('Idempotency-Key at the edge', () => {

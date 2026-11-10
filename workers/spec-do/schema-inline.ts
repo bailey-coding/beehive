@@ -867,3 +867,31 @@ CREATE TABLE IF NOT EXISTS governance_events (
 CREATE INDEX IF NOT EXISTS idx_governance_events_event ON governance_events(event, created_at);
 CREATE INDEX IF NOT EXISTS idx_governance_events_created ON governance_events(created_at);
 `;
+
+// Shadow scores (m14 -> m15, additive). See docs/plans/promotion-gaps-plan.md section 3.1 and sections 11-12.
+export const SHADOW_SCORES_SQL = `
+-- ============================================================================
+-- SHADOW SCORES (m14 -> m15, additive)
+-- One aggregate row per candidate: the sum of the scientist comparator's per-request scores, so the average is
+-- score_sum / sample_count with no re-averaging drift. candidate_id is a LOGICAL reference (UNIQUE, no foreign key): a
+-- foreign key to candidates would make an m14-floor build's purge fail while rolled back (docs/OPS.md rollback floor). The
+-- purge removes a candidate's row first and sweeps orphans left by a floor-build purge. Not tombstoned (no deleted_at):
+-- the candidate's tombstone plus the route's 404 is enough. production_count / production_score_sum are the part of
+-- sample_count / score_sum scored against a real production response; the rest were scored against the shadow router's
+-- placeholder 200 (the sample's baseline). Only the production part may become enforced evidence
+-- (docs/plans/promotion-gaps-plan.md sections 11-12).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS shadow_scores (
+  id TEXT PRIMARY KEY,
+  candidate_id TEXT NOT NULL UNIQUE,
+  sample_count INTEGER NOT NULL,
+  production_count INTEGER NOT NULL DEFAULT 0,
+  score_sum REAL NOT NULL,
+  production_score_sum REAL NOT NULL DEFAULT 0,
+  matched_count INTEGER NOT NULL,
+  diffs_json TEXT NOT NULL,
+  last_request_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`;

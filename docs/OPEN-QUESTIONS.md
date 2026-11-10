@@ -1175,6 +1175,7 @@ repos are capped at 1 GB, so M3 item 9 should be conditional on measured repo si
   needs Go for `go install`). Check with `ls /dev/fuse` in a Sandbox (the existing `GET /sandbox/probe` is the place).
 
 Still open: partial-clone support, FUSE in the Sandbox image, async-mount credentials. M3 item 9 stays conditional on measured repo size.
+- **Retry moves have no promotion state.** A car retried through `POST /merge/retry` that merges and advances moves the candidate, but only `POST /promote` records promotion states, so the promotion ledger does not show that move (the candidate's stage history and the train ledger do). Route the retry through the same reconcile step.
 
 **Status**: Open.
 
@@ -1228,6 +1229,12 @@ winner; it does not present the tournament as evidence-based.
 covers `/compare`; the missing `/api/candidates/:id/shadow` route (or pointing the comparator at an existing one) belongs
 in the same plan.
 
+**Update 2026-11-10**: plan `docs/plans/promotion-gaps-plan.md` (rev 3, two independent reviews). The finding was worse than
+stated: the `shadow_score`, `shadow_match` and `shadow_metrics` columns never existed, and the comparator also read the Spec DO's
+`{data}` envelope as a bare body. PR A (this branch) adds m15 `shadow_scores`, `POST /api/candidates/:id/shadow-samples` (verdict
+derived in the DO) and the comparator fixes; the route the comparator called is replaced, not added. Still open: PR B (`advance`,
+the promotion decision point) and PR C (promotion worker, tournament, e2e, demo).
+
 ## 2026-11-07: invalid create bodies are 500s, not 400s (specs, issue-spec links)
 
 `POST /api/specs` without `declaredDeltaSurface` answers 500 `NOT NULL constraint failed: specs.declared_delta_surface`
@@ -1236,3 +1243,33 @@ in the same plan.
 be 400s with the reason; a 500 reads as an outage.
 
 **Status**: Open. Small, non-spine: a good starter issue.
+
+## 2026-11-10: the shadow rung cannot be enforced yet (mirror targets and baseline), found in the promotion-gaps plan review
+
+The shadow router mirrors only static targets (`beehive-main`, local ports; `workers/shadow-router/config.ts:123,149`) and live canary-ref candidates (`:237-252`). A candidate at `passed_premerge` has no canary ref, so it is never mirrored and gets no shadow samples. The queue message's baseline is a placeholder (`status: 200`, no body; `workers/shadow-router/index.ts:447-453`), candidate bodies are `undefined` (`:464`) and `specId` is `''` (`:458`), so a "score" only measures "the candidate returned 200 for a path rewritten to its route template" (with `MIRROR_BODY_MODE = "none"`, id routes 404 on every candidate). PR A (`docs/plans/promotion-gaps-plan.md`) therefore builds the sample pipeline (m15 `shadow_scores`, the route, the verdict, the comparator fixes) but keeps shadow evidence **log-only** for promotion, with every sample marked `baseline: 'placeholder'`.
+
+Needed before shadow can be enforced (a follow-up plan, "option 2"): mirror `passed_premerge` candidates (a Spec DO read route, cached like `live-refs-cache.ts`); a per-candidate preview deployment target (`isAcceptableCanaryUrl`); the real production response as the baseline; capped and redacted bodies (M5A-2 rev 5 path h); fill `specId`; a `baseline: 'production'` marker on the queue message; then the flip (one constant in the Spec DO's evidence table, with an OPS check). Risks: mirrored load and cost, untrusted candidate output in queues and Analytics Engine, side effects of mirrored writes, and the sample rate against the 20-sample minimum. Consequence until then: tournament mode has no scores to rank by outside e2e and the demo, which seed samples (decision 6 in the plan).
+
+**Status**: Open (owner: the shadow-router follow-up plan).
+
+## 2026-11-10: the gate workflow call from merge-train sends an `actorId` that may not be an actor
+
+`workers/promotion-worker/merge-train.ts:406` sends `actorId: 'promotion-worker'` to the gate workflow. `gate_verdicts.decided_by` and `gate_runs.decided_by` reference `actors(id)` with foreign keys on (`workers/spec-do/schema-inline.ts:146`), and no actor named `promotion-worker` is created anywhere (the trial route has the same shape: `trials.decided_by`). If the Spec DO's gate-run write uses that id as `decided_by`, the verdict write throws and rolls back. Found by the PR A review (B4) in the same class as the comparator's `unknown` actor, which PR A fixes by creating a reserved `scientist-comparator` actor lazily in the route. Not verified at runtime; check what `handleGateRuns` binds as `decided_by` before fixing.
+
+**Status**: Open (not in the promotion-gaps plan; PR C's tournament trial write uses the `/promote` caller's actor instead).
+
+**Update 2026-11-10 (PR B and C)**: fixed on the branch. `advance` (the Spec DO's promotion decision point) checks the move and the enforced evidence (pre-merge verdict; a live, soaked canary for `full`); the promotion worker uses it, ranks the tournament by decision-time ledger scores (a tie or a missing score is a 409, never arrival order), no longer calls `/compare`, advances the winner and a merged car one rung at a time, and records the decision as a trial. `/promote` now answers 409/404/503 with a `code` for refusals (the two 500s for invalid create bodies, below, are separate and still open). Still open: the shadow rung and train rung evidence are log-only (OPEN-QUESTIONS 2026-11-10), `full` moves no deploy ref, and the tournament still decides on the second arrival (a third candidate for the same spec is refused `tournament_completed`).
+
+## 2026-11-10: the tournament decides on the second arrival, and the SHADOW_ROUTER binding is unused
+
+`TournamentManager.executeTournament` decides as soon as two candidates have joined (`workers/promotion-worker/tournament.ts`), so a third candidate for the same spec is refused `409 tournament_completed` and never competes, however high its shadow score. That is unchanged by promotion-gaps PR C (a deliberate scope limit); a fair contest needs a decision point other than "the second arrival" (a deadline, a minimum field, an explicit close). Separately, PR C stops calling the shadow router's nonexistent `/compare` route, so the promotion worker's `SHADOW_ROUTER` service binding (`workers/promotion-worker/wrangler.toml`, `types.ts`) is unused; removing a binding is a harmless config change left for a separate commit. Also unchanged: a merged car that the Spec DO then refuses to advance (the candidate changed stage while its gate ran) stays `merged` in the train ledger while its stage did not move; the requester sees the Spec DO's code, a non-requester whose car was the one processed only sees an error log.
+
+**Status**: Open (owner: whoever plans a fair tournament decision rule).
+
+## 2026-11-10: nothing resets an exhausted tournament, the queue acks failed promotions, and two decisions can overlap (found in the PR C review)
+
+- **Exhausted tournaments.** The ledger lets a tournament fail three times (`MAX_TOURNAMENT_ATTEMPTS`, `retries_exhausted`); after that every `/promote` for that spec's `shadow -> train` answers `409 tournament_exhausted`. Since PR C only real failures (an `advance` refusal or a ledger error after a winner was chosen) count, not evidence refusals, but nothing in the worker or a route resets an exhausted tournament; an operator would have to edit the ledger. Needs a maintainer-only reset route (spine: plan + review).
+- **Queue.** `processQueueMessage` (`workers/promotion-worker/index.ts`) acks every message because `promoteCandidate` returns a Response and never throws, so a 502 `ledger_error` or a deploy-window 503 `ledger_too_old` is dropped, not retried. No producer of `promotion-events` exists today; make 5xx throw when one is added.
+- **Overlapping decisions.** The tournament's read-scores, decide, advance-winner sequence is not one compare-and-swap, and `recordWinner` writes the candidate list from a copy read earlier: two requests deciding at once (a third entrant joining mid-decision) can each advance a different winner. Predates PR C. Fix with a decide-and-claim write in the Spec DO (spine), alongside the "decides on the second arrival" rule above.
+
+**Status**: Open.

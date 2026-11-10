@@ -16,6 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { getConfig } from './config';
 import { createRequest } from './helpers';
+import { seedWorld, candidateAt, passPremerge, shadowScore, stageOf } from './promotion-fixtures';
 
 // ============================================================================
 // Test Setup and Types
@@ -437,23 +438,12 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     it.skipIf(shouldSkip)('should start tournament with participants', async () => {
       const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
       const originalMode = (await readJson(await fetch(`${WORKER_URLS.promotion}/mode`, { headers: auth }))).mode;
-      // The winner is recorded on the candidate (PATCH /api/candidates/:id/stage), so the
-      // participants must be real rows. test-org-e2e-* is what the purge-by-prefix cleanup targets.
-      const seed = async (path: string, body: unknown, actor?: string) => {
-        const res = await fetch(createRequest(path, 'POST', body, actor ? { 'X-Actor-ID': actor } : {}));
-        expect(res.status, path).toBe(201);
-        return ((await readJson(res)).data as { id: string }).id;
-      };
-      const actor = await seed('/api/actors', { type: 'agent', name: `e2e-tournament-${Date.now()}` });
-      const orgId = await seed('/api/organizations', { name: `test-org-e2e-tournament-${Date.now()}`, type: 'artifacts' }, actor);
-      const repoId = await seed('/api/repositories', {
-        name: 'repo', organizationId: orgId, repoType: 'baseline', remoteUrl: 'https://example.invalid/r.git', namespace: 'e2e',
-      }, actor);
-      const specId = await seed('/api/specs', { name: 'spec', contract: '{}', declaredDeltaSurface: [], organizationId: orgId }, actor);
-      const candidateIds = [
-        await seed('/api/candidates', { specId, repositoryId: repoId, commitSha: 'abc', baseCommitSha: 'base' }, actor),
-        await seed('/api/candidates', { specId, repositoryId: repoId, commitSha: 'def', baseCommitSha: 'base' }, actor),
-      ];
+      // Participants are real candidates on the shadow rung with shadow scores in the ledger: the tournament ranks by those scores
+      const w = await seedWorld('tournament');
+      const candidateIds = [await candidateAt(w, 'passed_premerge'), await candidateAt(w, 'passed_premerge')];
+      // 20 samples is the minimum for a verdict, and an average under 80 is a failing one (which would keep that candidate out of the contest)
+      await shadowScore(w, candidateIds[0], 85);
+      await shadowScore(w, candidateIds[1], 95);
 
       try {
         const modeRes = await fetch(`${WORKER_URLS.promotion}/mode`, {
@@ -461,26 +451,33 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         });
         expect(modeRes.status).toBe(200);
 
+        const statuses: number[] = [];
         for (const candidateId of candidateIds) {
           const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
             method: 'POST',
             headers: auth,
-            body: JSON.stringify({ candidateId, specId, fromRung: 'shadow', toRung: 'train', actorId: 'e2e-test-actor' }),
+            body: JSON.stringify({ candidateId, specId: w.specId, toRung: 'train', actorId: w.actor }),
           });
-          expect(response.status).toBe(200);
+          statuses.push(response.status);
           const data = await readJson(response);
           expect(data.success).toBe(true);
           expect(data.mode).toBe('tournament');
         }
+        // The first entrant waits (202); the second arrival decides (200)
+        expect(statuses).toEqual([202, 200]);
 
         const listRes = await fetch(`${WORKER_URLS.promotion}/tournament`, { headers: auth });
         expect(listRes.status).toBe(200);
         const list = await readJson(listRes);
         expect(list.success).toBe(true);
-        const tournament = (list.tournaments as Array<{ specId: string; candidates: Array<{ candidateId: string }> }>)
-          .find((t) => t.specId === specId);
+        const tournament = (list.tournaments as Array<{ specId: string; winner?: string; status: string; candidates: Array<{ candidateId: string }> }>)
+          .find((t) => t.specId === w.specId);
         expect(tournament).toBeDefined();
         expect(tournament!.candidates.map((c) => c.candidateId).sort()).toEqual([...candidateIds].sort());
+        // The higher shadow score won, not the first arrival, and only the winner's stage moved
+        expect(tournament).toMatchObject({ status: 'completed', winner: candidateIds[1] });
+        expect(await stageOf(candidateIds[1])).toBe('passed_shadow');
+        expect(await stageOf(candidateIds[0])).toBe('passed_premerge');
       } finally {
         await fetch(`${WORKER_URLS.promotion}/mode`, {
           method: 'POST', headers: auth, body: JSON.stringify({ mode: originalMode }),
@@ -489,15 +486,11 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     }, 30000);
 
     it.skipIf(shouldSkip)('should promote candidate through rungs', async () => {
-      const requestBody = {
-        candidateId: `e2e-promote-${Date.now()}`,
-        // unique per run: a spec's tournament completes once it has two candidates
-        // and then refuses more, so a shared specId makes reruns fail with 500
-        specId: `e2e-promote-spec-${Date.now()}`,
-        fromRung: 'shadow',
-        toRung: 'train',
-        actorId: 'e2e-test-actor',
-      };
+      // A real candidate with a passing pre-merge verdict: the Spec DO's advance checks the evidence before the move
+      const w = await seedWorld('promote');
+      const candidateId = await candidateAt(w);
+      await passPremerge(w, candidateId);
+      const requestBody = { candidateId, specId: w.specId, toRung: 'shadow', actorId: w.actor };
       const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
 
       const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
@@ -506,19 +499,21 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         body: JSON.stringify(requestBody),
       });
 
-      // POST /promote answers 200 with { success, candidateId, fromRung, toRung, message, mode }
+      // POST /promote answers 200 with { success, outcome, candidateId, fromRung, toRung, message, mode }; fromRung is derived from the stage
       expect(response.status).toBe(200);
       const data = await readJson(response);
       expect(data.success).toBe(true);
-      expect(data.fromRung).toBe('shadow');
-      expect(data.toRung).toBe('train');
+      expect(data.outcome).toBe('moved');
+      expect(data.fromRung).toBe('pre-merge');
+      expect(data.toRung).toBe('shadow');
+      expect(await stageOf(candidateId)).toBe('passed_premerge');
 
       // The ledger state is nested under `state`; currentRung is the rung reached
-      const statusRes = await fetch(`${WORKER_URLS.promotion}/promote/${requestBody.candidateId}`, { headers: auth });
+      const statusRes = await fetch(`${WORKER_URLS.promotion}/promote/${candidateId}`, { headers: auth });
       const status = (await readJson(statusRes)) as { state?: { status?: string; currentRung?: string; targetRung?: string } };
       expect(status.state?.status).toBe('completed');
-      expect(status.state?.targetRung).toBe('train');
-      expect(status.state?.currentRung).toBe('train');
+      expect(status.state?.targetRung).toBe('shadow');
+      expect(status.state?.currentRung).toBe('shadow');
     }, 15000);
 
     // There is no /merge-train/start route: cars board implicitly through POST /promote in
@@ -526,8 +521,9 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     it.skipIf(shouldSkip)('should start merge-train', async () => {
       const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
       const originalMode = (await readJson(await fetch(`${WORKER_URLS.promotion}/mode`, { headers: auth }))).mode;
-      const specId = `e2e-train-spec-${Date.now()}`;
-      const candidateIds = [`e2e-car-1-${Date.now()}`, `e2e-car-2-${Date.now()}`];
+      // Cars are real candidates on the train rung; in merge-train mode train -> canary is the train
+      const w = await seedWorld('train');
+      const candidateIds = [await candidateAt(w, 'passed_shadow'), await candidateAt(w, 'passed_shadow')];
 
       try {
         const modeRes = await fetch(`${WORKER_URLS.promotion}/mode`, {
@@ -539,12 +535,14 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
           const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
             method: 'POST',
             headers: auth,
-            body: JSON.stringify({ candidateId, specId, fromRung: 'shadow', toRung: 'train', actorId: 'e2e-test-actor' }),
+            body: JSON.stringify({ candidateId, specId: w.specId, toRung: 'canary', actorId: w.actor }),
           });
-          expect(response.status).toBe(200);
           const data = await readJson(response);
-          expect(data.success).toBe(true);
           expect(data.mode).toBe('merge-train');
+          // The local stack runs no gate-workflow worker, so a car that reaches its gate fails there (409 gate_failed); a car queued
+          // behind it is 202. Either way the car boarded, which is what this test covers (the merge itself: promotion-worker unit tests).
+          expect([202, 409]).toContain(response.status);
+          if (response.status === 409) expect(data.code).toBe('gate_failed');
         }
 
         const listRes = await fetch(`${WORKER_URLS.promotion}/merge-train`, { headers: auth });
@@ -552,7 +550,9 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
         const list = await readJson(listRes);
         expect(list.success).toBe(true);
         expect(Array.isArray(list.trains)).toBe(true);
-        expect((list.trains as unknown[]).length).toBeGreaterThan(0);
+        const train = (list.trains as Array<{ specId: string; candidates: Array<{ candidateId: string }> }>).find((t) => t.specId === w.specId);
+        expect(train).toBeDefined();
+        expect(train!.candidates.map((c) => c.candidateId).sort()).toEqual([...candidateIds].sort());
       } finally {
         await fetch(`${WORKER_URLS.promotion}/mode`, {
           method: 'POST', headers: auth, body: JSON.stringify({ mode: originalMode }),
@@ -561,34 +561,38 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     }, 30000);
 
     it.skipIf(shouldSkip)('should handle invalid rung transition', async () => {
-      const requestBody = {
-        candidateId: `e2e-invalid-${Date.now()}`,
-        specId: 'test-spec',
-        fromRung: 'canary',
-        toRung: 'pre-merge', // Invalid: can't go backwards
-        actorId: 'e2e-test-actor',
-      };
-
-      const response = await fetch(`${WORKER_URLS.promotion}/promote`, {
+      const auth = { 'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`, 'Content-Type': 'application/json' };
+      // pre-merge is where every candidate starts, not a rung to move into
+      const toPreMerge = await fetch(`${WORKER_URLS.promotion}/promote`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
+        headers: auth,
+        body: JSON.stringify({ candidateId: `e2e-invalid-${Date.now()}`, specId: 'test-spec', toRung: 'pre-merge', actorId: 'e2e-test-actor' }),
       });
+      expect(toPreMerge.status).toBe(400);
+      expect((await readJson(toPreMerge)).success).toBe(false);
 
-      expect(response.status).toBe(400);
-      const data = await readJson(response);
+      // Skipping a rung is the Spec DO's refusal: 409 not_next_rung, and nothing is created in the promotion ledger
+      const w = await seedWorld('invalid');
+      const candidateId = await candidateAt(w);
+      const skipped = await fetch(`${WORKER_URLS.promotion}/promote`, {
+        method: 'POST',
+        headers: auth,
+        body: JSON.stringify({ candidateId, specId: w.specId, toRung: 'canary', actorId: w.actor }),
+      });
+      expect(skipped.status).toBe(409);
+      const data = await readJson(skipped);
       expect(data.success).toBe(false);
-      expect((data.error as string | undefined)?.includes('Invalid rung transition')).toBe(true);
-    }, 10000);
+      expect(data.code).toBe('not_next_rung');
+      expect(await stageOf(candidateId)).toBe('pending');
+    }, 15000);
   });
 
   describe('M3 Complete Workflow', () => {
     it.skipIf(shouldSkip)('should execute complete M3 workflow end-to-end', async () => {
-      const candidateId = `e2e-workflow-${Date.now()}`;
-      const specId = `e2e-spec-${Date.now()}`; // unique per run (see tournament note above)
+      // A real candidate on the canary rung: advance to full needs the candidate to be the live canary
+      const w = await seedWorld('workflow');
+      const candidateId = await candidateAt(w, 'passed_train');
+      const specId = w.specId;
 
       // Step 1: Get Statsig config from shadow router
       const shadowResponse = await fetch(`${WORKER_URLS.shadowRouter}/statsig/config`, {
@@ -636,12 +640,15 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
           specId,
           fromRung: 'canary',
           toRung: 'full',
-          actorId: 'e2e-test-actor',
+          actorId: w.actor,
         }),
       });
+      // The canary above is the live head; the local workers shorten the 15-minute soak to zero (CANARY_MIN_SOAK_MINUTES)
       expect(promoResponse.status).toBe(200);
       const promoData = await readJson(promoResponse);
       expect(promoData.success).toBe(true);
+      expect(promoData.outcome).toBe('moved');
+      expect(await stageOf(candidateId)).toBe('promoted');
 
       // Verify promotion mode
       const modeResponse = await fetch(`${WORKER_URLS.promotion}/mode`, {

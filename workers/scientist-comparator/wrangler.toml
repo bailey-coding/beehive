@@ -29,11 +29,14 @@ dataset = "beehive-metrics"
 queue = "beehive-scientist-comparisons"
 max_batch_size = 100
 max_batch_timeout = 30
+# A Spec DO 5xx retries the message; past this the platform drops it (one sample lost). Matches the queue consumer.
+max_retries = 4
 
 [[queues.consumers]]
 queue = "preview-scientist-comparisons"
 max_batch_size = 100
 max_batch_timeout = 30
+max_retries = 4
 
 # Observability configuration
 [observability]

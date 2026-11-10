@@ -19,6 +19,7 @@ import {
 } from './config';
 import { createRequest, readJson, fetchWithRetry, createTestContext } from './helpers';
 import { WorkerType } from './auth';
+import { seedWorld, candidateAt, setStage, passPremerge, stageOf } from './promotion-fixtures';
 
 // Re-export types from m3-features.test.ts for consistency
 type RequestClassification = {
@@ -168,18 +169,19 @@ async function setPromotionMode(mode: 'tournament' | 'merge-train'): Promise<{ s
 async function promoteCandidate(
   candidateId: string,
   specId: string,
-  fromRung: string,
+  fromRung: string | undefined,
   toRung: string,
   actorId: string = 'e2e-test-agent'
-): Promise<{ success: boolean; promotionId: string; fromRung: string; toRung: string }> {
-  // Changed from /promotion/candidates/promote to /promote to match actual worker routes
+): Promise<{ success: boolean; outcome?: string; code?: string; error?: string; message?: string; candidateId: string; fromRung: string; toRung: string }> {
+  // Changed from /promotion/candidates/promote to /promote to match actual worker routes.
+  // fromRung is optional: the Spec DO derives it from the candidate's stage (a wrong one is a 409 stale_from_rung).
   const response = await fetchWorker(
     '/promote',
     'POST',
-    { candidateId, specId, fromRung, toRung, actorId },
+    { candidateId, specId, ...(fromRung ? { fromRung } : {}), toRung, actorId },
     'promotion'
   );
-  return readJson(response);
+  return readJson(response) as never;
 }
 
 async function getCandidateStatus(candidateId: string): Promise<{
@@ -450,66 +452,57 @@ describe('Cross-Worker Flow Tests', () => {
     });
 
     it('should promote candidate through valid rung transitions', async () => {
-      // Deploy canary first (required for some transitions)
-      await deployCanary(ctx.candidateId, ctx.specId, 10);
+      await setPromotionMode('tournament');
+      const w = await seedWorld('rungs');
+      const candidateId = await candidateAt(w);
+      await passPremerge(w, candidateId);
 
-      // Promote from shadow to train
-      const result1 = await promoteCandidate(
-        ctx.candidateId,
-        ctx.specId,
-        'shadow',
-        'train'
-      );
-      
+      // pre-merge -> shadow: a direct advance, with the pre-merge verdict as evidence
+      const result1 = await promoteCandidate(candidateId, w.specId, 'pre-merge', 'shadow', w.actor);
       expect(result1.success).toBe(true);
-      expect(result1.fromRung).toBe('shadow');
-      expect(result1.toRung).toBe('train');
+      expect(result1.outcome).toBe('moved');
+      expect(result1.fromRung).toBe('pre-merge');
+      expect(result1.toRung).toBe('shadow');
 
-      // Promote from train to canary
-      const result2 = await promoteCandidate(
-        ctx.candidateId,
-        ctx.specId,
-        'train',
-        'canary'
-      );
-      
+      // shadow -> train is the tournament (see m3-features); here the candidate stands for one that won it
+      await setStage(w, candidateId, 'passed_shadow');
+
+      // train -> canary: a direct advance in tournament mode (the train evidence is logged, not enforced)
+      const result2 = await promoteCandidate(candidateId, w.specId, 'train', 'canary', w.actor);
       expect(result2.success).toBe(true);
+      expect(result2.outcome).toBe('moved');
       expect(result2.fromRung).toBe('train');
       expect(result2.toRung).toBe('canary');
+      expect(await stageOf(candidateId)).toBe('passed_train');
 
       // Check candidate status
-      const statusResult = await getCandidateStatus(ctx.candidateId);
+      const statusResult = await getCandidateStatus(candidateId);
       expect(statusResult.currentRung).toBe('canary');
     });
 
     it('should reject invalid rung transitions', async () => {
-      // Try to go backwards (canary -> shadow is invalid)
-      const result = await promoteCandidate(
-        ctx.candidateId,
-        ctx.specId,
-        'canary',
-        'shadow'
-      );
+      const w = await seedWorld('invalid');
+      const candidateId = await candidateAt(w, 'passed_train');
+      // Going backwards (canary -> shadow) is a 409 not_next_rung from the Spec DO
+      const result = await promoteCandidate(candidateId, w.specId, undefined, 'shadow', w.actor);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Invalid rung transition');
+      expect(result.code).toBe('not_next_rung');
+      expect(await stageOf(candidateId)).toBe('passed_train');
     });
 
     it('should get candidate promotion status', async () => {
-      // Promote first
-      await promoteCandidate(
-        ctx.candidateId,
-        ctx.specId,
-        'shadow',
-        'train'
-      );
+      const w = await seedWorld('status');
+      const candidateId = await candidateAt(w);
+      await passPremerge(w, candidateId);
+      await promoteCandidate(candidateId, w.specId, undefined, 'shadow', w.actor);
 
-      const result = await getCandidateStatus(ctx.candidateId);
+      const result = await getCandidateStatus(candidateId);
       
       expect(result.success).toBe(true);
-      expect(result.candidateId).toBe(ctx.candidateId);
-      expect(result.currentRung).toBeDefined();
-      expect(result.status).toBeDefined();
+      expect(result.candidateId).toBe(candidateId);
+      expect(result.currentRung).toBe('shadow');
+      expect(result.status).toBe('completed');
     });
   });
 
@@ -568,27 +561,18 @@ describe('Cross-Worker Flow Tests', () => {
       const sloMetrics = await getSloMetrics();
       expect(sloMetrics.healthy).toBeDefined();
 
-      // Step 6: Promote through ladder
-      // Shadow -> Train
-      const promo1 = await promoteCandidate(
-        ctx.candidateId,
-        ctx.specId,
-        'shadow',
-        'train'
-      );
+      // Step 6: Promote through ladder (a real candidate: the Spec DO checks each move)
+      const w = await seedWorld('ladder');
+      const laddered = await candidateAt(w);
+      await passPremerge(w, laddered);
+      const promo1 = await promoteCandidate(laddered, w.specId, undefined, 'shadow', w.actor);
       expect(promo1.success).toBe(true);
-
-      // Train -> Canary
-      const promo2 = await promoteCandidate(
-        ctx.candidateId,
-        ctx.specId,
-        'train',
-        'canary'
-      );
+      await setStage(w, laddered, 'passed_shadow'); // stands for winning the shadow tournament
+      const promo2 = await promoteCandidate(laddered, w.specId, undefined, 'canary', w.actor);
       expect(promo2.success).toBe(true);
 
       // Step 7: Verify candidate status
-      const status = await getCandidateStatus(ctx.candidateId);
+      const status = await getCandidateStatus(laddered);
       expect(status.currentRung).toBe('canary');
 
       // Step 8: Check promotion worker health
@@ -597,44 +581,54 @@ describe('Cross-Worker Flow Tests', () => {
     });
 
     it('should test all valid rung transitions', async () => {
-      const validTransitions = [
-        { from: 'pre-merge', to: 'shadow' },
-        { from: 'shadow', to: 'train' },
-        { from: 'train', to: 'canary' },
-        { from: 'canary', to: 'full' },
+      await setPromotionMode('tournament');
+      // One fresh candidate per transition, placed on the rung it leaves (a spec's tournament decides once, so each gets its own spec)
+      const transitions = [
+        { from: 'pre-merge', to: 'shadow', stage: 'pending', outcome: 'moved' },
+        { from: 'shadow', to: 'train', stage: 'passed_premerge', outcome: 'waiting' }, // alone in the tournament
+        { from: 'train', to: 'canary', stage: 'passed_shadow', outcome: 'moved' },
+        { from: 'canary', to: 'full', stage: 'passed_train', outcome: 'moved' },
       ];
 
-      for (const transition of validTransitions) {
-        const result = await promoteCandidate(
-          ctx.candidateId,
-          ctx.specId,
-          transition.from,
-          transition.to
-        );
+      for (const transition of transitions) {
+        const w = await seedWorld('valid');
+        const candidateId = await candidateAt(w, transition.stage);
+        if (transition.from === 'pre-merge') await passPremerge(w, candidateId);
+        if (transition.from === 'canary') await deployCanary(candidateId, w.specId, 10); // full needs the live, soaked canary (soak is 0 locally)
 
-        expect(result.success, `Transition ${transition.from} -> ${transition.to} should succeed`).toBe(true);
+        const result = await promoteCandidate(candidateId, w.specId, transition.from, transition.to, w.actor);
+
+        expect(result.success, `Transition ${transition.from} -> ${transition.to} should succeed: ${result.message ?? result.error}`).toBe(true);
+        expect(result.outcome, `Transition ${transition.from} -> ${transition.to}`).toBe(transition.outcome);
       }
     });
 
     it('should reject all invalid rung transitions', async () => {
-      const invalidTransitions = [
-        { from: 'canary', to: 'shadow' },  // Can't go backwards
-        { from: 'canary', to: 'train' },   // Can't go backwards
-        { from: 'shadow', to: 'pre-merge' }, // Can't go backwards
-        { from: 'full', to: 'canary' },    // Can't go backwards
-        { from: 'train', to: 'pre-merge' }, // Can't skip rungs
+      const w = await seedWorld('rejects');
+      // [stage the candidate is at, rung it asks for]: backwards, and skipping ahead
+      const invalid: Array<[string, string]> = [
+        ['promoted', 'canary'],
+        ['promoted', 'train'],
+        ['promoted', 'shadow'],
+        ['passed_train', 'train'],
+        ['pending', 'train'],
+        ['pending', 'canary'],
+        ['pending', 'full'],
       ];
 
-      for (const transition of invalidTransitions) {
-        const result = await promoteCandidate(
-          ctx.candidateId,
-          ctx.specId,
-          transition.from,
-          transition.to
-        );
+      for (const [stage, toRung] of invalid) {
+        const candidateId = await candidateAt(w, stage);
+        const result = await promoteCandidate(candidateId, w.specId, undefined, toRung, w.actor);
 
-        expect(result.success, `Transition ${transition.from} -> ${transition.to} should fail`).toBe(false);
+        expect(result.success, `At ${stage}, asking for ${toRung} should fail`).toBe(false);
+        expect(result.code, `At ${stage}, asking for ${toRung}`).toBe('not_next_rung');
+        expect(await stageOf(candidateId)).toBe(stage);
       }
+
+      // pre-merge is not a rung to move into at all
+      const candidateId = await candidateAt(w, 'passed_train');
+      const response = await fetchWorker('/promote', 'POST', { candidateId, specId: w.specId, toRung: 'pre-merge', actorId: w.actor }, 'promotion');
+      expect(response.status).toBe(400);
     });
   });
 
@@ -644,28 +638,24 @@ describe('Cross-Worker Flow Tests', () => {
 
   describe('Cross-Worker Data Consistency', () => {
     it('should maintain consistent candidate IDs across workers', async () => {
+      await setPromotionMode('tournament');
+      const w = await seedWorld('ids');
+      const candidateId = await candidateAt(w);
+      await passPremerge(w, candidateId);
+
       // Deploy canary
-      const deployResult = await deployCanary(
-        ctx.candidateId,
-        ctx.specId,
-        10
-      );
+      const deployResult = await deployCanary(candidateId, w.specId, 10);
       expect(deployResult.success).toBe(true);
-      expect(deployResult.deployment.candidateId).toBe(ctx.candidateId);
+      expect(deployResult.deployment.candidateId).toBe(candidateId);
 
       // Promote candidate
-      const promoResult = await promoteCandidate(
-        ctx.candidateId,
-        ctx.specId,
-        'shadow',
-        'train'
-      );
+      const promoResult = await promoteCandidate(candidateId, w.specId, undefined, 'shadow', w.actor);
       expect(promoResult.success).toBe(true);
-      expect(promoResult.candidateId).toBe(ctx.candidateId);
+      expect(promoResult.candidateId).toBe(candidateId);
 
       // Check candidate status
-      const statusResult = await getCandidateStatus(ctx.candidateId);
-      expect(statusResult.candidateId).toBe(ctx.candidateId);
+      const statusResult = await getCandidateStatus(candidateId);
+      expect(statusResult.candidateId).toBe(candidateId);
     });
 
     it('should handle concurrent requests gracefully', async () => {

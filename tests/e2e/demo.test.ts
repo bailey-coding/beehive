@@ -36,12 +36,15 @@ describe.skipIf(!isLocal)('npm run demo (local)', () => {
     const list = Array.isArray(verdicts.data) ? verdicts.data : [verdicts.data];
     expect(list).toContainEqual(expect.objectContaining({ gate: 'pre-merge', status: 'fail' }));
 
-    // B and C were never promoted (the demo, not Beehive, holds them back: see the narration's "Known gaps").
-    for (const loser of [result.candidates.b, result.candidates.c]) {
-      const promo = await get<{ status?: string; state?: unknown }>(`${LOCAL_URLS.promotion}/promote/${loser}`);
-      expect(promo.state).toBeUndefined();
-      expect(promo.status).toBe('not_started');
-    }
+    // The promotion worker refused C (no passing pre-merge verdict); C has no promotion state and never left pending.
+    expect(result.refusedC).toEqual({ status: 409, code: 'evidence_missing' });
+    const stageOf = async (id: string) => (await get<{ data: { stage: string } }>(`${LOCAL_URLS.api}/api/candidates/${id}`)).data.stage;
+    expect(await stageOf(result.candidates.c)).toBe('pending');
+    const cPromo = await get<{ status?: string; state?: unknown }>(`${LOCAL_URLS.promotion}/promote/${result.candidates.c}`);
+    expect(cPromo.status).toBe('not_started');
+    // B lost the tournament: it stays on the shadow rung. A was advanced one rung at a time and ended promoted.
+    expect(await stageOf(result.candidates.b)).toBe('passed_premerge');
+    expect(await stageOf(result.candidates.a)).toBe('promoted');
 
     // Every step is labelled, and the summary says what was simulated.
     expect(lines.filter((l) => /^── \d+\. .*\[(REAL|REAL record|REAL record, SCRIPTED input|REAL ref move, STUB build|REAL ref move, SCRIPTED breach)\]$/.test(l))).toHaveLength(10);

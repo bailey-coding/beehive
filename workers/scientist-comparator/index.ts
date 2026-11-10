@@ -7,7 +7,7 @@
  */
 
 import { authGate } from '../shared/auth';
-import type { ScientistEnv, ScientistQueueMessage, Message } from './types';
+import type { ScientistEnv, ScientistQueueMessage } from './types';
 import { parseDeltaSurface, getDefaultDeltaSurface, matchPath } from './delta-surface';
 import {
   normalizeResponse,
@@ -17,12 +17,10 @@ import {
   comparePerformance,
 } from './comparison';
 import { calculateCandidateScore } from './scoring';
-import { SpecDOClient } from './storage/spec-do';
+import { SpecDOClient, SpecDoTransientError } from './storage/spec-do';
+import { isValidCanaryCandidateId } from '../shared/deploy-refs';
 import { AnalyticsClient } from './storage/analytics';
 import { Logger, createLogger, withErrorHandling } from './utils';
-
-// Re-export Message type for queue handler
-export type { Message };
 
 // ============================================================================
 // Constants
@@ -110,36 +108,43 @@ const scientistHandler = {
       FLUSH_INTERVAL_MS
     );
 
-    // Process each message in the batch
-    const processingPromises = batch.messages.map(async (message) => {
+    // Per message: ack when it is done or can never succeed, retry only when the Spec DO was unavailable (5xx or a network
+    // error). A blanket ackAll() would drop every failed message (plan B2). max_retries is set in wrangler.toml; past it the
+    // platform drops the message, which costs one sample.
+    const unsupported = new Set<string>();
+    await Promise.all(batch.messages.map(async (message) => {
       try {
         logger.debug(`[${queueName}] Processing message ${message.id}`);
-        
+
         // Parse the message body
         const messageBody = parseQueueMessage(message.body);
         if (!messageBody) {
           logger.error(`[${queueName}] Failed to parse message ${message.id}`);
+          message.ack();
           return;
         }
 
         // Process the comparison with preview flag
-        await processComparison(messageBody, specDoClient, analyticsClient, logger, isPreview, queueName);
+        await processComparison(messageBody, specDoClient, analyticsClient, logger, isPreview, queueName, unsupported);
 
         logger.debug(`Completed message ${message.id}`);
+        message.ack();
       } catch (error) {
-        logger.error(`Error processing message ${message.id}: ${error}`);
-        // Errors will trigger retry for the message
+        if (error instanceof SpecDoTransientError) {
+          logger.error(`[${queueName}] Spec DO unavailable for message ${message.id}, retrying: ${error.message}`);
+          // Back off with the attempt number so 4 retries span a short outage instead of burning through at once
+          message.retry({ delaySeconds: Math.min(300, 30 * Math.max(1, message.attempts ?? 1)) });
+        } else {
+          logger.error(`[${queueName}] Message ${message.id} failed and will not be retried: ${error}`);
+          message.ack();
+        }
       }
-    });
-
-    // Wait for all messages to be processed
-    await Promise.allSettled(processingPromises);
+    }));
+    // Once per batch, not per message: an older Spec DO has no shadow-samples route yet (a mixed-version deploy window)
+    if (unsupported.size > 0) logger.warn(`shadow_samples_unsupported: ${unsupported.size} candidate(s) answered a code-less 404; samples dropped for this batch`);
 
     // Flush any remaining metrics
     analyticsClient.flush();
-
-    // Acknowledge all messages in the batch
-    batch.ackAll();
 
     logger.info(`Batch processing complete`);
   },
@@ -187,7 +192,8 @@ async function processComparison(
   analyticsClient: AnalyticsClient,
   logger: Logger,
   isPreview: boolean = false,
-  queueName: string = 'beehive-scientist-comparisons'
+  queueName: string = 'beehive-scientist-comparisons',
+  unsupported: Set<string> = new Set()
 ): Promise<void> {
   const startTime = Date.now();
 
@@ -196,13 +202,23 @@ async function processComparison(
     candidates: message.candidates.length,
   });
 
+  // The shadow router sends specId '' (it does not know it): take it from the ledger candidate. Static targets such as
+  // beehive-main have no ledger row and keep ''. A candidate the ledger does not know (null) keeps '' too.
+  const candidates = await Promise.all(
+    message.candidates.map(async (c) => {
+      if (c.specId || !isValidCanaryCandidateId(c.candidateId)) return c;
+      const row = await specDoClient.getCandidate(c.candidateId);
+      return row?.specId ? { ...c, specId: row.specId } : c;
+    })
+  );
+
   // Get declared delta surface for each spec
   // Group candidates by spec for efficiency
-  const specs = await getSpecsForCandidates(message.candidates, specDoClient);
+  const specs = await getSpecsForCandidates(candidates, specDoClient);
 
   // Process each candidate
   const candidateResults = await Promise.all(
-    message.candidates.map(async (candidate) => {
+    candidates.map(async (candidate) => {
       const specId = candidate.specId;
       const spec = specs.get(specId);
       const deltaSurface = spec ? parseDeltaSurface(spec.declaredDeltaSurface) : getDefaultDeltaSurface();
@@ -224,7 +240,7 @@ async function processComparison(
   const averageScore = candidateResults.reduce((sum, r) => sum + r.score, 0) / totalCandidates;
 
   // Record results in Spec DO
-  await specDoClient.recordRequestComparison(message, {
+  const outcomes = await specDoClient.recordRequestComparison(message, {
     requestId: message.requestId,
     timestamp: message.timestamp,
     path: message.path,
@@ -236,6 +252,10 @@ async function processComparison(
     averageScore,
     completedAt: Date.now(),
   });
+  for (const [candidateId, outcome] of outcomes) {
+    if (outcome === 'unsupported') unsupported.add(candidateId);
+    else if (outcome === 'rejected') logger.warn(`Spec DO rejected the shadow sample for ${candidateId} (request ${message.requestId}); not retried`);
+  }
 
   // Write metrics to Analytics Engine
   for (const result of candidateResults) {
@@ -280,7 +300,7 @@ async function getSpecsForCandidates(
   candidates: Array<{ specId: string }>,
   specDoClient: SpecDOClient
 ): Promise<Map<string, { id: string; declaredDeltaSurface: string }>> {
-  const specIds = new Set(candidates.map(c => c.specId));
+  const specIds = new Set(candidates.map(c => c.specId).filter(Boolean));
   const specs = new Map<string, { id: string; declaredDeltaSurface: string }>();
 
   for (const specId of specIds) {

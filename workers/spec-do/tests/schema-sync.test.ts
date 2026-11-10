@@ -21,6 +21,7 @@ import {
   ACTORS_GITHUB_UNIQUE_SQL,
   GATE_RUNS_SQL,
   GOVERNANCE_SQL,
+  SHADOW_SCORES_SQL,
 } from '../schema-inline';
 
 const file = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
@@ -29,7 +30,7 @@ describe('schema.sql vs schema-inline.ts', () => {
   it('schema.sql is the inline sections concatenated, byte for byte', () => {
     // Base schema (which already holds the m3 service_accounts and m4 promotion ledger
     // sections), then the sections later migrations appended, in migration order
-    expect(file).toBe(SCHEMA_SQL + LEDGER_LIFECYCLE_SQL + SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL + USER_TOKENS_SQL + IDEMPOTENCY_KEYS_SQL + CANARY_METRICS_SQL + ACTORS_GITHUB_UNIQUE_SQL + GATE_RUNS_SQL + GOVERNANCE_SQL);
+    expect(file).toBe(SCHEMA_SQL + LEDGER_LIFECYCLE_SQL + SERVICE_TOKENS_SQL + DEPLOY_REFS_SQL + LEDGER_CAS_SQL + USER_TOKENS_SQL + IDEMPOTENCY_KEYS_SQL + CANARY_METRICS_SQL + ACTORS_GITHUB_UNIQUE_SQL + GATE_RUNS_SQL + GOVERNANCE_SQL + SHADOW_SCORES_SQL);
   });
 
   it('m9 references actors only and adds no index on actors (a unique github_user_id index is m12)', () => {

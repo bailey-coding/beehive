@@ -84,12 +84,13 @@ echo "========================================"
 echo ""
 
 # PURGE_MIN_AGE_HOURS=0: tests/e2e/ledger-lifecycle.test.ts purges tombstones it just created
+# CANARY_MIN_SOAK_MINUTES=0: `advance` to full needs a canary live for 15 minutes; e2e and the demo cannot wait (local only: the Spec DO honors the var only below 15, and no deployed wrangler.toml sets it)
 UI_VARS=()
 if [ "${E2E_UI:-}" = "1" ]; then
     UI_VARS=(--var GITHUB_CLIENT_ID:dummy-e2e-client-id --var GITHUB_CLIENT_SECRET:dummy-e2e-client-secret --var ALLOWED_GITHUB_USERS:e2e-ui-user)
     echo "E2E_UI=1: beehive worker gets dummy GitHub OAuth vars (local only)"
 fi
-start_worker "1/6" "API worker (beehive)" 8787 --config wrangler.toml --var PURGE_MIN_AGE_HOURS:0 --var "SPEC_DO_INTERNAL_TOKEN:$DO_INTERNAL_TOKEN" --var "SPEC_DO_ADMIN_TOKEN:$DO_ADMIN_TOKEN" "${UI_VARS[@]}"
+start_worker "1/6" "API worker (beehive)" 8787 --config wrangler.toml --var PURGE_MIN_AGE_HOURS:0 --var CANARY_MIN_SOAK_MINUTES:0 --var "SPEC_DO_INTERNAL_TOKEN:$DO_INTERNAL_TOKEN" --var "SPEC_DO_ADMIN_TOKEN:$DO_ADMIN_TOKEN" "${UI_VARS[@]}"
 wait_healthy "API worker" http://localhost:8787/health .dev.vars
 
 start_worker "2/6" "Shadow router" 8788 --config workers/shadow-router/wrangler.toml --var "SPEC_DO_INTERNAL_TOKEN:$DO_INTERNAL_TOKEN"

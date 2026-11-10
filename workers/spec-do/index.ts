@@ -28,10 +28,11 @@ import {
   ACTORS_GITHUB_UNIQUE_SQL,
   GATE_RUNS_SQL,
   GOVERNANCE_SQL,
+  SHADOW_SCORES_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm14';
+const LATEST_SCHEMA_VERSION = 'm15';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -42,6 +43,7 @@ const IDEMPOTENCY_CLEANUP_EVERY = 50; // expired-key sweep runs on one keyed req
 const IDEMPOTENT_ROUTES: Set<string | RegExp> = new Set([
   'POST /api/organizations', 'POST /api/actors', 'POST /api/repositories', 'POST /api/specs',
   'POST /api/candidates', 'POST /api/gate-verdicts', 'POST /api/trials', 'POST /api/promotions',
+  /^POST \/api\/candidates\/[^\/]+\/shadow-samples$/, // one sample per key (handler check): the comparator keys it requestId:candidateId
   'POST /api/gate-runs', // start only; the result route is a compare-and-set and replays on its own
   'POST /deploy-refs/rollback', // internal DO route: a redelivered rollback must not roll back twice (resolved in handleDeployRefs)
   /^POST \/api\/entities\/[^\/]+\/[^\/]+\/history$/, // Dynamic entity history POST
@@ -176,6 +178,8 @@ const ORG_PURGE_ORDER: [table: string, where: string][] = [
   ['gate_runs', `candidate_id IN (${ORG_CANDIDATES})`],
   // near_misses: logical references only (m14, docs/OPS.md rollback floor); the orphan sweep below removes rows an older build left
   ['near_misses', `candidate_id IN (${ORG_CANDIDATES}) OR spec_id IN (${ORG_SPECS})`],
+  // shadow_scores (m15): logical reference only, like near_misses; the orphan sweep removes rows an older build left
+  ['shadow_scores', `candidate_id IN (${ORG_CANDIDATES})`],
   ['issues', `id IN (${ORG_ISSUES})`],
   ['candidates', `id IN (${ORG_CANDIDATES})`],
   ['repositories', 'organization_id = ?'],
@@ -399,6 +403,26 @@ import {
   isAcceptableCanaryUrl,
   EXPECTED_HEAD_HEADER,
 } from '../shared/deploy-refs';
+import {
+  AdvanceRequestSchema,
+  EVIDENCE_MODE,
+  EVIDENCE_MISSING_EVENT,
+  decideAdvance,
+  currentRungOf,
+  type AdvanceRequest,
+  type AdvanceResult,
+  type EvidenceResult,
+  type EvidenceRung,
+} from '../shared/promotion-advance';
+import {
+  ShadowSamplesRequestSchema,
+  type ShadowSample,
+  type ShadowSamplesResult,
+  shadowVerdict,
+  SHADOW_MAX_SAMPLES,
+  CANDIDATE_NOT_FOUND,
+  SCIENTIST_COMPARATOR_ACTOR,
+} from '../shared/shadow-verdict';
 
 // Gate runs (shared with the gate worker)
 import {
@@ -468,6 +492,8 @@ interface Env {
   WORKERS_SUBDOMAIN?: string;
   // Minimum tombstone age before purge may hard-delete (hours, default 24). Local e2e sets 0.
   PURGE_MIN_AGE_HOURS?: string;
+  // Minutes a canary must have been the live head before `advance` lets it move to full. Honored only below the default (15); local e2e sets 0.
+  CANARY_MIN_SOAK_MINUTES?: string;
   // Producer for canary SLO ticks (docs/M3-CANARY-SLO-PLAN.md). Optional: an unbound DO still arms and re-arms.
   CANARY_SLO_TICKS?: { send(message: unknown): Promise<void> };
 }
@@ -713,6 +739,9 @@ export class SpecDO {
 
       // governance tables and the m14 epoch: likewise
       this.applyGovernance();
+
+      // shadow_scores: likewise
+      this.db.exec(SHADOW_SCORES_SQL);
 
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
@@ -1174,6 +1203,9 @@ export class SpecDO {
       // m13 -> m14: governance tables (change classifications, approvals, near-misses, intent provenance, governance events) and the
       // m14 epoch. New tables only, no writers yet (docs/M5A-2-GOVERNANCE-PLAN.md PR-A)
       ['m14', () => this.applyGovernance()],
+      // m14 -> m15: shadow_scores (the scientist comparator's per-candidate aggregate). One new table, no writers outside the
+      // shadow-samples route (docs/plans/promotion-gaps-plan.md PR A)
+      ['m15', () => this.db!.exec(SHADOW_SCORES_SQL)],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -2290,9 +2322,6 @@ export class SpecDO {
       preview_url: row.preview_url as string | undefined,
       preview_worker_name: row.preview_worker_name as string | undefined,
       preview_created_at: row.preview_created_at as number | undefined,
-      shadow_match: row.shadow_match as boolean | undefined,
-      shadow_score: row.shadow_score as number | undefined,
-      shadow_metrics: row.shadow_metrics as string | undefined,
       ...tombstoneFieldsOf(row),
     };
   }
@@ -2300,7 +2329,7 @@ export class SpecDO {
   /**
    * Convert internal CandidateRow (snake_case) to API CandidateResponse (camelCase)
    */
-  private candidateRowToResponse(row: CandidateRow): CandidateResponse {
+  private candidateRowToResponse(row: CandidateRow, shadow?: Map<string, ReturnType<SpecDO['shadowFieldsFor']>>): CandidateResponse {
     return {
       id: row.id,
       specId: row.spec_id,
@@ -2313,9 +2342,7 @@ export class SpecDO {
       previewUrl: row.preview_url,
       previewWorkerName: row.preview_worker_name,
       previewCreatedAt: row.preview_created_at,
-      shadowMatch: row.shadow_match,
-      shadowScore: row.shadow_score,
-      shadowMetrics: row.shadow_metrics,
+      ...(shadow ? shadow.get(row.id) ?? {} : this.shadowFieldsFor(row.id)),
       ...(row.deleted_at != null
         ? { deletedAt: row.deleted_at, deletedBy: row.deleted_by, deleteReason: row.delete_reason }
         : {}),
@@ -2792,6 +2819,8 @@ export class SpecDO {
       for (const r of this.queryAll('SELECT id FROM gate_runs WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('gate_runs')!.add(r.id as string);
       // near_misses likewise (m14): a build older than m14 purges candidates without knowing the table
       for (const r of this.queryAll('SELECT id FROM near_misses WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('near_misses')!.add(r.id as string);
+      // shadow_scores likewise (m15): a build older than m15 purges candidates without knowing the table
+      for (const r of this.queryAll('SELECT id FROM shadow_scores WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('shadow_scores')!.add(r.id as string);
     }
     const rows: [string, string][] = ORG_PURGE_ORDER.flatMap(([table]) => [...ids.get(table)!].map((id): [string, string] => [table, id]));
     const counts = Object.fromEntries(ORG_PURGE_ORDER.map(([table]) => [table, ids.get(table)!.size]));
@@ -4373,7 +4402,9 @@ export class SpecDO {
         const agentId = url.searchParams.get('agentId') ?? undefined;
         const stage = url.searchParams.get('stage') ?? undefined;
         const candidates = this.listCandidates(limit, offset, specId, agentId, stage, includeDeleted);
-        return new Response(JSON.stringify({ success: true, data: candidates.map(c => this.candidateRowToResponse(c)), timestamp: Date.now() }), {
+        // One query for the page, not one per row (queue-consumer and preview-manager list with limit=100)
+        const shadowByCandidate = this.shadowFieldsForMany(candidates.map(c => c.id));
+        return new Response(JSON.stringify({ success: true, data: candidates.map(c => this.candidateRowToResponse(c, shadowByCandidate)), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
@@ -4429,6 +4460,30 @@ export class SpecDO {
         });
       }
       
+      // Shadow samples (m15): the scientist comparator's per-request scores, one aggregate row per candidate
+      const shadowMatch = path.match(/^\/api\/candidates\/([^\/]+)\/shadow-samples$/);
+      if (shadowMatch && method === 'POST') {
+        let candidateId: string;
+        try {
+          candidateId = decodeURIComponent(shadowMatch[1]);
+        } catch {
+          return new Response(JSON.stringify({ success: false, error: 'Malformed candidate id', timestamp: now() }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        return await this.handleShadowSamples(request, candidateId, idem);
+      }
+
+      // advance (promotion-gaps PR B): the one place a candidate moves up the ladder. Internal only: the edge does not route it.
+      const advanceMatch = path.match(/^\/api\/candidates\/([^\/]+)\/advance$/);
+      if (advanceMatch && method === 'POST') {
+        let candidateId: string;
+        try {
+          candidateId = decodeURIComponent(advanceMatch[1]);
+        } catch {
+          return new Response(JSON.stringify({ success: false, error: 'Malformed candidate id', timestamp: now() }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        return await this.handleAdvance(request, candidateId, actorId);
+      }
+
       // Gate runs: zod-validated, unlike the verdict routes below
       const gateRunResponse = await this.handleGateRuns(request, url, path, method, actorId, idem);
       if (gateRunResponse) return gateRunResponse;
@@ -4861,6 +4916,320 @@ export class SpecDO {
         { status: error instanceof ConflictError ? 409 : 500, headers: { 'Content-Type': 'application/json' } }
       );
     }
+  }
+
+  // ============================================================================
+  // ADVANCE (docs/plans/promotion-gaps-plan.md section 3.4; reviews in sections 11-13)
+  // The Spec DO is the single serialization point for promotion decisions (AGENTS.md): the stage check, the evidence check and the
+  // stage writes happen in one transactionSync. A dry run does everything except write (no stage, no history, no governance event).
+  // This is also the site where PR-D's assertPromotionApprovals hooks entering `promoted` (docs/M5A-2-GOVERNANCE-PLAN.md).
+  // ============================================================================
+
+  private async handleAdvance(request: Request, candidateId: string, actorId: string): Promise<Response> {
+    const respond = (status: number, body: Record<string, unknown>) =>
+      new Response(JSON.stringify({ ...body, timestamp: now() }), { status, headers: { 'Content-Type': 'application/json' } });
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return respond(400, { success: false, error: 'Body must be JSON' });
+    }
+    const parsed = AdvanceRequestSchema.safeParse(raw);
+    if (!parsed.success) return respond(400, { success: false, error: `Invalid advance request: ${zodMessage(parsed.error)}` });
+
+    const out = this.state.storage.transactionSync(() => this.advanceCandidate(candidateId, parsed.data, actorId));
+    if (out.ok) return respond(200, { success: true, data: out.data });
+    return respond(out.status, { success: false, error: out.error, ...(out.code ? { code: out.code } : {}), ...(out.evidence ? { evidence: out.evidence } : {}) });
+  }
+
+  /** Inside a transaction. Refusals return before any write, so nothing needs rolling back. */
+  private advanceCandidate(
+    candidateId: string,
+    req: AdvanceRequest,
+    actorId: string
+  ):
+    | { ok: true; data: AdvanceResult }
+    | { ok: false; status: number; error: string; code?: string; evidence?: EvidenceResult[] } {
+    // Coded 404: the caller tells it from an older Spec DO's code-less "Not found" (plan B5/V8)
+    const candidate = this.getCandidate(candidateId);
+    if (!candidate) return { ok: false, status: 404, error: CANDIDATE_NOT_FOUND };
+
+    const dryRun = req.dryRun === true;
+    const previousStage = candidate.stage as string;
+    const fromRung = currentRungOf(previousStage);
+    const base = { fromRung, toRung: req.toRung, previousStage, dryRun };
+
+    const decision = decideAdvance(previousStage, req.toRung, req.fromRung);
+    if (decision.kind === 'noop') return { ok: true, data: { ...base, stage: previousStage, noop: true, writes: [], evidence: [] } };
+    if (decision.kind === 'refuse') return { ok: false, status: 409, error: decision.message, code: decision.code };
+
+    const evidence = [this.evaluateEvidence(candidate, decision.leaving)];
+    const missing = evidence.filter((e) => e.status !== 'met');
+    const enforced = missing.filter((e) => e.mode === 'enforce');
+    if (enforced.length) {
+      const e = enforced[0];
+      return { ok: false, status: 409, error: `Cannot leave rung ${e.rung}: ${e.detail ?? e.status}`, code: 'evidence_missing', evidence };
+    }
+    if (!dryRun) for (const e of missing) this.logEvidenceMissing(candidate.id, candidate.spec_id, previousStage, req.toRung, e, actorId);
+    if (dryRun) return { ok: true, data: { ...base, stage: previousStage, noop: false, writes: decision.writes, evidence } };
+
+    // Each write goes through transitionCandidate, so history rows and the PR-S table (c) log are exactly as for a stage PATCH
+    for (const stage of decision.writes) {
+      this.transitionCandidate(candidate.id, stage, actorId, req.notes ?? `advance to ${req.toRung}`);
+    }
+    return { ok: true, data: { ...base, stage: decision.writes[decision.writes.length - 1], noop: false, writes: decision.writes, evidence } };
+  }
+
+  /** The evidence for the rung a candidate is leaving. Reads only. */
+  private evaluateEvidence(candidate: CandidateRow, rung: EvidenceRung): EvidenceResult {
+    const mode = EVIDENCE_MODE[rung];
+    const id = candidate.id;
+    if (rung === 'pre-merge' || rung === 'shadow') {
+      const v = this.getGateVerdict(id, rung);
+      if (!v) return { rung, status: 'missing', mode, detail: `no ${rung} gate verdict` };
+      if (v.status === 'pass') return { rung, status: 'met', mode };
+      if (v.status === 'fail') return { rung, status: 'failed', mode, detail: `${rung} gate verdict is fail (score ${v.score})` };
+      return { rung, status: 'missing', mode, detail: `${rung} gate verdict is still pending` };
+    }
+    if (rung === 'train') {
+      for (const t of this.queryAll('SELECT candidates FROM merge_trains WHERE spec_id = ?', candidate.spec_id)) {
+        try {
+          const cars = JSON.parse(String(t.candidates)) as Array<{ candidateId?: unknown; status?: unknown }>;
+          if (Array.isArray(cars) && cars.some((c) => c && c.candidateId === id && c.status === 'merged')) return { rung, status: 'met', mode };
+        } catch {
+          // an unreadable train row is no evidence
+        }
+      }
+      return { rung, status: 'missing', mode, detail: 'no merged merge-train car for this candidate' };
+    }
+    // canary: this candidate is the live canary head, and has been for the soak time
+    const head = this.deployHead(candidate.spec_id, 'canary');
+    if (!head || head.candidateId !== id) return { rung, status: 'missing', mode, detail: 'this candidate is not the live canary of its spec' };
+    const soak = this.canarySoakMinutes();
+    const liveMinutes = Math.floor((now() - head.movedAt) / 60_000);
+    if (liveMinutes < soak) return { rung, status: 'missing', mode, detail: `canary has been live ${liveMinutes} of ${soak} minutes` };
+    return { rung, status: 'met', mode };
+  }
+
+  /** Minutes a canary must have been live. The env override (local e2e) is honored only below the default, so it can only shorten the soak in a dev setup. */
+  private canarySoakMinutes(): number {
+    const raw = this.env?.CANARY_MIN_SOAK_MINUTES;
+    if (raw === undefined || raw.trim() === '') return CANARY_METRICS_DEFAULT_WINDOW_MINUTES;
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 0 && n < CANARY_METRICS_DEFAULT_WINDOW_MINUTES) {
+      // Visible in Workers Logs if the override is ever in effect somewhere it should not be (a dashboard var is not covered by the wrangler.toml test)
+      console.warn('[SpecDO] CANARY_MIN_SOAK_MINUTES override in effect', { minutes: n, default: CANARY_METRICS_DEFAULT_WINDOW_MINUTES });
+      return n;
+    }
+    return CANARY_METRICS_DEFAULT_WINDOW_MINUTES;
+  }
+
+  /**
+   * A governance_events row for log-mode evidence that is not met. LOG-ONLY like invalid_transition: never throws, never refuses.
+   * Flood control as for invalid_transition: one row per (candidate, rung, status) per trailing hour, at most INVALID_TRANSITION_CAP_PER_WINDOW rows an hour.
+   */
+  private logEvidenceMissing(candidateId: string, specId: string, fromStage: string, toRung: string, e: EvidenceResult, actorId: string): void {
+    try {
+      const subject = `candidate:${candidateId}`.slice(0, MAX_GOVERNANCE_SUBJECT_CHARS);
+      const reason = `${e.rung}:${e.status}`;
+      const at = now();
+      // Before the window query, like logTransitionViolation: a failing read must still leave this line
+      console.warn('[SpecDO] evidence_missing', { candidateId, rung: e.rung, status: e.status, mode: e.mode, toRung });
+      const w = this.queryAll(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN subject = ? AND reason = ? THEN 1 ELSE 0 END), 0) AS same
+           FROM governance_events WHERE event = ? AND created_at >= ?`,
+        subject, reason, EVIDENCE_MISSING_EVENT, at - INVALID_TRANSITION_WINDOW_MS
+      )[0];
+      if (Number(w?.same ?? 0) > 0 || Number(w?.total ?? 0) >= INVALID_TRANSITION_CAP_PER_WINDOW) return;
+      let detail = JSON.stringify({
+        v: 1, candidateId, specId, rung: e.rung, status: e.status, mode: e.mode, detail: e.detail, fromStage, toRung,
+        ...(Number(w?.total ?? 0) + 1 === INVALID_TRANSITION_CAP_PER_WINDOW ? { capReached: true } : {}),
+      });
+      if (new TextEncoder().encode(detail).length > MAX_GOVERNANCE_DETAIL_BYTES) detail = JSON.stringify({ v: 1, truncated: true });
+      this.run(
+        `INSERT INTO governance_events (id, event, actor_id, asserted_actor_id, subject, reason, detail, created_at)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        generateId(), EVIDENCE_MISSING_EVENT, actorId, subject, reason, detail, at
+      );
+    } catch (err) {
+      console.error('[SpecDO] evidence_missing log failed', candidateId, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // ============================================================================
+  // SHADOW SAMPLES (docs/plans/promotion-gaps-plan.md section 3.1; reviews in sections 11-12)
+  // shadow_scores holds one aggregate row per candidate (sum, not a re-averaged mean). The shadow gate verdict is derived in the
+  // same transaction. Evidence for promotion is LOG-ONLY until the shadow router mirrors shadow-rung candidates against a real
+  // production baseline (the `baseline` split in the row keeps placeholder-scored samples from ever becoming enforced evidence).
+  // ============================================================================
+
+  /** diffs_json if it has the shape the writer produces, else null (never throws: one bad row must not 500 a candidate for good) */
+  private parseShadowDiffs(raw: unknown): { total: number; byType: Record<string, number>; bySeverity: Record<string, number> } | null {
+    try {
+      const v = JSON.parse(String(raw));
+      const isObject = (o: unknown): o is Record<string, unknown> => !!o && typeof o === 'object' && !Array.isArray(o);
+      // Keep only finite numbers: a hand-corrupted value like "x" would otherwise turn the next += 1 into the string "x1"
+      const counts = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, n]) => typeof n === 'number' && Number.isFinite(n))) as Record<string, number>;
+      if (isObject(v) && typeof v.total === 'number' && Number.isFinite(v.total) && isObject(v.byType) && isObject(v.bySeverity)) {
+        return { total: v.total, byType: counts(v.byType), bySeverity: { error: 0, warning: 0, info: 0, ...counts(v.bySeverity) } };
+      }
+    } catch {
+      // fall through
+    }
+    return null;
+  }
+
+  /** shadow fields for many candidates in one query (list responses), keyed by candidate id */
+  private shadowFieldsForMany(candidateIds: string[]): Map<string, ReturnType<SpecDO['shadowFieldsFor']>> {
+    const out = new Map<string, ReturnType<SpecDO['shadowFieldsFor']>>();
+    for (const ids of chunk(candidateIds, MAX_BOUND_PARAMS)) {
+      for (const r of this.queryAll(`SELECT * FROM shadow_scores WHERE candidate_id IN (${placeholders(ids.length)})`, ...ids)) {
+        out.set(String(r.candidate_id), this.shadowFieldsFromRow(r));
+      }
+    }
+    return out;
+  }
+
+  /** The candidate response's shadow fields from shadow_scores. Absent until a sample lands, as before m15 (the columns never existed). */
+  private shadowFieldsFor(candidateId: string): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string } {
+    const [row] = this.queryAll('SELECT * FROM shadow_scores WHERE candidate_id = ?', candidateId);
+    return row ? this.shadowFieldsFromRow(row) : {};
+  }
+
+  private shadowFieldsFromRow(row: Record<string, unknown>): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string } {
+    const count = Number(row.sample_count);
+    if (!(count > 0)) return {};
+    // A corrupt aggregate reads as empty diffs; the score and counts stay right
+    const aggregate = this.parseShadowDiffs(row.diffs_json) ?? { total: 0, byType: {}, bySeverity: { error: 0, warning: 0, info: 0 } };
+    const metrics = {
+      averageScore: Number(row.score_sum) / count,
+      totalRequests: count,
+      matchedRequests: Number(row.matched_count),
+      aggregateDiffs: aggregate,
+      lastComparisonAt: Number(row.updated_at),
+      lastRequestId: String(row.last_request_id),
+    };
+    return {
+      shadowScore: Math.round((Number(row.score_sum) / count) * 100) / 100,
+      shadowMatch: Number(row.matched_count) === count,
+      shadowMetrics: JSON.stringify(metrics),
+    };
+  }
+
+  private async handleShadowSamples(request: Request, candidateId: string, idem: IdempotencyContext | null): Promise<Response> {
+    const respond = (status: number, body: Record<string, unknown>) =>
+      new Response(JSON.stringify({ ...body, timestamp: now() }), { status, headers: { 'Content-Type': 'application/json' } });
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return respond(400, { success: false, error: 'Body must be JSON' });
+    }
+    const parsed = ShadowSamplesRequestSchema.safeParse(raw);
+    if (!parsed.success) return respond(400, { success: false, error: `Invalid shadow samples: ${zodMessage(parsed.error)}` });
+    // A key covers one request for one candidate, so it can only mean one sample (replaying a batch would be ambiguous)
+    if (idem && parsed.data.samples.length !== 1) {
+      return respond(400, { success: false, error: 'A request under an Idempotency-Key must hold exactly one sample' });
+    }
+    // Coded 404: the caller tells it from an older Spec DO's code-less "Not found" (plan B5/V8). Nothing awaits between this check and the write.
+    if (!this.getCandidate(candidateId)) return respond(404, { success: false, error: CANDIDATE_NOT_FOUND });
+
+    const mutate = () => ({ success: true, data: this.recordShadowSamples(candidateId, parsed.data.samples), timestamp: now() });
+    if (idem) return this.idempotent(idem, 200, mutate);
+    // idempotent() opens no transaction without a key
+    return respond(200, this.state.storage.transactionSync(mutate));
+  }
+
+  /** Inside a transaction. Adds the samples (up to the cap), upserts the aggregate row, then the shadow gate verdict if its status changed. */
+  private recordShadowSamples(candidateId: string, samples: ShadowSample[]): ShadowSamplesResult {
+    const at = now();
+    // The verdict's decided_by references actors(id) with foreign keys on; a fresh ledger has no such row (plan B4/V6)
+    this.run(
+      `INSERT OR IGNORE INTO actors (id, type, name, promotion_authority, created_at) VALUES (?, 'agent', 'scientist comparator (service)', 0, ?)`,
+      SCIENTIST_COMPARATOR_ACTOR,
+      at
+    );
+    const [row] = this.queryAll('SELECT * FROM shadow_scores WHERE candidate_id = ?', candidateId);
+    let count = row ? Number(row.sample_count) : 0;
+    let productionCount = row ? Number(row.production_count) : 0;
+    let sum = row ? Number(row.score_sum) : 0;
+    let productionSum = row ? Number(row.production_score_sum) : 0;
+    let matched = row ? Number(row.matched_count) : 0;
+    let lastRequestId = row ? String(row.last_request_id) : '';
+    let diffs = { total: 0, byType: {} as Record<string, number>, bySeverity: { error: 0, warning: 0, info: 0 } as Record<string, number> };
+    if (row) diffs = this.parseShadowDiffs(row.diffs_json) ?? diffs;
+
+    // The cap is per baseline: a candidate full of placeholder-scored samples must still be able to record production ones,
+    // or the cap would freeze placeholder evidence in place and the log-to-enforce flip would need a reset (plan section 12)
+    let capped = false;
+    for (const sample of samples) {
+      const isProduction = sample.baseline === 'production';
+      if ((isProduction ? productionCount : count - productionCount) >= SHADOW_MAX_SAMPLES) {
+        capped = true;
+        continue;
+      }
+      count += 1;
+      sum += sample.score;
+      if (sample.baseline === 'production') {
+        productionCount += 1;
+        productionSum += sample.score;
+      }
+      if (sample.matched) matched += 1;
+      for (const d of sample.diffs) {
+        diffs.total += 1;
+        diffs.byType[d.type] = (diffs.byType[d.type] ?? 0) + 1;
+        diffs.bySeverity[d.severity] = (diffs.bySeverity[d.severity] ?? 0) + 1;
+      }
+      lastRequestId = sample.requestId;
+    }
+
+    const average = count > 0 ? sum / count : 0;
+    const status = shadowVerdict(count, average);
+    // Nothing recorded (all over the cap) writes nothing: no row churn, no verdict
+    if (count !== (row ? Number(row.sample_count) : 0)) {
+      this.run(
+        `INSERT INTO shadow_scores
+         (id, candidate_id, sample_count, production_count, score_sum, production_score_sum, matched_count, diffs_json, last_request_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(candidate_id) DO UPDATE SET
+           sample_count = excluded.sample_count, production_count = excluded.production_count, score_sum = excluded.score_sum,
+           production_score_sum = excluded.production_score_sum, matched_count = excluded.matched_count,
+           diffs_json = excluded.diffs_json, last_request_id = excluded.last_request_id, updated_at = excluded.updated_at`,
+        row ? String(row.id) : generateId(),
+        candidateId,
+        count,
+        productionCount,
+        sum,
+        productionSum,
+        matched,
+        JSON.stringify(diffs),
+        lastRequestId,
+        at
+      );
+      const existing = this.getGateVerdict(candidateId, 'shadow');
+      if (status !== 'pending' && existing?.status !== status) {
+        this.createGateVerdict(
+          candidateId,
+          'shadow',
+          status,
+          // floor, not round: a failing 79.6 must not be stored as a score of 80, the pass line
+          Math.floor(average),
+          0,
+          SCIENTIST_COMPARATOR_ACTOR,
+          `Shadow: ${count} samples (${productionCount} against production), average ${average.toFixed(1)}, ${matched}/${count} matched`
+        );
+      }
+    }
+
+    return {
+      sampleCount: count,
+      productionCount,
+      averageScore: average,
+      productionAverageScore: productionCount > 0 ? productionSum / productionCount : null,
+      matchedCount: matched,
+      verdict: status,
+      capped,
+    };
   }
 
   // ============================================================================
