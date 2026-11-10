@@ -5026,19 +5026,20 @@ export class SpecDO {
 
   /**
    * A governance_events row for log-mode evidence that is not met. LOG-ONLY like invalid_transition: never throws, never refuses.
-   * Flood control as for invalid_transition: one row per (candidate, rung) per trailing hour, at most INVALID_TRANSITION_CAP_PER_WINDOW rows an hour.
+   * Flood control as for invalid_transition: one row per (candidate, rung, status) per trailing hour, at most INVALID_TRANSITION_CAP_PER_WINDOW rows an hour.
    */
   private logEvidenceMissing(candidateId: string, specId: string, fromStage: string, toRung: string, e: EvidenceResult, actorId: string): void {
     try {
       const subject = `candidate:${candidateId}`.slice(0, MAX_GOVERNANCE_SUBJECT_CHARS);
       const reason = `${e.rung}:${e.status}`;
       const at = now();
+      // Before the window query, like logTransitionViolation: a failing read must still leave this line
+      console.warn('[SpecDO] evidence_missing', { candidateId, rung: e.rung, status: e.status, mode: e.mode, toRung });
       const w = this.queryAll(
         `SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN subject = ? AND reason = ? THEN 1 ELSE 0 END), 0) AS same
            FROM governance_events WHERE event = ? AND created_at >= ?`,
         subject, reason, EVIDENCE_MISSING_EVENT, at - INVALID_TRANSITION_WINDOW_MS
       )[0];
-      console.warn('[SpecDO] evidence_missing', { candidateId, rung: e.rung, status: e.status, mode: e.mode, toRung });
       if (Number(w?.same ?? 0) > 0 || Number(w?.total ?? 0) >= INVALID_TRANSITION_CAP_PER_WINDOW) return;
       let detail = JSON.stringify({
         v: 1, candidateId, specId, rung: e.rung, status: e.status, mode: e.mode, detail: e.detail, fromStage, toRung,

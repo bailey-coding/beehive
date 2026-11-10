@@ -156,5 +156,5 @@ export type AdvanceResult = z.infer<typeof AdvanceResultSchema>;
 
 export const ADVANCE_PATH = (candidateId: string) => `/api/candidates/${encodeURIComponent(candidateId)}/advance`;
 
-/** governance_events.event for log-mode evidence that is missing (never refuses; one row per candidate, rung and hour) */
+/** governance_events.event for log-mode evidence that is missing (never refuses; one row per candidate, rung and status per hour) */
 export const EVIDENCE_MISSING_EVENT = 'evidence_missing';

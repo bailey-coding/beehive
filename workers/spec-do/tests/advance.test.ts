@@ -466,6 +466,8 @@ describe('review fixes (PR B review: F1-F8)', () => {
     // the leniency is only for passed_canary: from any other stage a caller saying `canary` for a move to full is stale, not leniently accepted
     expect(decideAdvance('passed_premerge', 'full', 'canary')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
     expect(decideAdvance('pending', 'full', 'canary')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
+    // ... and only for a move to full: a `canary` caller asking for another rung from passed_canary is stale
+    for (const to of ['shadow', 'train', 'canary'] as const) expect(decideAdvance('passed_canary', to, 'canary'), to).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
     const { c, spec: s } = seed();
     setStage(c.id, 'passed_canary');
     await deployCanary(c.id, s.id);
@@ -525,10 +527,12 @@ describe('review fixes (PR B review: F1-F8)', () => {
     setStage(c.id, 'passed_premerge');
     store.raw.exec('DROP TABLE governance_events');
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await advance(c.id, { toRung: 'train' });
     expect(res.status).toBe(200);
     expect(stageOf(c.id)).toBe('passed_shadow');
+    // the miss still leaves its warn line when the governance read itself fails
+    expect(warn.mock.calls.some((a) => String(a[0]).includes('evidence_missing'))).toBe(true);
   });
 
   describe('F4: flood control', () => {
@@ -589,9 +593,11 @@ describe('review fixes (PR B review: F1-F8)', () => {
     const { c, spec: s } = seed();
     setStage(c.id, 'passed_train');
     await deployCanary(c.id, s.id);
-    store.raw.prepare('UPDATE deploy_refs SET moved_at = moved_at - ?').run(14 * 60_000 + 59_000);
+    // Margins of 30 s, not 1 s, so the real clock cannot flip the first assertion on a slow runner; the second is exact: 15:00 plus
+    // whatever elapsed is at least 15 whole minutes, which a `<=` instead of `<` would refuse
+    store.raw.prepare('UPDATE deploy_refs SET moved_at = moved_at - ?').run(14 * 60_000 + 30_000);
     expect((await advance(c.id, { toRung: 'full', dryRun: true })).status).toBe(409);
-    store.raw.prepare('UPDATE deploy_refs SET moved_at = moved_at - ?').run(1_000);
+    store.raw.prepare('UPDATE deploy_refs SET moved_at = moved_at - ?').run(30_000);
     expect((await advance(c.id, { toRung: 'full', dryRun: true })).status).toBe(200);
   });
 
