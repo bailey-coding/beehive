@@ -398,6 +398,7 @@ describe('tournament mode: shadow -> train is the competition', () => {
     const res = await w.promote({ candidateId: b, toRung: 'train' });
     expect(res.status).toBe(409);
     expect(res.json.code).toBe('not_enough_entrants');
+    expect(w.spec.listTournaments(w.specId)[0].candidates.find((c) => c.candidateId === a)?.status).toBe('disqualified');
   });
 
   it("a candidate with a failing shadow verdict cannot enter the tournament: 409 evidence_failed, no state, never ranked", async () => {
@@ -490,6 +491,50 @@ describe('tournament mode: shadow -> train is the competition', () => {
     expect(res.json.code).toBe('spec_mismatch');
     expect(w.states(c)).toHaveLength(0);
     expect(w.stageOf(c)).toBe('pending');
+  });
+
+  it('a ledger error while re-checking an entrant disqualifies nobody: 502, the entrant stays in, and the next attempt decides', async () => {
+    const { w, a, b } = await two(95, 10);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.box.hook = async (request) =>
+      new URL(request.url).pathname === `/api/candidates/${a}/advance` ? Response.json({ success: false, error: 'boom' }, { status: 500 }) : undefined;
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(502);
+    expect(res.json.code).toBe('ledger_error');
+    const [t] = w.spec.listTournaments(w.specId);
+    expect(t.status).toBe('pending');
+    expect(t.candidates.find((c) => c.candidateId === a)?.status).toBe('competing');
+    expect(w.events('evidence_missing')).toHaveLength(0);
+    w.box.hook = undefined;
+    const retry = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(retry.status).toBe(200);
+    expect(retry.json.details).toMatchObject({ winner: a });
+  });
+
+  it('an entrant that already moved past the shadow rung does not compete and is not a loss: the real shadow candidate is not eliminated by it', async () => {
+    const { w, a, b } = await two(99, 50);
+    await w.promote({ candidateId: a, toRung: 'train' }); // a joins with the top score
+    w.store.raw.prepare("UPDATE candidates SET stage = 'passed_shadow' WHERE id = ?").run(a); // and has moved on by another route
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(409);
+    expect(res.json.code).toBe('not_enough_entrants');
+    expect(res.json.message).toMatch(/already past the shadow rung/);
+    const [t] = w.spec.listTournaments(w.specId);
+    expect(t.candidates.find((c) => c.candidateId === a)?.status).toBe('competing'); // not disqualified: it did not lose
+    expect(w.stageOf(b)).toBe('passed_premerge');
+  });
+
+  it('a lone competing entrant beside a disqualified one waits (202), it is not refused', async () => {
+    const { w, a, b } = await two(95, 80);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.store.raw.prepare("UPDATE candidates SET stage = 'failed' WHERE id = ?").run(a);
+    expect((await w.promote({ candidateId: b, toRung: 'train' })).json.code).toBe('not_enough_entrants'); // a is disqualified now
+    // a third candidate joins b: two competing entrants again
+    const c = w.candidate('passed_premerge');
+    await w.samples(c, 90);
+    const res = await w.promote({ candidateId: c, toRung: 'train' });
+    expect(res.status).toBe(200);
+    expect(res.json.details).toMatchObject({ winner: c });
   });
 
   it('a completed tournament refuses a third candidate with 409 tournament_completed', async () => {
@@ -708,6 +753,33 @@ describe('merge train: whose car ran, no-ops, retry, capacity', () => {
     );
     expect(res.status).toBe(409);
     expect(((await res.json()) as PromotionResult).code).toMatch(/stale_from_rung|not_next_rung/);
+  });
+
+  it('POST /merge/retry for a car queued behind another names the RETRIED car\'s position, and an unknown spec is a 404', async () => {
+    const { w, seedCars } = await trainWorld();
+    const first = w.candidate('passed_shadow');
+    const retried = w.candidate('passed_shadow');
+    await seedCars([
+      { candidateId: first, position: 1, status: 'waiting' },
+      { candidateId: retried, position: 2, status: 'failed' },
+    ]);
+    const call = (specId: string) =>
+      handler.fetch(
+        new Request('http://localhost/merge/retry', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer test-auth-token', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ candidateId: retried, specId }),
+        }),
+        w.env as never,
+        {} as never
+      );
+    const res = await call(w.specId);
+    const body = (await res.json()) as PromotionResult;
+    expect(res.status).toBe(202);
+    expect(body.outcome).toBe('queued');
+    expect(body.message).toContain('position 2');
+    expect(w.stageOf(first)).toBe('passed_train'); // the first car in line was the one that ran
+    expect((await call('no-such-spec')).status).toBe(404);
   });
 
   it('a full train is a coded 409 train_full, not a bare 500', async () => {

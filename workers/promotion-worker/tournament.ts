@@ -30,7 +30,7 @@ export const TOURNAMENT_TO_RUNG: Rung = 'train';
 
 export type TournamentRefusalCode = 'no_shadow_evidence' | 'tie' | 'tournament_completed' | 'not_enough_entrants' | 'tournament_exhausted';
 
-/** A decision that cannot be made, with a stable code. The tournament is recorded failed (retryable) and the caller gets the code. */
+/** A decision that cannot be made, with a stable code. Before a winner exists it only reads (no attempt is spent); after, the tournament is recorded failed (retryable). The caller gets the code. */
 export class TournamentRefusal extends Error {
   constructor(readonly code: string, message: string) {
     super(message);
@@ -73,10 +73,11 @@ export class TournamentManager {
    * candidate may make this move, so every entrant is a candidate the ledger says is on the shadow rung.
    *
    * Outcomes: `waiting` (alone), `moved` (this candidate won and `advance` wrote its stage), `eliminated` (another won), or a refusal
-   * with a code (`no_shadow_evidence`, `tie`, an `advance` refusal): the tournament is then recorded failed and can be retried.
+   * with a code. Evidence refusals (`no_shadow_evidence`, `tie`, `not_enough_entrants`) only read and spend no attempt; an `advance` refusal for the
+   * winner records the tournament failed, retryable up to the ledger's cap (`tournament_exhausted` after).
    */
   async executeTournament(request: ResolvedPromotionRequest): Promise<PromotionResult> {
-    // Set once the tournament is in_progress: only then does a failure belong in the ledger
+    // Set once a winner exists and the tournament goes in_progress: only then does a failure belong in the ledger
     let runningId: string | null = null;
     const result = (r: Pick<PromotionResult, 'success' | 'message'> & Partial<PromotionResult>): PromotionResult => ({
       candidateId: request.candidateId,
@@ -110,7 +111,8 @@ export class TournamentManager {
         request.fromRung
       );
 
-      if (updatedTournament.candidates.length < 2) {
+      // Competing entrants only: a disqualified one beside a lone entrant leaves that entrant waiting, not refused
+      if (updatedTournament.candidates.filter((c) => c.status === 'competing').length < 2) {
         await this.updateTournamentStatus(updatedTournament.id, {
           status: 'pending',
         });
@@ -124,7 +126,11 @@ export class TournamentManager {
       // Entrants are re-checked now, not trusted from when they joined: one that can no longer make this move (it failed, was tombstoned, changed
       // stage) or whose shadow verdict failed does not compete (plan V2), and is marked disqualified so it cannot block the next attempt.
       const eligible: TournamentCandidate[] = [];
-      const ineligible = new Map<string, string>();
+      const ineligible = new Map<string, string>(); // disqualified: cannot make this move
+      const pastRung = new Map<string, string>(); // already moved on: not in the contest, and not a loss either
+      // Only a definite "this candidate cannot make this move" disqualifies. A ledger error or an older Spec DO says nothing about the candidate:
+      // it stops the attempt (before anything is written) and the entrant stays in, or a transient 5xx would knock a healthy entrant out for good.
+      const DISQUALIFYING = new Set(['candidate_not_found', 'stale_from_rung', 'not_next_rung', 'evidence_missing']);
       for (const c of updatedTournament.candidates.filter((x) => x.status === 'competing')) {
         const check = await advanceCandidate(
           this.env,
@@ -133,7 +139,10 @@ export class TournamentManager {
           request.actorId
         );
         if (!check.ok) {
+          if (!DISQUALIFYING.has(check.code)) throw new TournamentRefusal(check.code, `Could not check entrant ${c.candidateId}: ${check.message}`);
           ineligible.set(c.candidateId, `${check.code}: ${check.message}`);
+        } else if (check.data.noop) {
+          pastRung.set(c.candidateId, 'already past the shadow rung');
         } else if (check.data.evidence.some((e) => e.rung === 'shadow' && e.status === 'failed')) {
           ineligible.set(c.candidateId, 'evidence_failed: its shadow verdict is fail');
         } else {
@@ -143,12 +152,19 @@ export class TournamentManager {
       let current = updatedTournament;
       if (ineligible.size > 0) {
         console.warn(`[Tournament] Disqualifying ${[...ineligible].map(([id, why]) => `${id} (${why})`).join('; ')}`);
-        current = { ...current, candidates: current.candidates.map((c) => (ineligible.has(c.candidateId) ? { ...c, status: 'disqualified' as const } : c)) };
-        await this.updateTournament(current.id, { candidates: current.candidates });
+        // On the record as saved now, so an entrant that joined meanwhile is kept (the Spec DO writes a tournament_loss near-miss for each disqualified entrant)
+        const saved = await getPromotionLedger(this.env).modifyTournament(request.specId, (cur) => ({
+          ...cur,
+          candidates: cur.candidates.map((c) => (ineligible.has(c.candidateId) && c.status === 'competing' ? { ...c, status: 'disqualified' as const } : c)),
+        }));
+        if (!saved) throw new Error(`Tournament for spec ${request.specId} disappeared while disqualifying`);
+        current = saved as TournamentWithId;
       }
       if (eligible.length < 2) {
-        throw new TournamentRefusal('not_enough_entrants', `A tournament needs two eligible entrants; ${eligible.length} left${ineligible.size ? ` (${[...ineligible.values()].join('; ')})` : ''}`);
+        const why = [...ineligible.values(), ...[...pastRung].map(([id, w]) => `${id}: ${w}`)];
+        throw new TournamentRefusal('not_enough_entrants', `A tournament needs two eligible entrants; ${eligible.length} left${why.length ? ` (${why.join('; ')})` : ''}`);
       }
+      const contested = new Set(eligible.map((c) => c.candidateId));
 
       // Scores are read now, for every eligible entrant, from the ledger: a score that landed after a candidate joined counts, and a missing
       // score is "no evidence", never a default
@@ -172,7 +188,7 @@ export class TournamentManager {
       );
       if (!advanced.ok) throw new TournamentRefusal(advanced.code, `Winner ${decision.winnerId} could not advance: ${advanced.message}`);
 
-      await this.recordWinner(decision.winnerId, current);
+      await this.recordWinner(decision.winnerId, current, contested);
 
       // The decision as ledger evidence, AFTER the winner moved (a trial and a near-miss for the loser say somebody won). Best effort: the stage is
       // the truth, so a trial that cannot be written (an actorId that is no actor row is a foreign-key failure) is reported, not a failed tournament.
@@ -206,7 +222,7 @@ export class TournamentManager {
         success: true,
         outcome: won ? 'moved' : 'eliminated',
         message: `Tournament winner: ${decision.winnerId} promoted to ${request.toRung}`,
-        moves: [{ candidateId: decision.winnerId, fromRung: request.fromRung, toRung: request.toRung }],
+        moves: advanced.data.noop ? [] : [{ candidateId: decision.winnerId, fromRung: request.fromRung, toRung: request.toRung }],
         details: {
           tournamentId: current.id,
           winner: decision.winnerId,
@@ -452,22 +468,21 @@ export class TournamentManager {
   /**
    * Record the winner and the eliminated entrants, then complete the tournament. The winner's stage was already written by `advance`.
    */
-  private async recordWinner(winnerId: string, tournament: TournamentWithId): Promise<void> {
+  private async recordWinner(winnerId: string, tournament: TournamentWithId, contested: Set<string>): Promise<void> {
     const at = new Date().toISOString();
-    // Only competing entrants are decided here: a disqualified one stays disqualified
+    // Only the entrants that took part in this contest are decided; a disqualified one stays disqualified and one that joined mid-decision stays competing
     const updatedCandidates = tournament.candidates.map(c =>
       c.candidateId === winnerId
         ? { ...c, status: 'winner' as const, promotedAt: at }
-        : c.status === 'competing' ? { ...c, status: 'eliminated' as const } : c
+        : c.status === 'competing' && contested.has(c.candidateId) ? { ...c, status: 'eliminated' as const } : c
     );
 
-    await this.updateTournament(tournament.id, {
-      winner: winnerId,
-      candidates: updatedCandidates,
-    });
+    // One write: winner, candidate statuses and completion together, or a failure between two writes would leave a failed tournament with
+    // no competing entrant to ever decide it again
     await this.updateTournament(tournament.id, {
       status: 'completed',
       winner: winnerId,
+      candidates: updatedCandidates,
       completedAt: at,
     });
   }

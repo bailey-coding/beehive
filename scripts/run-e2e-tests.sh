@@ -123,6 +123,9 @@ else
   CMD="$CMD tests/e2e"
 fi
 
+# One file at a time: the e2e files share one stack and one global promotion mode (docs/OPS.md "Promotion worker on advance")
+CMD="$CMD --no-file-parallelism"
+
 # Add coverage if requested
 if [[ "$COVERAGE" == true ]]; then
   CMD="$CMD --coverage"

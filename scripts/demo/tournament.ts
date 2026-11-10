@@ -302,7 +302,11 @@ export async function runDemo(opts: DemoOptions): Promise<DemoResult> {
   try {
     return await runDemoSteps(opts);
   } finally {
-    if (original !== 'tournament') await mode({ mode: original }).catch(() => undefined);
+    if (original !== 'tournament') {
+      await mode({ mode: original }).catch((error) =>
+        opts.log(`   ! could not put the promotion mode back to "${original}": ${error instanceof Error ? error.message : String(error)}`)
+      );
+    }
   }
 }
 

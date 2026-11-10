@@ -116,14 +116,40 @@ describe('tournament candidate routes', () => {
     expect(update).not.toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'completed' }));
   });
 
-  it('an older Spec DO without the advance route disqualifies nobody into a win: the tournament refuses, naming ledger_too_old', async () => {
-    const { execute } = run(route({
+  it('an older Spec DO without the advance route stops the attempt as ledger_too_old: nobody is disqualified, nothing is written', async () => {
+    const { update, calls, execute } = run(route({
       'POST /api/candidates/c1/advance': () => json({ success: false, error: 'Not found' }, 404),
       'POST /api/candidates/c2/advance': () => json({ success: false, error: 'Not found' }, 404),
     }));
     const result = await execute();
-    expect(result).toMatchObject({ success: false, code: 'not_enough_entrants' });
-    expect(result.message).toContain('ledger_too_old');
+    expect(result).toMatchObject({ success: false, code: 'ledger_too_old' });
+    expect(update).not.toHaveBeenCalled();
+    expect(calls.every((c) => c.method === 'POST' && new URL(c.url).pathname.endsWith('/advance'))).toBe(true);
+  });
+
+  it('a transient ledger error while re-checking an entrant is a 502 ledger_error that disqualifies nobody (a healthy entrant must not be knocked out by a 5xx)', async () => {
+    const { update, execute } = run(route({ 'POST /api/candidates/c1/advance': () => json({ success: false, error: 'boom' }, 500) }));
+    const result = await execute();
+    expect(result).toMatchObject({ success: false, code: 'ledger_error' });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('recordWinner is ONE write (status, winner, statuses, completion) and leaves an entrant that was not in the contest competing', async () => {
+    const { env } = envWith(() => json({ success: true, data: {} }));
+    const manager = new TournamentManager(env) as any;
+    const update = vi.spyOn(manager, 'updateTournament').mockResolvedValue(undefined);
+    const t = {
+      id: 't1', specId: 's1', status: 'in_progress',
+      candidates: [
+        { candidateId: 'c1', status: 'competing' }, { candidateId: 'c2', status: 'competing' },
+        { candidateId: 'c3', status: 'disqualified' }, { candidateId: 'late', status: 'competing' },
+      ],
+    };
+    await manager.recordWinner('c1', t, new Set(['c1', 'c2']));
+    expect(update).toHaveBeenCalledTimes(1);
+    const patch = update.mock.calls[0][1] as { status: string; winner: string; completedAt: string; candidates: Array<{ candidateId: string; status: string }> };
+    expect(patch).toMatchObject({ status: 'completed', winner: 'c1', completedAt: expect.any(String) });
+    expect(Object.fromEntries(patch.candidates.map((c) => [c.candidateId, c.status]))).toEqual({ c1: 'winner', c2: 'eliminated', c3: 'disqualified', late: 'competing' });
   });
 });
 

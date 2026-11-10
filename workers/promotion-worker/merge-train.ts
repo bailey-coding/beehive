@@ -509,6 +509,7 @@ export class MergeTrainManager {
    * Retry failed merge
    */
   async retryFailedMerge(candidateId: string, specId: string): Promise<PromotionResult> {
+    let retriedPosition = 0;
     try {
       const updatedTrain = await this.modifyMergeTrain(specId, (train) => {
         // Only the candidate's latest car: an older failed car was superseded by a re-add
@@ -522,6 +523,7 @@ export class MergeTrainManager {
           throw new Error(`Candidate ${candidateId} is not in a failed state (current: ${candidate.status})`);
         }
 
+        retriedPosition = candidate.position;
         return {
           ...train,
           candidates: updateCar(train.candidates, candidate, c => ({
@@ -539,7 +541,7 @@ export class MergeTrainManager {
       return this.runResult(
         { candidateId, specId, fromRung: 'train' as Rung, toRung: 'canary' as Rung, timestamp: new Date().toISOString(), mode: 'merge-train' as const },
         processed,
-        { trainId: updatedTrain.id, position: updatedTrain.currentPosition, status: 'waiting' }
+        { trainId: updatedTrain.id, position: retriedPosition, status: 'waiting' }
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -554,7 +556,7 @@ export class MergeTrainManager {
         timestamp: new Date().toISOString(),
         mode: 'merge-train',
         // Stable reasons for the two refusals the CAS write throws; anything else is an unexpected error
-        code: /not found in merge train/.test(errorMessage) ? 'candidate_not_found' : /is not in a failed state/.test(errorMessage) ? 'car_not_failed' : 'merge_train_error',
+        code: /not found in merge train|No merge train found/.test(errorMessage) ? 'candidate_not_found' : /is not in a failed state/.test(errorMessage) ? 'car_not_failed' : 'merge_train_error',
       };
     }
   }

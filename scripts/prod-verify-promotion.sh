@@ -79,6 +79,7 @@ done
 echo "== promote in tournament mode (shadow -> train)"
 ORIGINAL_MODE="$(call GET "$PROMO" /mode | jq -r '.mode // empty')"
 echo "original mode: ${ORIGINAL_MODE:-unknown}"
+[ -n "$ORIGINAL_MODE" ] || { fail "could not read the promotion mode, so it could not be restored; stopping before changing it"; exit 1; }
 [ "$(call POST "$PROMO" /mode '{"mode":"tournament"}' | jq -r '.mode // empty')" = "tournament" ] || fail "could not set tournament mode"
 for c in "$C1" "$C2"; do
   r="$(call POST "$PROMO" /promote "{\"candidateId\":\"$c\",\"specId\":\"$SPEC\",\"toRung\":\"train\",\"actorId\":\"$ACTOR\"}")"
