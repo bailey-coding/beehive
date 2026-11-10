@@ -116,7 +116,9 @@ export function decideAdvance(stage: string, toRung: AdvanceToRung, fromRung?: R
   if (current === null) {
     return { kind: 'refuse', code: 'not_next_rung', message: `Candidate is ${stage}: a failed or rolled-back candidate must pass the rungs again with a new commit` };
   }
-  if (fromRung !== undefined && fromRung !== current) {
+  // `passed_canary` is on rung `full` by the stage reading, but a caller promoting a canary says `canary`: that is the rung being left, not stale
+  const leavingCanary = stage === 'passed_canary' && toRung === 'full' && fromRung === 'canary';
+  if (fromRung !== undefined && fromRung !== current && !leavingCanary) {
     return { kind: 'refuse', code: 'stale_from_rung', message: `Candidate is on rung ${current} (stage ${stage}), not ${fromRung}` };
   }
 
@@ -133,6 +135,7 @@ export function decideAdvance(stage: string, toRung: AdvanceToRung, fromRung?: R
   return { kind: 'go', leaving: LEAVING_RUNG[toRung], writes };
 }
 
+/** Not strict on purpose: a response field added later must not make a not-yet-updated reader reject a successful advance (AGENTS.md mixed-version rule) */
 export const AdvanceResultSchema = z
   .object({
     /** The rung the candidate was on before this call */
@@ -146,10 +149,9 @@ export const AdvanceResultSchema = z
     /** Stages written, or that a dry run would write */
     writes: z.array(z.string()),
     evidence: z.array(
-      z.object({ rung: z.enum(['pre-merge', 'shadow', 'train', 'canary']), status: z.enum(['met', 'missing', 'failed']), mode: z.enum(['enforce', 'log']), detail: z.string().optional() }).strict()
+      z.object({ rung: z.enum(['pre-merge', 'shadow', 'train', 'canary']), status: z.enum(['met', 'missing', 'failed']), mode: z.enum(['enforce', 'log']), detail: z.string().optional() })
     ),
-  })
-  .strict();
+  });
 export type AdvanceResult = z.infer<typeof AdvanceResultSchema>;
 
 export const ADVANCE_PATH = (candidateId: string) => `/api/candidates/${encodeURIComponent(candidateId)}/advance`;

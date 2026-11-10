@@ -6,7 +6,7 @@
  *
  * Task: promotion-gaps | Spec: docs/plans/promotion-gaps-plan.md PR B
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
 import { authedDo, TEST_DO_TOKENS } from './do-tokens';
@@ -19,6 +19,7 @@ import {
   type AdvanceToRung,
 } from '../../shared/promotion-advance';
 import { CANDIDATE_NOT_FOUND } from '../../shared/shadow-verdict';
+import { INVALID_TRANSITION_CAP_PER_WINDOW, INVALID_TRANSITION_WINDOW_MS } from '../../shared/governance-state-machine';
 
 let store: SqliteState;
 let spec: SpecDO;
@@ -451,5 +452,174 @@ describe('replays, order of checks, dry run, atomicity', () => {
     expect((await advance(c.id, { toRung: 'full', fromRung: 'canary' })).json.data.stage).toBe('promoted');
     expect(events('invalid_transition')).toHaveLength(0);
     expect(events('evidence_missing').map((e) => e.reason)).toEqual(['train:missing']);
+  });
+});
+
+describe('review fixes (PR B review: F1-F8)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('F1: a caller promoting a canary says fromRung canary from passed_canary: accepted, not stale', async () => {
+    expect(decideAdvance('passed_canary', 'full', 'canary')).toMatchObject({ kind: 'go', writes: ['promoted'] });
+    expect(decideAdvance('passed_canary', 'full', 'full').kind).toBe('go');
+    expect(decideAdvance('passed_canary', 'full', 'train')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
+    expect(decideAdvance('passed_train', 'full', 'full')).toMatchObject({ kind: 'refuse', code: 'stale_from_rung' });
+    const { c, spec: s } = seed();
+    setStage(c.id, 'passed_canary');
+    await deployCanary(c.id, s.id);
+    ageCanary(20);
+    const res = await advance(c.id, { toRung: 'full', fromRung: 'canary' });
+    expect(res.status).toBe(200);
+    expect(res.json.data).toMatchObject({ stage: 'promoted', writes: ['promoted'] });
+  });
+
+  describe('F2: the evidence rows under BOTH modes (flipping a rung to enforce is one constant)', () => {
+    const flipped = async (rung: 'shadow' | 'train', body: () => Promise<void>) => {
+      const was = EVIDENCE_MODE[rung];
+      EVIDENCE_MODE[rung] = 'enforce';
+      try {
+        await body();
+      } finally {
+        EVIDENCE_MODE[rung] = was;
+      }
+    };
+
+    it('shadow enforced: missing and failed refuse with nothing written; a pass moves', async () => {
+      await flipped('shadow', async () => {
+        const { c } = seed();
+        setStage(c.id, 'passed_premerge');
+        const before = [history(c.id), count('SELECT COUNT(*) AS n FROM governance_events')];
+        for (const kind of ['missing', 'failed']) {
+          if (kind === 'failed') verdict(c.id, 'shadow', 'fail');
+          const res = await advance(c.id, { toRung: 'train' });
+          expect(res.status, kind).toBe(409);
+          expect(res.json).toMatchObject({ code: 'evidence_missing', evidence: [{ rung: 'shadow', mode: 'enforce', status: kind }] });
+        }
+        expect(stageOf(c.id)).toBe('passed_premerge');
+        expect([history(c.id), count('SELECT COUNT(*) AS n FROM governance_events')]).toEqual(before);
+        verdict(c.id, 'shadow', 'pass');
+        expect((await advance(c.id, { toRung: 'train' })).status).toBe(200);
+        expect(stageOf(c.id)).toBe('passed_shadow');
+      });
+    });
+
+    it('train enforced: no merged car refuses; a merged car moves', async () => {
+      await flipped('train', async () => {
+        const { c, spec: s } = seed();
+        setStage(c.id, 'passed_shadow');
+        const refused = await advance(c.id, { toRung: 'canary' });
+        expect(refused.status).toBe(409);
+        expect(refused.json).toMatchObject({ code: 'evidence_missing', evidence: [{ rung: 'train', mode: 'enforce' }] });
+        store.raw
+          .prepare("INSERT INTO merge_trains (id, spec_id, status, current_position, next_merge, candidates, created_at, updated_at) VALUES ('t1', ?, 'idle', 0, NULL, ?, 1, 1)")
+          .run(s.id, JSON.stringify([{ candidateId: c.id, specId: s.id, position: 0, status: 'merged' }]));
+        expect((await advance(c.id, { toRung: 'canary' })).status).toBe(200);
+      });
+    });
+  });
+
+  it('F3: a failing governance log never breaks the write', async () => {
+    const { c } = seed();
+    setStage(c.id, 'passed_premerge');
+    store.raw.exec('DROP TABLE governance_events');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await advance(c.id, { toRung: 'train' });
+    expect(res.status).toBe(200);
+    expect(stageOf(c.id)).toBe('passed_shadow');
+  });
+
+  describe('F4: flood control', () => {
+    const insertEvents = (n: number, at: number) => {
+      const stmt = store.raw.prepare("INSERT INTO governance_events (id, event, subject, reason, detail, created_at) VALUES (?, 'evidence_missing', ?, 'shadow:missing', '{}', ?)");
+      for (let i = 0; i < n; i++) stmt.run(`e-${at}-${i}`, `candidate:other-${i}`, at);
+    };
+    const miss = async () => {
+      const { c } = seed(`flood-${Math.random().toString(36).slice(2, 8)}`);
+      setStage(c.id, 'passed_premerge');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect((await advance(c.id, { toRung: 'train' })).status).toBe(200);
+      return c.id;
+    };
+
+    it('at most the cap of rows in the trailing hour; the move still lands', async () => {
+      insertEvents(INVALID_TRANSITION_CAP_PER_WINDOW, Date.now());
+      const id = await miss();
+      expect(stageOf(id)).toBe('passed_shadow');
+      expect(events('evidence_missing')).toHaveLength(INVALID_TRANSITION_CAP_PER_WINDOW);
+    });
+
+    it('rows older than the window do not count toward the cap', async () => {
+      insertEvents(INVALID_TRANSITION_CAP_PER_WINDOW, Date.now() - INVALID_TRANSITION_WINDOW_MS - 60_000);
+      await miss();
+      expect(events('evidence_missing')).toHaveLength(INVALID_TRANSITION_CAP_PER_WINDOW + 1);
+    });
+
+    it('the row that reaches the cap says so, and every miss leaves a warn line even when no row is written', async () => {
+      insertEvents(INVALID_TRANSITION_CAP_PER_WINDOW - 1, Date.now());
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { c } = seed();
+      setStage(c.id, 'passed_premerge');
+      await advance(c.id, { toRung: 'train' });
+      const last = events('evidence_missing').find((e) => e.subject === `candidate:${c.id}`)!;
+      expect(JSON.parse(String(last.detail)).capReached).toBe(true);
+      expect(warn.mock.calls.some((a) => String(a[0]).includes('evidence_missing'))).toBe(true);
+      const { c: c2 } = seed('flood-b');
+      setStage(c2.id, 'passed_premerge');
+      warn.mockClear();
+      await advance(c2.id, { toRung: 'train' });
+      expect(events('evidence_missing').filter((e) => e.subject === `candidate:${c2.id}`)).toHaveLength(0);
+      expect(warn.mock.calls.some((a) => String(a[0]).includes('evidence_missing'))).toBe(true);
+    });
+
+    it('a failed item and a missing item for the same rung are separate keys (candidate, rung, status)', async () => {
+      const { c } = seed();
+      setStage(c.id, 'passed_premerge');
+      await advance(c.id, { toRung: 'train' });
+      setStage(c.id, 'passed_premerge');
+      verdict(c.id, 'shadow', 'fail');
+      await advance(c.id, { toRung: 'train' });
+      expect(events('evidence_missing').map((e) => e.reason)).toEqual(['shadow:missing', 'shadow:failed']);
+    });
+  });
+
+  it('F6: the soak boundary is inclusive at exactly the soak minutes', async () => {
+    const { c, spec: s } = seed();
+    setStage(c.id, 'passed_train');
+    await deployCanary(c.id, s.id);
+    store.raw.prepare('UPDATE deploy_refs SET moved_at = moved_at - ?').run(14 * 60_000 + 59_000);
+    expect((await advance(c.id, { toRung: 'full', dryRun: true })).status).toBe(409);
+    store.raw.prepare('UPDATE deploy_refs SET moved_at = moved_at - ?').run(1_000);
+    expect((await advance(c.id, { toRung: 'full', dryRun: true })).status).toBe(200);
+  });
+
+  it('F6: the default history note, the event row actor columns, and a dry run on a tombstoned candidate', async () => {
+    const { c } = seed();
+    setStage(c.id, 'passed_premerge');
+    await advance(c.id, { toRung: 'train' });
+    expect(store.raw.prepare("SELECT notes FROM entity_history WHERE entity_type = 'candidate' AND entity_id = ? ORDER BY rowid DESC LIMIT 1").get(c.id)).toEqual({ notes: 'advance to train' });
+    const [e] = events('evidence_missing');
+    expect(e.actor_id).toBeNull();
+    expect(e.asserted_actor_id).toBe(actor);
+    store.raw.prepare("UPDATE actors SET role = 'maintainer' WHERE id = ?").run(actor);
+    expect((await call('/internal/tombstone', 'POST', { entityType: 'candidate', id: c.id, reason: 't' })).status).toBe(200);
+    expect((await advance(c.id, { toRung: 'canary', dryRun: true })).json.error).toBe(CANDIDATE_NOT_FOUND);
+  });
+
+  it('F8: the soak override is announced in the logs whenever it is in effect, and only then', async () => {
+    const { c, spec: s } = seed();
+    setStage(c.id, 'passed_train');
+    await deployCanary(c.id, s.id);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await advance(c.id, { toRung: 'full', dryRun: true });
+    expect(warn.mock.calls.some((a) => String(a[0]).includes('CANARY_MIN_SOAK_MINUTES'))).toBe(false);
+    await advance(c.id, { toRung: 'full', dryRun: true }, specDoWithSoak('99'));
+    expect(warn.mock.calls.some((a) => String(a[0]).includes('CANARY_MIN_SOAK_MINUTES'))).toBe(false);
+    await advance(c.id, { toRung: 'full', dryRun: true }, specDoWithSoak('0'));
+    expect(warn.mock.calls.some((a) => String(a[0]).includes('CANARY_MIN_SOAK_MINUTES'))).toBe(true);
+  });
+
+  it('F5: the result schema tolerates a field a newer Spec DO adds', () => {
+    const data = { fromRung: 'pre-merge', toRung: 'shadow', stage: 'passed_premerge', previousStage: 'pending', noop: false, dryRun: false, writes: ['passed_premerge'], evidence: [{ rung: 'pre-merge', status: 'met', mode: 'enforce', extra: 1 }], later: 'x' };
+    expect(AdvanceResultSchema.safeParse(data).success).toBe(true);
   });
 });

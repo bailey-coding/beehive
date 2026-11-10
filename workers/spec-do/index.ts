@@ -5016,7 +5016,12 @@ export class SpecDO {
     const raw = this.env?.CANARY_MIN_SOAK_MINUTES;
     if (raw === undefined || raw.trim() === '') return CANARY_METRICS_DEFAULT_WINDOW_MINUTES;
     const n = Number(raw);
-    return Number.isInteger(n) && n >= 0 && n < CANARY_METRICS_DEFAULT_WINDOW_MINUTES ? n : CANARY_METRICS_DEFAULT_WINDOW_MINUTES;
+    if (Number.isInteger(n) && n >= 0 && n < CANARY_METRICS_DEFAULT_WINDOW_MINUTES) {
+      // Visible in Workers Logs if the override is ever in effect somewhere it should not be (a dashboard var is not covered by the wrangler.toml test)
+      console.warn('[SpecDO] CANARY_MIN_SOAK_MINUTES override in effect', { minutes: n, default: CANARY_METRICS_DEFAULT_WINDOW_MINUTES });
+      return n;
+    }
+    return CANARY_METRICS_DEFAULT_WINDOW_MINUTES;
   }
 
   /**
@@ -5033,8 +5038,12 @@ export class SpecDO {
            FROM governance_events WHERE event = ? AND created_at >= ?`,
         subject, reason, EVIDENCE_MISSING_EVENT, at - INVALID_TRANSITION_WINDOW_MS
       )[0];
+      console.warn('[SpecDO] evidence_missing', { candidateId, rung: e.rung, status: e.status, mode: e.mode, toRung });
       if (Number(w?.same ?? 0) > 0 || Number(w?.total ?? 0) >= INVALID_TRANSITION_CAP_PER_WINDOW) return;
-      let detail = JSON.stringify({ v: 1, candidateId, specId, rung: e.rung, status: e.status, mode: e.mode, detail: e.detail, fromStage, toRung });
+      let detail = JSON.stringify({
+        v: 1, candidateId, specId, rung: e.rung, status: e.status, mode: e.mode, detail: e.detail, fromStage, toRung,
+        ...(Number(w?.total ?? 0) + 1 === INVALID_TRANSITION_CAP_PER_WINDOW ? { capReached: true } : {}),
+      });
       if (new TextEncoder().encode(detail).length > MAX_GOVERNANCE_DETAIL_BYTES) detail = JSON.stringify({ v: 1, truncated: true });
       this.run(
         `INSERT INTO governance_events (id, event, actor_id, asserted_actor_id, subject, reason, detail, created_at)
