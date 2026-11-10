@@ -28,10 +28,11 @@ import {
   ACTORS_GITHUB_UNIQUE_SQL,
   GATE_RUNS_SQL,
   GOVERNANCE_SQL,
+  SHADOW_SCORES_SQL,
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm14';
+const LATEST_SCHEMA_VERSION = 'm15';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -42,6 +43,7 @@ const IDEMPOTENCY_CLEANUP_EVERY = 50; // expired-key sweep runs on one keyed req
 const IDEMPOTENT_ROUTES: Set<string | RegExp> = new Set([
   'POST /api/organizations', 'POST /api/actors', 'POST /api/repositories', 'POST /api/specs',
   'POST /api/candidates', 'POST /api/gate-verdicts', 'POST /api/trials', 'POST /api/promotions',
+  /^POST \/api\/candidates\/[^\/]+\/shadow-samples$/, // one sample per key (handler check): the comparator keys it requestId:candidateId
   'POST /api/gate-runs', // start only; the result route is a compare-and-set and replays on its own
   'POST /deploy-refs/rollback', // internal DO route: a redelivered rollback must not roll back twice (resolved in handleDeployRefs)
   /^POST \/api\/entities\/[^\/]+\/[^\/]+\/history$/, // Dynamic entity history POST
@@ -176,6 +178,8 @@ const ORG_PURGE_ORDER: [table: string, where: string][] = [
   ['gate_runs', `candidate_id IN (${ORG_CANDIDATES})`],
   // near_misses: logical references only (m14, docs/OPS.md rollback floor); the orphan sweep below removes rows an older build left
   ['near_misses', `candidate_id IN (${ORG_CANDIDATES}) OR spec_id IN (${ORG_SPECS})`],
+  // shadow_scores (m15): logical reference only, like near_misses; the orphan sweep removes rows an older build left
+  ['shadow_scores', `candidate_id IN (${ORG_CANDIDATES})`],
   ['issues', `id IN (${ORG_ISSUES})`],
   ['candidates', `id IN (${ORG_CANDIDATES})`],
   ['repositories', 'organization_id = ?'],
@@ -399,6 +403,15 @@ import {
   isAcceptableCanaryUrl,
   EXPECTED_HEAD_HEADER,
 } from '../shared/deploy-refs';
+import {
+  ShadowSamplesRequestSchema,
+  type ShadowSample,
+  type ShadowSamplesResult,
+  shadowVerdict,
+  SHADOW_MAX_SAMPLES,
+  CANDIDATE_NOT_FOUND,
+  SCIENTIST_COMPARATOR_ACTOR,
+} from '../shared/shadow-verdict';
 
 // Gate runs (shared with the gate worker)
 import {
@@ -713,6 +726,9 @@ export class SpecDO {
 
       // governance tables and the m14 epoch: likewise
       this.applyGovernance();
+
+      // shadow_scores: likewise
+      this.db.exec(SHADOW_SCORES_SQL);
 
       // Initialize metadata. A fresh ledger has every section applied, so it starts at the
       // latest version. INSERT OR IGNORE: a retry after a failed first init keeps what is there.
@@ -1174,6 +1190,9 @@ export class SpecDO {
       // m13 -> m14: governance tables (change classifications, approvals, near-misses, intent provenance, governance events) and the
       // m14 epoch. New tables only, no writers yet (docs/M5A-2-GOVERNANCE-PLAN.md PR-A)
       ['m14', () => this.applyGovernance()],
+      // m14 -> m15: shadow_scores (the scientist comparator's per-candidate aggregate). One new table, no writers outside the
+      // shadow-samples route (docs/plans/promotion-gaps-plan.md PR A)
+      ['m15', () => this.db!.exec(SHADOW_SCORES_SQL)],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -2313,9 +2332,7 @@ export class SpecDO {
       previewUrl: row.preview_url,
       previewWorkerName: row.preview_worker_name,
       previewCreatedAt: row.preview_created_at,
-      shadowMatch: row.shadow_match,
-      shadowScore: row.shadow_score,
-      shadowMetrics: row.shadow_metrics,
+      ...this.shadowFieldsFor(row.id),
       ...(row.deleted_at != null
         ? { deletedAt: row.deleted_at, deletedBy: row.deleted_by, deleteReason: row.delete_reason }
         : {}),
@@ -2792,6 +2809,8 @@ export class SpecDO {
       for (const r of this.queryAll('SELECT id FROM gate_runs WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('gate_runs')!.add(r.id as string);
       // near_misses likewise (m14): a build older than m14 purges candidates without knowing the table
       for (const r of this.queryAll('SELECT id FROM near_misses WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('near_misses')!.add(r.id as string);
+      // shadow_scores likewise (m15): a build older than m15 purges candidates without knowing the table
+      for (const r of this.queryAll('SELECT id FROM shadow_scores WHERE candidate_id NOT IN (SELECT id FROM candidates)')) ids.get('shadow_scores')!.add(r.id as string);
     }
     const rows: [string, string][] = ORG_PURGE_ORDER.flatMap(([table]) => [...ids.get(table)!].map((id): [string, string] => [table, id]));
     const counts = Object.fromEntries(ORG_PURGE_ORDER.map(([table]) => [table, ids.get(table)!.size]));
@@ -4429,6 +4448,12 @@ export class SpecDO {
         });
       }
       
+      // Shadow samples (m15): the scientist comparator's per-request scores, one aggregate row per candidate
+      const shadowMatch = path.match(/^\/api\/candidates\/([^\/]+)\/shadow-samples$/);
+      if (shadowMatch && method === 'POST') {
+        return await this.handleShadowSamples(request, decodeURIComponent(shadowMatch[1]), idem);
+      }
+
       // Gate runs: zod-validated, unlike the verdict routes below
       const gateRunResponse = await this.handleGateRuns(request, url, path, method, actorId, idem);
       if (gateRunResponse) return gateRunResponse;
@@ -4861,6 +4886,157 @@ export class SpecDO {
         { status: error instanceof ConflictError ? 409 : 500, headers: { 'Content-Type': 'application/json' } }
       );
     }
+  }
+
+  // ============================================================================
+  // SHADOW SAMPLES (docs/plans/promotion-gaps-plan.md section 3.1; reviews in sections 11-12)
+  // shadow_scores holds one aggregate row per candidate (sum, not a re-averaged mean). The shadow gate verdict is derived in the
+  // same transaction. Evidence for promotion is LOG-ONLY until the shadow router mirrors shadow-rung candidates against a real
+  // production baseline (the `baseline` split in the row keeps placeholder-scored samples from ever becoming enforced evidence).
+  // ============================================================================
+
+  /** The candidate response's shadow fields from shadow_scores. Absent until a sample lands, as before m15 (the columns never existed). */
+  private shadowFieldsFor(candidateId: string): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string } {
+    const [row] = this.queryAll('SELECT * FROM shadow_scores WHERE candidate_id = ?', candidateId);
+    if (!row || !(Number(row.sample_count) > 0)) return {};
+    const count = Number(row.sample_count);
+    let aggregate: Record<string, unknown> = {};
+    try {
+      aggregate = JSON.parse(String(row.diffs_json));
+    } catch {
+      // a corrupt aggregate reads as empty diffs; the score and counts stay right
+    }
+    const metrics = {
+      averageScore: Number(row.score_sum) / count,
+      totalRequests: count,
+      matchedRequests: Number(row.matched_count),
+      aggregateDiffs: aggregate,
+      lastComparisonAt: Number(row.updated_at),
+      lastRequestId: String(row.last_request_id),
+    };
+    return {
+      shadowScore: Math.round((Number(row.score_sum) / count) * 100) / 100,
+      shadowMatch: Number(row.matched_count) === count,
+      shadowMetrics: JSON.stringify(metrics),
+    };
+  }
+
+  private async handleShadowSamples(request: Request, candidateId: string, idem: IdempotencyContext | null): Promise<Response> {
+    const respond = (status: number, body: Record<string, unknown>) =>
+      new Response(JSON.stringify({ ...body, timestamp: now() }), { status, headers: { 'Content-Type': 'application/json' } });
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return respond(400, { success: false, error: 'Body must be JSON' });
+    }
+    const parsed = ShadowSamplesRequestSchema.safeParse(raw);
+    if (!parsed.success) return respond(400, { success: false, error: `Invalid shadow samples: ${zodMessage(parsed.error)}` });
+    // A key covers one request for one candidate, so it can only mean one sample (replaying a batch would be ambiguous)
+    if (idem && parsed.data.samples.length !== 1) {
+      return respond(400, { success: false, error: 'A request under an Idempotency-Key must hold exactly one sample' });
+    }
+    // Coded 404: the caller tells it from an older Spec DO's code-less "Not found" (plan B5/V8). Nothing awaits between this check and the write.
+    if (!this.getCandidate(candidateId)) return respond(404, { success: false, error: CANDIDATE_NOT_FOUND });
+
+    const mutate = () => ({ success: true, data: this.recordShadowSamples(candidateId, parsed.data.samples) });
+    if (idem) return this.idempotent(idem, 200, mutate);
+    // idempotent() opens no transaction without a key
+    return respond(200, this.state.storage.transactionSync(mutate));
+  }
+
+  /** Inside a transaction. Adds the samples (up to the cap), upserts the aggregate row, then the shadow gate verdict if its status changed. */
+  private recordShadowSamples(candidateId: string, samples: ShadowSample[]): ShadowSamplesResult {
+    const at = now();
+    // The verdict's decided_by references actors(id) with foreign keys on; a fresh ledger has no such row (plan B4/V6)
+    this.run(
+      `INSERT OR IGNORE INTO actors (id, type, name, promotion_authority, created_at) VALUES (?, 'agent', 'scientist comparator (service)', 0, ?)`,
+      SCIENTIST_COMPARATOR_ACTOR,
+      at
+    );
+    const [row] = this.queryAll('SELECT * FROM shadow_scores WHERE candidate_id = ?', candidateId);
+    let count = row ? Number(row.sample_count) : 0;
+    let productionCount = row ? Number(row.production_count) : 0;
+    let sum = row ? Number(row.score_sum) : 0;
+    let productionSum = row ? Number(row.production_score_sum) : 0;
+    let matched = row ? Number(row.matched_count) : 0;
+    let lastRequestId = row ? String(row.last_request_id) : '';
+    let diffs = { total: 0, byType: {} as Record<string, number>, bySeverity: { error: 0, warning: 0, info: 0 } as Record<string, number> };
+    if (row) {
+      try {
+        diffs = { ...diffs, ...JSON.parse(String(row.diffs_json)) };
+      } catch {
+        // restart from empty diffs; counts and scores are separate columns
+      }
+    }
+
+    let capped = false;
+    for (const sample of samples) {
+      if (count >= SHADOW_MAX_SAMPLES) {
+        capped = true;
+        break;
+      }
+      count += 1;
+      sum += sample.score;
+      if (sample.baseline === 'production') {
+        productionCount += 1;
+        productionSum += sample.score;
+      }
+      if (sample.matched) matched += 1;
+      for (const d of sample.diffs) {
+        diffs.total += 1;
+        diffs.byType[d.type] = (diffs.byType[d.type] ?? 0) + 1;
+        diffs.bySeverity[d.severity] = (diffs.bySeverity[d.severity] ?? 0) + 1;
+      }
+      lastRequestId = sample.requestId;
+    }
+
+    const average = count > 0 ? sum / count : 0;
+    const status = shadowVerdict(count, average);
+    // Nothing recorded (all over the cap) writes nothing: no row churn, no verdict
+    if (count !== (row ? Number(row.sample_count) : 0)) {
+      this.run(
+        `INSERT INTO shadow_scores
+         (id, candidate_id, sample_count, production_count, score_sum, production_score_sum, matched_count, diffs_json, last_request_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(candidate_id) DO UPDATE SET
+           sample_count = excluded.sample_count, production_count = excluded.production_count, score_sum = excluded.score_sum,
+           production_score_sum = excluded.production_score_sum, matched_count = excluded.matched_count,
+           diffs_json = excluded.diffs_json, last_request_id = excluded.last_request_id, updated_at = excluded.updated_at`,
+        row ? String(row.id) : generateId(),
+        candidateId,
+        count,
+        productionCount,
+        sum,
+        productionSum,
+        matched,
+        JSON.stringify(diffs),
+        lastRequestId,
+        at
+      );
+      const existing = this.getGateVerdict(candidateId, 'shadow');
+      if (status !== 'pending' && existing?.status !== status) {
+        this.createGateVerdict(
+          candidateId,
+          'shadow',
+          status,
+          Math.round(average),
+          0,
+          SCIENTIST_COMPARATOR_ACTOR,
+          `Shadow: ${count} samples (${productionCount} against production), average ${average.toFixed(1)}, ${matched}/${count} matched`
+        );
+      }
+    }
+
+    return {
+      sampleCount: count,
+      productionCount,
+      averageScore: average,
+      productionAverageScore: productionCount > 0 ? productionSum / productionCount : null,
+      matchedCount: matched,
+      verdict: status,
+      capped,
+    };
   }
 
   // ============================================================================

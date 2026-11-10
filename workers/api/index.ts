@@ -232,6 +232,11 @@ export default {
     if (path.match(/^\/api\/candidates\/[^\/]+\/stage$/) && method === 'PATCH') {
       return handleUpdateCandidateStage(actorRequest, specDoStub);
     }
+    // Shadow samples (m15): master/service tier only (not on the user-token allow-list). Like canary-metrics, any tier-1 holder
+    // can forge samples; the comparator reaches the Spec DO directly, so this route is for e2e, the demo and the maintainer.
+    if (path.match(/^\/api\/candidates\/[^\/]+\/shadow-samples$/) && method === 'POST') {
+      return handleRecordShadowSamples(actorRequest, specDoStub);
+    }
 
     // ============================================================================
     // GATE VERDICTS
@@ -1763,6 +1768,23 @@ async function handleUpdateCandidateStage(
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/stage`, 'PATCH', body, actorId);
   return response;
+}
+
+/** Forwards the body and the Idempotency-Key to the Spec DO's shadow-samples route; its 404/400/409 answers pass through as they are. */
+async function handleRecordShadowSamples(
+  request: ActorRequest,
+  stub: SpecDoStub
+): Promise<Response> {
+  const id = extractParentId(request.url);
+  const key = idemKey(request);
+  if (key instanceof Response) return key;
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return makeErrorResponse('Body must be JSON', 400);
+  }
+  return sendToSpecDo(stub, `/api/candidates/${id}/shadow-samples`, 'POST', body, request.actorId, key);
 }
 
 // ============================================================================
