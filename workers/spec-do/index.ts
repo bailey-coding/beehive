@@ -4904,9 +4904,11 @@ export class SpecDO {
   private parseShadowDiffs(raw: unknown): { total: number; byType: Record<string, number>; bySeverity: Record<string, number> } | null {
     try {
       const v = JSON.parse(String(raw));
-      const isCounts = (o: unknown) => !!o && typeof o === 'object' && !Array.isArray(o);
-      if (isCounts(v) && typeof v.total === 'number' && isCounts(v.byType) && isCounts(v.bySeverity)) {
-        return { total: v.total, byType: { ...v.byType }, bySeverity: { error: 0, warning: 0, info: 0, ...v.bySeverity } };
+      const isObject = (o: unknown): o is Record<string, unknown> => !!o && typeof o === 'object' && !Array.isArray(o);
+      // Keep only finite numbers: a hand-corrupted value like "x" would otherwise turn the next += 1 into the string "x1"
+      const counts = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, n]) => typeof n === 'number' && Number.isFinite(n))) as Record<string, number>;
+      if (isObject(v) && typeof v.total === 'number' && Number.isFinite(v.total) && isObject(v.byType) && isObject(v.bySeverity)) {
+        return { total: v.total, byType: counts(v.byType), bySeverity: { error: 0, warning: 0, info: 0, ...counts(v.bySeverity) } };
       }
     } catch {
       // fall through

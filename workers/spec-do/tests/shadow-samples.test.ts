@@ -281,6 +281,36 @@ describe('review fixes (PR A review: S1, S3, S5, S6, N2, N3)', () => {
     expect(over.json.data).toMatchObject({ capped: true, productionCount: SHADOW_MAX_SAMPLES });
   });
 
+  it('F1: a batch that mixes baselines across the placeholder cap records the production sample and reports capped', async () => {
+    const { c1 } = seed();
+    for (let i = 0; i < SHADOW_MAX_SAMPLES / 100; i++) await post(c1.id, many(100, 100, `m${i}`));
+    const mixed = await post(c1.id, [sample('late-placeholder', 0), sample('prod', 70, { baseline: 'production' })]);
+    expect(mixed.json.data).toMatchObject({ capped: true, sampleCount: SHADOW_MAX_SAMPLES + 1, productionCount: 1 });
+    expect(row(c1.id)).toMatchObject({ sample_count: SHADOW_MAX_SAMPLES + 1, production_count: 1, production_score_sum: 70, last_request_id: 'prod' });
+  });
+
+  it('F2: non-numeric entries in a stored aggregate are dropped, so the next sample repairs it instead of concatenating strings', async () => {
+    const { c1 } = seed();
+    await post(c1.id, [sample('a', 100)]);
+    store.raw.prepare("UPDATE shadow_scores SET diffs_json = ? WHERE candidate_id = ?").run('{"total":1,"byType":{"status":"x","body":2},"bySeverity":{"error":"y","info":1}}', c1.id);
+    await post(c1.id, [sample('b', 100, { diffs: [{ type: 'status', severity: 'error' }] })]);
+    expect(JSON.parse(String(row(c1.id)!.diffs_json))).toEqual({ total: 2, byType: { body: 2, status: 1 }, bySeverity: { error: 1, warning: 0, info: 1 } });
+  });
+
+  it('F3: a list of more than 100 candidates still finds a shadow row on the last one (the batched lookup is chunked)', async () => {
+    const x = seed('big-org');
+    const last = (() => {
+      let c = x.c2;
+      for (let i = 0; i < 105; i++) c = spec.createCandidate(x.spec.id, x.repo.id, sha(3), sha(0), actor);
+      return c;
+    })();
+    await post(last.id, [sample('a', 100)]);
+    const list = (await call('/api/candidates?limit=500')).json.data as any[];
+    expect(list.length).toBeGreaterThan(105);
+    expect(list.find((c) => c.id === last.id)).toMatchObject({ shadowScore: 100 });
+    expect(list.filter((c) => c.shadowScore !== undefined)).toHaveLength(1);
+  });
+
   it('flips fail to pass in place too', async () => {
     const { c1 } = seed();
     await post(c1.id, many(SHADOW_MIN_SAMPLES, 0));

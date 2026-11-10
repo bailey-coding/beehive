@@ -75,8 +75,8 @@ function message(requestId: string, candidateIds: string[]): ScientistQueueMessa
   };
 }
 
-function batch(bodies: ScientistQueueMessage[]) {
-  const messages = bodies.map((body, i) => ({ id: `m${i}`, timestamp: new Date(), body, attempts: 1, ack: vi.fn(), retry: vi.fn() }));
+function batch(bodies: ScientistQueueMessage[], attempts: number | undefined = 1) {
+  const messages = bodies.map((body, i) => ({ id: `m${i}`, timestamp: new Date(), body, attempts, ack: vi.fn(), retry: vi.fn() }));
   const b = { queue: 'beehive-scientist-comparisons', messages, ackAll: vi.fn(), retryAll: vi.fn() };
   return b;
 }
@@ -175,6 +175,18 @@ describe('ack and retry, per message', () => {
     expect(b.messages[0].retry).toHaveBeenCalledWith({ delaySeconds: 30 });
     expect(b.messages[0].ack).not.toHaveBeenCalled();
     expect(b.ackAll).not.toHaveBeenCalled();
+  });
+
+  it('F4: the retry delay grows with the attempt, is capped at 300 s, and falls back to 30 s without an attempt count', async () => {
+    fake.post = () => json(503, { success: false });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const delays: Array<number | undefined> = [];
+    for (const attempts of [3, 20, undefined]) {
+      const b = batch([message(`req-f4-${attempts}`, [C1])], attempts);
+      await run(b);
+      delays.push((b.messages[0].retry.mock.calls[0][0] as { delaySeconds: number }).delaySeconds);
+    }
+    expect(delays).toEqual([90, 300, 30]);
   });
 
   it('a failing candidate read (5xx) retries; the router-sent specId is never trusted over the ledger', async () => {
