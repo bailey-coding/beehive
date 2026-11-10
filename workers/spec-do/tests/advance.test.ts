@@ -274,8 +274,12 @@ describe('passed_train -> full (canary evidence, enforced; promoted only from pa
     expect(res.status).toBe(409);
     expect(res.json).toMatchObject({ code: 'evidence_missing', evidence: [{ rung: 'canary', mode: 'enforce', status: 'missing' }] });
     expect(res.json.evidence[0].detail).toMatch(/not the live canary/);
+    // another candidate is the live canary, long since soaked: it must be the identity that refuses, not the soak time
     await deployCanary('someone-else', s.id);
-    expect((await advance(c.id, { toRung: 'full' })).status).toBe(409);
+    ageCanary(20);
+    const other = await advance(c.id, { toRung: 'full' });
+    expect(other.status).toBe(409);
+    expect(other.json.error).toMatch(/not the live canary/);
     expect(stageOf(c.id)).toBe('passed_train');
   });
 
@@ -340,7 +344,9 @@ describe('passed_train -> full (canary evidence, enforced; promoted only from pa
     const zero = specDoWithSoak('0');
     expect((await advance(c.id, { toRung: 'full', dryRun: true }, zero)).status).toBe(200);
     for (const bad of ['15', '99', '-1', 'abc', '1.5', '']) {
-      expect((await advance(c.id, { toRung: 'full', dryRun: true }, specDoWithSoak(bad))).status, `override ${JSON.stringify(bad)}`).toBe(409);
+      const res = await advance(c.id, { toRung: 'full', dryRun: true }, specDoWithSoak(bad));
+      expect(res.status, `override ${JSON.stringify(bad)}`).toBe(409);
+      expect(res.json.error, `override ${JSON.stringify(bad)} falls back to the default`).toMatch(/live 0 of 15 minutes/);
     }
     expect((await advance(c.id, { toRung: 'full', dryRun: true }, specDoWithSoak('10'))).json.error).toMatch(/live 0 of 10 minutes/);
   });
@@ -418,6 +424,19 @@ describe('replays, order of checks, dry run, atomicity', () => {
     const res = await advance(c.id, { toRung: 'shadow' });
     expect(res.status).toBe(500);
     expect(stageOf(c.id)).toBe('pending');
+  });
+
+  it('is atomic across the two writes of a move to full: if promoted cannot be written, passed_canary is rolled back too', async () => {
+    const { c, spec: s } = seed();
+    setStage(c.id, 'passed_train');
+    await deployCanary(c.id, s.id);
+    ageCanary(20);
+    store.raw.exec("CREATE TRIGGER fail_promoted BEFORE UPDATE OF stage ON candidates WHEN NEW.stage = 'promoted' BEGIN SELECT RAISE(ABORT, 'boom'); END");
+    const before = history(c.id);
+    const res = await advance(c.id, { toRung: 'full' });
+    expect(res.status).toBe(500);
+    expect(stageOf(c.id)).toBe('passed_train');
+    expect(history(c.id)).toBe(before);
   });
 
   it('climbs the whole ladder one rung at a time with evidence, ending promoted with no invalid_transition rows', async () => {

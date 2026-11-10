@@ -54,8 +54,7 @@ revoke at `/app/settings/tokens`). Scripts against the deployed API need a plain
 
 **Next:** the promotion gaps above (spine): plan `docs/plans/promotion-gaps-plan.md` rev 3 (2026-11-09, two independent reviews). **PR A is
 implemented** (2026-11-10, branch `claude/pr1-review-lmgqik`, not merged to `main`, not deployed): m15 `shadow_scores`, the shadow-samples route and
-verdict, comparator ack/retry fixes, a maintainer-only edge route; full unit suite green, every guard mutation-checked. **PR B** (`advance`) can
-start; **PR C** waits on the maintainer's decision 6 (tournament scope, and that competitive promotion past `shadow` stays blocked in production until the
+verdict, comparator ack/retry fixes, a maintainer-only edge route; full unit suite green, every guard mutation-checked. **PR B** (`advance`, 2026-11-10: Spec DO route, internal, nothing calls it yet) is implemented and awaiting independent review; **PR C** waits on the maintainer's decision 6 (tournament scope, and that competitive promotion past `shadow` stays blocked in production until the
 shadow-router follow-up; plan section 12). Shadow evidence is log-only until that follow-up (OPEN-QUESTIONS 2026-11-10). D2 is already done (merged to `main` in `ecb7f27`, not deployed; 2026-11-02 handoff item 1).
 Candidates after it: the 500s as a starter issue, real traffic for `full`.
 
