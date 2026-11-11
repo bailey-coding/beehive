@@ -90,6 +90,22 @@ describe('POST /api/candidates/:id/shadow-samples', () => {
     expect(JSON.parse(String(row(c1.id)!.diffs_json))).toEqual({ total: 1, byType: { status: 1 }, bySeverity: { error: 1, warning: 0, info: 0 } });
   });
 
+  it('the candidate response carries shadowProductionScore/Count only once a production sample exists, and the shadow fields pass the zod schema', async () => {
+    const { c1 } = seed();
+    await post(c1.id, [sample('p0', 50)]);
+    const before = (await call(`/api/candidates/${c1.id}`)).json.data;
+    expect(before.shadowScore).toBe(50);
+    expect('shadowProductionScore' in before).toBe(false);
+    expect('shadowProductionCount' in before).toBe(false);
+    await post(c1.id, [sample('p1', 100, { baseline: 'production' }), sample('p2', 80, { baseline: 'production' })]);
+    const after = (await call(`/api/candidates/${c1.id}`)).json.data;
+    expect(after).toMatchObject({ shadowScore: 76.67, shadowProductionScore: 90, shadowProductionCount: 2 });
+    const zr = CandidateResponseSchema.safeParse(after);
+    expect(zr.success ? [] : zr.error.issues.filter((i) => String(i.path[0]).startsWith('shadow'))).toEqual([]);
+    const list = (await call('/api/candidates')).json.data as Array<Record<string, unknown>>;
+    expect(list.find((c) => c.id === c1.id)).toMatchObject({ shadowProductionScore: 90, shadowProductionCount: 2 });
+  });
+
   it('a sample defaults to the placeholder baseline, so it never counts as production evidence', async () => {
     const { c1 } = seed();
     const res = await post(c1.id, [{ requestId: 'x', score: 90, matched: true }]);

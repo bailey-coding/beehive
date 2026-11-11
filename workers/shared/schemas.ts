@@ -205,6 +205,9 @@ export const CandidateResponseSchema = z.object({
   shadowMatch: z.boolean().optional(),
   shadowScore: z.number().optional(),
   shadowMetrics: z.string().optional(),
+  // production-only aggregate, present once a 'production' sample exists
+  shadowProductionScore: z.number().optional(),
+  shadowProductionCount: z.number().int().optional(),
 });
 
 export const UpdateCandidateStageRequestSchema = z.object({

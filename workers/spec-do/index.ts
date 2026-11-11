@@ -5091,12 +5091,12 @@ export class SpecDO {
   }
 
   /** The candidate response's shadow fields from shadow_scores. Absent until a sample lands, as before m15 (the columns never existed). */
-  private shadowFieldsFor(candidateId: string): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string } {
+  private shadowFieldsFor(candidateId: string): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string; shadowProductionScore?: number; shadowProductionCount?: number } {
     const [row] = this.queryAll('SELECT * FROM shadow_scores WHERE candidate_id = ?', candidateId);
     return row ? this.shadowFieldsFromRow(row) : {};
   }
 
-  private shadowFieldsFromRow(row: Record<string, unknown>): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string } {
+  private shadowFieldsFromRow(row: Record<string, unknown>): { shadowScore?: number; shadowMatch?: boolean; shadowMetrics?: string; shadowProductionScore?: number; shadowProductionCount?: number } {
     const count = Number(row.sample_count);
     if (!(count > 0)) return {};
     // A corrupt aggregate reads as empty diffs; the score and counts stay right
@@ -5109,10 +5109,18 @@ export class SpecDO {
       lastComparisonAt: Number(row.updated_at),
       lastRequestId: String(row.last_request_id),
     };
+    // The production-only aggregate (additive: present only once a 'production' sample exists; the shadow verdict and shadowScore
+    // above still average every sample, and stay log-only evidence until the flip, docs/plans/shadow-router-followup-plan.md D2)
+    const productionCount = Number(row.production_count ?? 0);
+    const production =
+      productionCount > 0
+        ? { shadowProductionScore: Math.round((Number(row.production_score_sum) / productionCount) * 100) / 100, shadowProductionCount: productionCount }
+        : {};
     return {
       shadowScore: Math.round((Number(row.score_sum) / count) * 100) / 100,
       shadowMatch: Number(row.matched_count) === count,
       shadowMetrics: JSON.stringify(metrics),
+      ...production,
     };
   }
 
