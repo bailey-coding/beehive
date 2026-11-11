@@ -83,7 +83,7 @@ describe('scientistSafeHeaders', () => {
 
 describe('mirror fan-out through the handler', () => {
   const live = liveRef('cand-a', 'https://cand-a.bz23711.workers.dev');
-  const calls: Array<{ url: string; method: string; body: string | null; redirect: string; xRequestId: string | null; aborted: () => boolean }> = [];
+  const calls: Array<{ url: string; method: string; body: string | null; redirect: string; xRequestId: string | null; headers: Headers; aborted: () => boolean }> = [];
   let hang = false;
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
@@ -115,12 +115,12 @@ describe('mirror fan-out through the handler', () => {
     pending.length = 0;
     hang = false;
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation(() => {});
+    for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { if (process.env.DBG) process.stdout.write(m + ' ' + a.join(' ') + '\n'); });
     vi.stubGlobal('fetch', vi.fn(async (input: Request | string, init?: RequestInit) => {
       const req = typeof input === 'string' ? new Request(input, init) : input;
       const body = req.body ? await req.clone().text() : null;
       const signal = req.signal;
-      calls.push({ url: req.url, method: req.method, body, redirect: req.redirect, xRequestId: req.headers.get('x-request-id'), aborted: () => signal.aborted });
+      calls.push({ url: req.url, method: req.method, body, redirect: req.redirect, xRequestId: req.headers.get('x-request-id'), headers: req.headers, aborted: () => signal.aborted });
       if (hang && req.url.startsWith('https://cand-a')) {
         // like a real fetch: never answers, but rejects when the router aborts it
         return new Promise<Response>((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
@@ -136,6 +136,12 @@ describe('mirror fan-out through the handler', () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
+  }
+
+  async function settleAll(): Promise<void> {
+    let done = false;
+    void Promise.allSettled(pending).then(() => { done = true; });
+    await settleUntil(() => done);
   }
 
   afterEach(async () => {
@@ -185,15 +191,23 @@ describe('mirror fan-out through the handler', () => {
     expect(candidateCalls()[0].body).toBeNull();
   });
 
+  it('a write is mirrored to the candidate but has no baseline to compare with, so no Scientist message is queued', async () => {
+    const queue = { send: vi.fn(async () => {}) };
+    await handler.fetch(new Request(urlFor('POST'), { method: 'POST', body: '{}', headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: queue }, ctx);
+    await settleUntil(() => candidateCalls().length > 0);
+    await settleAll();
+    expect(candidateCalls()).toHaveLength(1);
+    expect(queue.send).not.toHaveBeenCalled();
+  });
+
   it('the Scientist queue message carries no body, only allowlisted headers and a templated path, and nothing logs data', async () => {
     const queue = { send: vi.fn(async () => {}) };
     const logged: string[] = [];
     for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { logged.push(a.map(String).join(' ')); });
     const secret = 'sk_live_TOPSECRET';
     await handler.fetch(
-      new Request(urlFor('POST', `?token=${secret}`), {
-        method: 'POST',
-        body: `{"card":"${secret}"}`,
+      new Request(urlFor('GET', `?token=${secret}`), {
+        method: 'GET',
         headers: { Authorization: 'Bearer tok', 'Content-Type': 'application/json', 'X-Csrf-Token': secret, Cookie: `s=${secret}`, 'X-Forwarded-For': '9.9.9.9' },
       }),
       { ...env({ MIRROR_BODY_MODE: 'full', GOVERNANCE_EGRESS_CONTROLLED: 'true' }), SCIENTIST_QUEUE: queue },
@@ -204,6 +218,7 @@ describe('mirror fan-out through the handler', () => {
     const message = (queue.send.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
     expect('body' in message && message.body !== undefined).toBe(false);
     expect(message.headers).toEqual({ 'content-type': 'application/json' });
+    expect((message.baseline as { kind: string }).kind).toBe('production');
     expect(message.path).toBe('/:id/:id'); // /m/<n> with no configured route words
     expect(JSON.stringify(message)).not.toContain(secret);
     expect(logged.join('\n')).not.toContain(secret);
@@ -232,11 +247,88 @@ describe('mirror fan-out through the handler', () => {
     expect(toml).not.toMatch(/^GOVERNANCE_EGRESS_CONTROLLED/m);
   });
 
-  it('the trusted baseline always gets the original request, even in mode none', async () => {
-    await send('GET', undefined, {}, {}, '?q=1');
-    const base = calls.find((c) => c.url.startsWith(BASELINE_URL));
-    expect(base).toBeDefined();
-    expect(base!.url).toContain('?q=1');
+  it('the baseline is a like-for-like production answer: the same sanitized request the candidate got, never the caller credentials or query', async () => {
+    await send('GET', undefined, {}, { Cookie: 's=secret', 'X-Csrf-Token': 'secret' }, '?q=1&token=secret');
+    const base = calls.filter((c) => c.url.startsWith(BASELINE_URL));
+    expect(base).toHaveLength(1);
+    expect(base[0].url).not.toContain('?');
+    expect(base[0].url).not.toContain('secret');
+    expect(base[0].headers.get('authorization')).toBeNull();
+    expect(base[0].headers.get('cookie')).toBeNull();
+    expect(base[0].headers.get('x-csrf-token')).toBeNull();
+    // same path as the candidate's
+    expect(new URL(base[0].url).pathname).toBe(new URL(candidateCalls()[0].url).pathname);
+  });
+
+  it('every request the router sends carries the loop-guard marker header', async () => {
+    await send('GET');
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const c of calls) expect(c.headers.get('x-beehive-mirror')).toBe('1');
+  });
+
+  it('no baseline answer, no message: a failing baseline fetch queues nothing', async () => {
+    const queue = { send: vi.fn(async () => {}) };
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: Request | string, init?: RequestInit) => {
+      const req = typeof input === 'string' ? new Request(input, init) : input;
+      calls.push({ url: req.url, method: req.method, body: null, redirect: req.redirect, xRequestId: null, headers: req.headers, aborted: () => false });
+      if (req.url.startsWith(BASELINE_URL)) throw new Error('boom');
+      return new Response('ok');
+    });
+    await handler.fetch(new Request(urlFor('GET'), { headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: queue }, ctx);
+    await settleUntil(() => calls.some((c) => c.url.startsWith(BASELINE_URL)));
+    await settleAll();
+    expect(queue.send).not.toHaveBeenCalled();
+  });
+
+  it('a non-2xx baseline answer (a 401) is a real answer and is queued as production', async () => {
+    const queue = { send: vi.fn(async () => {}) };
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: Request | string, init?: RequestInit) => {
+      const req = typeof input === 'string' ? new Request(input, init) : input;
+      calls.push({ url: req.url, method: req.method, body: null, redirect: req.redirect, xRequestId: null, headers: req.headers, aborted: () => false });
+      return new Response('no', { status: req.url.startsWith(BASELINE_URL) ? 401 : 200 });
+    });
+    await handler.fetch(new Request(urlFor('GET'), { headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: queue }, ctx);
+    await settleUntil(() => queue.send.mock.calls.length > 0);
+    const message = (queue.send.mock.calls[0] as unknown[])[0] as { baseline: { status: number; kind: string }; candidates: Array<{ candidateId: string }> };
+    expect(message.baseline).toMatchObject({ status: 401, kind: 'production' });
+    expect(message.candidates.map((c) => c.candidateId)).toEqual(['cand-a']); // the baseline is not one of the candidates
+  });
+
+  describe('POST /mirror (descriptor)', () => {
+    const mirror = (body: unknown, headers: Record<string, string> = { Authorization: 'Bearer tok' }) =>
+      handler.fetch(new Request('http://localhost/mirror', { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body), headers }), env(), ctx);
+
+    it('is behind the auth gate', async () => {
+      expect((await mirror({ v: 1, method: 'GET', path: '/' }, {})).status).toBe(401);
+    });
+
+    it('rejects anything but a strict template descriptor with a 400, before any fetch', async () => {
+      for (const bad of [
+        'not json',
+        { v: 1, method: 'POST', path: '/' },
+        { v: 2, method: 'GET', path: '/' },
+        { v: 1, method: 'GET', path: '/users/alice@x.com' },
+        { v: 1, method: 'GET', path: '/api?x=1' },
+        { v: 1, method: 'GET', path: '/a/b/c/d/e/f/g/h/i' },
+        { v: 1, method: 'GET', path: '/api', headers: { authorization: 'x' } },
+      ]) {
+        expect((await mirror(bad)).status).toBe(400);
+      }
+      expect(calls).toHaveLength(0);
+    });
+
+    it('accepts, answers 202 at once and fans out regardless of the URL hash gates (many descriptors, every one mirrored)', async () => {
+      const queue = { send: vi.fn(async () => {}) };
+      vi.spyOn(Math, 'random').mockReturnValue(0.5);
+      // a draw of 0.5 is far outside the default 1% canary split, which is what the hash gate would have used
+      const res = await handler.fetch(new Request('http://localhost/mirror', { method: 'POST', body: JSON.stringify({ v: 1, method: 'GET', path: '/api/:id' }), headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: queue }, ctx);
+      expect(res.status).toBe(202);
+      await settleUntil(() => queue.send.mock.calls.length > 0);
+      expect(candidateCalls()).toHaveLength(1);
+      expect(queue.send).toHaveBeenCalledTimes(1);
+      const message = (queue.send.mock.calls[0] as unknown[])[0] as { path: string; method: string; baseline: { kind: string } };
+      expect(message).toMatchObject({ path: '/api/:id', method: 'GET', baseline: { kind: 'production' } });
+    });
   });
 
   it('a POST body reaches the candidate in mode full (with the egress var), and the production baseline is not replayed', async () => {

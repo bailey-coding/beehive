@@ -12,6 +12,7 @@
 
 import { BASELINE_TARGET_ID, headersForTarget, scientistSafeHeaders, scientistSafeResponseHeaders } from './candidate-headers';
 import { mirrorRequestFor, resolveMirrorMode, routeTemplate, routeWords, type MirrorBodyMode } from './mirror-mode';
+import { MIRROR_MARKER_HEADER, parseMirrorDescriptor } from '../shared/mirror-descriptor';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub } from '../shared/spec-do-auth';
 import { MetricsCollector } from '../shared/analytics';
@@ -84,7 +85,9 @@ export function specDoFetcher(env: any): SpecDoFetcher | null {
 function classifyRequest(
   request: Request,
   config: ShadowConfig,
-  candidateId?: string
+  candidateId?: string,
+  /** A descriptor (POST /mirror) has no real URL: a hash of `method:url` would put each route template permanently in or out, so the caller passes a random draw. */
+  randomDraw?: number
 ): RequestClassification {
   // If Statsig is disabled, use existing shadow behavior
   if (!config.statsig?.enabled) {
@@ -106,7 +109,7 @@ function classifyRequest(
     hash = ((hash << 5) - hash) + char;
     hash = hash & hash; // Convert to 32-bit integer
   }
-  const randomValue = Math.abs(hash) % 10000 / 10000; // Normalize to 0-1
+  const randomValue = randomDraw !== undefined ? randomDraw : Math.abs(hash) % 10000 / 10000; // Normalize to 0-1
 
   // Determine classification based on percentages
   // First check: canary group (0 to canaryPercentage)
@@ -187,7 +190,7 @@ async function logTrafficSplit(
 const CANDIDATE_FETCH_TIMEOUT_MS = 10_000;
 /** Largest request body that is copied to the mirror targets. */
 const MAX_MIRROR_BODY_BYTES = 1024 * 1024;
-/** Methods that are safe to replay against the production baseline. Anything else would be a second write with the caller's credentials. */
+/** Methods that are safe to replay against the production baseline. Anything else would be a second write. */
 const BASELINE_REPLAY_METHODS = new Set(['GET', 'HEAD']);
 
 /**
@@ -229,7 +232,8 @@ async function fanOutToCandidates(
   request: Request,
   config: ShadowConfig,
   metrics: MetricsCollector | null,
-  env: any
+  env: any,
+  fromDescriptor = false
 ): Promise<Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }>> {
   const results: Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }> = [];
   
@@ -264,8 +268,12 @@ async function fanOutToCandidates(
   const promises: Array<Promise<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }>> = [];
   
   for (const [candidateId, previewUrl] of config.candidatePreviews) {
+    // The baseline is not a mirror target: it is fetched once per request, with the candidates' sanitized request, by
+    // triggerScientist (the old replay of the original request, with the caller's credentials, fed nothing)
+    if (candidateId === BASELINE_TARGET_ID) continue;
+
     // Classify this request for this candidate
-    const classification = classifyRequest(request, config, candidateId);
+    const classification = classifyRequest(request, config, candidateId, fromDescriptor ? Math.random() : undefined);
     
     // Log the classification
     await logTrafficSplit(classification, candidateId, metrics, env);
@@ -277,12 +285,6 @@ async function fanOutToCandidates(
     // Baseline: don't send to candidates (production only)
     const shouldSendToCandidate = classification.type === 'canary' || classification.type === 'shadow';
 
-    // The baseline is production itself: never replay a write against it (the caller's real request already did that)
-    if (candidateId === BASELINE_TARGET_ID && !BASELINE_REPLAY_METHODS.has(request.method)) {
-      console.log(`[Shadow] Not replaying ${request.method} against the baseline ${candidateId}`);
-      continue;
-    }
-    
     if (!shouldSendToCandidate) {
       console.log(`[Shadow] Skipping candidate ${candidateId} - classified as ${classification.type}`);
       continue;
@@ -345,10 +347,9 @@ async function fetchCandidate(
   // Build the candidate request. The trusted baseline gets the original; any other target gets what the mirror mode allows
   // (mirror-mode.ts): by default no body, no query string and no path ids.
   const url = new URL(request.url);
-  const isBaseline = candidateId === BASELINE_TARGET_ID;
-  const target = isBaseline
-    ? { pathAndQuery: `${url.pathname}${url.search}`, headers: request.headers, body: bodyBytes ? bodyBytes.slice(0) : undefined }
-    : mirrorRequestFor(mirrorMode, url, request.headers, bodyBytes, requestId, headersForTarget(candidateId, request.headers), words);
+  const target = mirrorRequestFor(mirrorMode, url, request.headers, bodyBytes, requestId, headersForTarget(candidateId, request.headers), words);
+  // A canary ref can point at the platform's own worker, which would mirror this request again: tell it not to
+  target.headers.set(MIRROR_MARKER_HEADER, '1');
   const candidateUrl = `${previewUrl}${target.pathAndQuery}`;
   
   // The timer is a plain setTimeout (not AbortSignal.timeout) so it can be cleared once the answer headers arrive
@@ -365,7 +366,7 @@ async function fetchCandidate(
       signal: controller.signal,
     });
     // Never log the query string or the full path: they can carry tokens and customer data
-    console.log(`[Shadow] Fetching candidate ${candidateId} (${isBaseline ? 'baseline' : mirrorMode} mode)`);
+    console.log(`[Shadow] Fetching candidate ${candidateId} (${mirrorMode} mode)`);
     const response = await fetch(candidateRequest);
     const latencyMs = Date.now() - startTime;
     
@@ -389,6 +390,38 @@ async function fetchCandidate(
 }
 
 /**
+ * The production answer to the request the candidates were sent. Same builder, same sanitized request (no credentials, no body,
+ * no query, templated path), with a non-baseline id so `headersForTarget` does not hand the caller's headers over. Null when
+ * there is no baseline target, the method cannot be replayed, or the fetch fails (a refusal such as a 401 is a real answer).
+ */
+async function fetchBaseline(
+  request: Request,
+  config: ShadowConfig,
+  requestId: string,
+  mirrorMode: MirrorBodyMode,
+  words: ReadonlySet<string>
+): Promise<{ status: number; headers: Record<string, string>; latencyMs: number } | null> {
+  const baselineUrl = config.candidatePreviews.get(BASELINE_TARGET_ID);
+  if (!baselineUrl || !BASELINE_REPLAY_METHODS.has(request.method)) return null;
+  const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CANDIDATE_FETCH_TIMEOUT_MS);
+  try {
+    const url = new URL(request.url);
+    const target = mirrorRequestFor(mirrorMode, url, request.headers, undefined, requestId, headersForTarget('baseline-probe', request.headers), words);
+    target.headers.set(MIRROR_MARKER_HEADER, '1');
+    const response = await fetch(new Request(`${baselineUrl}${target.pathAndQuery}`, { method: request.method, headers: target.headers, redirect: 'manual', signal: controller.signal }));
+    void response.body?.cancel();
+    return { status: response.status, headers: scientistSafeResponseHeaders(response.headers), latencyMs: Date.now() - started };
+  } catch (error) {
+    console.error(`[Shadow] Baseline fetch failed: ${error instanceof Error ? error.name : 'error'}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Scientist Queue Message type
  */
 interface ScientistQueueMessage {
@@ -406,6 +439,8 @@ interface ScientistQueueMessage {
     headers: Record<string, string>;
     body?: string;
     latencyMs: number;
+    /** 'production': a real answer to the candidates' sanitized request. The comparator treats an absent kind as a placeholder. */
+    kind: 'production';
   };
   candidates: Array<{
     candidateId: string;
@@ -428,7 +463,8 @@ async function triggerScientist(
   request: Request,
   candidateResponses: Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }>,
   metrics: MetricsCollector | null,
-  env: any
+  env: any,
+  config: ShadowConfig
 ): Promise<void> {
   if (candidateResponses.length === 0) {
     return;
@@ -441,21 +477,19 @@ async function triggerScientist(
   
   // The request body is deliberately not enqueued: the comparator never reads it, and queue messages are persisted.
 
-  // Get baseline response from production
-  // For now, we'll use a stub - in production this would be the actual production response
-  // For shadow traffic, we need to capture this.
-  const baseline: ScientistQueueMessage['baseline'] = {
-    candidateId: 'production',
-    specId: candidateResponses[0].candidateId,
-    status: 200, // Placeholder
-    headers: { 'content-type': 'application/json' },
-    latencyMs: 50, // Placeholder
-  };
+  // The baseline: one real answer from the service the candidates replace, to the same sanitized request they got. Without one
+  // (a write method, no baseline target, a failed fetch) no message is sent: an old comparator would score it against a placeholder.
+  const baselineAnswer = await fetchBaseline(request, config, requestId, resolveMirrorMode(env ?? {}), routeWords(env ?? {}));
+  if (!baselineAnswer) {
+    console.warn(`[Shadow] no production baseline for request ${requestId}; comparison not queued`);
+    return;
+  }
+  const baseline: ScientistQueueMessage['baseline'] = { candidateId: 'production', specId: '', ...baselineAnswer, kind: 'production' };
 
   // Prepare candidate data with classification information
   const candidates: ScientistQueueMessage['candidates'] = candidateResponses.map(r => ({
     candidateId: r.candidateId,
-    specId: '', // TODO: Get from Spec DO or config
+    specId: '', // the comparator takes it from the ledger candidate
     status: r.response.status,
     // An allowlist with bounded values: the candidate is untrusted and its headers were stored unbounded
     headers: scientistSafeResponseHeaders(r.response.headers),
@@ -567,6 +601,59 @@ function recordCanaryMetrics(
   } catch (error) {
     console.warn('[Shadow] canary metrics recording failed:', error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * Classify, fan out to the candidates and queue the Scientist comparison for one request (or one /mirror descriptor).
+ * A descriptor has no real URL, so both hash gates (the top split and the per-candidate split) are replaced by random draws
+ * and the top gate does not hold back the fan-out: the edge's MIRROR_SAMPLE_PERCENT is the sampling for descriptors.
+ */
+async function mirrorPipeline(request: Request, env: any, ctx: ExecutionContext, config: ShadowConfig, fromDescriptor: boolean): Promise<void> {
+  // Initialize metrics collector
+  const aeBinding = env.ANALYTICS || (typeof ANALYTICS !== 'undefined' ? ANALYTICS : null);
+  const metrics = aeBinding ? new MetricsCollector(aeBinding) : null;
+
+  // Classify this request using Statsig
+  const classification = classifyRequest(request, config, undefined, fromDescriptor ? Math.random() : undefined);
+
+  // Log the classification
+  if (config.statsig?.enabled) {
+    await logTrafficSplit(classification, undefined, metrics, env);
+  }
+
+  // Only fan out to candidates if not holdout or baseline (which go to production only)
+  // Canary and shadow classifications get fanned out to candidates
+  const shouldFanOut = fromDescriptor || classification.type === 'canary' || classification.type === 'shadow';
+
+  if (shouldFanOut) {
+    // Fan out to candidates with classification
+    const candidateResponses = await fanOutToCandidates(request, config, metrics, env, fromDescriptor);
+
+    // Canary metrics (M3 SLO loop): best effort, only candidates that are a live canary deployment
+    recordCanaryMetrics(candidateResponses, config, env, ctx);
+
+    // Trigger Scientist comparison (async - don't wait)
+    if (metrics) {
+      ctx.waitUntil(triggerScientist(request, candidateResponses, metrics, env, config));
+      // Flush metrics before returning
+      metrics.flush();
+    } else {
+      console.log('[Shadow] Analytics Engine not available in local dev - metrics logged to console');
+      ctx.waitUntil(triggerScientist(request, candidateResponses, null, env, config));
+    }
+  } else {
+    // Holdout or baseline - don't fan out, just trigger Scientist with empty candidates
+    if (config.statsig?.enabled) {
+      console.log(`[Shadow] Request classified as ${classification.type} - skipping fan-out`);
+    }
+
+    // Still trigger Scientist for comparison tracking
+    ctx.waitUntil(triggerScientist(request, [], metrics, env, config));
+    if (metrics) {
+      metrics.flush();
+    }
+  }
+
 }
 
 export default {
@@ -692,6 +779,28 @@ export default {
       });
     }
 
+    // POST /mirror - a mirror descriptor from the edge ({ v, method, path } with a route template, nothing else). The router
+    // builds the request itself; the answer is immediate and the work runs after it.
+    if (url.pathname === '/mirror') {
+      if (request.method !== 'POST') return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { 'Content-Type': 'application/json' } });
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        body = null;
+      }
+      const descriptor = parseMirrorDescriptor(body);
+      if (!descriptor) return new Response(JSON.stringify({ error: 'Invalid mirror descriptor' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      const config = await getShadowConfig(env);
+      const synthetic = new Request(`https://mirror.invalid${descriptor.path}`, { method: descriptor.method, headers: { accept: 'application/json' } });
+      ctx.waitUntil(
+        (shouldMirror(descriptor.path, config) ? mirrorPipeline(synthetic, env, ctx, config, true) : Promise.resolve()).catch((error) =>
+          console.error('[Shadow] /mirror pipeline failed:', error instanceof Error ? error.name : 'error')
+        )
+      );
+      return new Response(JSON.stringify({ accepted: true }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+    }
+
     // Get configuration based on environment
     const config = await getShadowConfig(env);
     
@@ -707,51 +816,8 @@ export default {
       return new Response(null, { status: 200 });
     }
 
-    // Initialize metrics collector
-    const aeBinding = env.ANALYTICS || (typeof ANALYTICS !== 'undefined' ? ANALYTICS : null);
-    const metrics = aeBinding ? new MetricsCollector(aeBinding) : null;
+    await mirrorPipeline(request, env, ctx, config, false);
 
-    // Classify this request using Statsig
-    const classification = classifyRequest(request, config);
-    
-    // Log the classification
-    if (config.statsig?.enabled) {
-      await logTrafficSplit(classification, undefined, metrics, env);
-    }
-    
-    // Only fan out to candidates if not holdout or baseline (which go to production only)
-    // Canary and shadow classifications get fanned out to candidates
-    const shouldFanOut = classification.type === 'canary' || classification.type === 'shadow';
-    
-    if (shouldFanOut) {
-      // Fan out to candidates with classification
-      const candidateResponses = await fanOutToCandidates(request, config, metrics, env);
-
-      // Canary metrics (M3 SLO loop): best effort, only candidates that are a live canary deployment
-      recordCanaryMetrics(candidateResponses, config, env, ctx);
-      
-      // Trigger Scientist comparison (async - don't wait)
-      if (metrics) {
-        ctx.waitUntil(triggerScientist(request, candidateResponses, metrics, env));
-        // Flush metrics before returning
-        metrics.flush();
-      } else {
-        console.log('[Shadow] Analytics Engine not available in local dev - metrics logged to console');
-        ctx.waitUntil(triggerScientist(request, candidateResponses, null, env));
-      }
-    } else {
-      // Holdout or baseline - don't fan out, just trigger Scientist with empty candidates
-      if (config.statsig?.enabled) {
-        console.log(`[Shadow] Request classified as ${classification.type} - skipping fan-out`);
-      }
-      
-      // Still trigger Scientist for comparison tracking
-      ctx.waitUntil(triggerScientist(request, [], metrics, env));
-      if (metrics) {
-        metrics.flush();
-      }
-    }
-    
     // Discard all candidate responses - return empty
     // The actual response comes from the production Worker, not the shadow
     return new Response(null, { status: 200 });
