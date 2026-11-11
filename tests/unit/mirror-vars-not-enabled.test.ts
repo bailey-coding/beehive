@@ -6,15 +6,28 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 
+/** Every assignment of `key` in a TOML text (bare or quoted key, plain or inline-table), as its raw value; comments are stripped first */
+export function assignments(text: string, key: string): string[] {
+  const code = text.split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n');
+  return [...code.matchAll(new RegExp(`["']?${key}["']?\\s*=\\s*("[^"]*"|'[^']*'|[^\\s,}]+)`, 'g'))].map((m) => m[1].replace(/^["']|["']$/g, ''));
+}
+
 describe('mirror exposure vars', () => {
-  const files = ['wrangler.toml', ...readdirSync('workers').map((w) => `workers/${w}/wrangler.toml`)].filter((f) => existsSync(f));
+  const files = ['wrangler.toml', ...readdirSync('workers').map((w) => `workers/${w}/wrangler.toml`), 'tests/e2e/probe/wrangler.toml'].filter((f) => existsSync(f));
   it('are enabled in no wrangler config in this repo', () => {
     expect(files.length).toBeGreaterThan(5);
     for (const f of files) {
       const text = readFileSync(f, 'utf8');
-      // a commented-out example is fine; an assignment is not
-      expect(text, f).not.toMatch(/^\s*MIRROR_SAMPLE_PERCENT\s*=\s*"?(?!0"?\s*$)\S/m);
-      expect(text, f).not.toMatch(/^\s*SHADOW_RUNG_MIRRORING\s*=\s*"?true/im);
+      for (const v of assignments(text, 'MIRROR_SAMPLE_PERCENT')) expect(v.trim(), f).toBe('0');
+      for (const v of assignments(text, 'SHADOW_RUNG_MIRRORING')) expect(v.trim().toLowerCase(), f).not.toBe('true');
     }
+  });
+
+  it('the scanner sees inline tables, quoted keys and bare values, and ignores comments and "0"', () => {
+    expect(assignments('vars = { MIRROR_SAMPLE_PERCENT = "5" }', 'MIRROR_SAMPLE_PERCENT')).toEqual(['5']);
+    expect(assignments('"MIRROR_SAMPLE_PERCENT" = "5"', 'MIRROR_SAMPLE_PERCENT')).toEqual(['5']);
+    expect(assignments('MIRROR_SAMPLE_PERCENT = 5', 'MIRROR_SAMPLE_PERCENT')).toEqual(['5']);
+    expect(assignments('# MIRROR_SAMPLE_PERCENT = "5"', 'MIRROR_SAMPLE_PERCENT')).toEqual([]);
+    expect(assignments('MIRROR_SAMPLE_PERCENT = "0"', 'MIRROR_SAMPLE_PERCENT')).toEqual(['0']);
   });
 });

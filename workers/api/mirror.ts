@@ -102,7 +102,7 @@ export function mirrorAfterResponse(
       });
       void response.body?.cancel();
       if (response.ok) mirrorCounters.sent++;
-      else mirrorCounters.failed++; // a 404 from an older router is an error, never "mirrored"
+      else mirrorCounters.failed++; // a non-OK answer is an error, never "mirrored" (an older router has no /mirror route; its generic path answers 200 without fanning out, which counts as sent but does nothing)
     } catch {
       mirrorCounters.failed++;
     } finally {

@@ -344,7 +344,7 @@ async function fetchCandidate(
 ): Promise<{ candidateId: string; response: Response; latencyMs: number }> {
   const startTime = Date.now();
   
-  // Build the candidate request. The trusted baseline gets the original; any other target gets what the mirror mode allows
+  // Build the candidate request: what the mirror mode allows
   // (mirror-mode.ts): by default no body, no query string and no path ids.
   const url = new URL(request.url);
   const target = mirrorRequestFor(mirrorMode, url, request.headers, bodyBytes, requestId, headersForTarget(candidateId, request.headers), words);
@@ -392,7 +392,7 @@ async function fetchCandidate(
 /**
  * The production answer to the request the candidates were sent. Same builder, same sanitized request (no credentials, no body,
  * no query, templated path), with a non-baseline id so `headersForTarget` does not hand the caller's headers over. Null when
- * there is no baseline target, the method cannot be replayed, or the fetch fails (a refusal such as a 401 is a real answer).
+ * there is no baseline target, the method cannot be replayed, the fetch fails, or production answers 5xx/429 (a refusal such as a 401 is a real answer).
  */
 async function fetchBaseline(
   request: Request,
@@ -412,6 +412,11 @@ async function fetchBaseline(
     target.headers.set(MIRROR_MARKER_HEADER, '1');
     const response = await fetch(new Request(`${baselineUrl}${target.pathAndQuery}`, { method: request.method, headers: target.headers, redirect: 'manual', signal: controller.signal }));
     void response.body?.cancel();
+    // A broken production answer (5xx, 429) is not evidence about the candidate: no baseline, no message. 401/404 are real answers.
+    if (response.status >= 500 || response.status === 429) {
+      console.warn(`[Shadow] Baseline answered ${response.status}; not a usable production answer`);
+      return null;
+    }
     return { status: response.status, headers: scientistSafeResponseHeaders(response.headers), latencyMs: Date.now() - started };
   } catch (error) {
     console.error(`[Shadow] Baseline fetch failed: ${error instanceof Error ? error.name : 'error'}`);

@@ -115,7 +115,7 @@ describe('mirror fan-out through the handler', () => {
     pending.length = 0;
     hang = false;
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { if (process.env.DBG) process.stdout.write(m + ' ' + a.join(' ') + '\n'); });
+    for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { });
     vi.stubGlobal('fetch', vi.fn(async (input: Request | string, init?: RequestInit) => {
       const req = typeof input === 'string' ? new Request(input, init) : input;
       const body = req.body ? await req.clone().text() : null;
@@ -281,6 +281,19 @@ describe('mirror fan-out through the handler', () => {
       calls.push({ url: req.url, method: req.method, body: null, redirect: req.redirect, xRequestId: null, headers: req.headers, aborted: () => false });
       if (req.url.startsWith(BASELINE_URL)) throw new Error('boom');
       return new Response('ok');
+    });
+    await handler.fetch(new Request(urlFor('GET'), { headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: queue }, ctx);
+    await settleUntil(() => calls.some((c) => c.url.startsWith(BASELINE_URL)));
+    await settleAll();
+    expect(queue.send).not.toHaveBeenCalled();
+  });
+
+  it.each([500, 503, 429])('a baseline answering %i is not a usable production answer: nothing is queued', async (status) => {
+    const queue = { send: vi.fn(async () => {}) };
+    (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (input: Request | string, init?: RequestInit) => {
+      const req = typeof input === 'string' ? new Request(input, init) : input;
+      calls.push({ url: req.url, method: req.method, body: null, redirect: req.redirect, xRequestId: null, headers: req.headers, aborted: () => false });
+      return new Response('x', { status: req.url.startsWith(BASELINE_URL) ? status : 200 });
     });
     await handler.fetch(new Request(urlFor('GET'), { headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: queue }, ctx);
     await settleUntil(() => calls.some((c) => c.url.startsWith(BASELINE_URL)));

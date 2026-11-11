@@ -258,3 +258,16 @@ Verdict was "not approvable as written" (4 blockers). Slice M's shape (sanitize 
 - **S6** drop rule extends to both-3xx; the plan states scores are status, four headers and latency (bodies never compared, `index.ts:464`); `X-Beehive-Mirror` is sent only where the target can be `beehive` (baseline, canary refs), not to shadow candidates.
 - **S7** the `production` marker is forgeable by master/service principals (`api/index.ts:236-239`); acceptable in D1, D2 must not treat it as proof.
 - **Nits** fixed in section 1: `fetch` at `api/index.ts:89`; public pages `:94-97`; `createSimulatedPreview` `:616-675`; `wrangler.toml:20` is the router's; F7 a per-target percent is a no-op only at or above the top split. Edge wrapper captures method and path before `request` is reassigned (`:121`); `/mirror` is matched before the generic path (`:695-708`).
+
+### Code review 1 dispositions (2026-11-11, on the M + D1-additive implementation; no blockers)
+
+Fixed: a baseline answering 5xx or 429 is not a usable production answer, so no message is queued (401/404 stay real answers); the exposure-var test now
+parses assignments (inline tables, quoted keys, `"0"` allowed, `tests/e2e/probe` scanned); `headersForTarget` no longer special-cases the baseline (dead,
+and it would have handed over the caller's headers); stale comments and the debug hook removed. Corrected: an **old router** has no `/mirror` route and
+its generic path answers 200 without fanning out (the edge counts that as sent; harmless, and the gate is off by default); section 7's "404" row means this.
+**Deviation recorded (decision for the maintainer at D2):** a descriptor reaches a canary target at `MIRROR_SAMPLE_PERCENT x the canary's own trafficPercentage`
+(section 15 B1 said "at the edge's rate"); it keeps each deployment's configured split, but a 5% canary at a 10% edge rate sees 0.5%, which lengthens the
+measurement window. Known and accepted: every enqueued sample is now `production`, including canaries of specs whose service is not the platform API (F6, S7);
+D2 must not read `production_count` as proof. Left: the marker header goes to all candidates (fine while shadow targets are not built), the template
+truncation at 128 characters can leave a partial segment (the router answers 400, no privacy impact), the unused `PREVIEW_SCIENTIST_QUEUE` binding stays
+(mixed-version safe).

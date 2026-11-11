@@ -3,15 +3,14 @@
  *
  * Candidates run agent-written code, so they must never see the caller's credentials: the router receives
  * `Authorization` (the platform bearer token, or a user's), cookies, and internal headers such as `X-Actor-ID`.
- * Candidates therefore get an allowlist. The baseline target (production `beehive-main`) is trusted code and
- * keeps the original headers, so the comparison is like for like.
+ * Every target, the production baseline included, gets the allowlist: the baseline is fetched with the same sanitized
+ * request as the candidates, so the comparison is like for like and no credential is replayed.
  */
 export const BASELINE_TARGET_ID = 'beehive-main';
 
 const CANDIDATE_HEADER_ALLOWLIST = ['accept', 'accept-language', 'content-type', 'user-agent', 'x-request-id'];
 
-export function headersForTarget(targetId: string, source: Headers): Headers {
-  if (targetId === BASELINE_TARGET_ID) return source;
+export function headersForTarget(_targetId: string, source: Headers): Headers {
   const out = new Headers();
   for (const name of CANDIDATE_HEADER_ALLOWLIST) {
     const value = source.get(name);

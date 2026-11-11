@@ -18,9 +18,11 @@ describe('headersForTarget', () => {
     for (const secret of ['authorization', 'cookie', 'x-actor-id', 'x-api-key', 'proxy-authorization']) expect(out.has(secret)).toBe(false);
   });
 
-  it('leaves the trusted baseline untouched', () => {
+  it('the production baseline gets the same allowlist, never the caller headers', () => {
     const src = incoming();
-    expect(headersForTarget(BASELINE_TARGET_ID, src)).toBe(src);
+    const out = headersForTarget(BASELINE_TARGET_ID, src);
+    expect(out).not.toBe(src);
+    expect(out.has('authorization')).toBe(false);
   });
 
   it('copes with a request that has none of the allowed headers', () => {
