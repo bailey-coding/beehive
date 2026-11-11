@@ -28,16 +28,15 @@ handoff below (its open items still stand). `AGENTS.md` first as always.
   deployed wrangler.toml); the namespace `4101` check and the other deploy steps of the 2026-11-07 handoff still apply.
 
 **Next, in order.**
-1. **Shadow evidence, from a mirror source to the flip** (`docs/plans/shadow-router-followup-plan.md`, **rev 3**, 2026-11-11, awaiting re-review). Rev 1's
-   review found five blockers (all verified; mapped in the plan's section 12). The biggest: **nothing in this repo sends production traffic to the
-   shadow router**, so the plan now starts with **slice M**, a mirror source in the `beehive` worker (GET/HEAD only, reduced at the source to
-   `{method, route template}`, off by default behind a dashboard-set `MIRROR_SAMPLE_PERCENT`, with a loop guard because the router's baseline fetch hits
-   the same worker), then **D1** (shadow targets behind a default-off flag, a like-for-like production baseline, `production`-marked samples, production-only
-   tournament score, a `preview_kind` marker because previews can be simulated), then a 7-day measurement window with a validity criterion, then **D2** (the
-   flip) only with its own approval. Human checks first: **P0** (does anything outside the repo already mirror into the router?) and **P1** (are candidate
-   previews real Workers in production?). Next steps: re-review rev 3 (fable agent, read-only), fold dispositions, put section 13's decisions to the
-   maintainer, then implement slice M. Whose traffic customers' services produce is a separate, larger plan (section 9: an ingest source plus per-spec
-   baselines).
+1. **Shadow evidence: slice M + D1-additive are implemented on `claude/pr1-review-lmgqik`, not merged, not deployed** (plan
+   `docs/plans/shadow-router-followup-plan.md` rev 4; Review 1 and Review 2 dispositions in sections 12 and 15; operations in `docs/OPS.md` "Mirror
+   source and the production baseline"). Built: the edge mirror source (`workers/api/mirror.ts`, GET/HEAD, route-template descriptor, off unless the
+   maintainer sets `MIRROR_SAMPLE_PERCENT` in `[vars]` of the Artifacts repo), router `POST /mirror`, a like-for-like production baseline fetch
+   (`baseline.kind`), comparator marking and dropping, `shadowProductionScore/Count` on the candidate. **It changes no promotion behavior.** Not built, by
+   the maintainer's choice: shadow targets for `passed_premerge` candidates (previews at that rung are simulated; needs plan slice P, a real pre-shadow deploy
+   and a governance decision), the production-only tournament score and the flip (D2, needs a measurement window and approval). Human checks: **P0**
+   (does anything outside the repo already mirror into the router?) before the deploy; the two-pass first deploy on an empty account. After deploy: set
+   `MIRROR_SAMPLE_PERCENT` (start low) and watch the production samples; whose traffic customers' services produce is a separate plan (plan section 9).
 2. Still open, each in `docs/OPEN-QUESTIONS.md` (2026-11-10 entries): nothing resets an exhausted tournament; the queue acks failed promotions; two
    decisions can overlap and the tournament decides on the second arrival; `/merge/retry` moves get no promotion state; `SHADOW_ROUTER` binding unused;
    the merge-train gate call sends an `actorId` that may not be an actor. Older: D2 canary follow-up (tombstoned rollback target, PR-G), the 500s

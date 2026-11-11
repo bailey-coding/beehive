@@ -673,6 +673,45 @@ The shadow router decides what a mirrored request carries to a candidate (`worke
 - Mixed-version window (one push, ten workers, any order): a new promotion worker against an old Spec DO gets a code-less 404 on `advance` and answers `503 ledger_too_old` (promotions pause for the window; nothing is recorded); an old promotion worker against a new Spec DO is unchanged (it never calls `advance`; its stage PATCH is still allowed and still logged by PR-S). Deploy the Spec DO's worker and the promotion worker together, which one push does.
 - Rollback: a build older than PR C runs the old flow against the new Spec DO (no schema dependency); `advance` simply goes unused.
 
+## Mirror source and the production baseline (shadow-router follow-up M + D1, 2026-11-11)
+
+Plan: `docs/plans/shadow-router-followup-plan.md` (rev 4). **Nothing here changes promotion**: the tournament, `advance` and the shadow verdict
+are untouched (shadow evidence stays log-only; the tournament keeps its all-sample average). Not deployed.
+
+- **Mirror source (`workers/api/mirror.ts`).** After the response exists, the `beehive` worker copies a sample of its own **GET/HEAD** requests to the
+  shadow router (`POST /mirror`, service binding `SHADOW_ROUTER` in the root `wrangler.toml`), reduced to `{ v: 1, method, path }` where `path` is a route
+  template (known route words kept, every other segment `:id`). No raw request, header, credential, query string or body leaves the edge. It never delays
+  or alters a response; failures are swallowed and counted (`mirrorCounters`).
+- **Switch: `MIRROR_SAMPLE_PERCENT`** (integer 0-100; absent, `0` or anything else = off, no parsing and no I/O). **Set it in `[vars]` of the Artifacts
+  deploy repo** (a dashboard var is overwritten by the next push, `keep_vars` is not set); it is never set in this repo (`tests/unit/mirror-vars-not-enabled.test.ts`).
+  Rollback = deploy it back to `0` (or remove it).
+- **Caps.** Per isolate: a token bucket (20 burst, 10/s) and at most 10 mirrors in flight; 2 s timeout, no retry.
+- **Loop guard.** The router sends `X-Beehive-Mirror: 1` on every candidate and baseline fetch; the edge never mirrors a request carrying it
+  (the baseline `beehive-main` is this same worker). A candidate that fetches `beehive` public pages itself is mirrored like any anonymous client; the
+  token bucket bounds that.
+- **Router `POST /mirror`** (bearer-gated like every route; strict body, a path that is not template-shaped is a 400; answers 202 and works in
+  `waitUntil`). Descriptors bypass both URL-hash gates (a hash of a few dozen templates would put each permanently in or out): the per-candidate split is a
+  random draw. The raw-request path of the router still exists for any external source and keeps its hash gates.
+- **Like-for-like baseline.** The router no longer replays the caller's original request (with its credentials) against `beehive-main`. After the
+  candidates answer, it fetches the baseline **once**, with the same sanitized request the candidates got (no credentials, no body, no query, templated
+  path), and sends it in the queue message with `baseline.kind = 'production'`. No baseline (write method, fetch failure) = **no message queued**. A 401 is
+  a real answer. The baseline is no longer one of the `candidates` of the message.
+- **Comparator.** `baseline.kind = 'production'` -> samples are stored with `baseline: 'production'`; an absent kind (an old router) -> `placeholder`.
+  For production samples, a pair where baseline and candidate both answered 3xx, both 4xx or both 5xx is **dropped** (it agrees on a refusal and says
+  nothing); a disagreement is scored. Scored/dropped counts are logged per message.
+- **Spec DO.** The candidate response gains `shadowProductionScore` and `shadowProductionCount` once a production sample exists (additive). `shadowScore`
+  and the verdict still average every sample.
+- **Removed.** `triggerShadowComparisons` in the preview manager (it sent a message nothing consumed).
+- **What this does not do (yet).** Shadow targets (a `passed_premerge` candidate receiving mirrored traffic) are **not built**: candidate previews at that
+  rung are simulated (`workers/preview-manager/builds.ts:276-285`), so a target route needs a real pre-shadow deploy first (plan slice P, a governance
+  decision). Today only canary-ref candidates and `beehive-main` are targets. The signal is thin: only the public pages (`/`, `/app*`) give an informative
+  baseline answer; status, four headers and latency are compared, never bodies.
+- **Before deploy (human):** P0, confirm in Cloudflare that nothing outside this repo already mirrors into the router. The first deploy to an empty account
+  needs two passes (the new `SHADOW_ROUTER` binding names a worker that must exist).
+- **Mixed versions.** Old edge: never calls `/mirror`. New edge, old router: `/mirror` 404 is counted as failed, nothing breaks (the gate is off by
+  default). New router, old comparator: extra `kind` field ignored, samples stay `placeholder`. Old router, new comparator: no `kind` -> `placeholder`. New
+  router with an old Spec DO: nothing new is required of it.
+
 ## Invalid transitions (PR-S, 2026-11-02)
 
 - The Spec DO checks every candidate stage write (the stage PATCH; sandbox execute was retired 2026-11-02) against table (c) and every promotion-state write against table (d) of `docs/GOVERNANCE-STATE-MACHINES.md`, in the write's transaction. **Log-only:** a violation never refuses; it writes one `governance_events` row (`event = 'invalid_transition'`, `subject = candidate:<id>` or `promotion_state:<id>`, `reason = <machine>:<from>-><to>`, `actor_id` NULL, `asserted_actor_id` = the asserted `X-Actor-ID` or the promotion-state row's actor, `detail` JSON with `rule`, `enforceable`, `source`, `specId`, `candidateId`, `orgName`) and a `console.warn('[SpecDO] invalid_transition', ...)` log line. A failure to log is a `console.error` and the write still lands.
