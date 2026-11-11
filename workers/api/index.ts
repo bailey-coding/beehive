@@ -25,6 +25,11 @@ interface Env {
   VIEWER_RATE_LIMITER?: RateLimit;
   // wrangler.toml [[analytics_engine_datasets]]; optional so a missing binding never fails a request
   ANALYTICS?: AnalyticsEngineDataset;
+  // Mirror source (workers/api/mirror.ts, docs/plans/shadow-router-followup-plan.md): service binding to the shadow router and the
+  // maintainer-set sampling percent (deploy repo `[vars]`; absent = off)
+  SHADOW_ROUTER?: { fetch(input: string, init?: RequestInit): Promise<Response> };
+  MIRROR_SAMPLE_PERCENT?: string;
+  MIRROR_ROUTE_WORDS?: string;
 }
 
 import { CANDIDATE_NOT_FOUND } from '../shared/shadow-verdict';
@@ -37,6 +42,7 @@ import { handleUserTokenRoutes } from './user-tokens';
 import { handleLifecycleRoutes } from './lifecycle';
 import { createCandidateWorkerCleanup, createUnavailableWorkerCleanup } from './purge-cleanup';
 import { handleUi } from './ui';
+import { mirrorAfterResponse, MIRROR_MARKER_HEADER } from './mirror';
 
 
 // Import types for JSDoc
@@ -87,6 +93,23 @@ export { SpecDO } from '../spec-do/index';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Read before handleFetch reassigns the request. The mirror runs after the response exists and can never change it.
+    const method = request.method;
+    const pathname = new URL(request.url).pathname;
+    const marked = request.headers.has(MIRROR_MARKER_HEADER);
+    const response = await handleFetch(request, env, ctx);
+    try {
+      const work = mirrorAfterResponse({ method, pathname, marked }, env);
+      if (work) ctx.waitUntil(work);
+    } catch {
+      // the mirror must never affect a response
+    }
+    return response;
+  },
+} satisfies ExportedHandler<Env>;
+
+async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
@@ -386,8 +409,8 @@ export default {
       }),
       { status: 404, headers: { 'Content-Type': 'application/json' } }
     );
-  },
-} satisfies ExportedHandler<Env>;
+  }
+}
 
 // Type definition
 type ExportedHandler<E = unknown> = {

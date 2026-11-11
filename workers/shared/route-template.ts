@@ -7,8 +7,10 @@
 // pattern separates them from route words, so the rule is an allowlist (inverted after review): a small fixed list plus the words
 // the deploy configures in MIRROR_ROUTE_WORDS (comma separated, the mirrored service's own route names).
 export const ROUTE_WORD = /^[a-z][a-z0-9_-]{0,31}$/;
-// The platform's own public pages and API route words are defaults, so the edge (which has no router config) and the router template alike.
-export const DEFAULT_ROUTE_WORDS = ['api', 'health', 'healthz', 'v1', 'v2', 'v3', 'static', 'assets', 'about', 'roadmap', 'app'];
+export const DEFAULT_ROUTE_WORDS = ['api', 'health', 'healthz', 'v1', 'v2', 'v3', 'static', 'assets'];
+
+/** The platform's own route words (public pages, API resources). The edge mirror source templates with these; the router's MIRROR_ROUTE_WORDS must list them all (tests/unit/route-words-in-sync.test.ts). */
+export const PLATFORM_ROUTE_WORDS = ['about', 'roadmap', 'app', 'organizations', 'actors', 'repositories', 'specs', 'candidates', 'gate-verdicts', 'trials', 'promotions', 'issues', 'entities', 'history', 'stage', 'claim', 'decide', 'comments'];
 export const MAX_TEMPLATE_SEGMENTS = 8;
 export const MAX_TEMPLATE_CHARS = 128;
 

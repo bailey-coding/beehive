@@ -62,6 +62,13 @@ service = "beehive-gate-workflow"
 binding = "PREVIEW_MANAGER"
 service = "beehive-preview-manager"
 
+# Mirror source (workers/api/mirror.ts): a sample of this worker's own GET/HEAD requests goes to the shadow router as a route-template
+# descriptor, only while MIRROR_SAMPLE_PERCENT is set (a maintainer var in the deploy repo; absent = off). A binding to a worker that does
+# not exist yet fails the deploy of this one (two passes on an empty account, like the bindings above; docs/OPS.md).
+[[services]]
+binding = "SHADOW_ROUTER"
+service = "beehive-shadow-router"
+
 # DO migration - SQLite-backed (required for state.storage.sql)
 [[migrations]]
 tag = "v1"

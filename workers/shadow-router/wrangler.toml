@@ -20,7 +20,7 @@ WORKERS_SUBDOMAIN = "bz23711"
 MIRROR_BODY_MODE = "none"
 # Route words kept in mirrored paths and in persisted paths (mirror-mode.ts routeTemplate); every other path segment becomes ":id".
 # Add the mirrored service's own route names; usernames, slugs and ids must never be listed.
-MIRROR_ROUTE_WORDS = "organizations,actors,repositories,specs,candidates,gate-verdicts,trials,promotions,issues,entities,history,stage,claim,decide,comments,app"
+MIRROR_ROUTE_WORDS = "organizations,actors,repositories,specs,candidates,gate-verdicts,trials,promotions,issues,entities,history,stage,claim,decide,comments,app,about,roadmap"
 
 # Durable Object binding for Spec DO (cross-script): the canary deploy refs
 # (traffic pointer) are read from it on every mirrored request
