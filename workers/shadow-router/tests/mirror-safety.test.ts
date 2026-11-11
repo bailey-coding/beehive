@@ -260,6 +260,14 @@ describe('mirror fan-out through the handler', () => {
     expect(new URL(base[0].url).pathname).toBe(new URL(candidateCalls()[0].url).pathname);
   });
 
+  it('in mode full the baseline still gets no caller credentials (the candidate allowlist applies to it too)', async () => {
+    await send('GET', undefined, FULL, { Cookie: 's=secret' });
+    const base = calls.filter((c) => c.url.startsWith(BASELINE_URL));
+    expect(base).toHaveLength(1);
+    expect(base[0].headers.get('authorization')).toBeNull();
+    expect(base[0].headers.get('cookie')).toBeNull();
+  });
+
   it('every request the router sends carries the loop-guard marker header', async () => {
     await send('GET');
     expect(calls.length).toBeGreaterThanOrEqual(2);
@@ -315,6 +323,21 @@ describe('mirror fan-out through the handler', () => {
         expect((await mirror(bad)).status).toBe(400);
       }
       expect(calls).toHaveLength(0);
+    });
+
+    it('a descriptor is sampled per candidate by a random draw against its split, not by a URL hash', async () => {
+      const partial = liveRef('cand-a', 'https://cand-a.bz23711.workers.dev');
+      partial.deployment.trafficPercentage = 50;
+      const e = { ...env(), SPEC_DO: { idFromName: () => 'id', get: () => ({ fetch: vi.fn(async () => new Response(JSON.stringify({ success: true, data: [partial] }), { status: 200 })) }) } };
+      const run = async (draw: number) => {
+        calls.length = 0;
+        vi.spyOn(Math, 'random').mockReturnValue(draw);
+        await handler.fetch(new Request('http://localhost/mirror', { method: 'POST', body: JSON.stringify({ v: 1, method: 'GET', path: '/api/:id' }), headers: { Authorization: 'Bearer tok' } }), { ...e, SCIENTIST_QUEUE: { send: vi.fn(async () => {}) } }, ctx);
+        await settleAll();
+        return candidateCalls().length;
+      };
+      expect(await run(0.1)).toBe(1);
+      expect(await run(0.9)).toBe(0);
     });
 
     it('accepts, answers 202 at once and fans out regardless of the URL hash gates (many descriptors, every one mirrored)', async () => {
