@@ -2,7 +2,7 @@
 
 Task: `shadow-router-followup` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-10: the shadow rung cannot be enforced yet (mirror targets and baseline)" |
 Tier: heavy (AGENTS.md rule 2: promotion train inputs; the edge worker, the router, the comparator and the Spec DO's evidence rules).
-Status: **rev 3 (2026-11-11), awaiting re-review. No code written.** Rev 1 was reviewed (approve with changes for D1 only, 5 blockers, D2 not
+Status: **rev 4 (2026-11-11): rev 3 re-reviewed (section 15), 4 blockers folded as plan changes; awaiting maintainer decisions (section 13, amended). No code written.** Rev 1 was reviewed (approve with changes for D1 only, 5 blockers, D2 not
 approved); rev 3 is a rewrite that applies every finding (section 12 maps them) and adds the piece the review exposed: **nothing in this repo sends
 production traffic to the shadow router**, so the first deliverable is a mirror source. Follows `docs/plans/promotion-gaps-plan.md` (merged,
 `aaef5e4`, not deployed), whose shadow evidence is log-only exactly because of these gaps.
@@ -224,6 +224,7 @@ The Spec DO's fall-through body for an unknown route is unverified; the router t
 
 1. **Baseline model (9.1):** keep the platform baseline `beehive-main` for the dogfood pipeline (proposed) and plan per-spec baselines with the ingest
    source, or add a per-spec baseline URL (column, route, migration) first.
+8. **Slice P (new, B2):** add a pre-shadow real preview deploy (default-off flag, `built` marker), or ship D1's additive parts only and park shadow targets until PR-G. Proposed: park shadow targets; ship M and D1-additive.
 2. **Mirror source:** slice M on the `beehive` worker, GET/HEAD only, template-only (proposed); `MIRROR_SAMPLE_PERCENT` default 0, dashboard-set.
 3. **Exposure variables** `MIRROR_SAMPLE_PERCENT` and `SHADOW_RUNG_MIRRORING`: both default off, dashboard-set, never in a `wrangler.toml` (proposed).
 4. **Defaults:** `SHADOW_SAMPLE_PERCENT = 10`, `SHADOW_MAX_TARGETS = 5` (hard max 8), in-flight mirror cap 10.
@@ -231,7 +232,7 @@ The Spec DO's fall-through body for an unknown route is unverified; the router t
 6. **D2 bar:** >= 3 candidates reach `SHADOW_MIN_SAMPLES` production samples, at least half on declared spec routes, within 7 days (proposed).
 7. **Order:** P0, P1, then M, then D1, then the window, then D2 with its own approval (proposed); the ingest source for customer services as its own plan.
 
-## 14. Review asks (for the re-review)
+## 14. Review asks (rev 3 re-review; answered in section 15)
 
 - Slice M: is sanitizing at the source and sending only `{method, template}` safe and sufficient? The loop guard (`X-Beehive-Mirror`): any path where
   a router-originated request can reach the edge without it (service-binding calls, redirects, the baseline URL)? Does wrapping `fetch` risk the response
@@ -240,3 +241,20 @@ The Spec DO's fall-through body for an unknown route is unverified; the router t
 - D1 sections 4-5: production-only tournament score; both-4xx drop; `preview_kind` as the real-deploy test (or a probe); the target ordering.
 - Is `GET /shadow-targets` plus two default-off dashboard variables enough exposure control until PR-G, given allowlisted-member creation?
 - D2 outline and the measurement bar; the ingest-source reservation in section 9.
+
+## 15. Review 2 dispositions (independent agent, 2026-11-11, on rev 3; all verified against the code at `aaef5e4`)
+
+Verdict was "not approvable as written" (4 blockers). Slice M's shape (sanitize at source, wrapper, loop header) stands. Plan changes, which supersede earlier text:
+
+- **B1 (router hash gate) - right.** `/mirror` bypasses the top gate (`classifyRequest`, `shadow-router/index.ts:715`) and the per-candidate hash (`:268`): a descriptor URL is one of a few dozen templates, so a hash would put each permanently in or out. The edge's `MIRROR_SAMPLE_PERCENT` is the only sampling for canary and baseline-less paths; shadow targets use the random draw of D1.2. Tested: a `/mirror` descriptor reaches canary targets at the edge's rate, not 1%.
+- **B2 (no honest `preview_kind` writer) - right.** The only preview at `passed_premerge` is simulated (`preview-manager/builds.ts:276-285`, URL fails `isAcceptableCanaryUrl`); the one real deploy is the canary upload, after shadow. P1 is therefore answered by the code. **D1 as specced delivers nothing on its own.** Shadow targets need a slice that really deploys a `passed_premerge` candidate (unreviewed code deployed one rung earlier: a governance decision). New slice **P** (pre-shadow real preview deploy, behind its own default-off flag) is a prerequisite of D1's `/shadow-targets`; `preview_kind='built'` is written only by that path. Without P, D1 ships only the additive parts (baseline kind, comparator marking, response fields). Decision 13.8.
+- **B3 (dashboard vars) - right** (`docs/OPS.md:628`: dashboard vars are overwritten by the next push; no config sets `keep_vars`). `MIRROR_SAMPLE_PERCENT` and `SHADOW_RUNG_MIRRORING` are set by the maintainer in `[vars]` in the Artifacts deploy repo (the documented pattern, like `GOVERNANCE_EGRESS_CONTROLLED`); the "no toml sets it" test asserts the **repo's GitHub copy** never enables them (value absent or `0`/`false`). Rollback is a deploy, not an instant dashboard flip. Decision 13.3 amended.
+- **B4 (D1 changes promotion) - right.** Every seeder posts `placeholder` samples (`e2e/promotion-fixtures.ts:55-57`, `scripts/demo/tournament.ts:188-189`, `scripts/prod-verify-promotion.sh:73-76`), and the tournament has no minimum-sample rule today. Chosen: **D1 ships additive fields only; the production-only tournament score and `SHADOW_MIN_SAMPLES` move to D2** with the seeders. Section 5 is replaced by: D1 changes no promotion behavior; the tournament keeps its all-sample average until D2. Mixed-version row added: old tournament against new Spec DO (all-sample average now includes production samples; accepted, log-only region).
+- **S1** route words: the edge shares `MIRROR_ROUTE_WORDS` (moved to a shared constant, router and edge read the same default) and `about`/`roadmap` are added. F6 corrected: informative baselines are `/` and `/app*` only.
+- **S2** amplification: add a per-isolate token bucket (rate, not just in-flight cap); state that a candidate can fetch public pages and be re-mirrored; the gate default stays 0.
+- **S3** claim fixed: the router has a Spec DO binding with `script_name = "beehive"` (`shadow-router/wrangler.toml:27-30`); the new root-to-router binding is a mutual dependency like the gate workflow and preview manager (safe on the existing account, two-pass on an empty one). Section 7 table amended.
+- **S4** the prefix `beehive-candidate-` also matches the platform's `beehive-candidate-service`: `/shadow-targets` reuses the reserved-name exclusion; constant moves to `workers/shared/`.
+- **S5** `preview_kind` resets on any preview PUT that omits it; mixed-version rows added (new preview manager against old Spec DO: field ignored, fine).
+- **S6** drop rule extends to both-3xx; the plan states scores are status, four headers and latency (bodies never compared, `index.ts:464`); `X-Beehive-Mirror` is sent only where the target can be `beehive` (baseline, canary refs), not to shadow candidates.
+- **S7** the `production` marker is forgeable by master/service principals (`api/index.ts:236-239`); acceptable in D1, D2 must not treat it as proof.
+- **Nits** fixed in section 1: `fetch` at `api/index.ts:89`; public pages `:94-97`; `createSimulatedPreview` `:616-675`; `wrangler.toml:20` is the router's; F7 a per-target percent is a no-op only at or above the top split. Edge wrapper captures method and path before `request` is reassigned (`:121`); `/mirror` is matched before the generic path (`:695-708`).
