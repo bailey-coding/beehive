@@ -8,9 +8,45 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-11-09
+**Last updated:** 2026-11-11
 
-## Handoff (2026-11-07): start here
+## Handoff (2026-11-11): start here
+
+**Read first:** this section, then `docs/plans/shadow-router-followup-plan.md` (rev 1 plus its review dispositions once added), then the 2026-11-07
+handoff below (its open items still stand). `AGENTS.md` first as always.
+
+**State.** `origin/main` = `aaef5e4` (CI green, run 295). It carries the promotion gaps, **none of it deployed** (production still runs `523291b`,
+2026-10-28; deploying is the maintainer's push to the Artifacts repo). Working branch `claude/pr1-review-lmgqik` = `main` plus the follow-up plan.
+- **PR A (shadow samples, schema m15), PR B (the Spec DO `advance` route), PR C (the promotion worker on `advance`)**: plan
+  `docs/plans/promotion-gaps-plan.md` (rev 3, dispositions in sections 11-15), operations in `docs/OPS.md` ("Shadow samples, schema m15",
+  "Advance", "Promotion worker on advance"). Each had a plan review, an implementation review and a verification pass; every guard was
+  mutation-checked. Unit suite 88 files / 2259 tests, local e2e 62 tests, both green.
+- **Maintainer decision 6, accepted:** the tournament decides only `shadow -> train`; every other move is a direct `advance`; once deployed,
+  competitive promotion past `shadow` answers `409 no_shadow_evidence` in production until the follow-up lands (candidates have no shadow scores).
+- **Behavior to know about at deploy:** `POST /promote` now refuses (with a `code`) instead of recording; shadow and train evidence are log-only
+  (`governance_events` `evidence_missing`); `advance` to `full` needs a live canary soaked 15 min (`CANARY_MIN_SOAK_MINUTES` is for local e2e only, never in a
+  deployed wrangler.toml); the namespace `4101` check and the other deploy steps of the 2026-11-07 handoff still apply.
+
+**Next, in order.**
+1. **Shadow-router follow-up** (`docs/plans/shadow-router-followup-plan.md`): rev 1 is written. An independent plan review was started (agent
+   `aadda1cde8d0e2c18`, model fable; it hit a usage limit and was resumed) and its findings must be folded into the plan as a dated "Review 1
+   dispositions" section before any code. Then the maintainer decides section 9 (baseline model, `none` mode only, the default-off
+   `SHADOW_RUNG_MIRRORING` flag, 10% sample / 5 targets, the baseline 4xx/5xx drop rule, flip criteria, D1/D2 slicing). Then implement **D1** (evidence
+   path; changes nothing about promotion), deploy and measure for ~7 days, then **D2** (production-only verdict, `EVIDENCE_MODE.shadow = 'enforce'`, sweep).
+2. Still open, each in `docs/OPEN-QUESTIONS.md` (2026-11-10 entries): nothing resets an exhausted tournament; the queue acks failed promotions; two
+   decisions can overlap and the tournament decides on the second arrival; `/merge/retry` moves get no promotion state; `SHADOW_ROUTER` binding unused;
+   the merge-train gate call sends an `actorId` that may not be an actor. Older: D2 canary follow-up (tombstoned rollback target, PR-G), the 500s
+   for invalid create bodies (starter issue), real traffic for `full`, M5a-2 PR-C/D0/D/G/F/E.
+
+**How we worked (keep doing this; it caught real bugs every round).** Spine work: plan doc -> independent review agent (Agent tool,
+`model: fable`, read-only, report as the final message) -> fold findings as dispositions -> implement -> mutation checks (break each new guard, a test must
+fail; survivors are weak tests) -> independent code review -> fixes -> verification pass for any behavior change -> merge to `main` only when the
+maintainer says so in chat. **Commit before mutating**: the mutation helper restores files with `git checkout -- <file>`, which silently discards uncommitted edits.
+Local e2e: start the workers detached (`nohup bash scripts/start-e2e-workers.sh &`, then poll the six ports), run `npm run test:e2e:local` (files run
+serially on purpose: they share one stack and one global promotion mode), then `scripts/stop-e2e-workers.sh`. There is no `gh` CLI in cloud sessions:
+read CI with the GitHub MCP tools. Review agents hit the 5-hour limit: resume them with `SendMessage` after the reset instead of starting new ones.
+
+## Handoff (2026-11-07): previous
 
 **Read first:** this section, then the 2026-11-02 handoff below (its "Next" list, open questions and maintainer
 decisions all still stand).
