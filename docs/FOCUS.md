@@ -28,11 +28,14 @@ handoff below (its open items still stand). `AGENTS.md` first as always.
   deployed wrangler.toml); the namespace `4101` check and the other deploy steps of the 2026-11-07 handoff still apply.
 
 **Next, in order.**
-1. **Shadow-router follow-up** (`docs/plans/shadow-router-followup-plan.md`): rev 1 is written. An independent plan review was started (agent
-   `aadda1cde8d0e2c18`, model fable; it hit a usage limit and was resumed) and its findings must be folded into the plan as a dated "Review 1
-   dispositions" section before any code. Then the maintainer decides section 9 (baseline model, `none` mode only, the default-off
-   `SHADOW_RUNG_MIRRORING` flag, 10% sample / 5 targets, the baseline 4xx/5xx drop rule, flip criteria, D1/D2 slicing). Then implement **D1** (evidence
-   path; changes nothing about promotion), deploy and measure for ~7 days, then **D2** (production-only verdict, `EVIDENCE_MODE.shadow = 'enforce'`, sweep).
+1. **Shadow-router follow-up** (`docs/plans/shadow-router-followup-plan.md`, rev 2). Its independent review (2026-11-11) found five blockers, all
+   verified and folded into section 11; the plan **is not startable yet**: (P0) nothing in the repo sends production traffic to the shadow router, so
+   where it comes from (or whether it exists) is a human check in Cloudflare; (P1) candidate `preview_url` can be a simulated URL with no Worker behind
+   it, so verify how previews are really produced; and the single platform baseline `beehive-main` cannot judge candidates that implement other
+   services (every `/api/*` answer is 401), so **decision 9.1 (per-spec baseline URL vs synthetic contract probes) comes first**. Then: a rev 3, a
+   re-review, the maintainer's section 9 decisions, **D1** (evidence path, now also with production-only tournament scoring and a `preview_kind`
+   marker), deploy and measure ~7 days against a *validity* criterion (informative production samples on the candidate's own spec routes), then **D2**
+   (the flip) only with a separate approval. Do not enforce shadow evidence before that.
 2. Still open, each in `docs/OPEN-QUESTIONS.md` (2026-11-10 entries): nothing resets an exhausted tournament; the queue acks failed promotions; two
    decisions can overlap and the tournament decides on the second arrival; `/merge/retry` moves get no promotion state; `SHADOW_ROUTER` binding unused;
    the merge-train gate call sends an `actorId` that may not be an actor. Older: D2 canary follow-up (tombstoned rollback target, PR-G), the 500s

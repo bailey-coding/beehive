@@ -2,7 +2,8 @@
 
 Task: `shadow-router-followup` | Spec: `docs/OPEN-QUESTIONS.md` "2026-11-10: the shadow rung cannot be enforced yet (mirror targets and baseline)" |
 Tier: heavy (AGENTS.md rule 2: promotion train inputs; touches the Spec DO's evidence rules and the router that feeds them).
-Status: **rev 1, draft, awaiting independent review. No code written.** Follows `docs/plans/promotion-gaps-plan.md` (merged 2026-11-10,
+Status: **rev 2 (2026-11-11): Review 1 (independent agent, approve with changes for D1 only, 5 blockers, D2 not approved) applied in section 11, which
+supersedes conflicting text above. Needs a re-review before any code. Blocked on P0, P1 and decision 9.1 (section 11).** No code written. Follows `docs/plans/promotion-gaps-plan.md` (merged 2026-11-10,
 `aaef5e4`, not deployed), whose shadow evidence is log-only exactly because of the gaps below.
 
 The goal is one sentence: **a candidate on the shadow rung receives mirrored traffic, is scored against a real production answer to the
@@ -214,3 +215,77 @@ until chosen), `docs/OPEN-QUESTIONS.md` (close the 2026-11-10 entry in two steps
 - D2's production-only verdict, the sweep and the grandfathering: any path where a placeholder score can still pass a candidate, or a
   legitimately passed candidate is regressed?
 - Mixed-version rows; anything in the router's subrequest/limits budget I missed.
+
+## 11. Review 1 dispositions (independent agent, 2026-11-11: approve with changes for D1 only; D2 not approved; sections 11 supersedes the text above)
+
+I re-checked B1, B2 and B4 in the code before accepting them. The plan as written would have shipped a pipeline that measures nothing.
+
+**Blockers.**
+- **B1 (accepted, verified): nothing sends traffic to the shadow router.** No worker, edge route or workflow calls it (`workers/` and
+  `.github/workflows` contain only the unused `SHADOW_ROUTER` binding of the promotion worker and CI's build list; the edge, `workers/api`, does not
+  mirror). Either mirrored traffic comes from configuration outside the repo, or there is none. **Precondition P0 (human, before D1):** confirm in
+  Cloudflare where the router receives production traffic from and its volume; record it in `docs/OPEN-QUESTIONS.md`. If there is no source, building
+  one (an edge hook that copies requests) is its own plan and this plan waits for it. Without it the section 3.5 measurement window yields zero samples.
+- **B2 (accepted, verified): `preview_url` may not be a live Worker.** `createSimulatedPreview` writes a URL without deploying anything
+  (`workers/preview-manager/index.ts:616-634`), the Workers Builds path is a placeholder (`builds.ts:201-212`), and the DO stores whatever it is
+  given. A dead URL becomes a synthetic 500 in `fetchCandidate` and every such candidate scores low. **Precondition P1 (human):** verify in production
+  how candidate previews are really produced. **Design change:** `/shadow-targets` returns only candidates whose preview was produced by a real
+  deploy. Recommended: a `preview_kind` marker (`built` | `simulated`) written by the preview manager through the existing preview PUT route
+  (additive column, additive optional request field, an older writer leaves it unset = not eligible); the alternative is a router health probe
+  before first use. A simulated or unmarked preview is never a target.
+- **B3 (accepted): `beehive-main` is not an oracle for candidates.** A sanitized request carries no credentials, so every `/api/*` answer from the
+  baseline is `401` (auth is fail-closed) and, under the 4xx rule, dropped; the only informative answers are the public pages (`/`, `/about`,
+  `/roadmap`, the UI, `workers/api/index.ts:92-103`), and candidates implement other services. A single platform baseline would score "does the
+  candidate look like Beehive's landing page". **Consequences:** D2 is removed from this plan's approval; section 3.5 gains a *validity*
+  criterion (informative production samples on the candidate's **own spec routes**, not just a count); and **decision 9.1 is no longer optional**:
+  a per-spec baseline (a baseline URL on the spec or repository, set by the maintainer, additive migration) or option B (synthetic contract probes,
+  which also need example values in the spec contract) must be chosen before the evidence path is worth building. Recommended: per-spec baseline for
+  the live oracle, synthetic probes later as a second source.
+- **B4 (accepted, verified): the sampling and latency claims in 3.1 were wrong.** The top gate classifies every request with the default split
+  (1% in production, `config.ts:158`, `index.ts:715`) using a hash of `method:url` (`index.ts:102-109`), and the per-candidate check reuses the same
+  value (`:268`): `SHADOW_SAMPLE_PERCENT = 10` was a no-op, a shadow target would see only the 1% that passes the gate, and the same URLs would always
+  (or never) be mirrored. The fan-out is **awaited** before the response (`:728`); only `triggerScientist` is in `waitUntil`, so latency is up to 10 s
+  per target. **Revised:** shadow targets are sampled per target and per request with a random draw (`SHADOW_SAMPLE_PERCENT`, default 10) evaluated
+  after the top gate and independent of the URL hash (so the same URL is not always or never mirrored); the top gate's own 1% default is stated in
+  OPS as the ceiling on volume unless changed; the fan-out moves into `ctx.waitUntil` so mirroring never delays the response (the canary metrics
+  recording moves with it).
+- **B5 (accepted, verified): D1 changes promotion.** The tournament ranks by `shadowScore`, an average of all samples (`workers/spec-do/index.ts:5113`).
+  With the flag on, tournaments would decide on a mix of placeholder and thin production samples before the measurement window ends. **Moved into
+  D1:** the candidate response gains `shadowProductionScore` / `shadowProductionCount` (additive), and the tournament uses the production score
+  only (a candidate with fewer than `SHADOW_MIN_SAMPLES` production samples has none, so the tournament says `no_shadow_evidence`, as it does in
+  production today). The shadow *verdict* stays all-sample and log-only until D2.
+
+**Non-blocking, all accepted.**
+- **N1:** replace the original-request replay of `beehive-main` with the sanitized baseline fetch instead of adding a second fetch. The replay feeds
+  only Analytics Engine rows (`index.ts:295-309`), which nothing reads, re-sends caller credentials over the public Internet, and leaves the
+  baseline in `candidates` scored against the new baseline. The baseline is excluded from `candidates` in the queue message. **N2:** build the
+  baseline request with a non-baseline id (`headersForTarget(BASELINE_TARGET_ID, ...)` returns the caller's headers).
+- **N3:** drop a sample only when baseline and candidate agree on the status class (both 4xx or both 5xx); a disagreement (baseline 4xx, candidate
+  2xx: it accepts what production rejects) is scored. Per-candidate counts of dropped and scored samples are logged, not Analytics Engine alone.
+- **N4:** D2's sweep recomputes every shadow verdict from the `shadow_scores` columns; it does not match the notes text (the row is rewritten only on a
+  status change, and a candidate at the cap writes nothing, so a text match goes stale).
+- **N5:** samples accumulate across pushes to the same candidate id and freeze at 1000 per baseline. D1 must establish whether a new commit is a new
+  candidate id (`candidates.commit_sha` is fixed at creation) and state the reset rule; if one id spans commits, the production columns reset when the
+  head sha changes. **N6:** the comparator's batch of 100 times one post per candidate leaves a hard `SHADOW_MAX_TARGETS` of 20 at ~2000
+  subrequests against the ~900 already noted (`scientist-comparator/storage/spec-do.ts:53-55`): the hard max is 8, default 5.
+- **N7:** a message whose baseline is unavailable is **not enqueued** (an old comparator would score it against a placeholder). The mixed-version
+  table gains that row. **N8:** targets are ordered by fewest production samples and skip candidates at the cap, not newest first (which starves
+  older candidates). **N9:** `/shadow-targets` also requires the candidate worker-name prefix (`CANDIDATE_WORKER_PREFIX`), because
+  `isAcceptableCanaryUrl` accepts any Worker on the account, `beehive` itself included.
+- **N10:** F10 is corrected: candidates are created by **allowlisted members** (user tokens with write scope can create and claim, viewers are
+  read-only, minting is master or session only), not only the maintainer; creation is closed to strangers. `SHADOW_RUNG_MIRRORING` must be a
+  **dashboard-set variable, never in a `wrangler.toml`** (an agent's pull request can edit one), with a unit test that no wrangler config sets it, like
+  `CANARY_MIN_SOAK_MINUTES`.
+- **N11, rollback:** turning the flag off removes shadow targets within two cache TTLs (~10 s); the samples and verdict rows stay and still count
+  after D2; idempotency rows expire in 24 h. **N12, docs and tests:** also `docs/ARCHITECTURE.md:564` (says the router has no `SPEC_DO` binding) and the
+  public page text (`workers/api/index.ts:749,1248`); tests for the classification of shadow targets, the baseline excluded from `candidates`,
+  and any non-OK `/shadow-targets` answer (not only 404) keeping the canary targets. The Spec DO's fall-through 404 body for an unknown route is
+  unverified: check it before relying on "code-less 404".
+
+**Facts corrected.** F2: writes are skipped at `index.ts:280-284`, and in production the baseline is replayed for ~1% of URLs only. F4: `none` mode
+also sends `x-request-id` (the router's own UUID, so no leak). F9: the preview URL may be simulated (B2). F10: member origin (N10). `applyCanaryRefs`
+is `config.ts:216-260`. The tournament already consumes `shadowScore` (B5).
+
+**What this means for the plan.** D1 as written is not startable. The order is now: P0 (where does mirrored traffic come from) and P1 (are previews
+real) are human checks; decision 9.1 (per-spec baseline vs synthetic probes) shapes everything; then a re-reviewed rev 3; then D1; then the
+measurement window with the validity criterion; D2 only after that and a separate approval.
