@@ -28,14 +28,16 @@ handoff below (its open items still stand). `AGENTS.md` first as always.
   deployed wrangler.toml); the namespace `4101` check and the other deploy steps of the 2026-11-07 handoff still apply.
 
 **Next, in order.**
-1. **Shadow-router follow-up** (`docs/plans/shadow-router-followup-plan.md`, rev 2). Its independent review (2026-11-11) found five blockers, all
-   verified and folded into section 11; the plan **is not startable yet**: (P0) nothing in the repo sends production traffic to the shadow router, so
-   where it comes from (or whether it exists) is a human check in Cloudflare; (P1) candidate `preview_url` can be a simulated URL with no Worker behind
-   it, so verify how previews are really produced; and the single platform baseline `beehive-main` cannot judge candidates that implement other
-   services (every `/api/*` answer is 401), so **decision 9.1 (per-spec baseline URL vs synthetic contract probes) comes first**. Then: a rev 3, a
-   re-review, the maintainer's section 9 decisions, **D1** (evidence path, now also with production-only tournament scoring and a `preview_kind`
-   marker), deploy and measure ~7 days against a *validity* criterion (informative production samples on the candidate's own spec routes), then **D2**
-   (the flip) only with a separate approval. Do not enforce shadow evidence before that.
+1. **Shadow evidence, from a mirror source to the flip** (`docs/plans/shadow-router-followup-plan.md`, **rev 3**, 2026-11-11, awaiting re-review). Rev 1's
+   review found five blockers (all verified; mapped in the plan's section 12). The biggest: **nothing in this repo sends production traffic to the
+   shadow router**, so the plan now starts with **slice M**, a mirror source in the `beehive` worker (GET/HEAD only, reduced at the source to
+   `{method, route template}`, off by default behind a dashboard-set `MIRROR_SAMPLE_PERCENT`, with a loop guard because the router's baseline fetch hits
+   the same worker), then **D1** (shadow targets behind a default-off flag, a like-for-like production baseline, `production`-marked samples, production-only
+   tournament score, a `preview_kind` marker because previews can be simulated), then a 7-day measurement window with a validity criterion, then **D2** (the
+   flip) only with its own approval. Human checks first: **P0** (does anything outside the repo already mirror into the router?) and **P1** (are candidate
+   previews real Workers in production?). Next steps: re-review rev 3 (fable agent, read-only), fold dispositions, put section 13's decisions to the
+   maintainer, then implement slice M. Whose traffic customers' services produce is a separate, larger plan (section 9: an ingest source plus per-spec
+   baselines).
 2. Still open, each in `docs/OPEN-QUESTIONS.md` (2026-11-10 entries): nothing resets an exhausted tournament; the queue acks failed promotions; two
    decisions can overlap and the tournament decides on the second arrival; `/merge/retry` moves get no promotion state; `SHADOW_ROUTER` binding unused;
    the merge-train gate call sends an `actorId` that may not be an actor. Older: D2 canary follow-up (tombstoned rollback target, PR-G), the 500s
