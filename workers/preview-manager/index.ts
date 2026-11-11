@@ -129,9 +129,6 @@ const previewManagerHandler = {
         
         if (deployment.success) {
           logger.info(`Preview deployed for candidate ${candidate.id}: ${deployment.previewUrl}`);
-          
-          // Trigger shadow comparisons for this preview
-          await triggerShadowComparisons(env, candidate, deployment, logger);
         } else {
           logger.error(`Preview deployment failed for candidate ${candidate.id}: ${deployment.error}`);
         }
@@ -230,12 +227,6 @@ async function handleDeployPreviewRequest(
     });
 
     if (deployment.success) {
-      // Trigger shadow comparisons for this preview
-      await triggerShadowComparisons(env, candidate, deployment, {
-        info: (msg: string, data?: object) => console.log(`[PreviewManager] ${msg}`, data || ''),
-        error: (msg: string, error?: unknown) => console.error(`[PreviewManager] ${msg}`, error || ''),
-      });
-
       return new Response(JSON.stringify({
         success: true,
         candidateId: candidate.id,
@@ -674,47 +665,6 @@ async function createSimulatedPreview(
       success: false,
       error: error instanceof Error ? error.message : String(error),
     };
-  }
-}
-
-/**
- * Trigger shadow comparisons for the preview candidate
- * Sends a message to the preview-scientist-comparisons queue
- */
-async function triggerShadowComparisons(
-  env: PreviewManagerEnv,
-  candidate: Candidate,
-  deployment: PreviewDeployment,
-  logger: { info: (msg: string, data?: object) => void; error: (msg: string, error?: unknown) => void }
-): Promise<void> {
-  if (!deployment.success || !deployment.previewUrl) {
-    logger.info(`Skipping shadow comparisons - deployment failed for candidate ${candidate.id}`);
-    return;
-  }
-
-  try {
-    // Create a ping message to test the preview
-    const testMessage = {
-      type: 'preview-deployed',
-      candidateId: candidate.id,
-      specId: candidate.specId,
-      previewUrl: deployment.previewUrl,
-      previewWorkerName: deployment.workerName,
-      deployedAt: deployment.deployedAt,
-      commitSha: candidate.commitSha,
-      timestamp: Date.now(),
-    };
-
-    // Send to preview-scientist-comparisons queue
-    // In production, the Shadow Router will send actual comparison messages
-    // For now, we just send a deployment notification
-    await env.PREVIEW_SCIENTIST_QUEUE.send(testMessage);
-    
-    logger.info(`Shadow comparisons triggered for candidate ${candidate.id}`, {
-      previewUrl: deployment.previewUrl,
-    });
-  } catch (error) {
-    logger.error(`Failed to trigger shadow comparisons for candidate ${candidate.id}:`, error);
   }
 }
 

@@ -27,8 +27,9 @@ export interface ScientistQueueMessage {
   headers: Record<string, string>;
   body?: string;
   
-  // Baseline (production) response
-  baseline: ResponseData;
+  // Baseline response. `kind: 'production'` means a real answer from the service the candidate would replace, to the same
+  // sanitized request; absent means the router's placeholder stub (an old router).
+  baseline: ResponseData & { kind?: 'production' };
   
   // Candidate responses (one per candidate)
   candidates: CandidateResponse[];

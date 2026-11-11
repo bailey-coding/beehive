@@ -26,11 +26,30 @@ export class SpecDoTransientError extends Error {}
 export type ShadowPostOutcome = 'recorded' | 'not_found' | 'unsupported' | 'rejected';
 
 /**
- * What the samples are scored against. The shadow router still sends a placeholder baseline (a fake 200), so every sample is
- * 'placeholder' until its follow-up plan captures real production responses; only 'production' samples can ever become enforced
- * evidence (docs/plans/promotion-gaps-plan.md section 12, flip-readiness).
+ * What a sample is scored against: 'production' only when the router says its baseline is a real answer (`baseline.kind`);
+ * an absent kind (an old router's stub) is 'placeholder', which never becomes enforced evidence.
  */
-export const SAMPLE_BASELINE: ShadowSample['baseline'] = 'placeholder';
+export function sampleBaselineFor(message: Pick<ScientistQueueMessage, 'baseline'>): ShadowSample['baseline'] {
+  return message.baseline?.kind === 'production' ? 'production' : 'placeholder';
+}
+
+/** 'client_error' | 'server_error' | 'redirect' for a 3xx/4xx/5xx status, null otherwise (2xx and others carry information). */
+function failureClass(status: number): 'redirect' | 'client_error' | 'server_error' | null {
+  if (status >= 300 && status < 400) return 'redirect';
+  if (status >= 400 && status < 500) return 'client_error';
+  if (status >= 500 && status < 600) return 'server_error';
+  return null;
+}
+
+/**
+ * A production sample is dropped when baseline and candidate both answered in the same failure class (both 4xx, both 5xx,
+ * both 3xx): the pair agrees on a refusal (e.g. both 401 to an anonymous request) and says nothing about the candidate.
+ * A disagreement (baseline 4xx, candidate 2xx; baseline 2xx, candidate 5xx) is scored.
+ */
+export function isUninformativePair(baselineStatus: number, candidateStatus: number): boolean {
+  const c = failureClass(baselineStatus);
+  return c !== null && c === failureClass(candidateStatus);
+}
 
 const IDEMPOTENCY_KEY_MAX = 255;
 
@@ -140,7 +159,7 @@ export class SpecDOClient {
    * Post one candidate's sample for one request. The Idempotency-Key makes a queue redelivery (or a retry after a sibling
    * candidate failed) a replay, never a second count. Throws SpecDoTransientError on 5xx or a network error only.
    */
-  async postShadowSample(candidateId: string, result: CandidateComparisonResult): Promise<ShadowPostOutcome> {
+  async postShadowSample(candidateId: string, result: CandidateComparisonResult, baseline: ShadowSample['baseline'] = 'placeholder'): Promise<ShadowPostOutcome> {
     const rawKey = `${result.requestId}:${candidateId}`;
     // A key over the DO's limit would be a 400 and a redelivery would then double-count: hash it (hex SHA-256 is 64 characters)
     const key = rawKey.length <= IDEMPOTENCY_KEY_MAX ? rawKey : `sha256:${await sha256Hex(rawKey)}`;
@@ -149,7 +168,7 @@ export class SpecDOClient {
       score: Math.min(100, Math.max(0, Number.isFinite(result.score) ? result.score : 0)),
       matched: result.matched,
       diffs: result.diffs.slice(0, SHADOW_MAX_DIFFS_PER_SAMPLE).map((d) => ({ type: d.type, severity: d.severity })),
-      baseline: SAMPLE_BASELINE,
+      baseline,
     };
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Actor-ID': 'scientist-comparator' };
     headers['Idempotency-Key'] = key;
@@ -178,14 +197,26 @@ export class SpecDOClient {
    * `unsupported` once per batch rather than retry it.
    */
   async recordRequestComparison(
-    _message: ScientistQueueMessage,
+    message: ScientistQueueMessage,
     results: RequestComparisonResult
   ): Promise<Map<string, ShadowPostOutcome>> {
     const outcomes = new Map<string, ShadowPostOutcome>();
+    const baseline = sampleBaselineFor(message);
+    let scored = 0;
+    let dropped = 0;
     for (const candidateResult of results.candidates) {
       if (!isValidCanaryCandidateId(candidateResult.candidateId)) continue;
-      outcomes.set(candidateResult.candidateId, await this.postShadowSample(candidateResult.candidateId, candidateResult));
+      if (
+        baseline === 'production' &&
+        isUninformativePair(candidateResult.statusComparison.baselineStatus, candidateResult.statusComparison.candidateStatus)
+      ) {
+        dropped++;
+        continue;
+      }
+      scored++;
+      outcomes.set(candidateResult.candidateId, await this.postShadowSample(candidateResult.candidateId, candidateResult, baseline));
     }
+    if (baseline === 'production') console.log(`[Scientist] production samples for request ${message.requestId}: scored=${scored} dropped=${dropped}`);
     return outcomes;
   }
 }

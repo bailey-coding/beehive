@@ -115,6 +115,38 @@ describe('samples', () => {
   });
 });
 
+describe('production baseline (shadow-router follow-up D1)', () => {
+  const prod = (requestId: string, baselineStatus: number, candidateStatuses: Array<[string, number]>): ScientistQueueMessage => ({
+    ...message(requestId, []),
+    baseline: { candidateId: 'production', specId: '', status: baselineStatus, headers: {}, latencyMs: 20, kind: 'production' },
+    candidates: candidateStatuses.map(([id, status]) => response(id, status)),
+  });
+
+  it("marks samples 'production' when the router says its baseline is a real answer", async () => {
+    await run(batch([prod('p-1', 200, [[C1, 200]])]));
+    expect(posts()[0].body.samples[0]).toMatchObject({ baseline: 'production' });
+  });
+
+  it('drops a pair that agrees on a refusal (both 4xx, both 5xx, both 3xx) and scores a disagreement', async () => {
+    await run(batch([prod('p-2', 401, [[C1, 401], [C2, 200]])]));
+    expect(posts().map((c) => c.path)).toEqual([`/api/candidates/${C2}/shadow-samples`]);
+    fake.calls.length = 0;
+    await run(batch([prod('p-3', 500, [[C1, 503]])]));
+    await run(batch([prod('p-4', 302, [[C1, 302]])]));
+    expect(posts()).toHaveLength(0);
+    await run(batch([prod('p-5', 200, [[C1, 500]])]));
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('an absent kind stays placeholder and nothing is dropped (an old router)', async () => {
+    const m = prod('p-6', 401, [[C1, 401]]);
+    delete (m.baseline as { kind?: string }).kind;
+    await run(batch([m]));
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].body.samples[0]).toMatchObject({ baseline: 'placeholder' });
+  });
+});
+
 describe('fan-out (review S4)', () => {
   it('looks a candidate and its spec up once per batch, however many messages mention them', async () => {
     const b = batch([message('req-a', [C1, C2]), message('req-b', [C1, C2]), message('req-c', [C1])]);
