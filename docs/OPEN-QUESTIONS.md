@@ -1273,3 +1273,11 @@ Needed before shadow can be enforced (a follow-up plan, "option 2"): mirror `pas
 - **Overlapping decisions.** The tournament's read-scores, decide, advance-winner sequence is not one compare-and-swap, and `recordWinner` writes the candidate list from a copy read earlier: two requests deciding at once (a third entrant joining mid-decision) can each advance a different winner. Predates PR C. Fix with a decide-and-claim write in the Spec DO (spine), alongside the "decides on the second arrival" rule above.
 
 **Status**: Open.
+
+## 2026-11-12: scientist-comparator Workers Build failed on missing shared `postinstall` (third occurrence)
+
+The push of `d63abf7` built nine workers and failed `beehive-scientist-comparator` with `Could not resolve "zod"` from
+`../shared/deploy-refs.ts` and `../shared/shadow-verdict.ts`. It declared `zod` itself but lacked the `postinstall` that installs
+`workers/shared`'s dependencies (same cause as the 2026-10-16 entry). It stayed on its 2026-11-03 version until the fix.
+**Fix**: `0a14bc1` adds the `postinstall`; all ten builds passed. **Open**: CI still does not assert that every worker importing a zod-using
+shared module declares the `postinstall` (see the 2026-10-16 note); a guard in `ci.yml` would stop a fourth recurrence.
