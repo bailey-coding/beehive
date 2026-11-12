@@ -138,6 +138,9 @@ data and secrets) and is human-only.
 Config rules that bit this repo twice:
 - Service bindings take `binding = "..."`, never `name = "..."`.
 - Queue consumers attach via `[[queues.consumers]]`; `[[queues]]` is the producer form.
+- A worker importing any `workers/shared/*` module that imports `zod` needs the `postinstall` `npm install --prefix ../shared --no-audit --no-fund --no-package-lock`
+  (copy it from `workers/gate-workflow/package.json`). Declaring `zod` in the worker is not enough, and local builds, tsc and CI hide the gap
+  (hit three times; `scientist-comparator` 2026-11-12, `docs/OPEN-QUESTIONS.md`).
 
 Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missing
 `API_AUTH_TOKEN` → 503, wrong bearer → 401, including `/health` and local dev. Workers read
