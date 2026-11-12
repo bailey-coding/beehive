@@ -298,3 +298,29 @@ itself (`EVIDENCE_MODE.shadow = 'enforce'`) is still a separate constant change 
 7. **Review asks.** Is reading the shadow rung from columns in `evaluateEvidence` (instead of the stored row) safe for `advance` idempotency and the log-only
    `evidence_missing` events? Does anything else read the stored shadow verdict as evidence (UI, gate-workflow, merge-train)? Any path where the switch changes
    behavior while absent? Is `SHADOW_MIN_SAMPLES` the right production minimum, given section 6's measurement bar?
+
+### Review 3 dispositions (independent agent, 2026-11-12, on section 16; no blockers)
+
+Answers: reading the shadow rung from columns is safe for `advance` idempotency (a replay is a stage no-op decided before evidence; evaluation runs in the same
+transaction; the `evidence_missing` dedupe key excludes `detail`); no machine reader besides `evaluateEvidence` uses the stored shadow verdict (the promotion
+worker, tournament and merge train go through the `advance` dry run); with both switches absent nothing changes except seeded data.
+- **S1 (switches not independent) - right.** Supported states are **off/off, DO-only, and both**; tournament-only is a transient mixed-version state in which
+  the tournament disqualifies on the DO's all-sample `failed` but ranks on production scores. Stated here and in OPS; the matrix is tested (documenting, not
+  endorsing, tournament-only).
+- **S2 (stale stored row) - right.** In production mode a sample-time `pending` is written over an existing non-pending verdict (the table allows it), and the
+  `evaluateEvidence` detail names the source ("N of M production samples"). Stored rows that no further sample touches stay stale; documented in OPS, and
+  `advance`, the tournament and merge train follow the columns.
+- **S3 (manual shadow verdicts stop being evidence) - right.** Under the DO switch a posted `shadow` gate verdict has no effect on `advance`; stated, tested,
+  and the maintainer override is the stage PATCH break-glass.
+- **S4 - right.** `shadowMinProductionSamples()` (default = `SHADOW_MIN_SAMPLES`) used by the DO and the tournament; TS seeders import `SHADOW_MIN_SAMPLES`; the
+  shell seeder is pinned by a repo test.
+- **S5 - tests added:** the switch matrix; unrounded boundary (79.996 is `fail` while the rounded field shows 80); `failed` versus `missing` in the dry-run
+  evidence; placeholder-only at the cap plus too few production samples is `missing`; the vars test reuses `assignments()`. **Not done:** a switch-on pass of the
+  e2e stack (a follow-up when the stack is next run with the switches).
+- **S6 - right.** In production mode the trial records `basis: 'shadow_production_score'`; the join snapshot score stays all-sample by design (it is a snapshot,
+  not what decides).
+- **N1** values are trimmed and case-insensitive, an unrecognized non-empty value logs a warning once. **N2** seeders post `baseline` only to a PR A Spec DO (the
+  strict schema answers 400 to an older one); noted in OPS. **N3** edge-posted `production` samples are forgeable by tier-1 holders: a prerequisite of the
+  flip (restrict or mark them). **N4** both vars may arrive in one push in any order: the transient states are the S1 ones. **N5** until slice P no
+  shadow-rung candidate earns production samples, so `TOURNAMENT_SHADOW_SOURCE=production` makes every real tournament answer `no_shadow_evidence` (as today).
+  **N6** production-only scores tie more easily (two candidates at 100). **N7** stale comments updated with the code.
