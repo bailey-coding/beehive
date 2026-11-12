@@ -15,8 +15,9 @@ Completed items are removed, not struck through; history lives in git.*
 The handoffs below say "not deployed"; that is **out of date**. The maintainer pushed `d63abf7` to the Artifacts repo on 2026-11-12 (about 16:18 UTC): nine
 of ten Workers Builds passed, `beehive-scientist-comparator` failed (`Could not resolve "zod"`: it lacked the shared `postinstall`) and kept its 2026-11-03
 version. `0a14bc1` added the `postinstall` and was pushed to `cf` too; all ten builds then passed (read via the Cloudflare builds API, latest build per worker),
-so production runs `0a14bc1` or later. `scripts/check-shared-postinstall.mjs` now guards the gap in CI. **Not verified:** the deploy checks of the earlier
-handoffs (namespace `4101`, m14/m15 ran, `OPEN_VIEWER_SIGNIN`, P0, `MIRROR_SAMPLE_PERCENT`); confirm them before relying on the behavior listed under each.
+so production runs `0a14bc1` or later. `scripts/check-shared-postinstall.mjs` now guards the gap in CI. **Verified 2026-11-12:** `schema_version` is `m15` on the `main` Spec DO (maintainer, dashboard SQL editor); `scripts/prod-health.sh` passes
+(ten `/health` 200s plus the Spec DO call); namespace `4101` is bound as `VIEWER_RATE_LIMITER`; `OPEN_VIEWER_SIGNIN` and `MIRROR_SAMPLE_PERCENT` are unset (both off).
+**Not verified:** P0 (does anything outside the repo mirror into the router?). Confirm it before setting `MIRROR_SAMPLE_PERCENT`.
 
 ## Handoff (2026-11-11): start here
 
