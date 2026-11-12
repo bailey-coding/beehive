@@ -712,6 +712,28 @@ are untouched (shadow evidence stays log-only; the tournament keeps its all-samp
   default). New router, old comparator: extra `kind` field ignored, samples stay `placeholder`. Old router, new comparator: no `kind` -> `placeholder`. New
   router with an old Spec DO: nothing new is required of it.
 
+## Production-only shadow sources (D2-prep, 2026-11-12; both switches default off)
+
+Plan: `docs/plans/shadow-router-followup-plan.md` section 16 (Review 3 dispositions). **Nothing changes while the switches are absent**; the flip
+itself (`EVIDENCE_MODE.shadow = 'enforce'`) is a separate, later constant change after a real measurement window and approval. Not deployed.
+
+- **`SHADOW_VERDICT_SOURCE=production`** (Spec DO var) and **`TOURNAMENT_SHADOW_SOURCE=production`** (promotion-worker var). Set by the maintainer in `[vars]` of the
+  Artifacts deploy repo, never in this repo (`tests/unit/shadow-source-vars-not-enabled.test.ts`). Values are trimmed and case-insensitive; any other
+  non-empty value is off and logs one warning.
+- **DO switch.** The shadow verdict written at sample time uses the production count and average (`shadowMinProductionSamples()`, = `SHADOW_MIN_SAMPLES`); a
+  production-mode `pending` also replaces a stored pass/fail written under the all-sample rule. `advance`'s evidence for the shadow rung is computed **from
+  `shadow_scores`** (raw sums) at call time: the stored verdict row, including a manually posted `shadow` gate verdict, decides nothing. Stored rows no new sample
+  touches stay stale for humans (UI, CLI, `GET /api/gate-verdicts`); `advance`, the tournament and the merge train follow the columns. The maintainer's override is the stage PATCH.
+- **Tournament switch.** Ranks by `shadowProductionScore`, and only for a candidate with at least the production minimum; otherwise it has no score
+  (`no_shadow_evidence`). An older Spec DO without the fields fails closed. The trial's `basis` is `shadow_production_score`.
+- **Supported states: off/off, DO-only, both.** Tournament-only is a transient mixed-version state (the tournament disqualifies on the DO's all-sample `failed`
+  but ranks on production scores). Both vars may arrive in one push in any order.
+- **Until slice P** (real pre-shadow previews) no shadow-rung candidate earns production samples, so `TOURNAMENT_SHADOW_SOURCE=production` makes every real
+  tournament answer `no_shadow_evidence`, as production does today. Production-only scores also tie more easily (two candidates at 100 is a `tie`).
+- **Seeders** (e2e fixtures, the demo, `scripts/prod-verify-promotion.sh`) post `production` samples (the minimum count), so they work in both modes; they need a Spec DO
+  with PR A (its sample schema is strict). Edge-posted `production` samples are forgeable by tier-1 holders: restricting or marking them is a prerequisite of the flip.
+- **Not done:** a switch-on pass of the e2e stack.
+
 ## Invalid transitions (PR-S, 2026-11-02)
 
 - The Spec DO checks every candidate stage write (the stage PATCH; sandbox execute was retired 2026-11-02) against table (c) and every promotion-state write against table (d) of `docs/GOVERNANCE-STATE-MACHINES.md`, in the write's transaction. **Log-only:** a violation never refuses; it writes one `governance_events` row (`event = 'invalid_transition'`, `subject = candidate:<id>` or `promotion_state:<id>`, `reason = <machine>:<from>-><to>`, `actor_id` NULL, `asserted_actor_id` = the asserted `X-Actor-ID` or the promotion-state row's actor, `detail` JSON with `rule`, `enforceable`, `source`, `specId`, `candidateId`, `orgName`) and a `console.warn('[SpecDO] invalid_transition', ...)` log line. A failure to log is a `console.error` and the write still lands.

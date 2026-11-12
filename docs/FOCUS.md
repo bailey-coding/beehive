@@ -36,7 +36,8 @@ handoff below (its open items still stand). `AGENTS.md` first as always.
    the maintainer's choice: shadow targets for `passed_premerge` candidates (previews at that rung are simulated; needs plan slice P, a real pre-shadow deploy
    and a governance decision), the production-only tournament score and the flip (D2, needs a measurement window and approval). Human checks: **P0**
    (does anything outside the repo already mirror into the router?) before the deploy; the two-pass first deploy on an empty account. After deploy: set
-   `MIRROR_SAMPLE_PERCENT` (start low) and watch the production samples; whose traffic customers' services produce is a separate plan (plan section 9).
+   `MIRROR_SAMPLE_PERCENT` (start low) and watch the production samples; **D2-prep is also on `main`'s branch** (2026-11-12): `SHADOW_VERDICT_SOURCE` and
+   `TOURNAMENT_SHADOW_SOURCE` (default off, `docs/OPS.md` "Production-only shadow sources"), the flip itself still waits for a window and approval; whose traffic customers' services produce is a separate plan (plan section 9).
 2. Still open, each in `docs/OPEN-QUESTIONS.md` (2026-11-10 entries): nothing resets an exhausted tournament; the queue acks failed promotions; two
    decisions can overlap and the tournament decides on the second arrival; `/merge/retry` moves get no promotion state; `SHADOW_ROUTER` binding unused;
    the merge-train gate call sends an `actorId` that may not be an actor. Older: D2 canary follow-up (tombstoned rollback target, PR-G), the 500s
