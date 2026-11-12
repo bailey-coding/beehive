@@ -324,3 +324,11 @@ worker, tournament and merge train go through the `advance` dry run); with both 
   flip (restrict or mark them). **N4** both vars may arrive in one push in any order: the transient states are the S1 ones. **N5** until slice P no
   shadow-rung candidate earns production samples, so `TOURNAMENT_SHADOW_SOURCE=production` makes every real tournament answer `no_shadow_evidence` (as today).
   **N6** production-only scores tie more easily (two candidates at 100). **N7** stale comments updated with the code.
+
+### Code review 2 dispositions (2026-11-12, on the D2-prep code; no blockers with the switches off)
+
+Switches absent: nothing changes (confirmed by reading). Fixed/adjusted: **S1** DO-only is dropped from the supported states (supported: off/off and both, set in
+one deploy), documented in OPS and pinned by a test; **S2** rollback of the DO switch is not clean, documented in OPS; **S3/S4** tests added: log-only real `advance`
+under the switch, and a "both on" test whose all-sample and production rankings disagree (with `PRODUCTION` read case-insensitively by the DO). Left: the e2e
+switch-on pass, non-2xx in production mode (the same `getCandidate` throw path as the default), the cap-sized placeholder test, vars-test scope beyond
+`wrangler.toml` files, string-match pins for the shell seeder.

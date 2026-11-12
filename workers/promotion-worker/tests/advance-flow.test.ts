@@ -903,10 +903,19 @@ describe('production-only shadow sources (D2-prep, plan section 16; default off)
   });
 
   it('both on: the higher production score wins and the trial records its basis (a case-insensitive, trimmed value counts)', async () => {
-    const { w, res, cb } = await pair({ tournamentSource: ' Production ', doSource: 'PRODUCTION' }, [85, 'production', MIN], [95, 'production', MIN]);
-    expect(res.json).toMatchObject({ success: true, outcome: 'moved' });
-    expect(res.json.details).toMatchObject({ winner: cb });
-    expect(w.stageOf(cb)).toBe('passed_shadow');
+    // all-sample ranking would pick B (placeholder 100s lift its average); the production ranking picks A (92 vs 85)
+    const w = await world('tournament', { tournamentSource: ' Production ', doSource: 'PRODUCTION' });
+    const ca = w.candidate('passed_premerge');
+    const cb = w.candidate('passed_premerge');
+    await w.samples(ca, 92, 'production', MIN);
+    await w.samples(cb, 85, 'production', MIN);
+    await w.samples(cb, 100, 'placeholder', 3 * MIN);
+    await w.promote({ candidateId: ca, toRung: 'train' });
+    const res = await w.promote({ candidateId: cb, toRung: 'train' });
+    expect(res.json).toMatchObject({ success: true, outcome: 'eliminated' });
+    expect(res.json.details).toMatchObject({ winner: ca });
+    expect(w.stageOf(ca)).toBe('passed_shadow');
+    expect((await dryEvidence(w, cb)).status).toBe('met'); // 'PRODUCTION' is read case-insensitively by the Spec DO too
     const row = w.store.raw.prepare('SELECT comparison_metrics FROM trials').get() as { comparison_metrics: string };
     expect(JSON.parse(row.comparison_metrics)).toMatchObject({ basis: 'shadow_production_score' });
   });
@@ -974,5 +983,29 @@ describe('production-only shadow sources (D2-prep, plan section 16; default off)
     (w.spec as unknown as { env: Record<string, unknown> }).env.SHADOW_VERDICT_SOURCE = 'production';
     await w.samples(a, 100, 'placeholder', 1);
     expect(w.spec.getGateVerdict(a, 'shadow')?.status).toBe('pending');
+  });
+
+  it('DO switch: shadow evidence stays log-only: a real advance with missing evidence still moves and writes an evidence_missing event', async () => {
+    const w = await world('merge-train', { doSource: 'production' });
+    const a = w.candidate('passed_premerge');
+    const res = await w.direct.fetch(
+      new Request(`https://spec-do.internal/api/candidates/${a}/advance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Actor-ID': w.agent },
+        body: JSON.stringify({ toRung: 'train', fromRung: 'shadow' }),
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(w.stageOf(a)).toBe('passed_shadow');
+    expect(w.events('evidence_missing')).toHaveLength(1);
+  });
+
+  it('DO-only is NOT a supported state (documented): a candidate with no production samples is never `failed`, so the all-sample loser is not disqualified', async () => {
+    const w = await world('tournament', { doSource: 'production' });
+    const a = w.candidate('passed_premerge');
+    const b = w.candidate('passed_premerge');
+    await w.samples(a, 50, 'placeholder', MIN);
+    await w.samples(b, 40, 'placeholder', MIN);
+    expect((await dryEvidence(w, a)).status).toBe('missing'); // not `failed`: the tournament's failed-entrant refusal cannot fire
   });
 });

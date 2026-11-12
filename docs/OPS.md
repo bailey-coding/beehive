@@ -726,8 +726,13 @@ itself (`EVIDENCE_MODE.shadow = 'enforce'`) is a separate, later constant change
   touches stay stale for humans (UI, CLI, `GET /api/gate-verdicts`); `advance`, the tournament and the merge train follow the columns. The maintainer's override is the stage PATCH.
 - **Tournament switch.** Ranks by `shadowProductionScore`, and only for a candidate with at least the production minimum; otherwise it has no score
   (`no_shadow_evidence`). An older Spec DO without the fields fails closed. The trial's `basis` is `shadow_production_score`.
-- **Supported states: off/off, DO-only, both.** Tournament-only is a transient mixed-version state (the tournament disqualifies on the DO's all-sample `failed`
-  but ranks on production scores). Both vars may arrive in one push in any order.
+- **Supported states: off/off and both, set in the same deploy.** Neither single switch is supported: tournament-only disqualifies on the DO's all-sample `failed` but
+  ranks on production scores; **DO-only** makes every candidate without production samples `missing`, never `failed`, so the tournament's failed-entrant refusal
+  cannot fire and an all-sample loser can win while the tournament still ranks on all samples (shadow evidence is log-only). Both vars arrive in one push in any
+  order, so a short transient of either exists.
+- **Rollback of the DO switch is not clean:** rows rewritten in production mode (a `pending` over an all-sample pass, or a production `fail`) stay after the switch is
+  turned off and heal only when another sample arrives (a capped or idle candidate never heals); a leftover `fail` then makes default-mode evidence `failed`. After
+  turning it off, post a sample or fix the row by hand. A same-status row keeps its older score and notes.
 - **Until slice P** (real pre-shadow previews) no shadow-rung candidate earns production samples, so `TOURNAMENT_SHADOW_SOURCE=production` makes every real
   tournament answer `no_shadow_evidence`, as production does today. Production-only scores also tie more easily (two candidates at 100 is a `tie`).
 - **Seeders** (e2e fixtures, the demo, `scripts/prod-verify-promotion.sh`) post `production` samples (the minimum count), so they work in both modes; they need a Spec DO
