@@ -17,7 +17,8 @@ of ten Workers Builds passed, `beehive-scientist-comparator` failed (`Could not 
 version. `0a14bc1` added the `postinstall` and was pushed to `cf` too; all ten builds then passed (read via the Cloudflare builds API, latest build per worker),
 so production runs `0a14bc1` or later. `scripts/check-shared-postinstall.mjs` now guards the gap in CI. **Verified 2026-11-12:** `schema_version` is `m15` on the `main` Spec DO (maintainer, dashboard SQL editor); `scripts/prod-health.sh` passes
 (ten `/health` 200s plus the Spec DO call); namespace `4101` is bound as `VIEWER_RATE_LIMITER`; `OPEN_VIEWER_SIGNIN` and `MIRROR_SAMPLE_PERCENT` are unset (both off).
-**Not verified:** P0 (does anything outside the repo mirror into the router?). Confirm it before setting `MIRROR_SAMPLE_PERCENT`.
+**P0 done (2026-11-12, Cloudflare API, read-only):** only `beehive` (the slice M mirror hook) and `beehive-promotion-worker` (unused) bind the router; the account has no
+zones or routes, the router has no custom domain or cron. Direct calls with the token to its workers.dev URL cannot be ruled out. Next: set `MIRROR_SAMPLE_PERCENT` low (maintainer, `[vars]`).
 
 ## Handoff (2026-11-11): start here
 
