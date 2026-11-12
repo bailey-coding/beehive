@@ -4,6 +4,7 @@
   "description": "Beehive Scientist Comparator Worker - Implements the Shadow rung of the oracle ladder",
   "main": "index.ts",
   "scripts": {
+    "postinstall": "npm install --prefix ../shared --no-audit --no-fund --no-package-lock",
     "dev": "wrangler dev --local",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
