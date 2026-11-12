@@ -18,11 +18,12 @@ version. `0a14bc1` added the `postinstall` and was pushed to `cf` too; all ten b
 so production runs `0a14bc1` or later. `scripts/check-shared-postinstall.mjs` now guards the gap in CI. **Verified 2026-11-12:** `schema_version` is `m15` on the `main` Spec DO (maintainer, dashboard SQL editor); `scripts/prod-health.sh` passes
 (ten `/health` 200s plus the Spec DO call); namespace `4101` is bound as `VIEWER_RATE_LIMITER`; `OPEN_VIEWER_SIGNIN` and `MIRROR_SAMPLE_PERCENT` are unset (both off).
 **P0 done (2026-11-12, Cloudflare API, read-only):** only `beehive` (the slice M mirror hook) and `beehive-promotion-worker` (unused) bind the router; the account has no
-zones or routes, the router has no custom domain or cron. Direct calls with the token to its workers.dev URL cannot be ruled out. **`MIRROR_SAMPLE_PERCENT` = 1 is set (2026-11-12, worker secret on `beehive`, `docs/OPS.md`); `prod-health.sh` still passes.** **Synthetic check (2026-11-12, 400 anonymous GETs to `/` and `/app`, `wrangler tail`):** the edge hook works end to end as far as the router: one descriptor reached
-`POST /mirror` (202, "Mirroring to 1 candidates"), `beehive` threw no errors. **Not validated:** the queue consumer and the comparator logged nothing, so no sample was
-scored; with no canary-ref candidate the only target is `beehive-main` (reading of the OPS notes, unconfirmed). One mirror from 365 requests at 1% is within variance
-but could also be the per-isolate cap. To finish: a canary candidate (needs approval, e2e against production), a brief higher `MIRROR_SAMPLE_PERCENT`, or the local e2e stack.
-Then watch `shadow_scores.production_count` and widen.
+zones or routes, the router has no custom domain or cron. Direct calls with the token to its workers.dev URL cannot be ruled out. **`MIRROR_SAMPLE_PERCENT` = 1 is set (2026-11-12, worker secret on `beehive`, `docs/OPS.md`); `prod-health.sh` still passes.** **Synthetic check (2026-11-12, anonymous GETs to `/` and `/app`, `wrangler tail`):** `MIRROR_SAMPLE_PERCENT` 1 (400 requests) gave 1 router `POST /mirror`; the maintainer then
+raised the secret to 33 and 150 requests gave 53 (202 each, "Mirroring to 1 candidates", no "Skipping candidate" lines), so the edge hook and the percent are validated.
+**Not validated:** no message reached `beehive-scientist-comparator` (the consumer of `beehive-scientist-comparisons`; `beehive-queue-consumer` is a different worker), so no
+sample was scored. The queue wiring is intact (`wrangler queues info`). Open: whether the router queued at all (a baseline-less or refusal-agreeing pair queues nothing or is
+dropped; unconfirmed), and which candidate it mirrored to (only canary-ref candidates and `beehive-main` are targets). Next: tail the router's later log lines for a baseline or
+queue error, check `shadow_scores`, or run the local e2e stack. `MIRROR_SAMPLE_PERCENT` is **33** now; set it back low (or delete the secret) when done.
 
 ## Handoff (2026-11-11): start here
 
