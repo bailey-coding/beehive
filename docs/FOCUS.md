@@ -8,7 +8,15 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-11-11
+**Last updated:** 2026-11-12
+
+## Deploy status (2026-11-12): read before the handoffs below
+
+The handoffs below say "not deployed"; that is **out of date**. The maintainer pushed `d63abf7` to the Artifacts repo on 2026-11-12 (about 16:18 UTC): nine
+of ten Workers Builds passed, `beehive-scientist-comparator` failed (`Could not resolve "zod"`: it lacked the shared `postinstall`) and kept its 2026-11-03
+version. `0a14bc1` added the `postinstall` and was pushed to `cf` too; all ten builds then passed (read via the Cloudflare builds API, latest build per worker),
+so production runs `0a14bc1` or later. `scripts/check-shared-postinstall.mjs` now guards the gap in CI. **Not verified:** the deploy checks of the earlier
+handoffs (namespace `4101`, m14/m15 ran, `OPEN_VIEWER_SIGNIN`, P0, `MIRROR_SAMPLE_PERCENT`); confirm them before relying on the behavior listed under each.
 
 ## Handoff (2026-11-11): start here
 
