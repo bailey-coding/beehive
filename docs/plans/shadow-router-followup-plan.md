@@ -271,3 +271,30 @@ measurement window. Known and accepted: every enqueued sample is now `production
 D2 must not read `production_count` as proof. Left: the marker header goes to all candidates (fine while shadow targets are not built), the template
 truncation at 128 characters can leave a partial segment (the router answers 400, no privacy impact), the unused `PREVIEW_SCIENTIST_QUEUE` binding stays
 (mixed-version safe).
+
+## 16. D2-prep (2026-11-12, rev 5): production-only evidence behind two default-off switches
+
+Maintainer: "go ahead", then chose **prep D2 with the flag off**. Nothing is enforced and nothing changes while the switches are absent. The flip
+itself (`EVIDENCE_MODE.shadow = 'enforce'`) is still a separate constant change after a real measurement window and approval (section 6).
+
+1. **Tournament source: `TOURNAMENT_SHADOW_SOURCE`** (promotion-worker var, set by the maintainer in `[vars]` of the Artifacts deploy repo, never in this repo's
+   configs; absent or any value but `production` = today's all-sample `shadowScore`). With `production`: `readShadowScore` returns
+   `shadowProductionScore` only when `shadowProductionCount >= SHADOW_MIN_SAMPLES`, else `null` (-> `no_shadow_evidence`, exactly the refusal a candidate without
+   evidence gets today). An old Spec DO without the fields answers no score: fail closed. A non-2xx still throws (a 404 is never "no score").
+2. **Verdict source: `SHADOW_VERDICT_SOURCE`** (Spec DO var, same rules). With `production`: (a) the shadow verdict written at sample time uses the production
+   count and average (`shadowVerdict(productionCount, productionAverage)`; notes say "N production samples"); (b) `evaluateEvidence` for the `shadow` rung is
+   computed **from `shadow_scores`** at call time, not from the stored verdict row, so a stale row written under the all-sample rule (or before the switch) can
+   neither pass nor fail a candidate; (c) the stored row is only the human-readable log. Absent = today's behavior (stored verdict row, all samples).
+   This replaces the rev 3 idea of recomputing every stored verdict by a sweep.
+3. **Seeders.** The e2e promotion fixtures (`tests/e2e/promotion-fixtures.ts:55-57`), the demo (`scripts/demo/tournament.ts:188-189`) and
+   `scripts/prod-verify-promotion.sh:73-76` post `baseline: 'production'` with at least `SHADOW_MIN_SAMPLES` samples, so they work in both modes (an
+   all-sample consumer reads them identically).
+4. **Not in this step:** the flip; `EVIDENCE_MODE.shadow`; grandfathering code (advance already checks only the rung being left); shadow targets (slice P).
+5. **Tests.** Tournament: both modes, below-minimum production count, placeholder-only candidate, old-DO (no fields), non-2xx throws. Spec DO: verdict source in
+   both modes, `evaluateEvidence` from columns (stale stored `pass` row + no production samples = missing; no stored row + enough passing production samples = met),
+   `advance` under the switch still log-only for shadow. A repo test: no wrangler config here sets either var to `production`. Mutation checks for each guard.
+6. **Mixed version.** New tournament + old Spec DO: fields absent -> null (production mode only). New Spec DO + old tournament: unchanged. Switches are
+   independent; either can be set alone (tournament on without the DO switch is the section 5 behavior).
+7. **Review asks.** Is reading the shadow rung from columns in `evaluateEvidence` (instead of the stored row) safe for `advance` idempotency and the log-only
+   `evidence_missing` events? Does anything else read the stored shadow verdict as evidence (UI, gate-workflow, merge-train)? Any path where the switch changes
+   behavior while absent? Is `SHADOW_MIN_SAMPLES` the right production minimum, given section 6's measurement bar?
