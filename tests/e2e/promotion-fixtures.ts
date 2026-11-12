@@ -7,6 +7,7 @@
  */
 import { expect } from 'vitest';
 import { createRequest, readJson } from './helpers';
+import { SHADOW_MIN_SAMPLES } from '../../workers/shared/shadow-verdict';
 
 export interface PromotionWorld {
   actor: string;
@@ -53,7 +54,7 @@ export async function passPremerge(w: PromotionWorld, candidateId: string): Prom
 
 /** Shadow samples averaging `score`, through the maintainer-only edge route (the comparator's own path is the queue) */
 export async function shadowScore(w: PromotionWorld, candidateId: string, score: number): Promise<void> {
-  const samples = Array.from({ length: 20 }, (_, i) => ({ requestId: `e2e-${candidateId}-${i}`, score, matched: score >= 100, diffs: [] }));
+  const samples = Array.from({ length: SHADOW_MIN_SAMPLES }, (_, i) => ({ requestId: `e2e-${candidateId}-${i}`, score, matched: score >= 100, diffs: [], baseline: 'production' }));
   await post(`/api/candidates/${candidateId}/shadow-samples`, { samples }, w.actor, 200);
 }
 

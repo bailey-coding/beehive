@@ -30,6 +30,28 @@ export function shadowMinSamples(): number {
   return SHADOW_MIN_SAMPLES;
 }
 
+/** Production samples needed before a production-only verdict or tournament score exists. Its own helper so the flip can raise or qualify it without touching the all-sample rule. */
+export function shadowMinProductionSamples(): number {
+  return SHADOW_MIN_SAMPLES;
+}
+
+/**
+ * The default-off D2-prep switches (SHADOW_VERDICT_SOURCE on the Spec DO, TOURNAMENT_SHADOW_SOURCE on the promotion worker): true only for
+ * `production` (trimmed, any case). An unrecognized non-empty value is off and warns once per value, so a typo is visible, not silent.
+ * Set by the maintainer in `[vars]` of the deploy repo, never in this repo's configs (tests/unit/shadow-source-vars-not-enabled.test.ts).
+ */
+const warnedSourceValues = new Set<string>();
+export function isProductionSource(name: string, raw: string | undefined): boolean {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === '') return false;
+  if (v === 'production') return true;
+  if (!warnedSourceValues.has(`${name}=${v}`)) {
+    warnedSourceValues.add(`${name}=${v}`);
+    console.warn(`[Shadow] ${name}='${raw}' is not 'production'; the switch is off`);
+  }
+  return false;
+}
+
 /** What a sample was scored against: the shadow router's placeholder 200, or a real production response */
 export const ShadowBaselineSchema = z.enum(['placeholder', 'production']);
 
@@ -79,8 +101,8 @@ export type ShadowVerdictStatus = z.infer<typeof ShadowVerdictStatusSchema>;
 export type ShadowSamplesResult = z.infer<typeof ShadowSamplesResultSchema>;
 
 /** `pending` below the minimum sample count, else `pass` at or above the pass score, else `fail`. Pure. */
-export function shadowVerdict(sampleCount: number, averageScore: number): ShadowVerdictStatus {
-  if (sampleCount < shadowMinSamples()) return 'pending';
+export function shadowVerdict(sampleCount: number, averageScore: number, minSamples: number = shadowMinSamples()): ShadowVerdictStatus {
+  if (sampleCount < minSamples) return 'pending';
   return averageScore >= SHADOW_PASS_SCORE ? 'pass' : 'fail';
 }
 

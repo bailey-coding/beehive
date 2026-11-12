@@ -13,6 +13,7 @@ import {
   Env,
 } from './types';
 import { getCandidate, getPromotionLedger, advanceCandidate, recordDecidedTrial } from './spec-do';
+import { shadowMinProductionSamples, isProductionSource } from '../shared/shadow-verdict';
 
 /**
  * Extended tournament type with ID
@@ -203,7 +204,7 @@ export class TournamentManager {
               candidateAId: decision.winnerId,
               candidateBId: decision.runnerUpId,
               winnerId: decision.winnerId,
-              comparisonMetrics: { basis: 'shadow_score', tournamentId: current.id, scores: decision.scores },
+              comparisonMetrics: { basis: this.productionSource() ? 'shadow_production_score' : 'shadow_score', tournamentId: current.id, scores: decision.scores },
               actorId: request.actorId,
               idempotencyKey: `tournament:${current.id}:${decision.winnerId}:${decision.runnerUpId}`,
             }),
@@ -418,12 +419,22 @@ export class TournamentManager {
     return updatedTournament;
   }
 
+  /** TOURNAMENT_SHADOW_SOURCE=production (default off) */
+  private productionSource(): boolean {
+    return isProductionSource('TOURNAMENT_SHADOW_SOURCE', this.env.TOURNAMENT_SHADOW_SOURCE);
+  }
+
   /**
    * The candidate's shadow score in the ledger, or null when it has none. Throws on any non-2xx (a 404 included), never "no score".
    * A score of 0 is a real score.
    */
   private async readShadowScore(candidateId: string): Promise<number | null> {
-    const row = (await getCandidate(this.env, candidateId)) as { shadowScore?: unknown };
+    const row = (await getCandidate(this.env, candidateId)) as { shadowScore?: unknown; shadowProductionScore?: unknown; shadowProductionCount?: unknown };
+    if (this.productionSource()) {
+      // Production samples only, and enough of them. A Spec DO without the fields (older) answers no score: fail closed.
+      const count = row.shadowProductionCount;
+      return typeof row.shadowProductionScore === 'number' && typeof count === 'number' && count >= shadowMinProductionSamples() ? row.shadowProductionScore : null;
+    }
     return typeof row.shadowScore === 'number' ? row.shadowScore : null;
   }
 

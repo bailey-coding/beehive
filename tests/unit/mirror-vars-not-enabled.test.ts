@@ -5,12 +5,7 @@
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
-
-/** Every assignment of `key` in a TOML text (bare or quoted key, plain or inline-table), as its raw value; comments are stripped first */
-export function assignments(text: string, key: string): string[] {
-  const code = text.split('\n').map((l) => l.replace(/(^|\s)#.*$/, '')).join('\n');
-  return [...code.matchAll(new RegExp(`["']?${key}["']?\\s*=\\s*("[^"]*"|'[^']*'|[^\\s,}]+)`, 'g'))].map((m) => m[1].replace(/^["']|["']$/g, ''));
-}
+import { assignments } from '../helpers/toml-assignments';
 
 describe('mirror exposure vars', () => {
   const files = ['wrangler.toml', ...readdirSync('workers').map((w) => `workers/${w}/wrangler.toml`), 'tests/e2e/probe/wrangler.toml'].filter((f) => existsSync(f));

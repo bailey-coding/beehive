@@ -70,7 +70,7 @@ echo "== place the candidates on the shadow rung and give them shadow scores"
 for c in "$C1" "$C2"; do
   [ "$(call PATCH "$API" "/api/candidates/$c/stage" '{"stage":"passed_premerge","notes":"prod-verify fixture"}' "$ACTOR" | jq -r '.data.stage // empty')" = "passed_premerge" ] || fail "could not place $c on the shadow rung"
 done
-samples() { jq -nc --arg p "$1" --argjson s "$2" '{samples: [range(0;20) | {requestId: ($p + "-" + (. | tostring)), score: $s, matched: false, diffs: []}]}'; }
+samples() { jq -nc --arg p "$1" --argjson s "$2" '{samples: [range(0;20) | {requestId: ($p + "-" + (. | tostring)), score: $s, matched: false, diffs: [], baseline: "production"}]}'; }
 for pair in "$C1:85" "$C2:95"; do
   c="${pair%%:*}"; score="${pair##*:}"
   [ "$(call POST "$API" "/api/candidates/$c/shadow-samples" "$(samples "prodcheck-$TS-$c" "$score")" "$ACTOR" | jq -r '.data.sampleCount // empty')" = "20" ] || fail "could not post shadow samples for $c"

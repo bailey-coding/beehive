@@ -10,6 +10,9 @@
  * the workers, type annotations only. `runDemo` is exported for tests/e2e/demo.test.ts.
  */
 
+/** The shadow minimum (workers/shared/shadow-verdict.ts SHADOW_MIN_SAMPLES; no imports here, tests/unit/shadow-seeders.test.ts pins it). */
+const DEMO_SHADOW_SAMPLES = 20;
+
 export interface DemoUrls {
   api: string;
   shadow: string;
@@ -183,7 +186,7 @@ async function runDemoSteps(opts: DemoOptions): Promise<DemoResult> {
     'A changes only what the spec declared; B also adds a "Cache-Control" header nobody asked for. Both ask to move to train:\n' +
     'the promotion worker runs a tournament, reads both scores from the ledger, records the decision as a trial, and advances the winner.');
   const samples = (score: number) => ({
-    samples: Array.from({ length: 20 }, (_, i) => ({ requestId: `demo-${suffix}-${score}-${i}`, score, matched: score >= 100, diffs: [] })),
+    samples: Array.from({ length: DEMO_SHADOW_SAMPLES }, (_, i) => ({ requestId: `demo-${suffix}-${score}-${i}`, score, matched: score >= 100, diffs: [], baseline: 'production' })),
   });
   await call(urls.api, `/api/candidates/${a}/shadow-samples`, samples(98), maintainer);
   await call(urls.api, `/api/candidates/${b}/shadow-samples`, samples(83), maintainer);

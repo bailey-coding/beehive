@@ -406,6 +406,7 @@ import {
 import {
   AdvanceRequestSchema,
   EVIDENCE_MODE,
+  type EvidenceMode,
   EVIDENCE_MISSING_EVENT,
   decideAdvance,
   currentRungOf,
@@ -419,6 +420,8 @@ import {
   type ShadowSample,
   type ShadowSamplesResult,
   shadowVerdict,
+  shadowMinProductionSamples,
+  isProductionSource,
   SHADOW_MAX_SAMPLES,
   CANDIDATE_NOT_FOUND,
   SCIENTIST_COMPARATOR_ACTOR,
@@ -494,6 +497,8 @@ interface Env {
   PURGE_MIN_AGE_HOURS?: string;
   // Minutes a canary must have been the live head before `advance` lets it move to full. Honored only below the default (15); local e2e sets 0.
   CANARY_MIN_SOAK_MINUTES?: string;
+  // 'production': the shadow verdict and the shadow evidence of `advance` come from production samples only (default off; docs/plans/shadow-router-followup-plan.md section 16)
+  SHADOW_VERDICT_SOURCE?: string;
   // Producer for canary SLO ticks (docs/M3-CANARY-SLO-PLAN.md). Optional: an unbound DO still arms and re-arms.
   CANARY_SLO_TICKS?: { send(message: unknown): Promise<void> };
 }
@@ -4984,6 +4989,7 @@ export class SpecDO {
   private evaluateEvidence(candidate: CandidateRow, rung: EvidenceRung): EvidenceResult {
     const mode = EVIDENCE_MODE[rung];
     const id = candidate.id;
+    if (rung === 'shadow' && this.shadowFromProduction()) return this.shadowEvidenceFromColumns(id, mode);
     if (rung === 'pre-merge' || rung === 'shadow') {
       const v = this.getGateVerdict(id, rung);
       if (!v) return { rung, status: 'missing', mode, detail: `no ${rung} gate verdict` };
@@ -5009,6 +5015,24 @@ export class SpecDO {
     const liveMinutes = Math.floor((now() - head.movedAt) / 60_000);
     if (liveMinutes < soak) return { rung, status: 'missing', mode, detail: `canary has been live ${liveMinutes} of ${soak} minutes` };
     return { rung, status: 'met', mode };
+  }
+
+  /** SHADOW_VERDICT_SOURCE=production: shadow evidence comes from the production columns, never from the stored verdict row or all-sample averages */
+  private shadowFromProduction(): boolean {
+    return isProductionSource('SHADOW_VERDICT_SOURCE', this.env?.SHADOW_VERDICT_SOURCE);
+  }
+
+  /** The shadow rung's evidence from shadow_scores (raw sums, not the rounded response fields), so a stale or manually posted verdict row decides nothing. */
+  private shadowEvidenceFromColumns(candidateId: string, mode: EvidenceMode): EvidenceResult {
+    const rung: EvidenceRung = 'shadow';
+    const [row] = this.queryAll('SELECT production_count, production_score_sum FROM shadow_scores WHERE candidate_id = ?', candidateId);
+    const count = row ? Number(row.production_count) : 0;
+    const min = shadowMinProductionSamples();
+    if (count < min) return { rung, status: 'missing', mode, detail: `${count} of ${min} production shadow samples` };
+    const average = Number(row!.production_score_sum) / count;
+    return shadowVerdict(count, average, min) === 'pass'
+      ? { rung, status: 'met', mode }
+      : { rung, status: 'failed', mode, detail: `production shadow average ${average.toFixed(1)} over ${count} samples is below the pass score` };
   }
 
   /** Minutes a canary must have been live. The env override (local e2e) is honored only below the default, so it can only shorten the soak in a dev setup. */
@@ -5192,7 +5216,11 @@ export class SpecDO {
     }
 
     const average = count > 0 ? sum / count : 0;
-    const status = shadowVerdict(count, average);
+    // Under SHADOW_VERDICT_SOURCE=production the verdict reads the production samples only
+    const fromProduction = this.shadowFromProduction();
+    const verdictCount = fromProduction ? productionCount : count;
+    const verdictAverage = fromProduction ? (productionCount > 0 ? productionSum / productionCount : 0) : average;
+    const status = shadowVerdict(verdictCount, verdictAverage, fromProduction ? shadowMinProductionSamples() : undefined);
     // Nothing recorded (all over the cap) writes nothing: no row churn, no verdict
     if (count !== (row ? Number(row.sample_count) : 0)) {
       this.run(
@@ -5215,16 +5243,21 @@ export class SpecDO {
         at
       );
       const existing = this.getGateVerdict(candidateId, 'shadow');
-      if (status !== 'pending' && existing?.status !== status) {
+      // In production mode a `pending` also replaces a stored pass/fail written under the all-sample rule, so the human-readable row does not
+      // contradict `advance` (which reads the columns); in the default mode a pending never downgrades, as before
+      const writeVerdict = status !== 'pending' ? existing?.status !== status : fromProduction && !!existing && existing.status !== 'pending';
+      if (writeVerdict) {
         this.createGateVerdict(
           candidateId,
           'shadow',
           status,
           // floor, not round: a failing 79.6 must not be stored as a score of 80, the pass line
-          Math.floor(average),
+          Math.floor(verdictAverage),
           0,
           SCIENTIST_COMPARATOR_ACTOR,
-          `Shadow: ${count} samples (${productionCount} against production), average ${average.toFixed(1)}, ${matched}/${count} matched`
+          fromProduction
+            ? `Shadow (production samples only): ${productionCount} of ${shadowMinProductionSamples()} needed, average ${verdictAverage.toFixed(1)}, ${count} samples in all`
+            : `Shadow: ${count} samples (${productionCount} against production), average ${average.toFixed(1)}, ${matched}/${count} matched`
         );
       }
     }

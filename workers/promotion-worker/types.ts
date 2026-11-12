@@ -95,6 +95,8 @@ export interface Env {
   SHADOW_ROUTER: Service;
   ANALYTICS: AnalyticsEngine;
   PROMOTION_MODE: string;
+  // 'production': the tournament ranks by production-only shadow scores (default off; docs/plans/shadow-router-followup-plan.md section 16)
+  TOURNAMENT_SHADOW_SOURCE?: string;
   MAX_CONCURRENT_CANDIDATES: string;
   PROMOTION_TIMEOUT: string;
   API_AUTH_TOKEN?: string;
