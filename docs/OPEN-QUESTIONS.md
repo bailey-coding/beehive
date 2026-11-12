@@ -1280,4 +1280,4 @@ The push of `d63abf7` built nine workers and failed `beehive-scientist-comparato
 `../shared/deploy-refs.ts` and `../shared/shadow-verdict.ts`. It declared `zod` itself but lacked the `postinstall` that installs
 `workers/shared`'s dependencies (same cause as the 2026-10-16 entry). It stayed on its 2026-11-03 version until the fix.
 **Fix**: `0a14bc1` adds the `postinstall`; all ten builds passed. **Open**: CI still does not assert that every worker importing a zod-using
-shared module declares the `postinstall` (see the 2026-10-16 note); a guard in `ci.yml` would stop a fourth recurrence.
+shared module declares the `postinstall` (see the 2026-10-16 note); `scripts/check-shared-postinstall.mjs` (a `ci.yml` step) now asserts it.

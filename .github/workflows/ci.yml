@@ -60,6 +60,11 @@ jobs:
       # 4. Workers with postinstall scripts will also install shared, but we do it
       #    explicitly first to ensure all workers can resolve from shared
 
+      # The installs below share one checkout, so one worker's postinstall (or the step after this) masks another's
+      # missing one. Assert the declaration directly (docs/OPEN-QUESTIONS.md 2026-11-12).
+      - name: Check workers declare the shared postinstall
+        run: node scripts/check-shared-postinstall.mjs
+
       - name: Install shared dependencies
         run: |
           echo "=== Installing shared dependencies ==="

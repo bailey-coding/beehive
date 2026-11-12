@@ -139,7 +139,7 @@ Config rules that bit this repo twice:
 - Service bindings take `binding = "..."`, never `name = "..."`.
 - Queue consumers attach via `[[queues.consumers]]`; `[[queues]]` is the producer form.
 - A worker importing any `workers/shared/*` module that imports `zod` needs the `postinstall` `npm install --prefix ../shared --no-audit --no-fund --no-package-lock`
-  (copy it from `workers/gate-workflow/package.json`). Declaring `zod` in the worker is not enough, and local builds, tsc and CI hide the gap
+  (copy it from `workers/gate-workflow/package.json`). Declaring `zod` in the worker is not enough, and local builds, tsc and the CI build hide the gap; `scripts/check-shared-postinstall.mjs` (a CI step) now asserts it
   (hit three times; `scientist-comparator` 2026-11-12, `docs/OPEN-QUESTIONS.md`).
 
 Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missing
