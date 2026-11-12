@@ -685,6 +685,8 @@ are untouched (shadow evidence stays log-only; the tournament keeps its all-samp
 - **Switch: `MIRROR_SAMPLE_PERCENT`** (integer 0-100; absent, `0` or anything else = off, no parsing and no I/O). **Set it in `[vars]` of the Artifacts
   deploy repo** (a dashboard var is overwritten by the next push, `keep_vars` is not set); it is never set in this repo (`tests/unit/mirror-vars-not-enabled.test.ts`).
   Rollback = deploy it back to `0` (or remove it).
+  **As deployed 2026-11-12:** set to `1` as a worker *secret* on `beehive` (`printf 1 | npx wrangler secret put MIRROR_SAMPLE_PERCENT --name beehive`), not a `[vars]` entry:
+  it needs no cf-only commit, redeploys only that worker, and a push does not overwrite it. Rollback: `npx wrangler secret delete MIRROR_SAMPLE_PERCENT --name beehive`.
 - **Caps.** Per isolate: a token bucket (20 burst, 10/s) and at most 10 mirrors in flight; 2 s timeout, no retry.
 - **Loop guard.** The router sends `X-Beehive-Mirror: 1` on every candidate and baseline fetch; the edge never mirrors a request carrying it
   (the baseline `beehive-main` is this same worker). A candidate that fetches `beehive` public pages itself is mirrored like any anonymous client; the
