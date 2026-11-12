@@ -27,10 +27,11 @@ function gateResponse(status: 'pass' | 'fail', notes = 'gate note'): Response {
 
 type Hook = (request: Request) => Promise<Response | undefined>;
 
-async function world(mode: PromotionMode) {
+async function world(mode: PromotionMode, vars: { doSource?: string; tournamentSource?: string } = {}) {
   const store = makeSqliteState();
   const spec = makeSpecDo(store, false);
   await spec.init();
+  if (vars.doSource !== undefined) (spec as unknown as { env: Record<string, unknown> }).env = { ...(spec as unknown as { env: Record<string, unknown> }).env, SHADOW_VERDICT_SOURCE: vars.doSource };
   const direct = authedDo(spec);
   const agent = spec.createActor('agent', 'agent-1').id;
   const org = spec.createOrganization('org-pf', 'artifacts');
@@ -50,6 +51,7 @@ async function world(mode: PromotionMode) {
     MAX_CONCURRENT_CANDIDATES: '10',
     PROMOTION_TIMEOUT: '300000',
     API_AUTH_TOKEN: 'test-auth-token',
+    ...(vars.tournamentSource !== undefined ? { TOURNAMENT_SHADOW_SOURCE: vars.tournamentSource } : {}),
     ...TEST_INTERNAL_ONLY,
   } as unknown as Env;
   const worker = new PromotionWorker(env);
@@ -66,12 +68,15 @@ async function world(mode: PromotionMode) {
     const res = await worker.promoteCandidate({ specId: s.id, actorId: agent, ...body } as PromotionRequest);
     return { status: res.status, json: (await res.json()) as PromotionResult & Record<string, any> };
   };
-  const samples = async (id: string, score: number) => {
+  const samples = async (id: string, score: number, baseline: 'placeholder' | 'production' = 'placeholder', n = 1) => {
+    for (let i = 0; i < n; i++) await postSample(id, score, baseline);
+  };
+  const postSample = async (id: string, score: number, baseline: 'placeholder' | 'production') => {
     const res = await direct.fetch(
       new Request(`https://spec-do.internal/api/candidates/${id}/shadow-samples`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Actor-ID': 'scientist-comparator' },
-        body: JSON.stringify({ samples: [{ requestId: `r-${id}-${score}-${Math.random()}`, score, matched: score >= 100, diffs: [] }] }),
+        body: JSON.stringify({ samples: [{ requestId: `r-${id}-${score}-${Math.random()}`, score, matched: score >= 100, diffs: [], baseline }] }),
       })
     );
     expect(res.status).toBe(200);
@@ -91,7 +96,7 @@ async function world(mode: PromotionMode) {
   const states = (id: string) => spec.listPromotionStates(id);
   const count = (sql: string) => (store.raw.prepare(sql).get() as { n: number }).n;
   const events = (name: string) => store.raw.prepare('SELECT * FROM governance_events WHERE event = ?').all(name) as Record<string, unknown>[];
-  return { store, spec, env, worker, box, agent, specId: s.id, candidate, stageOf, promote, samples, passPremerge, deployCanary, states, count, events };
+  return { store, spec, env, direct, worker, box, agent, specId: s.id, candidate, stageOf, promote, samples, passPremerge, deployCanary, states, count, events };
 }
 
 beforeEach(() => {
@@ -855,5 +860,119 @@ describe('statusFor: every code has a status, and the list is closed', () => {
     expect(statusFor({ ...result(undefined, true), outcome: 'waiting' })).toBe(202);
     expect(statusFor({ ...result(undefined, true), outcome: 'queued' })).toBe(202);
     for (const outcome of ['moved', 'noop', 'eliminated'] as const) expect(statusFor({ ...result(undefined, true), outcome })).toBe(200);
+  });
+});
+
+
+describe('production-only shadow sources (D2-prep, plan section 16; default off)', () => {
+  const MIN = 20;
+  const dryEvidence = async (w: Awaited<ReturnType<typeof world>>, id: string) => {
+    const res = await w.direct.fetch(
+      new Request(`https://spec-do.internal/api/candidates/${id}/advance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Actor-ID': w.agent },
+        body: JSON.stringify({ toRung: 'train', fromRung: 'shadow', dryRun: true }),
+      })
+    );
+    return ((await res.json()) as { data: { evidence: Array<{ status: string; detail?: string }> } }).data.evidence[0];
+  };
+  const pair = async (vars: { doSource?: string; tournamentSource?: string }, a: [number, 'placeholder' | 'production', number], b: [number, 'placeholder' | 'production', number]) => {
+    const w = await world('tournament', vars);
+    const ca = w.candidate('passed_premerge');
+    const cb = w.candidate('passed_premerge');
+    await w.samples(ca, a[0], a[1], a[2]);
+    await w.samples(cb, b[0], b[1], b[2]);
+    await w.promote({ candidateId: ca, toRung: 'train' });
+    const res = await w.promote({ candidateId: cb, toRung: 'train' });
+    return { w, ca, cb, res };
+  };
+
+  it('switches off (and an unrecognized value): today\'s all-sample ranking, placeholder samples count', async () => {
+    for (const vars of [{}, { tournamentSource: 'prod' }, { tournamentSource: '', doSource: 'everything' }]) {
+      const { res, cb } = await pair(vars, [90, 'production', MIN], [99, 'placeholder', MIN]);
+      expect(res.json.details).toMatchObject({ winner: cb });
+    }
+  });
+
+  it('tournament on: only production samples rank; a candidate with placeholder-only or too few production samples has no score', async () => {
+    const placeholderOnly = await pair({ tournamentSource: 'production' }, [90, 'production', MIN], [99, 'placeholder', MIN]);
+    expect(placeholderOnly.res.json).toMatchObject({ success: false, code: 'no_shadow_evidence' });
+    const tooFew = await pair({ tournamentSource: 'production' }, [90, 'production', MIN], [99, 'production', MIN - 1]);
+    expect(tooFew.res.json).toMatchObject({ success: false, code: 'no_shadow_evidence' });
+    expect(tooFew.w.stageOf(tooFew.cb)).toBe('passed_premerge');
+  });
+
+  it('both on: the higher production score wins and the trial records its basis (a case-insensitive, trimmed value counts)', async () => {
+    const { w, res, cb } = await pair({ tournamentSource: ' Production ', doSource: 'PRODUCTION' }, [85, 'production', MIN], [95, 'production', MIN]);
+    expect(res.json).toMatchObject({ success: true, outcome: 'moved' });
+    expect(res.json.details).toMatchObject({ winner: cb });
+    expect(w.stageOf(cb)).toBe('passed_shadow');
+    const row = w.store.raw.prepare('SELECT comparison_metrics FROM trials').get() as { comparison_metrics: string };
+    expect(JSON.parse(row.comparison_metrics)).toMatchObject({ basis: 'shadow_production_score' });
+  });
+
+  it('tournament on against an older Spec DO (no production fields): fail closed with no_shadow_evidence', async () => {
+    const w = await world('tournament', { tournamentSource: 'production' });
+    const a = w.candidate('passed_premerge');
+    const b = w.candidate('passed_premerge');
+    await w.samples(a, 90, 'production', MIN);
+    await w.samples(b, 95, 'production', MIN);
+    w.box.hook = async (request) => {
+      const res = await w.spec.fetch(request);
+      if (new URL(request.url).pathname.match(/^\/api\/candidates\/[^/]+$/) && request.method === 'GET') {
+        const body = (await res.json()) as { data: Record<string, unknown> };
+        delete body.data.shadowProductionScore;
+        delete body.data.shadowProductionCount;
+        return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return res;
+    };
+    await w.promote({ candidateId: a, toRung: 'train' });
+    expect((await w.promote({ candidateId: b, toRung: 'train' })).json).toMatchObject({ success: false, code: 'no_shadow_evidence' });
+  });
+
+  it('DO switch: shadow evidence comes from the production columns, not the stored verdict row', async () => {
+    const w = await world('merge-train', { doSource: 'production' });
+    const a = w.candidate('passed_premerge');
+    // 30 placeholder samples at 100 would store a passing verdict row in the default mode
+    await w.samples(a, 100, 'placeholder', 30);
+    expect(await dryEvidence(w, a)).toMatchObject({ status: 'missing', detail: `0 of ${MIN} production shadow samples` });
+    // a manually posted pass row is not evidence either
+    w.spec.createGateVerdict(a, 'shadow', 'pass', 95, 0, w.agent);
+    expect((await dryEvidence(w, a)).status).toBe('missing');
+    await w.samples(a, 60, 'production', MIN - 1);
+    expect(await dryEvidence(w, a)).toMatchObject({ status: 'missing', detail: `${MIN - 1} of ${MIN} production shadow samples` });
+    await w.samples(a, 60, 'production', 1);
+    expect(await dryEvidence(w, a)).toMatchObject({ status: 'failed' });
+  });
+
+  it('DO switch: enough passing production samples are met even with no stored verdict row, and the boundary uses the raw sum', async () => {
+    const w = await world('merge-train', { doSource: 'production' });
+    const a = w.candidate('passed_premerge');
+    await w.samples(a, 100, 'production', MIN - 1);
+    await w.samples(a, 80 - 0.4, 'production', 1); // 19x100 + 79.6 = 1979.6 / 20 = 98.98: a pass
+    expect((await dryEvidence(w, a)).status).toBe('met');
+    const b = w.candidate('passed_premerge');
+    await w.samples(b, 79.996, 'production', MIN); // average 79.996: fail, though shadowProductionScore rounds to 80
+    expect((await dryEvidence(w, b)).status).toBe('failed');
+    const row = (await (await w.direct.fetch(new Request(`https://spec-do.internal/api/candidates/${b}`, { headers: { 'X-Actor-ID': w.agent } }))).json()) as { data: { shadowProductionScore: number } };
+    expect(row.data.shadowProductionScore).toBe(80);
+  });
+
+  it('DO switch off: the stored verdict row decides, as before', async () => {
+    const w = await world('merge-train');
+    const a = w.candidate('passed_premerge');
+    await w.samples(a, 100, 'placeholder', MIN);
+    expect((await dryEvidence(w, a)).status).toBe('met');
+  });
+
+  it('DO switch: a production-mode pending replaces a stored all-sample pass, so the human-readable row does not contradict advance', async () => {
+    const w = await world('merge-train');
+    const a = w.candidate('passed_premerge');
+    await w.samples(a, 100, 'placeholder', MIN);
+    expect(w.spec.getGateVerdict(a, 'shadow')?.status).toBe('pass');
+    (w.spec as unknown as { env: Record<string, unknown> }).env.SHADOW_VERDICT_SOURCE = 'production';
+    await w.samples(a, 100, 'placeholder', 1);
+    expect(w.spec.getGateVerdict(a, 'shadow')?.status).toBe('pending');
   });
 });
