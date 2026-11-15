@@ -116,7 +116,9 @@ Worker: never use orchestrator spawning; run solo or use `tools.subagent`. Table
 - **Don't downgrade first.** Pinning an older version, swapping ESM for CJS, or going back to a deprecated API needs the maintainer's say-so.
 - **Never fake a pass.** No hard-coded values, special cases or masking just to turn a test green.
 - **Report what you ran:** what passed, what failed, and what you did not run, with numbers ("3 of 7 failed", not "some").
-  Keep facts, hypotheses and next steps apart, and recommend one path.
+  Keep facts, hypotheses and next steps apart, and recommend one path. If a request rests on a misconception, say so.
+- **Write plainly:** the goal before the instruction ("to rotate the token, run X"), numbered lists only when order matters,
+  name the thing instead of "this" or "the above", first person for your own actions, and report what you did, not what you will do.
 - **Ask first** before adding, removing or upgrading a dependency, and before force pushes, `reset --hard` or mass deletes.
   Mutation checks restore files with `git checkout -- <file>`; that is fine once your own edits are committed.
 
