@@ -107,6 +107,19 @@ Worker: never use orchestrator spawning; run solo or use `tools.subagent`. Table
 - **Avoid duplicate work.** Before creating new agents, check if existing agents or subagents have already completed the task. Flag overlaps explicitly: "Agent X already delivered Y. Creating new agents will duplicate work. Confirm?"
 - **Use isolated workspaces.** When running concurrent agents on the same repo, use separate worktrees (`--new-workspace worktree --worktree-slug <name>`) or branches (`--new-branch <name>`) to prevent merge conflicts and file contention.
 
+### Investigation, scope and reporting
+
+- **Understand before fixing.** When a test fails or behavior is wrong, first establish what happens versus what should, then
+  narrow down where the two diverge. Find the root cause before you write a fix. A fix you cannot explain masks the bug.
+- **Treat remembered tool syntax as unverified.** Check a config by running the installed tool (`wrangler dev` boot, `--dry-run`).
+- **Make the smallest diff that fixes the root cause.** Leave out unrelated cleanup, and don't change public APIs unless the task asks for it.
+- **Don't downgrade first.** Pinning an older version, swapping ESM for CJS, or going back to a deprecated API needs the maintainer's say-so.
+- **Never fake a pass.** No hard-coded values, special cases or masking just to turn a test green.
+- **Report what you ran:** what passed, what failed, and what you did not run, with numbers ("3 of 7 failed", not "some").
+  Keep facts, hypotheses and next steps apart, and recommend one path.
+- **Ask first** before adding, removing or upgrading a dependency, and before force pushes, `reset --hard` or mass deletes.
+  Mutation checks restore files with `git checkout -- <file>`; that is fine once your own edits are committed.
+
 ### State management
 
 - **Spec DO is source of truth.** All coordination state (scores, verdicts, train state) lives in the Durable Object SQLite store.

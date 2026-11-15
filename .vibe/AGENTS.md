@@ -45,8 +45,7 @@ Accidental fixes create hidden debt. One-line fixes born from understanding beat
 
 ## Git Conventions
 
-- Prefix feature branches with `<username>/` (e.g., `username/feature-name`).
-- Never use a different username prefix as a branch namespace unless it's yours.
+- Use the branch the session or the root `AGENTS.md` names.
 - For force pushes in partial clones: use `--force-with-lease=<branch>:<expected-remote-sha>` after confirming the remote SHA with `git ls-remote origin refs/heads/<branch>`.
 
 ## Execution Boundaries
@@ -79,7 +78,7 @@ If requirements are ambiguous but a safe default exists, state the assumption br
 ## Build & Test Commands
 
 - **TypeScript**: prefer per-file checks (`tsc --noEmit path/to/file.ts`, `eslint --fix path/to/file.ts`) over full project builds for fast iteration.
-- **Workers/Cloudflare**: use `wrangler dev` for local development, `wrangler deploy` for production.
+- **Workers/Cloudflare**: use `wrangler dev` for local development and `wrangler deploy --dry-run` to check a build. Agents never deploy (root `AGENTS.md`).
 
 ## CLI Tool Preferences
 
