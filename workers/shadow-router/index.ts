@@ -237,12 +237,14 @@ async function fanOutToCandidates(
 ): Promise<Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }>> {
   const results: Array<{ candidateId: string; response: Response; latencyMs: number; classification: RequestClassification; requestId?: string }> = [];
   
-  if (config.candidatePreviews.size === 0) {
-    console.log('[Shadow] No candidates configured for mirroring');
+  // The baseline (`beehive-main`) is in the same map but is never a mirror target, so it is not counted
+  const targetCount = [...config.candidatePreviews.keys()].filter((id) => id !== BASELINE_TARGET_ID).length;
+  if (targetCount === 0) {
+    console.log('[Shadow] No mirror targets (no live canary ref; the baseline is not a target): nothing mirrored');
     return results;
   }
-  
-  console.log(`[Shadow] Mirroring to ${config.candidatePreviews.size} candidates with Statsig classification`);
+
+  console.log(`[Shadow] Mirroring to ${targetCount} candidate(s) with Statsig classification`);
   const mirrorMode = resolveMirrorMode(env ?? {});
   const words = routeWords(env ?? {});
 
@@ -472,6 +474,7 @@ async function triggerScientist(
   config: ShadowConfig
 ): Promise<void> {
   if (candidateResponses.length === 0) {
+    console.log('[Shadow] no candidate was mirrored for this request; comparison not queued');
     return;
   }
 

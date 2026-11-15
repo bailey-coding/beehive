@@ -353,6 +353,30 @@ describe('mirror fan-out through the handler', () => {
       expect(await run(0.9)).toBe(0);
     });
 
+    it('with no live canary ref (only the baseline) it mirrors nothing, queues nothing and says so in the logs', async () => {
+      const logged: string[] = [];
+      for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { logged.push(a.map(String).join(' ')); });
+      const queue = { send: vi.fn(async () => {}) };
+      const e = { ...env(), SPEC_DO: { idFromName: () => 'id', get: () => ({ fetch: vi.fn(async () => new Response(JSON.stringify({ success: true, data: [] }), { status: 200 })) }) } };
+      const res = await handler.fetch(new Request('http://localhost/mirror', { method: 'POST', body: JSON.stringify({ v: 1, method: 'GET', path: '/api/:id' }), headers: { Authorization: 'Bearer tok' } }), { ...e, SCIENTIST_QUEUE: queue }, ctx);
+      expect(res.status).toBe(202);
+      await settleAll();
+      expect(candidateCalls()).toHaveLength(0);
+      expect(queue.send).not.toHaveBeenCalled();
+      expect(logged.some((l) => l.includes('No mirror targets'))).toBe(true);
+      expect(logged.some((l) => l.includes('comparison not queued'))).toBe(true);
+      expect(logged.some((l) => /Mirroring to \d/.test(l))).toBe(false);
+    });
+
+    it('counts only real mirror targets, never the baseline, in the fan-out log', async () => {
+      const logged: string[] = [];
+      for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { logged.push(a.map(String).join(' ')); });
+      vi.spyOn(Math, 'random').mockReturnValue(0.5);
+      await handler.fetch(new Request('http://localhost/mirror', { method: 'POST', body: JSON.stringify({ v: 1, method: 'GET', path: '/api/:id' }), headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: { send: vi.fn(async () => {}) } }, ctx);
+      await settleAll();
+      expect(logged.some((l) => l.includes('Mirroring to 1 candidate(s)'))).toBe(true);
+    });
+
     it('accepts, answers 202 at once and fans out regardless of the URL hash gates (many descriptors, every one mirrored)', async () => {
       const queue = { send: vi.fn(async () => {}) };
       vi.spyOn(Math, 'random').mockReturnValue(0.5);
