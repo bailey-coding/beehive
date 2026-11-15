@@ -28,9 +28,10 @@ queue error, check `shadow_scores`, or run the local e2e stack. `MIRROR_SAMPLE_P
 counts `candidatePreviews.size`, and production's static map holds only the baseline `beehive-main` (`workers/shadow-router/config.ts` `getProductionShadowConfig`). With no
 live canary ref nothing else gets added. `fanOutToCandidates` skips the baseline before it classifies (`index.ts:273`), so it logs no "Skipping candidate" line and returns `[]`.
 Then `triggerScientist` returns early on an empty list, without logging anything. To score a production sample end to end, a candidate needs a **live canary ref**. The
-mirror path has no other target. **Log fix on `ccr-cd33bfbc-7yd3mx` (not merged, not deployed):** the router now logs `Mirroring to N candidate(s)` without the baseline,
-`No mirror targets (no live canary ref; ...)` when only the baseline is configured, and `no candidate was mirrored for this request; comparison not queued` on the empty path.
-There are two new tests in `mirror-safety.test.ts`, and all three changes were mutation-checked. Local e2e 62 passed / 19 skipped. A manual `POST /mirror` against the local
+mirror path has no other target. **Log fix on `ccr-cd33bfbc-7yd3mx` (not merged, not deployed):** the router now logs `Mirroring to N candidate(s)` without the baseline, and
+`No mirror targets (no usable live canary ref; ...): nothing mirrored, comparison not queued` when only the baseline is configured (one line; the empty
+`triggerScientist` return stays silent, since every path into it already logged why). There are two new tests in `mirror-safety.test.ts`, every change was mutation-checked,
+and the independent review (2026-11-15) approved with changes. Its S1, N1 and N3 are fixed. N2 is left as is because it predates the change (dispositions in the commit message). Local e2e 62 passed / 19 skipped. A manual `POST /mirror` against the local
 stack logged `Scientist comparison queued` once (a live canary target) and the empty-path line twice. The local stack runs no `beehive-scientist-comparator`, and queues
 do not cross separate `wrangler dev` processes, so router -> queue -> comparator is still unexercised end to end, both locally and in production.
 
