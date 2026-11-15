@@ -240,7 +240,7 @@ async function fanOutToCandidates(
   // The baseline (`beehive-main`) is in the same map but is never a mirror target, so it is not counted
   const targetCount = [...config.candidatePreviews.keys()].filter((id) => id !== BASELINE_TARGET_ID).length;
   if (targetCount === 0) {
-    console.log('[Shadow] No mirror targets (no live canary ref; the baseline is not a target): nothing mirrored');
+    console.log('[Shadow] No mirror targets (no usable live canary ref; the baseline is not a target): nothing mirrored, comparison not queued');
     return results;
   }
 
@@ -473,8 +473,8 @@ async function triggerScientist(
   env: any,
   config: ShadowConfig
 ): Promise<void> {
+  // Silent on purpose: every path that reaches here empty already logged why (no targets, holdout/baseline, skipped, body cap)
   if (candidateResponses.length === 0) {
-    console.log('[Shadow] no candidate was mirrored for this request; comparison not queued');
     return;
   }
 

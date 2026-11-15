@@ -363,8 +363,9 @@ describe('mirror fan-out through the handler', () => {
       await settleAll();
       expect(candidateCalls()).toHaveLength(0);
       expect(queue.send).not.toHaveBeenCalled();
-      expect(logged.some((l) => l.includes('No mirror targets'))).toBe(true);
-      expect(logged.some((l) => l.includes('comparison not queued'))).toBe(true);
+      // One line explains the whole outcome, not two
+      expect(logged.filter((l) => l.includes('No mirror targets') && l.includes('comparison not queued'))).toHaveLength(1);
+      expect(logged.filter((l) => l.includes('comparison not queued'))).toHaveLength(1);
       expect(logged.some((l) => /Mirroring to \d/.test(l))).toBe(false);
     });
 
@@ -372,8 +373,10 @@ describe('mirror fan-out through the handler', () => {
       const logged: string[] = [];
       for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { logged.push(a.map(String).join(' ')); });
       vi.spyOn(Math, 'random').mockReturnValue(0.5);
-      await handler.fetch(new Request('http://localhost/mirror', { method: 'POST', body: JSON.stringify({ v: 1, method: 'GET', path: '/api/:id' }), headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: { send: vi.fn(async () => {}) } }, ctx);
+      const res = await handler.fetch(new Request('http://localhost/mirror', { method: 'POST', body: JSON.stringify({ v: 1, method: 'GET', path: '/api/:id' }), headers: { Authorization: 'Bearer tok' } }), { ...env(), SCIENTIST_QUEUE: { send: vi.fn(async () => {}) } }, ctx);
+      expect(res.status).toBe(202);
       await settleAll();
+      expect(candidateCalls()).toHaveLength(1);
       expect(logged.some((l) => l.includes('Mirroring to 1 candidate(s)'))).toBe(true);
     });
 
