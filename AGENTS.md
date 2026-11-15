@@ -85,6 +85,10 @@ serialization point for promotion decisions.
 - **Prefer search_replace over rewrite.** Edit files in-place to preserve existing structure and comments.
 - **Avoid redundant summaries.** Skip generic explanations; state facts, decisions, and actionable items only.
 - **Keep the context pack lean.** `AGENTS.md` is loaded into every turn. Add a note here only after the same mistake happens twice, and prune stale notes. Keep this file under ~200 lines.
+  When you are confident a pattern or convention will recur (or a mistake was preventable), suggest the note to the maintainer
+  with the evidence instead of waiting for the repeat; add it only once they agree.
+- **Prefer the faster CLI tools when installed:** `rg` over `grep`, `fd` over `find`, `fastmod` over `sed` for
+  find-and-replace, `eza` over `ls`, `bat` over `cat` when highlighting helps, `delta` for diffs. Fall back when one is missing.
 - **Reference files by path, don't paste.** Point at `path:line` instead of pasting file contents or logs. Trim logs and stack traces to the relevant 20–30 lines.
 - **Clear and compact between phases.** Start a fresh session for unrelated work (new milestone, new worker). Compact mid-task only when a long task must continue. Hand off state via a committed doc, not chat history.
 - **Plan before multi-file changes.** For work touching more than 2–3 files (especially across workers or the spec DO schema), write a file-by-file plan and get it accepted before editing.
