@@ -24,6 +24,11 @@ raised the secret to 33 and 150 requests gave 53 (202 each, "Mirroring to 1 cand
 sample was scored. The queue wiring is intact (`wrangler queues info`). Open: whether the router queued at all (a baseline-less or refusal-agreeing pair queues nothing or is
 dropped; unconfirmed), and which candidate it mirrored to (only canary-ref candidates and `beehive-main` are targets). Next: tail the router's later log lines for a baseline or
 queue error, check `shadow_scores`, or run the local e2e stack. `MIRROR_SAMPLE_PERCENT` is **33** now; set it back low (or delete the secret) when done.
+**Explained from the code (2026-11-15, not re-checked in production):** the router mirrored to **no candidate**, so queueing nothing was correct. "Mirroring to 1 candidates"
+counts `candidatePreviews.size`, and production's static map holds only the baseline `beehive-main` (`workers/shadow-router/config.ts` `getProductionShadowConfig`). With no
+live canary ref nothing else gets added. `fanOutToCandidates` skips the baseline before it classifies (`index.ts:273`), so it logs no "Skipping candidate" line and returns `[]`.
+Then `triggerScientist` returns early on an empty list, without logging anything. To score a production sample end to end, a candidate needs a **live canary ref**. The
+mirror path has no other target. Logging gap: the count includes the baseline, and the empty-candidates return is silent (a small router log fix, not yet made).
 
 ## Handoff (2026-11-11): start here
 
