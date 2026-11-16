@@ -34,6 +34,9 @@ mirror path has no other target. **Log fix on `ccr-cd33bfbc-7yd3mx` (not merged,
 and the independent review (2026-11-15) approved with changes. Its S1, N1 and N3 are fixed. N2 is left as is because it predates the change (dispositions in the commit message). Local e2e 62 passed / 19 skipped. A manual `POST /mirror` against the local
 stack logged `Scientist comparison queued` once (a live canary target) and the empty-path line twice. The local stack runs no `beehive-scientist-comparator`, and queues
 do not cross separate `wrangler dev` processes, so router -> queue -> comparator is still unexercised end to end, both locally and in production.
+**It would fail anyway (review 2026-11-16, probed):** the comparator acks and drops every comparison for a candidate whose spec is in the ledger, because it
+reads `declaredDeltaSurface` while the Spec DO returns `declared_delta_surface`. A live canary would therefore still score nothing.
+See `docs/reviews/2026-11-16-review-c-shadow-canary-evidence.md` M1, and the other `docs/reviews/2026-11-1*` reports from the whole-repo review.
 
 ## Handoff (2026-11-11): start here
 
