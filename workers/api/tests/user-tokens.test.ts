@@ -126,7 +126,9 @@ describe('with the real Spec DO', () => {
       expect(JSON.parse(seen[0].body).agentId).toBe(alice);
     });
 
-    it('the X-Actor-ID a user token sends is replaced by its own actor (the guard above depends on it, review d N2)', async () => {
+    // The DO sees the caller's actor whatever X-Actor-ID the token sends. Handlers read principal.actorId, so the header rewrite in
+    // index.ts is defence in depth: removing it alone changes nothing here (an equivalent mutation, review d N2).
+    it('the X-Actor-ID a user token sends never reaches the DO', async () => {
       const t = await token();
       await send(ctx.env, '/api/repositories', 'POST', { token: t.plaintext, body: { name: 'r' }, headers: { 'X-Actor-ID': maint } });
       expect(forwarded('/api/repositories')[0].headers.get('X-Actor-ID')).toBe(alice);
