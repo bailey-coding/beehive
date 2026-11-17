@@ -37,16 +37,16 @@ This quick start guide helps you set up OAuth and API authentication for GitHub 
 # With permissions: Workers:Edit, Workers Queues:Edit, Artifacts:Edit, Accounts:Read
 
 # Set on all workers
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive-gate-workflow
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive-sandbox-runner
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive-queue-consumer
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-gate-workflow
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-sandbox-runner
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-queue-consumer
 
 # Set account ID on all workers
-wrangler secret put CLOUDFLARE_ACCOUNT_ID -n beehive
-wrangler secret put CLOUDFLARE_ACCOUNT_ID -n beehive-gate-workflow
-wrangler secret put CLOUDFLARE_ACCOUNT_ID -n beehive-sandbox-runner
-wrangler secret put CLOUDFLARE_ACCOUNT_ID -n beehive-queue-consumer
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --name beehive
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --name beehive-gate-workflow
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --name beehive-sandbox-runner
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --name beehive-queue-consumer
 ```
 
 ### 2. Local Development (Required)
@@ -183,7 +183,7 @@ Client → Beehive API → Worker → authGate() → Allow/Deny
 
 ### Issue: "API_AUTH_TOKEN not configured" (503 error)
 **Cause:** Missing API_AUTH_TOKEN secret  
-**Fix:** Set secret on all workers: `wrangler secret put API_AUTH_TOKEN -n <worker>`
+**Fix:** Set secret on all workers: `wrangler secret put API_AUTH_TOKEN --name <worker>`
 
 ### Issue: "wrangler secret put" fails with 403
 **Cause:** API token lacks Workers Scripts:Edit permission  

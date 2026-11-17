@@ -132,23 +132,24 @@ npm run dev:queue     # Queue Consumer
 
 GitHub `main` runs CI only (`.github/workflows/ci.yml`); it does not deploy. The maintainer deploys all 10 workers by pushing to the Cloudflare Artifacts repo (see `docs/OPS.md`).
 
-Set `API_AUTH_TOKEN` on all 10 workers:
+Set `API_AUTH_TOKEN` on all 10 workers. This is not the full list: the Spec DO tokens (`SPEC_DO_INTERNAL_TOKEN`, `SPEC_DO_ADMIN_TOKEN`) are a hard
+prerequisite, or every Spec DO call fails closed. Follow `docs/SETUP.md` section 2d for every secret.
 ```bash
-wrangler secret put API_AUTH_TOKEN -n beehive
-wrangler secret put API_AUTH_TOKEN -n beehive-gate-workflow
-wrangler secret put API_AUTH_TOKEN -n beehive-sandbox-runner
-wrangler secret put API_AUTH_TOKEN -n beehive-queue-consumer
-wrangler secret put API_AUTH_TOKEN -n beehive-shadow-router
-wrangler secret put API_AUTH_TOKEN -n beehive-scientist-comparator
-wrangler secret put API_AUTH_TOKEN -n beehive-preview-manager
-wrangler secret put API_AUTH_TOKEN -n beehive-candidate-service
-wrangler secret put API_AUTH_TOKEN -n beehive-canary-worker
-wrangler secret put API_AUTH_TOKEN -n beehive-promotion-worker
+wrangler secret put API_AUTH_TOKEN --name beehive
+wrangler secret put API_AUTH_TOKEN --name beehive-gate-workflow
+wrangler secret put API_AUTH_TOKEN --name beehive-sandbox-runner
+wrangler secret put API_AUTH_TOKEN --name beehive-queue-consumer
+wrangler secret put API_AUTH_TOKEN --name beehive-shadow-router
+wrangler secret put API_AUTH_TOKEN --name beehive-scientist-comparator
+wrangler secret put API_AUTH_TOKEN --name beehive-preview-manager
+wrangler secret put API_AUTH_TOKEN --name beehive-candidate-service
+wrangler secret put API_AUTH_TOKEN --name beehive-canary-worker
+wrangler secret put API_AUTH_TOKEN --name beehive-promotion-worker
 ```
 
 Set Cloudflare credentials for Artifacts integration on `beehive`:
 ```bash
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive
 ```
 
 ---

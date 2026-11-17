@@ -612,17 +612,12 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8787/health
 # Spec DO (via API)
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8787/api/organizations
 
-# Gate Workflow
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8788/health
-
-# Queue Consumer
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8789/queue/health
-
-# Sandbox Runner
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8790/health
+# The other local e2e workers (scripts/start-e2e-workers.sh; port table in docs/SETUP.md)
+for p in 8788 8789 8790 8791 8792; do curl -s -o /dev/null -w "$p %{http_code}\n" -H "Authorization: Bearer $TOKEN" http://localhost:$p/health; done
+# 8788 shadow-router, 8789 canary-worker, 8790 promotion-worker, 8791 preview-manager, 8792 e2e probe
 ```
 
-Use `./scripts/health-check.sh` for the local dev workers. For the deployed ones use
+`./scripts/health-check.sh` still uses an older port map and does not match `start-e2e-workers.sh`. For the deployed ones use
 `BEEHIVE_API_TOKEN=... ./scripts/prod-health.sh`: `/health` on `beehive` calls the Spec DO (503 when it is
 down), and the script also makes a separate request that reaches the DO.
 
@@ -634,7 +629,7 @@ down), and the script also makes a separate request that reaches the DO.
 |-------|---------|----------|
 | Git version | `git --version` | >= 2.39.0 |
 | Node version | `node --version` | >= 22.0.0 |
-| CLOUDFLARE_API_TOKEN set | `echo $CLOUDFLARE_API_TOKEN | head -c 10` | `art_v2_` or `cfat_` |
+| CLOUDFLARE_API_TOKEN set | `[ -n "$CLOUDFLARE_API_TOKEN" ] && echo set` | `set` (never print any part of a token) |
 | CLOUDFLARE_ACCOUNT_ID set | `echo $CLOUDFLARE_ACCOUNT_ID | head -c 12` | Your account ID |
 | Queue exists | `cf artifacts namespaces repos list default` | No errors |
 | Workers running | `./scripts/health-check.sh` | All ✅ HEALTHY |
@@ -652,34 +647,8 @@ down), and the script also makes a separate request that reaches the DO.
 
 ## 🎯 Quick Start for New Developers
 
-```bash
-# 1. Start the local e2e workers (ports in docs/SETUP.md)
-nohup bash scripts/start-e2e-workers.sh &
-
-# 2. Wait for initialization
-sleep 15
-
-# 3. Verify health
-./scripts/health-check.sh
-
-# 4. Create and claim a spec
-SPEC_ID=$(curl -s -X POST http://localhost:8787/api/specs \
-  -H "Authorization: Bearer dev-local-spike-token" \
-  -H "X-Actor-ID: 1bfcea99-0308-4b05-a3ec-e91b8f4722b2" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"test-$(date +%s)","description":"test","contract":"{}","declaredDeltaSurface":[],"organizationId":"4a6d4e70-9ed2-4a81-8358-730b37e2e236"}' | jq -r '.data.id')
-
-CLAIM=$(curl -s -X POST "http://localhost:8787/api/specs/$SPEC_ID/claim" \
-  -H "Authorization: Bearer dev-local-spike-token" \
-  -H "X-Actor-ID: 1bfcea99-0308-4b05-a3ec-e91b8f4722b2" \
-  -H "Content-Type: application/json" \
-  -d '{"agentId":"1bfcea99-0308-4b05-a3ec-e91b8f4722b2"}')
-
-# 5. Clone, commit, push (use token and URL from CLAIM response)
-# 6. Check verdict
-sleep 15
-curl -s -H "Authorization: Bearer dev-local-spike-token" \
-  "http://localhost:8787/api/candidates/$(echo $CLAIM | jq -r '.data.candidateId')/gate-verdicts" | jq
+Follow `docs/SETUP.md` "Local e2e": start the workers with `nohup bash scripts/start-e2e-workers.sh &`, poll the ports above, then run
+`npm run test:e2e:local`, and stop them with `scripts/stop-e2e-workers.sh`. For a narrated walk-through with no Cloudflare account, run `npm run demo`.
 
 ---
 

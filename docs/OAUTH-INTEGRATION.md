@@ -189,8 +189,8 @@ Set the credentials as Worker secrets:
 
 ```bash
 # For the main beehive worker (API router)
-wrangler secret put GITHUB_OAUTH_CLIENT_ID -n beehive
-wrangler secret put GITHUB_OAUTH_CLIENT_SECRET -n beehive
+wrangler secret put GITHUB_OAUTH_CLIENT_ID --name beehive
+wrangler secret put GITHUB_OAUTH_CLIENT_SECRET --name beehive
 ```
 
 For local development, add to `.dev.vars`:
@@ -273,16 +273,16 @@ Set as Worker secrets on **ALL workers**:
 
 ```bash
 # For each worker
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive-gate-workflow
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive-sandbox-runner
-wrangler secret put CLOUDFLARE_API_TOKEN -n beehive-queue-consumer
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-gate-workflow
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-sandbox-runner
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-queue-consumer
 ```
 
 Also set the Cloudflare Account ID as a variable:
 
 ```bash
-wrangler secret put CLOUDFLARE_ACCOUNT_ID -n beehive
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --name beehive
 ```
 
 For local development, add to `.dev.vars`:
@@ -437,8 +437,8 @@ Headers:
 2. **Configure Beehive**
    ```bash
    # Set as Worker secrets
-   wrangler secret put GITHUB_OAUTH_CLIENT_ID -n beehive
-   wrangler secret put GITHUB_OAUTH_CLIENT_SECRET -n beehive
+   wrangler secret put GITHUB_OAUTH_CLIENT_ID --name beehive
+   wrangler secret put GITHUB_OAUTH_CLIENT_SECRET --name beehive
    ```
 
 3. **Implement OAuth Flow** (Future)
@@ -460,8 +460,8 @@ Headers:
 2. **Configure All Workers**
    ```bash
    # For each worker (beehive, gate-workflow, sandbox-runner, queue-consumer)
-   wrangler secret put CLOUDFLARE_API_TOKEN -n <worker-name>
-   wrangler secret put CLOUDFLARE_ACCOUNT_ID -n <worker-name>
+   wrangler secret put CLOUDFLARE_API_TOKEN --name <worker-name>
+   wrangler secret put CLOUDFLARE_ACCOUNT_ID --name <worker-name>
    ```
 
 3. **Verify Configuration**
@@ -477,10 +477,10 @@ The existing `API_AUTH_TOKEN` system is already in place:
 
 ```bash
 # Set on all workers (already done in current setup)
-wrangler secret put API_AUTH_TOKEN -n beehive
-wrangler secret put API_AUTH_TOKEN -n beehive-gate-workflow
-wrangler secret put API_AUTH_TOKEN -n beehive-sandbox-runner
-wrangler secret put API_AUTH_TOKEN -n beehive-queue-consumer
+wrangler secret put API_AUTH_TOKEN --name beehive
+wrangler secret put API_AUTH_TOKEN --name beehive-gate-workflow
+wrangler secret put API_AUTH_TOKEN --name beehive-sandbox-runner
+wrangler secret put API_AUTH_TOKEN --name beehive-queue-consumer
 ```
 
 For local development:

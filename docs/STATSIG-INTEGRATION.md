@@ -899,9 +899,9 @@ STATSIG_ENVIRONMENT = "production"
 **Production:**
 ```bash
 # Set on each worker
-wrangler secret put STATSIG_SERVER_SECRET -n beehive-shadow-router
-wrangler secret put STATSIG_SERVER_SECRET -n beehive-canary-worker
-wrangler secret put STATSIG_SERVER_SECRET -n beehive-promotion-worker
+wrangler secret put STATSIG_SERVER_SECRET --name beehive-shadow-router
+wrangler secret put STATSIG_SERVER_SECRET --name beehive-canary-worker
+wrangler secret put STATSIG_SERVER_SECRET --name beehive-promotion-worker
 ```
 
 **Local Development:**

@@ -126,9 +126,12 @@ The CI workflow needs none. For manual deploys set
 ### c. Queues (create before first deploy)
 
 No workflow creates queues any more (the old deploy workflow created only `canary-rollback-triggers` and `promotion-events`; create them by hand with `wrangler queues create`). The configs also
-reference these five, which a fresh account must create by hand:
+reference these eight, which a fresh account must create by hand (without `canary-slo-ticks` the deploy of `beehive` fails, `docs/OPS.md`):
 
 ```bash
+npx wrangler queues create canary-slo-ticks
+npx wrangler queues create canary-rollback-triggers
+npx wrangler queues create promotion-events
 npx wrangler queues create beehive-artifacts-push
 npx wrangler queues create preview-artifacts-push
 npx wrangler queues create preview-artifacts-events
@@ -154,9 +157,11 @@ for w in beehive beehive-gate-workflow beehive-queue-consumer beehive-shadow-rou
 done
 # Tier 2: beehive ONLY
 wrangler secret put SPEC_DO_ADMIN_TOKEN --name beehive
-# Artifacts token: beehive AND beehive-preview-manager (previews are simulated without it)
+# Artifacts token: beehive, beehive-preview-manager (previews are simulated without it) and
+# beehive-sandbox-runner (Artifacts read scope; it mints the short-lived clone tokens for canary builds)
 wrangler secret put CLOUDFLARE_API_TOKEN --name beehive
 wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-preview-manager
+wrangler secret put CLOUDFLARE_API_TOKEN --name beehive-sandbox-runner
 # beehive only:
 wrangler secret put GITHUB_CLIENT_ID --name beehive       # web UI login
 wrangler secret put GITHUB_CLIENT_SECRET --name beehive

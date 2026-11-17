@@ -489,11 +489,11 @@ export function authGate(request: Request, env: AuthEnv): Response | null {
 
 **Production:**
 ```bash
-# Set on each worker
-wrangler secret put API_AUTH_TOKEN -n beehive
-wrangler secret put API_AUTH_TOKEN -n beehive-gate-workflow
-wrangler secret put API_AUTH_TOKEN -n beehive-sandbox-runner
-wrangler secret put API_AUTH_TOKEN -n beehive-queue-consumer
+# Not the full list: follow docs/SETUP.md section 2d (Spec DO tokens are a hard prerequisite)
+wrangler secret put API_AUTH_TOKEN --name beehive
+wrangler secret put API_AUTH_TOKEN --name beehive-gate-workflow
+wrangler secret put API_AUTH_TOKEN --name beehive-sandbox-runner
+wrangler secret put API_AUTH_TOKEN --name beehive-queue-consumer
 ```
 
 **Local Development:**
@@ -561,13 +561,7 @@ class_name = "SpecDO"
 script_name = "beehive"
 ```
 
-**Exception:** `shadow-router` has no SPEC_DO binding. `promotion-worker` binds to the `beehive` worker via a service binding instead of a DO binding:
-```toml
-# In promotion-worker/wrangler.toml
-[[services]]
-binding = "SPEC_DO"
-service = "beehive"
-```
+Every worker that calls the Spec DO, `shadow-router` and `promotion-worker` included, uses this DO binding (check the worker's own `wrangler.toml`).
 
 ### Workers → Workers (Service Bindings)
 
@@ -590,9 +584,6 @@ service = "beehive-preview-manager"
 
 # In promotion-worker/wrangler.toml
 [[services]]
-binding = "SPEC_DO"
-service = "beehive"
-[[services]]
 binding = "PREVIEW_MANAGER"
 service = "beehive-preview-manager"
 [[services]]
@@ -603,7 +594,7 @@ binding = "SHADOW_ROUTER"
 service = "beehive-shadow-router"
 ```
 
-**Note:** No worker has a `SANDBOX_RUNNER` service binding.
+`preview-manager` has a `SANDBOX_RUNNER` service binding (canary builds, `docs/OPS.md` "Sandbox build container").
 
 ### Workers → Queues
 
