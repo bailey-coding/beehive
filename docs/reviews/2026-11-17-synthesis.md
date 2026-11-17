@@ -98,7 +98,8 @@ through are listed as "guards with no test" in the slice reports.
 4. d-S3 and b2-S4 (edge side): remove the spec and issue stage PATCH, the link routes and the gate route from `USER_WRITE_ROUTES` until the DO has ownership
    rules; retire or fix the broken gate route (d-S1); correct the `principal.ts:258` comment.
 5. d-S4: a top-level catch in `handleFetch`. d-S2: tests for the cookie signature, expiry, OAuth state and cookie attributes.
-6. Maintainer action, no code: set `MIRROR_SAMPLE_PERCENT` back down. It is still 33, and with problem 2 nothing it produces can be scored.
+6. `MIRROR_SAMPLE_PERCENT` is still 33. The maintainer decided on 2026-11-17 to leave it, because there is no traffic. Revisit it before real traffic
+   arrives, or once problem 2 is fixed.
 
 **Wave 1: contract tests, then the three broken pipelines.**
 1. e-M3: the `wire()` helper and contract tests 1-3, which fail today, plus test 5. Make e2e `m3-features.test.ts:544` require a merged car, and turn the
