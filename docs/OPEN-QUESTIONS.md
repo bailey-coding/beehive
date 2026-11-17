@@ -64,6 +64,8 @@ migrates once this reaches `main` (human approval). Open points:
 
 ## 2026-10-15: Cross-worker e2e failures (local) - root causes
 
+**Status (2026-11-17):** Item 5 is fixed: m3-features reaches production only with `E2E_ALLOW_PRODUCTION` (review e).
+
 Local run of `tests/e2e/cross-worker-flows.test.ts` after route fixes: 11 pass, 9 fail, 2 skip
 (was 14 failing). Remaining failures are real worker defects, not test drift:
 
@@ -271,6 +273,8 @@ Resolves "Service accounts: API handler and Spec DO disagree" above. Usage: `doc
 ---
 
 ## 2026-10-16: Canary deploy and rollback (m6 -> m7) (branch `agent/canary-rollback`)
+
+**Status (2026-11-17):** The malformed `ANALYTICS.writeDataPoint` payload is wider than recorded: the comparator and the router's `logTrafficSplit` have the same shape (review c S4, inferred). Open, Wave 3.
 
 Spine item 2, design as approved: preview-manager `POST /api/preview/canary` builds a version
 (`{url, versionId}`); rollback is a Spec DO ref move; `deploy_refs` is the authority. Contract:
@@ -650,6 +654,8 @@ no API sets an issue's `visibility`, so private issues cannot be made through th
 
 ## Queue-consumer double-write prevention is unfinished (2026-10-19)
 
+**Status (2026-11-17):** Partly resolved: the `queue-consumer` seed actor exists only in local dev (`DEV === 'local'`). In production the gate verdict write fails on the actor foreign key (review b2 M1, `docs/reviews/2026-11-17-synthesis.md`).
+
 **Status**: Resolved - implemented in agent/m5a-idempotency-fix
 
 The three blocking issues identified by agent 621993c have been addressed:
@@ -972,6 +978,8 @@ Everything else passed for every start version (m1 with and without a `schema_ve
 
 ## 2026-10-26: The shadow rung's declared-delta-surface check cannot work for any stored spec (found while planning `docs/SPEC-BACKTEST-PLAN.md`; code read, not run; nothing changed)
 
+**Status (2026-11-17):** Confirmed, and since PR A (`b10b851`) a total loss: the comparator acks and drops every comparison for a candidate whose spec is in the ledger (review c M1, `docs/reviews/2026-11-17-synthesis.md`). Point 3 is outdated (the handler acks explicitly). Open, Wave 1.
+
 Three mismatches stack on the path Spec DO -> Scientist comparator:
 1. **Stored shape.** `CreateSpecRequestSchema` takes `declaredDeltaSurface: string[]` (`workers/shared/schemas.ts:138`) and the Spec DO stores `JSON.stringify(array)` (`workers/spec-do/index.ts:1336`). The comparator's `parseDeltaSurface` wants one object with a `version` field (`delta-surface/parser.ts:57-59`, `:66`), so an array fails with "missing required version" even if it reached the parser unwrapped.
 2. **Envelope and casing.** `GET /api/specs/:id` answers `{ success, data: { ..., declared_delta_surface } }` (`index.ts:3890`; snake_case from the row mapper at `:1941`). `SpecDOClient.getSpec` returns that whole envelope unchanged (`scientist-comparator/storage/spec-do.ts:49-50`), so `spec.declaredDeltaSurface` at `scientist-comparator/index.ts:208` is `undefined` and `parseDeltaSurface(undefined)` throws "must be an object" (`parser.ts:57-59`). The default surface is used only when the spec is not found.
@@ -1021,6 +1029,8 @@ Input: `default/beehive` at `589b280` on Artifacts, cloned inside the container 
 
 ## 2026-10-28: m13 on workerd, and gate-run routes not yet on the edge (`agent/real-gate-slice5`, not merged or deployed)
 
+**Status (2026-11-17):** m13 and the gate-run Spec DO routes are on `main` and deployed; they are still not routed at the edge.
+
 - **The preview-columns finding of 2026-10-26 is fixed in code.** The three `candidates.preview_*` columns are now in the base `candidates` table (`schema.sql` and `schema-inline.ts`, kept equal by `schema-sync.test.ts`) and the m13 step runs `addColumnsIfMissing` for them, which repairs ledgers that were created fresh at m11 or m12 and stamped without running m2. The `it.fails` pin is now an `it`. A4 no longer excludes them.
 - **Run on workerd's real SQLite (local only).** A ledger created by `main` (`087b876`, m12) through `scripts/start-e2e-workers.sh` had `schema_version = m12` and **no preview columns** (the finding, observed on workerd, not only on `node:sqlite`). The same persisted state under this branch's code went to `m13`: `gate_runs` with its three indexes and foreign keys to `candidates` and `actors`, the three preview columns added, the candidate and organization rows kept. Start, dedupe (running), 409 `busy` (repository), strict 400, finish, list and the `gate_verdicts` summary upsert answered as designed through the local probe worker. Idempotent redelivery was exercised on `node:sqlite` only (the probe forwards no `Idempotency-Key`).
 - **The edge does not route `/api/gate-runs`** (a `GET` through `beehive` answers 404 "Not found"): by plan it is slice 8, so only the tier-1 Spec DO stub (the gate worker, slice 7a) can reach the new routes.
@@ -1034,6 +1044,8 @@ Input: `default/beehive` at `589b280` on Artifacts, cloned inside the container 
 - **Idempotency-Key on workerd (2026-10-28, local).** With the e2e probe relaying an allow-listed `Idempotency-Key`: start 200; same key and body replayed with `Idempotent-Replay: true` and the same `runId`; same key with another sha 409 `Idempotency key conflict`; a 409 `busy` under a key left no key row, and the same key after the first run finished started the run (200, new `runId`, later replayed). Nested `transactionSync` (route inside `idempotent()`) behaved as on `node:sqlite`.
 
 ## 2026-10-28: Real-gate slice 4, TestSandbox and `/sandbox/test` (`agent/real-gate-slice4`, not merged or deployed)
+
+**Status (2026-11-17):** Merged to `main` and deployed; `/sandbox/test` still has no production caller.
 
 Code only; no `wrangler.toml`, Dockerfile or Spec DO change. Unit-tested with a fake container; nothing here ran on the platform.
 
@@ -1052,6 +1064,8 @@ Code only; no `wrangler.toml`, Dockerfile or Spec DO change. Unit-tested with a 
 
 
 ## 2026-10-28: Real-gate slice 6, TestSandbox container config (`agent/real-gate-slice6`, not merged or deployed)
+
+**Status (2026-11-17):** Merged to `main` and deployed.
 
 Config, image and export only; nothing here ran on the platform (no Docker on this host, no deploy).
 - **Files.** `workers/sandbox-runner/wrangler.toml`: second `[[containers]]` (`class_name`, `scheduling_policy = "durable_object"`, `[containers.images.test] dockerfile = "./Dockerfile.test"`), binding `TEST_SANDBOX`, `[exports.TestSandbox]` (new class, sqlite). `index.ts` exports `TestSandbox`. `Dockerfile.test`: same digest-pinned `node:24-trixie-slim` as the build image, plus bash, ca-certificates, findutils, git (clone, the bash phase wrapper, `find`/`test`); no esbuild.
@@ -1073,6 +1087,8 @@ a deployment that is not live). Two distinct rollbacks still toggled at that poi
 candidate is not the current head's" alternative above does not fix that.
 
 ## 2026-11-01: rolling back the restored canary re-promotes the rolled-back one (D2)
+
+**Status (2026-11-17):** Fixed and tested (`slo-loop-real-do.test.ts`), confirmed by review c.
 
 Trace: deploy A, deploy B, roll back B: the canary head moves to A and `syncCanaryStatuses`
 (`workers/spec-do/index.ts`, the `UPDATE ... SET status = 'deployed'` for the head's canary) marks A `deployed`. Roll
@@ -1097,6 +1113,8 @@ the SLO loop goes quiet. Spec DO only; no schema or route change. Not repaired: 
 roll back to the empty ref instead of an earlier canary.
 
 ## 2026-11-01: merge train matches cars by candidate only, so a re-added candidate's old car is updated too
+
+**Status (2026-11-17):** Fixed: cars are matched by `(position, candidateId)` (`isCar`), confirmed by review b1.
 
 `processMergeTrain` (`workers/promotion-worker/merge-train.ts:261, 283, 316`) finds the car to update by `candidateId`. After a failure the worker re-adds the candidate as a new car (`:63-74`), so both cars match: the old failed car is also set to `merging` and then `merged` or `failed`. Near-miss records are unaffected (each car is its own fact and the dedupe holds), but the train record itself is wrong. Pre-existing; found in the PR-B verification. Fix: match on position as well as candidate id. Not changed in PR-B (promotion-train logic, needs its own plan and review).
 
@@ -1189,6 +1207,8 @@ Not fixed in D2 (plan rev 3 scope: target selection by chain identity). Planned 
 
 ## 2026-11-03: gate-workflow and queue-consumer builds failed on the 27c74e2 push (Could not resolve "zod"); CI did not catch it
 
+**Status (2026-11-17):** Fixed: the `postinstall` is on `main` and deployed (2026-11-12), and `scripts/check-shared-postinstall.mjs` runs in CI. Its gaps are review e S5.
+
 The cf push of `27c74e2` (2026-11-03 09:46Z) built eight workers and **failed two**: `beehive-gate-workflow` (build `b55aaadf`) and
 `beehive-queue-consumer` (build `f6f34faf`), both `Could not resolve "zod"` at `workers/shared/schemas.ts:22`. Both gained an
 import of `GATE_PRE_MERGE_PATH` / `GATE_WORKFLOW_ORIGIN` from `workers/shared/schemas.ts` (task `merge-train-gate-call`), a
@@ -1246,6 +1266,8 @@ be 400s with the reason; a 500 reads as an outage.
 
 ## 2026-11-10: the shadow rung cannot be enforced yet (mirror targets and baseline), found in the promotion-gaps plan review
 
+**Status (2026-11-17):** The mirror source, router `/mirror`, production baseline and production fields are deployed (2026-11-12). Still not earnable: only live canaries are mirrored, and the comparator drops every comparison (review c M1).
+
 The shadow router mirrors only static targets (`beehive-main`, local ports; `workers/shadow-router/config.ts:123,149`) and live canary-ref candidates (`:237-252`). A candidate at `passed_premerge` has no canary ref, so it is never mirrored and gets no shadow samples. The queue message's baseline is a placeholder (`status: 200`, no body; `workers/shadow-router/index.ts:447-453`), candidate bodies are `undefined` (`:464`) and `specId` is `''` (`:458`), so a "score" only measures "the candidate returned 200 for a path rewritten to its route template" (with `MIRROR_BODY_MODE = "none"`, id routes 404 on every candidate). PR A (`docs/plans/promotion-gaps-plan.md`) therefore builds the sample pipeline (m15 `shadow_scores`, the route, the verdict, the comparator fixes) but keeps shadow evidence **log-only** for promotion, with every sample marked `baseline: 'placeholder'`.
 
 Needed before shadow can be enforced (a follow-up plan, "option 2"): mirror `passed_premerge` candidates (a Spec DO read route, cached like `live-refs-cache.ts`); a per-candidate preview deployment target (`isAcceptableCanaryUrl`); the real production response as the baseline; capped and redacted bodies (M5A-2 rev 5 path h); fill `specId`; a `baseline: 'production'` marker on the queue message; then the flip (one constant in the Spec DO's evidence table, with an OPS check). Risks: mirrored load and cost, untrusted candidate output in queues and Analytics Engine, side effects of mirrored writes, and the sample rate against the 20-sample minimum. Consequence until then: tournament mode has no scores to rank by outside e2e and the demo, which seed samples (decision 6 in the plan).
@@ -1254,6 +1276,8 @@ Needed before shadow can be enforced (a follow-up plan, "option 2"): mirror `pas
 
 ## 2026-11-10: the gate workflow call from merge-train sends an `actorId` that may not be an actor
 
+**Status (2026-11-17):** Confirmed against the real Spec DO (500 FOREIGN KEY), and wider: `queue-consumer` has the same defect (reviews b1 M2, b2 M1, `docs/reviews/2026-11-17-synthesis.md`). Open, Wave 1.
+
 `workers/promotion-worker/merge-train.ts:406` sends `actorId: 'promotion-worker'` to the gate workflow. `gate_verdicts.decided_by` and `gate_runs.decided_by` reference `actors(id)` with foreign keys on (`workers/spec-do/schema-inline.ts:146`), and no actor named `promotion-worker` is created anywhere (the trial route has the same shape: `trials.decided_by`). If the Spec DO's gate-run write uses that id as `decided_by`, the verdict write throws and rolls back. Found by the PR A review (B4) in the same class as the comparator's `unknown` actor, which PR A fixes by creating a reserved `scientist-comparator` actor lazily in the route. Not verified at runtime; check what `handleGateRuns` binds as `decided_by` before fixing.
 
 **Status**: Open (not in the promotion-gaps plan; PR C's tournament trial write uses the `/promote` caller's actor instead).
@@ -1261,6 +1285,8 @@ Needed before shadow can be enforced (a follow-up plan, "option 2"): mirror `pas
 **Update 2026-11-10 (PR B and C)**: fixed on the branch. `advance` (the Spec DO's promotion decision point) checks the move and the enforced evidence (pre-merge verdict; a live, soaked canary for `full`); the promotion worker uses it, ranks the tournament by decision-time ledger scores (a tie or a missing score is a 409, never arrival order), no longer calls `/compare`, advances the winner and a merged car one rung at a time, and records the decision as a trial. `/promote` now answers 409/404/503 with a `code` for refusals (the two 500s for invalid create bodies, below, are separate and still open). Still open: the shadow rung and train rung evidence are log-only (OPEN-QUESTIONS 2026-11-10), `full` moves no deploy ref, and the tournament still decides on the second arrival (a third candidate for the same spec is refused `tournament_completed`).
 
 ## 2026-11-10: the tournament decides on the second arrival, and the SHADOW_ROUTER binding is unused
+
+**Status (2026-11-17):** Still true, and wider: a completed tournament is terminal and there is one per spec, so in the default mode no later candidate of that spec can pass shadow -> train (review b1, `docs/reviews/2026-11-17-synthesis.md`).
 
 `TournamentManager.executeTournament` decides as soon as two candidates have joined (`workers/promotion-worker/tournament.ts`), so a third candidate for the same spec is refused `409 tournament_completed` and never competes, however high its shadow score. That is unchanged by promotion-gaps PR C (a deliberate scope limit); a fair contest needs a decision point other than "the second arrival" (a deadline, a minimum field, an explicit close). Separately, PR C stops calling the shadow router's nonexistent `/compare` route, so the promotion worker's `SHADOW_ROUTER` service binding (`workers/promotion-worker/wrangler.toml`, `types.ts`) is unused; removing a binding is a harmless config change left for a separate commit. Also unchanged: a merged car that the Spec DO then refuses to advance (the candidate changed stage while its gate ran) stays `merged` in the train ledger while its stage did not move; the requester sees the Spec DO's code, a non-requester whose car was the one processed only sees an error log.
 
