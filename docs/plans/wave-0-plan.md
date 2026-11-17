@@ -202,3 +202,17 @@ test passes.
 | S4: a live reference in `demo-multi-agent.sh`; SUBMISSION was edited twice | Fixed. `demo-multi-agent.sh` added to the deletion list; SUBMISSION gets only the banner. |
 | S5: pin the `X-Actor-ID` rewrite | Fixed (part 1 tests). |
 | Nits: Part 4 harness, `AGENTS-REVIEWER.md` labels, map path, TROUBLESHOOTING `:636`, 191 lines, nine entries, MR-FLOW note, part order | All taken. |
+
+## Code review dispositions (2026-11-17, approve with changes)
+
+| Finding | Disposition |
+|---|---|
+| S1: the lifecycle `decodeSegment` and the dispatch `URIError` branch hid each other, so removing either survived the tests | Fixed (`200ae8d`). The lifecycle 400 says `Malformed path segment` and the test pins that message; a unit test calls `dispatchErrorResponse(new URIError)`. Both mutations are now caught. |
+| S2: the AGENTS-REVIEWER ladder had no "built today" link | Fixed. |
+| S3: `docs/QUEUE-GATE-WIRING-PLAN.md` (status active) still runs the deleted script | Fixed: a dated note at the top of the doc. |
+| Nit: a `null` agentId passing was not pinned | Fixed: a test case; the mutation is caught. |
+| Nit: `agentId: ''` gets 403 (stricter than the DO) | Kept: fails closed, and no caller sends it. |
+| Nit: a GET whose handler throws now gets the mirror hook | Accepted: the mirror never changes the response. |
+| Nit: OPEN-QUESTIONS got 13 status lines, the plan said nine | The extra four are f S6's stale "not merged / not deployed" lines (m13, slices 4 and 6, the postinstall), which part 7.2 includes. |
+| Nit: `debug tail -n` clashes with the global `-n, --dry-run` (pre-existing) | Not changed in Wave 0 (it renames a CLI flag); Wave 3. |
+| Nit: `health-check.sh` checks ports no kept script starts | Wave 3, with the TROUBLESHOOTING port table already corrected. |
