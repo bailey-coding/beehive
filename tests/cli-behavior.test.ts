@@ -240,6 +240,7 @@ describe('dry run', () => {
     ['-n org create o', ['-n', 'org', 'create', 'o']],
     ['--dry-run promotion create', ['--dry-run', 'promotion', 'create', 'c1', '--from-rung', 'shadow', '--to-rung', 'train']],
     ['--dry-run debug test-claim', ['--dry-run', 'debug', 'test-claim', 's1']],
+    ['-n actor trust (a PATCH)', ['-n', 'actor', 'trust', 'a1', '0.5']],
   ])('%s sends no write and exits 0', async (_n, args) => {
     const { code, stdout } = await runCli(args);
     expect(code).toBe(0);
