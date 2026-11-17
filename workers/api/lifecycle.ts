@@ -102,7 +102,7 @@ export async function handleLifecycleRoutes(
     if (!body.success) return err(body.error.message, 400);
     const entityType = TOMBSTONE_SEGMENTS[tombstone[1]];
     const id = decodeSegment(tombstone[2]);
-    if (id === null) return err('Malformed request', 400);
+    if (id === null) return err('Malformed path segment', 400);
     if (entityType === 'organization' && id === RESERVED_ORGANIZATION_ID) {
       return err(`organization ${id} is reserved and cannot be tombstoned`, 403);
     }
@@ -164,6 +164,6 @@ export async function handleLifecycleRoutes(
   const body = SetActorRoleRequestSchema.safeParse(read.body);
   if (!body.success) return err(body.error.message, 400);
   const roleActorId = decodeSegment(role![1]);
-  if (roleActorId === null) return err('Malformed request', 400);
+  if (roleActorId === null) return err('Malformed path segment', 400);
   return relay(await client.setActorRole(roleActorId, body.data.role, actorId));
 }

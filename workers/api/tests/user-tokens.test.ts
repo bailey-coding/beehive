@@ -109,9 +109,10 @@ describe('with the real Spec DO', () => {
       expect(forwarded(path)).toHaveLength(0);
     });
 
-    it.each([[true], [false]])('a user token with its own agentId (%s) or none reaches the DO with the body unchanged', async (own) => {
+    it.each([['own'], ['none'], ['null']])('a user token with agentId %s reaches the DO with the body unchanged', async (kind) => {
       const t = await token();
-      const body = own ? { name: 'r', organizationId: 'o1', agentId: alice } : { name: 'r', organizationId: 'o1' };
+      const base = { name: 'r', organizationId: 'o1' };
+      const body = kind === 'own' ? { ...base, agentId: alice } : kind === 'null' ? { ...base, agentId: null } : base;
       await send(ctx.env, '/api/repositories', 'POST', { token: t.plaintext, body });
       const seen = forwarded('/api/repositories');
       expect(seen).toHaveLength(1);

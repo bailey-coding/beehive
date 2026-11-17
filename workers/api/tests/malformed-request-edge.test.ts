@@ -4,7 +4,7 @@
  * generic 500 that echoes no error text.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import worker from '../index';
+import worker, { dispatchErrorResponse } from '../index';
 
 const stub = { fetch: vi.fn() };
 const env = { SPEC_DO: { idFromName: vi.fn().mockReturnValue('do'), get: vi.fn().mockReturnValue(stub) }, API_AUTH_TOKEN: 'tok' };
@@ -50,9 +50,23 @@ describe('route dispatch errors at the edge', () => {
   it.each([
     ['DELETE', '/api/organizations/%E0%A4%A', '{}'],
     ['POST', '/api/admin/actors/%E0%A4%A/role', JSON.stringify({ role: 'maintainer' })],
-  ])('a path segment that does not decode is a 400 (%s %s, master token)', async (method, path, body) => {
+  ])('a path segment that does not decode is a 400 from the lifecycle check itself (%s %s, master token)', async (method, path, body) => {
     const res = await call(path, method, body);
     expect(res.status).toBe(400);
+    // The lifecycle message, not the dispatch catch's 'Malformed request': each guard is tested on its own
+    expect(await res.json()).toMatchObject({ success: false, error: 'Malformed path segment' });
     expect(stub.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatchErrorResponse', () => {
+  it('a URIError (a path that does not decode, from any future decodeURIComponent in dispatch) is a 400', async () => {
+    const res = dispatchErrorResponse(new URIError('URI malformed'));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ success: false, error: 'Malformed request' });
+  });
+
+  it('a SyntaxError that is not tagged as a request-body error is a 500', async () => {
+    expect(dispatchErrorResponse(new SyntaxError('Unexpected token')).status).toBe(500);
   });
 });

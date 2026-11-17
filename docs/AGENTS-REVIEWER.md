@@ -17,7 +17,7 @@
 - Always-pushed: no local-only work, intermediate → scratch/* (no worker writes scratch refs yet)
 - Fail-closed: missing auth → 503, wrong bearer → 401
 
-### Oracle Ladder
+### Oracle Ladder (what is built today: `docs/reviews/2026-11-15-architecture-map.md` section 4)
 | Rung | Traffic | Oracle | Failure |
 |------|---------|--------|---------|
 | Pre-merge | none | tests, spec conformance | never board train |

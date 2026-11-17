@@ -7,6 +7,8 @@ tags:
   - gates
 ---
 
+> **2026-11-17:** `scripts/test-queue-gate-wiring.sh`, named below, was removed (it wrote to production without asking; `docs/plans/wave-0-plan.md` part 6). The wiring it describes is implemented; see `docs/reviews/2026-11-16-review-b2-build-gate-plumbing.md` for its current state.
+
 # Queue-Gate Wiring Plan
 
 **Status:** Ready for implementation  
