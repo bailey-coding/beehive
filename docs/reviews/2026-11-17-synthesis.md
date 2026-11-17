@@ -144,4 +144,35 @@ Updating these entries in `docs/OPEN-QUESTIONS.md` is part of Wave 0's docs work
 
 ## Docs vs code (slice f)
 
-Pending; filled in when the slice f report arrives.
+Full report: `2026-11-17-review-f-docs-vs-code.md`. Verdict: request changes. It found 7 dangerous instructions, 11 wrong claims, 9 stale statuses and
+5 unlabeled aspirations. All 12 discrepancies in the map are confirmed, several of them wider than first listed.
+
+**What matters most:**
+1. **Instructions that fail or do harm if followed:**
+   - SETUP's queue list lacks `canary-slo-ticks`, so a self-hosted deploy of `beehive` fails (D1).
+   - SUBMISSION tells readers to run `npm run deploy` (D2).
+   - Every `wrangler secret put ... -n` command fails; the flag is `--name` (D3, confirmed).
+   - README recommends a demo script that runs `pkill -f "wrangler dev"` and can call production (D4).
+   - TROUBLESHOOTING has the wrong ports and prints a token prefix (D5).
+   - ARCHITECTURE's wrangler examples are wrong, and AGENTS.md sends agents to copy them (D6).
+2. **AGENTS.md is loaded into every agent turn, and it states targets as facts:**
+   - Statsig and Analytics Engine as the SLO source (W1);
+   - D1, git notes and `scratch/*` refs (A1);
+   - Workflows and Workers Builds (A2);
+   - the oracle ladder as built (A3);
+   - "no exceptions" auth (W2).
+
+   Changing AGENTS.md needs the maintainer's agreement. The fix is a "Built today / target" label on each, not a rewrite.
+3. **Status claims that point readers the wrong way:**
+   - MILESTONES has no current phase since 2026-10-15, and marks M2 and M5a COMPLETE (S2, S3).
+   - OPS says the production SLO loop does not run (S5).
+   - OPEN-QUESTIONS has stale "not merged / not deployed" lines, and calls the seed actor "resolved" (S1, S6).
+   - About 10 plans have wrong front matter (S7).
+4. **The public docs** (README, CONTRIBUTING, SUBMISSION) list the mirroring and the comparator as running. With review c M1, no sample is scored. SUBMISSION
+   is a 2026-10-12 snapshot that claims "Production-Ready", and needs a historical banner.
+5. **The docs-links test** checks only markdown links. Extending it to backticked paths and `path:N` bounds is cheap.
+
+**Where this goes in the order of work:**
+- **Wave 0:** the dangerous-instruction fixes D1-D7 (docs only, no behavior change) and the OPEN-QUESTIONS status updates.
+- **Wave 0, once the maintainer agrees:** the AGENTS.md labels (W1, W2, A1-A3).
+- **Wave 3:** the rest. ARCHITECTURE is better replaced by links to the architecture map than patched section by section.
