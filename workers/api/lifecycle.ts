@@ -24,6 +24,7 @@ import {
   type LifecycleResult,
 } from '../shared/ledger-lifecycle';
 import type { SpecDoStub } from '../shared/spec-do-auth';
+import { decodeSegment } from './user-tokens';
 import type { CandidateWorkerCleanup, WorkerCleanupReport } from './purge-cleanup';
 
 const ROLE_ROUTE = /^\/api\/admin\/actors\/([^\/]+)\/role$/;
@@ -100,7 +101,8 @@ export async function handleLifecycleRoutes(
     const body = TombstoneBodySchema.strict().safeParse(read.body);
     if (!body.success) return err(body.error.message, 400);
     const entityType = TOMBSTONE_SEGMENTS[tombstone[1]];
-    const id = decodeURIComponent(tombstone[2]);
+    const id = decodeSegment(tombstone[2]);
+    if (id === null) return err('Malformed request', 400);
     if (entityType === 'organization' && id === RESERVED_ORGANIZATION_ID) {
       return err(`organization ${id} is reserved and cannot be tombstoned`, 403);
     }
@@ -161,5 +163,7 @@ export async function handleLifecycleRoutes(
   }
   const body = SetActorRoleRequestSchema.safeParse(read.body);
   if (!body.success) return err(body.error.message, 400);
-  return relay(await client.setActorRole(decodeURIComponent(role![1]), body.data.role, actorId));
+  const roleActorId = decodeSegment(role![1]);
+  if (roleActorId === null) return err('Malformed request', 400);
+  return relay(await client.setActorRole(roleActorId, body.data.role, actorId));
 }

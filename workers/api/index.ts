@@ -154,262 +154,302 @@ async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): P
     const specDoStub =
       principal.kind === 'user' && !principal.scopes.includes('maintainer') ? maintainerCappedStub(authStub) : authStub;
 
-    const adminResponse = await handleServiceAccountRoutes(request, path, principal, specDoStub);
-    if (adminResponse) return adminResponse;
+    // Route dispatch. A malformed request (body JSON, path encoding) is a 400; anything else that throws is a generic 500,
+    // never an uncaught exception. Auth and the UI answer above, outside this block (docs/plans/wave-0-plan.md part 3).
+    try {
+      // Awaited, so a rejected handler promise is caught here too
+      return await (async (): Promise<Response> => {
+        const adminResponse = await handleServiceAccountRoutes(request, path, principal, specDoStub);
+        if (adminResponse) return adminResponse;
 
-    const userTokenResponse = await handleUserTokenRoutes(request, path, principal, specDoStub);
-    if (userTokenResponse) return userTokenResponse;
+        const userTokenResponse = await handleUserTokenRoutes(request, path, principal, specDoStub);
+        if (userTokenResponse) return userTokenResponse;
 
-    // Ledger lifecycle: tombstones, purge, maintainer role, ?include_deleted=1 reads
-    const lifecycleResponse = await handleLifecycleRoutes(
-      request, url, principal, specDoStub,
-      env.PREVIEW_MANAGER && env.API_AUTH_TOKEN ? createCandidateWorkerCleanup(env.PREVIEW_MANAGER, env.API_AUTH_TOKEN) : createUnavailableWorkerCleanup()
-    );
-    if (lifecycleResponse) return lifecycleResponse;
+        // Ledger lifecycle: tombstones, purge, maintainer role, ?include_deleted=1 reads
+        const lifecycleResponse = await handleLifecycleRoutes(
+          request, url, principal, specDoStub,
+          env.PREVIEW_MANAGER && env.API_AUTH_TOKEN ? createCandidateWorkerCleanup(env.PREVIEW_MANAGER, env.API_AUTH_TOKEN) : createUnavailableWorkerCleanup()
+        );
+        if (lifecycleResponse) return lifecycleResponse;
 
-    // Health check
-    if (path === '/health' || path === '/api/health') {
-      return handleHealth(actorRequest, specDoStub);
-    }
+        // Health check
+        if (path === '/health' || path === '/api/health') {
+          return handleHealth(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // ORGANIZATIONS
-    // ============================================================================
+        // ============================================================================
+        // ORGANIZATIONS
+        // ============================================================================
 
-    if (path === '/api/organizations' && method === 'POST') {
-      return handleCreateOrganization(actorRequest, specDoStub);
-    }
-    if (path === '/api/organizations' && method === 'GET') {
-      return handleListOrganizations(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/organizations\/[^\/]+$/) && method === 'GET') {
-      return handleGetOrganization(actorRequest, specDoStub);
-    }
+        if (path === '/api/organizations' && method === 'POST') {
+          return handleCreateOrganization(actorRequest, specDoStub);
+        }
+        if (path === '/api/organizations' && method === 'GET') {
+          return handleListOrganizations(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/organizations\/[^\/]+$/) && method === 'GET') {
+          return handleGetOrganization(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // ACTORS
-    // ============================================================================
+        // ============================================================================
+        // ACTORS
+        // ============================================================================
 
-    if (path === '/api/actors' && method === 'POST') {
-      return handleCreateActor(actorRequest, specDoStub);
-    }
-    if (path === '/api/actors' && method === 'GET') {
-      return handleListActors(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/actors\/[^\/]+$/) && method === 'GET') {
-      return handleGetActor(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/actors\/[^\/]+\/trust$/) && method === 'PATCH') {
-      return handleUpdateActorTrust(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/actors\/[^\/]+\/promotion-authority$/) && method === 'PATCH') {
-      return handleGrantPromotionAuthority(actorRequest, specDoStub);
-    }
+        if (path === '/api/actors' && method === 'POST') {
+          return handleCreateActor(actorRequest, specDoStub);
+        }
+        if (path === '/api/actors' && method === 'GET') {
+          return handleListActors(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/actors\/[^\/]+$/) && method === 'GET') {
+          return handleGetActor(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/actors\/[^\/]+\/trust$/) && method === 'PATCH') {
+          return handleUpdateActorTrust(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/actors\/[^\/]+\/promotion-authority$/) && method === 'PATCH') {
+          return handleGrantPromotionAuthority(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // REPOSITORIES
-    // ============================================================================
+        // ============================================================================
+        // REPOSITORIES
+        // ============================================================================
 
-    if (path === '/api/repositories' && method === 'POST') {
-      return handleCreateRepository(actorRequest, specDoStub);
-    }
-    if (path === '/api/repositories' && method === 'GET') {
-      return handleListRepositories(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/repositories\/[^\/]+$/) && method === 'GET') {
-      return handleGetRepository(actorRequest, specDoStub);
-    }
+        if (path === '/api/repositories' && method === 'POST') {
+          return handleCreateRepository(actorRequest, specDoStub);
+        }
+        if (path === '/api/repositories' && method === 'GET') {
+          return handleListRepositories(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/repositories\/[^\/]+$/) && method === 'GET') {
+          return handleGetRepository(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // SPECS
-    // ============================================================================
+        // ============================================================================
+        // SPECS
+        // ============================================================================
 
-    if (path === '/api/specs' && method === 'POST') {
-      return handleCreateSpec(actorRequest, specDoStub);
-    }
-    if (path === '/api/specs' && method === 'GET') {
-      return handleListSpecs(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/specs\/[^\/]+$/) && method === 'GET') {
-      return handleGetSpec(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/specs\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateSpecStage(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/specs\/[^\/]+\/claim$/) && method === 'POST') {
-      return handleClaimSpec(actorRequest, specDoStub);
-    }
+        if (path === '/api/specs' && method === 'POST') {
+          return handleCreateSpec(actorRequest, specDoStub);
+        }
+        if (path === '/api/specs' && method === 'GET') {
+          return handleListSpecs(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/specs\/[^\/]+$/) && method === 'GET') {
+          return handleGetSpec(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/specs\/[^\/]+\/stage$/) && method === 'PATCH') {
+          return handleUpdateSpecStage(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/specs\/[^\/]+\/claim$/) && method === 'POST') {
+          return handleClaimSpec(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // CANDIDATES
-    // ============================================================================
+        // ============================================================================
+        // CANDIDATES
+        // ============================================================================
 
-    if (path === '/api/candidates' && method === 'POST') {
-      return handleCreateCandidate(actorRequest, specDoStub);
-    }
-    if (path === '/api/candidates' && method === 'GET') {
-      return handleListCandidates(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/candidates\/[^\/]+$/) && method === 'GET') {
-      return handleGetCandidate(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/candidates\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateCandidateStage(actorRequest, specDoStub);
-    }
-    // Shadow samples (m15): master/service tier only (not on the user-token allow-list). Like canary-metrics, any tier-1 holder
-    // can forge samples; the comparator reaches the Spec DO directly, so this route is for e2e, the demo and the maintainer.
-    if (path.match(/^\/api\/candidates\/[^\/]+\/shadow-samples$/) && method === 'POST') {
-      return handleRecordShadowSamples(actorRequest, specDoStub);
-    }
+        if (path === '/api/candidates' && method === 'POST') {
+          return handleCreateCandidate(actorRequest, specDoStub);
+        }
+        if (path === '/api/candidates' && method === 'GET') {
+          return handleListCandidates(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/candidates\/[^\/]+$/) && method === 'GET') {
+          return handleGetCandidate(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/candidates\/[^\/]+\/stage$/) && method === 'PATCH') {
+          return handleUpdateCandidateStage(actorRequest, specDoStub);
+        }
+        // Shadow samples (m15): master/service tier only (not on the user-token allow-list). Like canary-metrics, any tier-1 holder
+        // can forge samples; the comparator reaches the Spec DO directly, so this route is for e2e, the demo and the maintainer.
+        if (path.match(/^\/api\/candidates\/[^\/]+\/shadow-samples$/) && method === 'POST') {
+          return handleRecordShadowSamples(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // GATE VERDICTS
-    // ============================================================================
+        // ============================================================================
+        // GATE VERDICTS
+        // ============================================================================
 
-    if (path === '/api/gate-verdicts' && method === 'POST') {
-      return handleCreateGateVerdict(actorRequest, specDoStub);
-    }
-    if (path === '/api/gate-verdicts' && method === 'GET') {
-      return handleListGateVerdicts(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/candidates\/[^\/]+\/gate-verdicts$/) && method === 'GET') {
-      return handleGetGateVerdictsForCandidate(actorRequest, specDoStub);
-    }
+        if (path === '/api/gate-verdicts' && method === 'POST') {
+          return handleCreateGateVerdict(actorRequest, specDoStub);
+        }
+        if (path === '/api/gate-verdicts' && method === 'GET') {
+          return handleListGateVerdicts(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/candidates\/[^\/]+\/gate-verdicts$/) && method === 'GET') {
+          return handleGetGateVerdictsForCandidate(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // GATE WORKFLOW
-    // ============================================================================
+        // ============================================================================
+        // GATE WORKFLOW
+        // ============================================================================
 
-    // POST /api/candidates/:id/gate/pre-merge - Run pre-merge gate
-    if (path.match(/^\/api\/candidates\/[^\/]+\/gate\/pre-merge$/) && method === 'POST') {
-      return handleRunPreMergeGate(actorRequest, specDoStub);
-    }
+        // POST /api/candidates/:id/gate/pre-merge - Run pre-merge gate
+        if (path.match(/^\/api\/candidates\/[^\/]+\/gate\/pre-merge$/) && method === 'POST') {
+          return handleRunPreMergeGate(actorRequest, specDoStub);
+        }
 
-    // GET /api/gate-verdicts/:id - Get gate verdict
-    if (path.match(/^\/api\/gate-verdicts\/[^\/]+$/) && method === 'GET') {
-      return handleGetGateVerdict(actorRequest, specDoStub);
-    }
+        // GET /api/gate-verdicts/:id - Get gate verdict
+        if (path.match(/^\/api\/gate-verdicts\/[^\/]+$/) && method === 'GET') {
+          return handleGetGateVerdict(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // TRIALS
-    // ============================================================================
+        // ============================================================================
+        // TRIALS
+        // ============================================================================
 
-    if (path === '/api/trials' && method === 'POST') {
-      return handleCreateTrial(actorRequest, specDoStub);
-    }
-    if (path === '/api/trials' && method === 'GET') {
-      return handleListTrials(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/trials\/[^\/]+$/) && method === 'GET') {
-      return handleGetTrial(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/trials\/[^\/]+\/decide$/) && method === 'POST') {
-      return handleDecideTrial(actorRequest, specDoStub);
-    }
+        if (path === '/api/trials' && method === 'POST') {
+          return handleCreateTrial(actorRequest, specDoStub);
+        }
+        if (path === '/api/trials' && method === 'GET') {
+          return handleListTrials(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/trials\/[^\/]+$/) && method === 'GET') {
+          return handleGetTrial(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/trials\/[^\/]+\/decide$/) && method === 'POST') {
+          return handleDecideTrial(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // PROMOTIONS
-    // ============================================================================
+        // ============================================================================
+        // PROMOTIONS
+        // ============================================================================
 
-    if (path === '/api/promotions' && method === 'POST') {
-      return handleCreatePromotion(actorRequest, specDoStub);
-    }
-    if (path === '/api/promotions' && method === 'GET') {
-      return handleListPromotions(actorRequest, specDoStub);
-    }
-    if (path === '/api/near-misses' && method === 'GET') {
-      return handleListNearMisses(actorRequest, specDoStub);
-    }
+        if (path === '/api/promotions' && method === 'POST') {
+          return handleCreatePromotion(actorRequest, specDoStub);
+        }
+        if (path === '/api/promotions' && method === 'GET') {
+          return handleListPromotions(actorRequest, specDoStub);
+        }
+        if (path === '/api/near-misses' && method === 'GET') {
+          return handleListNearMisses(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // ISSUES
-    // ============================================================================
+        // ============================================================================
+        // ISSUES
+        // ============================================================================
 
-    if (path === '/api/issues' && method === 'POST') {
-      return handleCreateIssue(actorRequest, specDoStub);
-    }
-    if (path === '/api/issues' && method === 'GET') {
-      return handleListIssues(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/issues\/[^\/]+$/) && method === 'GET') {
-      return handleGetIssue(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/issues\/[^\/]+\/stage$/) && method === 'PATCH') {
-      return handleUpdateIssueStage(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
-      return handleUpdateIssueStatus(actorRequest, specDoStub);
-    }
-    if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
-      return handleUpdateIssueCommentPolicy(actorRequest, specDoStub);
-    }
+        if (path === '/api/issues' && method === 'POST') {
+          return handleCreateIssue(actorRequest, specDoStub);
+        }
+        if (path === '/api/issues' && method === 'GET') {
+          return handleListIssues(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/issues\/[^\/]+$/) && method === 'GET') {
+          return handleGetIssue(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/issues\/[^\/]+\/stage$/) && method === 'PATCH') {
+          return handleUpdateIssueStage(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/issues\/[^\/]+\/status$/) && method === 'PATCH') {
+          return handleUpdateIssueStatus(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/issues\/[^\/]+\/comment-policy$/) && method === 'PATCH') {
+          return handleUpdateIssueCommentPolicy(actorRequest, specDoStub);
+        }
 
-    // ============================================================================
-    // ISSUE COMMENTS
-    // ============================================================================
+        // ============================================================================
+        // ISSUE COMMENTS
+        // ============================================================================
 
-    if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'POST') {
-      return handleCreateIssueComment(actorRequest, specDoStub);
+        if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'POST') {
+          return handleCreateIssueComment(actorRequest, specDoStub);
+        }
+        if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'GET') {
+          return handleListIssueComments(actorRequest, specDoStub);
+        }
+
+        // ============================================================================
+        // LINKS
+        // ============================================================================
+
+        if (path === '/api/issue-spec-links' && method === 'POST') {
+          return handleCreateIssueSpecLink(actorRequest, specDoStub);
+        }
+        if (path === '/api/issue-candidate-links' && method === 'POST') {
+          return handleCreateIssueCandidateLink(actorRequest, specDoStub);
+        }
+
+        // ============================================================================
+        // SERVICE ACCOUNTS
+        // ============================================================================
+
+        // Retired: the pre-m6 token scheme (hash on the account row). Its list exposed
+        // token_hash/token_salt to any read principal. Use /api/admin/service-accounts.
+        if (path === '/api/service-accounts' || path.startsWith('/api/service-accounts/')) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Gone: use /api/admin/service-accounts (master token)', timestamp: Date.now() }),
+            { status: 410, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        // ============================================================================
+        // HISTORY
+        // ============================================================================
+
+        if (path.match(/^\/api\/entities\/[^\/]+\/[^\/]+\/history$/) && method === 'GET') {
+          return handleGetEntityHistory(actorRequest, specDoStub);
+        }
+
+        // ============================================================================
+        // SANDBOX INTEGRATION
+        // ============================================================================
+
+        // POST /api/candidates/:id/execute - retired (410, docs/plans/retire-execute-plan.md). Answered here, before reading the body
+        // and without calling the Spec DO; a user token is refused with 403 by authorize() first.
+        if (path.match(/^\/api\/candidates\/[^\/]+\/execute$/) && method === 'POST') {
+          return routeRetired(EXECUTE_RETIRED_MESSAGE);
+        }
+
+        // ============================================================================
+        // 404
+        // ============================================================================
+
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: 'Not found',
+            timestamp: Date.now(),
+          }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        );
+      })();
+    } catch (error) {
+      return dispatchErrorResponse(error);
     }
-    if (path.match(/^\/api\/issues\/[^\/]+\/comments$/) && method === 'GET') {
-      return handleListIssueComments(actorRequest, specDoStub);
-    }
-
-    // ============================================================================
-    // LINKS
-    // ============================================================================
-
-    if (path === '/api/issue-spec-links' && method === 'POST') {
-      return handleCreateIssueSpecLink(actorRequest, specDoStub);
-    }
-    if (path === '/api/issue-candidate-links' && method === 'POST') {
-      return handleCreateIssueCandidateLink(actorRequest, specDoStub);
-    }
-
-    // ============================================================================
-    // SERVICE ACCOUNTS
-    // ============================================================================
-
-    // Retired: the pre-m6 token scheme (hash on the account row). Its list exposed
-    // token_hash/token_salt to any read principal. Use /api/admin/service-accounts.
-    if (path === '/api/service-accounts' || path.startsWith('/api/service-accounts/')) {
-      return new Response(
-        JSON.stringify({ success: false, error: 'Gone: use /api/admin/service-accounts (master token)', timestamp: Date.now() }),
-        { status: 410, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // ============================================================================
-    // HISTORY
-    // ============================================================================
-
-    if (path.match(/^\/api\/entities\/[^\/]+\/[^\/]+\/history$/) && method === 'GET') {
-      return handleGetEntityHistory(actorRequest, specDoStub);
-    }
-
-    // ============================================================================
-    // SANDBOX INTEGRATION
-    // ============================================================================
-
-    // POST /api/candidates/:id/execute - retired (410, docs/plans/retire-execute-plan.md). Answered here, before reading the body
-    // and without calling the Spec DO; a user token is refused with 403 by authorize() first.
-    if (path.match(/^\/api\/candidates\/[^\/]+\/execute$/) && method === 'POST') {
-      return routeRetired(EXECUTE_RETIRED_MESSAGE);
-    }
-
-    // ============================================================================
-    // 404
-    // ============================================================================
-
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: 'Not found',
-        timestamp: Date.now(),
-      }),
-      { status: 404, headers: { 'Content-Type': 'application/json' } }
-    );
   }
+}
+
+/** Thrown by readJsonBody when the request body is not JSON: the caller's fault, a 400. */
+export class MalformedRequestError extends Error {
+  constructor() {
+    super('Malformed request body');
+    this.name = 'MalformedRequestError';
+  }
+}
+
+/**
+ * The request body as JSON. A parse failure is tagged, so the dispatch catch can tell it apart from a SyntaxError raised
+ * while parsing a Spec DO answer (an upstream fault, which stays a 500).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function readJsonBody(request: Request): Promise<any> {
+  try {
+    return await request.json();
+  } catch {
+    throw new MalformedRequestError();
+  }
+}
+
+/** The answer for an error thrown by route dispatch. Never echoes the error message. */
+export function dispatchErrorResponse(error: unknown): Response {
+  const malformed = error instanceof MalformedRequestError || error instanceof URIError;
+  if (!malformed) console.error(`[api] unhandled ${error instanceof Error ? error.name : typeof error} in route dispatch`);
+  return new Response(
+    JSON.stringify({ success: false, error: malformed ? 'Malformed request' : 'Internal error', timestamp: Date.now() }),
+    { status: malformed ? 400 : 500, headers: { 'Content-Type': 'application/json' } }
+  );
 }
 
 // Type definition
@@ -1547,7 +1587,7 @@ async function handleCreateOrganization(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateOrganizationRequest = await request.json();
+  const body: import('./types').CreateOrganizationRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1583,7 +1623,7 @@ async function handleCreateActor(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateActorRequest = await request.json();
+  const body: import('./types').CreateActorRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1616,7 +1656,7 @@ async function handleUpdateActorTrust(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').UpdateActorTrustRequest = await request.json();
+  const body: import('./types').UpdateActorTrustRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/actors/${id}/trust`, 'PATCH', body, actorId);
   return response;
@@ -1640,7 +1680,7 @@ async function handleCreateRepository(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateRepositoryRequest = await request.json();
+  const body: import('./types').CreateRepositoryRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1676,7 +1716,7 @@ async function handleCreateSpec(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateSpecRequest = await request.json();
+  const body: import('./types').CreateSpecRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1712,7 +1752,7 @@ async function handleUpdateSpecStage(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').UpdateSpecStageRequest = await request.json();
+  const body: import('./types').UpdateSpecStageRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/specs/${id}/stage`, 'PATCH', body, actorId);
   return response;
@@ -1727,7 +1767,7 @@ async function handleClaimSpec(
   stub: SpecDoStub
 ): Promise<Response> {
   const specId = extractParentId(request.url);
-  const body: import('./types').ClaimSpecRequest = await request.json();
+  const body: import('./types').ClaimSpecRequest = await readJsonBody(request);
   const actorId = request.actorId;
   
   // Call Spec DO to claim the spec - it now returns real data from Artifacts API
@@ -1748,7 +1788,7 @@ async function handleCreateCandidate(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateCandidateRequest = await request.json();
+  const body: import('./types').CreateCandidateRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1785,7 +1825,7 @@ async function handleUpdateCandidateStage(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').UpdateCandidateStageRequest = await request.json();
+  const body: import('./types').UpdateCandidateStageRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/stage`, 'PATCH', body, actorId);
   return response;
@@ -1801,7 +1841,7 @@ async function handleRecordShadowSamples(
   if (key instanceof Response) return key;
   let body: unknown;
   try {
-    body = await request.json();
+    body = await readJsonBody(request);
   } catch {
     return makeErrorResponse('Body must be JSON', 400);
   }
@@ -1828,7 +1868,7 @@ async function handleCreateGateVerdict(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateGateVerdictRequest = await request.json();
+  const body: import('./types').CreateGateVerdictRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1868,7 +1908,7 @@ async function handleCreateTrial(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateTrialRequest = await request.json();
+  const body: import('./types').CreateTrialRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1904,7 +1944,7 @@ async function handleDecideTrial(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').DecideTrialRequest = await request.json();
+  const body: import('./types').DecideTrialRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/trials/${id}/decide`, 'POST', { ...body, decidedBy: actorId }, actorId);
   return response;
@@ -1918,7 +1958,7 @@ async function handleCreatePromotion(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreatePromotionRequest = await request.json();
+  const body: import('./types').CreatePromotionRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const key = idemKey(request);
   if (key instanceof Response) return key;
@@ -1967,7 +2007,7 @@ async function handleCreateIssue(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateIssueRequest = await request.json();
+  const body: import('./types').CreateIssueRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issues', 'POST', { ...body, createdBy: actorId }, actorId);
   return response;
@@ -2002,7 +2042,7 @@ async function handleUpdateIssueStage(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').UpdateIssueStageRequest = await request.json();
+  const body: import('./types').UpdateIssueStageRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/stage`, 'PATCH', body, actorId);
   return response;
@@ -2013,7 +2053,7 @@ async function handleUpdateIssueStatus(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').UpdateIssueStatusRequest = await request.json();
+  const body: import('./types').UpdateIssueStatusRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/status`, 'PATCH', body, actorId);
   return response;
@@ -2024,7 +2064,7 @@ async function handleUpdateIssueCommentPolicy(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').UpdateIssueCommentPolicyRequest = await request.json();
+  const body: import('./types').UpdateIssueCommentPolicyRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/comment-policy`, 'PATCH', body, actorId);
   return response;
@@ -2039,7 +2079,7 @@ async function handleCreateIssueComment(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body: import('./types').CreateIssueCommentRequest = await request.json();
+  const body: import('./types').CreateIssueCommentRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/issues/${id}/comments`, 'POST', { ...body, createdBy: actorId, issueId: id }, actorId);
   return response;
@@ -2062,7 +2102,7 @@ async function handleCreateIssueSpecLink(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateIssueSpecLinkRequest = await request.json();
+  const body: import('./types').CreateIssueSpecLinkRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issue-spec-links', 'POST', body, actorId);
   return response;
@@ -2072,7 +2112,7 @@ async function handleCreateIssueCandidateLink(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
-  const body: import('./types').CreateIssueCandidateLinkRequest = await request.json();
+  const body: import('./types').CreateIssueCandidateLinkRequest = await readJsonBody(request);
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, '/api/issue-candidate-links', 'POST', body, actorId);
   return response;
@@ -2102,7 +2142,7 @@ async function handleRunPreMergeGate(
   stub: SpecDoStub
 ): Promise<Response> {
   const id = extractParentId(request.url);
-  const body = await request.json() as unknown;
+  const body = await readJsonBody(request) as unknown;
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/gate/pre-merge`, 'POST', body, actorId);
   return response;
