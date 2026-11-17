@@ -33,4 +33,4 @@ ledger, and `full` is a record only. Needs Node 22.6+ and bash (Linux or macOS; 
 The demo is tested by `tests/e2e/demo.test.ts` in CI's local e2e job. Design and known gaps:
 [`docs/plans/demo-tournament-plan.md`](../docs/plans/demo-tournament-plan.md).
 
-The older shell demos (`demo-end-to-end.sh`, `demo-multi-agent.sh`, `create-agent-forks.sh`) are superseded.
+The older shell demos `demo-end-to-end.sh` and `demo-multi-agent.sh` were removed on 2026-11-17; `create-agent-forks.sh` is superseded.

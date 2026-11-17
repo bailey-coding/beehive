@@ -308,7 +308,6 @@ cleanups. Confirm, in this order:
   plus `scratch/m8-*` remote refs deleted (2026-10-19, `507ebca`). As of 2026-10-23 another 15 `agent/*`/`merge/*` branches are 0 commits ahead of `main` (e.g. `m8-issues-do`, `m8-issues-ui`,
   `m9-nav`, `m12-pr-a`, `m12-pr-b`, `merge/m12-prb`) and can be deleted; the review/plan branches that are still ahead
   (their docs are on `main`) go once nothing needs them.
-- `scripts/demo-multi-agent.sh` prints hard-coded ArtifactFS numbers (ArtifactFS is not built).
 - The 5 skipped local e2e tests are m3 health checks for workers with no local port.
 
 ## Open work

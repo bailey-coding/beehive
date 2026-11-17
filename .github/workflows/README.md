@@ -26,7 +26,7 @@ remain for manual use by the maintainer only.
 ## Local development
 
 ```bash
-./scripts/start-all.sh
+nohup bash scripts/start-e2e-workers.sh &
 ```
 
-Starts all workers locally on ports 8787-8794. See `docs/SETUP.md`.
+Starts the local e2e workers on ports 8787-8792. See `docs/SETUP.md`.

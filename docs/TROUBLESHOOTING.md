@@ -653,8 +653,8 @@ down), and the script also makes a separate request that reaches the DO.
 ## 🎯 Quick Start for New Developers
 
 ```bash
-# 1. Start all workers
-./scripts/start-all.sh
+# 1. Start the local e2e workers (ports in docs/SETUP.md)
+nohup bash scripts/start-e2e-workers.sh &
 
 # 2. Wait for initialization
 sleep 15

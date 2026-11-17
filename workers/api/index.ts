@@ -1390,11 +1390,8 @@ $ git clone https://github.com/bailey-coding/beehive.git<br>
 $ cd beehive<br>
 $ npm install<br>
 <br>
-<span class="comment"># Create 3 agent forks</span><br>
-$ ./scripts/create-agent-forks.sh agent-1 agent-2 agent-3<br>
-<br>
-<span class="comment"># Run the demo</span><br>
-$ ./scripts/demo-end-to-end.sh --local
+<span class="comment"># Run one local tournament (no Cloudflare account)</span><br>
+$ npm run demo
       </div>
       <p>
         Or <a href="https://github.com/bailey-coding/beehive">view the source code</a>.

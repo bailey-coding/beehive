@@ -159,38 +159,14 @@ Beehive includes a complete end-to-end demo that showcases multiple agents worki
 
 ### Quick Demo (Local)
 
-Run the full demo with local workers:
+Run one local tournament, with no Cloudflare account:
 
 ```bash
-# Create 3 agent forks with different implementations
-./scripts/create-agent-forks.sh agent-1 agent-2 agent-3
-
-# Run the end-to-end demo
-./scripts/demo-end-to-end.sh --local
+npm run demo
 ```
 
-This will:
-1. Create 3 agent forks with different implementations of the same spec
-2. Start all workers locally
-3. Mirror traffic to all candidates via the Shadow Router
-4. Compare responses using the Scientist Comparator
-5. Show all candidates passing and eligible for promotion
-
-### Full Demo (Production)
-
-For a production demo with deployed workers:
-
-```bash
-# Set required tokens
-export BEEHIVE_API_TOKEN=your-api-token
-export CLOUDFLARE_API_TOKEN=your-cf-token
-export CLOUDFLARE_ACCOUNT_ID=your-account-id
-
-# Run the demo
-./scripts/demo-end-to-end.sh --remote
-```
-
-This uses the deployed workers on `*.bz23711.workers.dev` and demonstrates the full M2 flow.
+Each step is labelled REAL, STUB or SCRIPTED, and the run ends with a "Known gaps" list (`scripts/DEMO-QUICK-START.md`). The older shell demos were
+removed on 2026-11-17.
 
 ### Demo Video Script
 
@@ -202,20 +178,6 @@ This script includes:
 - Terminal commands to run
 - Scene-by-scene breakdown
 - Recording tips and tricks
-
-### Multi-Agent Demo Script
-
-For a quick demonstration of the multi-agent workflow without recording:
-- `scripts/demo-multi-agent.sh`
-
-This script demonstrates:
-- Concurrent agent work
-- Agent-created issues
-- Candidate spawning
-- Lazy file access via ArtifactFS pattern
-- Multi-agent coordination via Spec DO ledger
-
----
 
 ## 📖 Core Concepts
 

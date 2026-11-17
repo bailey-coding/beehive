@@ -13,7 +13,7 @@ fi
 
 API_TOKEN=${API_AUTH_TOKEN:?API_AUTH_TOKEN is not set (export it or put it in .dev.vars)}
 
-# Ports used by start-all.sh
+# Legacy port map (start-all.sh, removed 2026-11-17); scripts/start-e2e-workers.sh uses other ports (docs/SETUP.md)
 MAIN_PORT=${MAIN_PORT:-8787}
 GATE_PORT=${GATE_PORT:-8788}
 QUEUE_PORT=${QUEUE_PORT:-8789}

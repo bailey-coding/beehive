@@ -111,9 +111,9 @@ the `npm run deploy:*` scripts:
 |---|---|
 | `wrangler.toml` `[vars]` | `CLOUDFLARE_ACCOUNT_ID`, `ALLOWED_GITHUB_USERS` (the `deploy` scripts override the account ID via `--var`) |
 | `cli/src/index.ts`, `cli/src/utils/config.ts`, `cli/src/utils/api-client.ts`, `cli/src/commands/auth.ts` | default API URL `https://beehive.bz23711.workers.dev` |
-| `workers/shadow-router/config.ts:145` | `beehive-main` preview URL |
+| `workers/shadow-router/config.ts:150` | `beehive-main` preview URL |
 | `tests/e2e/config.ts`, `tests/e2e/m3-features.test.ts:33-53` | `production` URLs (m3-features has its own map) |
-| `.env.test.production:16-19`, `scripts/e2e-test.ts:40` | production URLs |
+| `.env.test.production:16-19` | production URLs |
 | `workers/shadow-router/tests/shadow.test.ts:216` | asserts the `bz23711` URL, so it breaks when `config.ts:145` changes |
 | `scripts/*.sh`, `scripts/test-workers-builds.ts` | `bz23711` subdomain |
 
