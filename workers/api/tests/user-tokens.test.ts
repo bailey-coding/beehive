@@ -98,6 +98,41 @@ describe('with the real Spec DO', () => {
     return ((await res.json()) as any).data.token as { id: string; plaintext: string; prefix: string };
   }
 
+  // Wave 0 part 1 (review d M1): a non-master caller cannot name another actor in agentId; the body is otherwise forwarded unchanged
+  describe('agentId in the body (claim, repositories)', () => {
+    const forwarded = (path: string) => ctx.seen.filter((s) => s.path === path);
+
+    it.each([['/api/repositories'], ['/api/specs/s1/claim']])('a user token naming another actor in agentId on %s is a 403 before the DO', async (path) => {
+      const t = await token();
+      const res = await send(ctx.env, path, 'POST', { token: t.plaintext, body: { name: 'r', agentId: maint } });
+      expect(res.status).toBe(403);
+      expect(forwarded(path)).toHaveLength(0);
+    });
+
+    it.each([[true], [false]])('a user token with its own agentId (%s) or none reaches the DO with the body unchanged', async (own) => {
+      const t = await token();
+      const body = own ? { name: 'r', organizationId: 'o1', agentId: alice } : { name: 'r', organizationId: 'o1' };
+      await send(ctx.env, '/api/repositories', 'POST', { token: t.plaintext, body });
+      const seen = forwarded('/api/repositories');
+      expect(seen).toHaveLength(1);
+      expect(JSON.parse(seen[0].body)).toEqual(body);
+      expect(seen[0].headers.get('X-Actor-ID')).toBe(alice);
+    });
+
+    it('master may still name any actor in agentId', async () => {
+      await send(ctx.env, '/api/repositories', 'POST', { token: MASTER, body: { name: 'r', agentId: alice }, headers: { 'X-Actor-ID': maint } });
+      const seen = forwarded('/api/repositories');
+      expect(seen).toHaveLength(1);
+      expect(JSON.parse(seen[0].body).agentId).toBe(alice);
+    });
+
+    it('the X-Actor-ID a user token sends is replaced by its own actor (the guard above depends on it, review d N2)', async () => {
+      const t = await token();
+      await send(ctx.env, '/api/repositories', 'POST', { token: t.plaintext, body: { name: 'r' }, headers: { 'X-Actor-ID': maint } });
+      expect(forwarded('/api/repositories')[0].headers.get('X-Actor-ID')).toBe(alice);
+    });
+  });
+
   it('admin mint: 201 with the plaintext once, no-store, attributed to X-Actor-ID or the master actor', async () => {
     const res = await adminMint({ actorId: alice, name: 'laptop', scope: 'read', expiresInDays: 7 }, { 'X-Actor-ID': maint });
     expect(res.status).toBe(201);

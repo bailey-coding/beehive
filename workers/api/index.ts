@@ -1676,12 +1676,29 @@ async function handleGrantPromotionAuthority(
 // REPOSITORIES
 // ============================================================================
 
+/**
+ * A non-master caller may not name another actor in `agentId` (review d M1): the Spec DO takes `body.agentId` over the edge-set
+ * X-Actor-ID on claim and stores it as the repository's agent. The body is otherwise forwarded unchanged, so a baseline repository
+ * keeps a null agent and a keyed retry keeps its idempotency hash. Master may still name any actor (OPEN-QUESTIONS 2026-10-17).
+ */
+function refuseForeignAgentId(request: ActorRequest, body: unknown): Response | null {
+  if (request.principal.kind === 'master') return null;
+  const agentId = body && typeof body === 'object' ? (body as { agentId?: unknown }).agentId : undefined;
+  if (agentId === undefined || agentId === null || agentId === request.actorId) return null;
+  return new Response(JSON.stringify({ success: false, error: 'agentId must be the caller', timestamp: Date.now() }), {
+    status: 403,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 async function handleCreateRepository(
   request: ActorRequest,
   stub: SpecDoStub
 ): Promise<Response> {
   const body: import('./types').CreateRepositoryRequest = await readJsonBody(request);
   const actorId = request.actorId;
+  const foreign = refuseForeignAgentId(request, body);
+  if (foreign) return foreign;
   const key = idemKey(request);
   if (key instanceof Response) return key;
   const response = await sendToSpecDo(stub, '/api/repositories', 'POST', body, actorId, key);
@@ -1769,6 +1786,8 @@ async function handleClaimSpec(
   const specId = extractParentId(request.url);
   const body: import('./types').ClaimSpecRequest = await readJsonBody(request);
   const actorId = request.actorId;
+  const foreign = refuseForeignAgentId(request, body);
+  if (foreign) return foreign;
   
   // Call Spec DO to claim the spec - it now returns real data from Artifacts API
   const doResponse = await sendToSpecDo(stub, `/api/specs/${specId}/claim`, 'POST', body, actorId);
