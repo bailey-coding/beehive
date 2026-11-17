@@ -13,8 +13,8 @@
 ### Beehive Architecture Invariants
 - 10 Workers, one push deploys all, no order control
 - Spec DO (SQLite) = coordination state source of truth
-- Analytics Engine = metrics, D1 = cross-spec queries, Git notes = provenance only
-- Always-pushed: no local-only work, intermediate → scratch/*
+- Analytics Engine = metrics, D1 = cross-spec queries, Git notes = provenance only (D1 and git notes are targets, not built)
+- Always-pushed: no local-only work, intermediate → scratch/* (no worker writes scratch refs yet)
 - Fail-closed: missing auth → 503, wrong bearer → 401
 
 ### Oracle Ladder
@@ -23,7 +23,7 @@
 | Pre-merge | none | tests, spec conformance | never board train |
 | Shadow | mirrored, discarded | Scientist diff | hold, iterate |
 | Train | projection slice | combined-candidate conformance | drop car |
-| Canary | small % live | SLOs (Statsig + AE) | auto-rollback |
+| Canary | small % live (target; mirrored today) | SLOs over Spec DO `canary_metrics` | auto-rollback |
 | Full | 100% | drift, holdouts | alarm, bisect |
 
 ---

@@ -29,24 +29,24 @@ verdicts, and outcomes as first-class, linked artifacts.
 3. **Fork, don't contend.** Never design a "many agents push one repo/one branch" flow.
 4. **Coordination state lives in Workers-native stores, never in the repo.**
    - Scores, verdicts, train state → **spec Durable Object (SQLite)**, transactional.
-   - Metric streams → **Analytics Engine**. Cross-spec indexes → **D1**.
-   - Git notes only for portable provenance stamps — never queried as live state.
+   - Metric streams → **Analytics Engine**. Cross-spec indexes → **D1** (target: no D1 binding exists yet).
+   - Git notes only for portable provenance stamps — never queried as live state (target: no code writes them yet).
 5. **The always-pushed invariant.** No agent task reaches done/failed without a final
-   push. Intermediate states go to `scratch/*` refs. Nothing is ever local-only.
-6. **No external CI.** Validation = Sandboxes via Workflows (Cloudflare CI SDK pattern).
+   push. Intermediate states go to `scratch/*` refs (no worker writes them yet). Nothing is ever local-only.
+6. **No external CI.** Validation = Sandboxes via Workflows (target; today the gate is simulated and no Workflow binding exists).
    Deploys = Workers Builds (candidate pipeline). The platform's own workers deploy only
    when the maintainer pushes to the Cloudflare Artifacts repo (human-only, `docs/OPS.md`);
    GitHub runs CI only (`.github/workflows/ci.yml`).
 7. **Rollback is a ref operation.** Promotion and demotion must remain equally cheap.
 
-### The oracle ladder (memorize)
+### The oracle ladder (memorize; what is built today: `docs/reviews/2026-11-15-architecture-map.md` section 4)
 
 | Rung | Traffic | Oracle | Failure action |
 |---|---|---|---|
 | Pre-merge | none | tests, property/fuzz, spec conformance | never board the train |
 | Shadow | mirrored, discarded | Scientist diff vs spec's declared delta surface | hold, iterate |
 | Train | projection slice | combined-candidate conformance | drop car, re-project |
-| Canary | small % live | SLOs via Statsig + Analytics Engine | auto-rollback (ref op) |
+| Canary | small % live (target; today mirrored only) | SLOs over Spec DO `canary_metrics` (no Statsig) | auto-rollback (ref op) |
 | Full | 100% | drift, holdouts | alarm, bisect by diff |
 
 A candidate is promotable only when it clears all rungs. The spec DO is the single
@@ -129,8 +129,8 @@ Worker: never use orchestrator spawning; run solo or use `tools.subagent`. Table
 ### State management
 
 - **Spec DO is source of truth.** All coordination state (scores, verdicts, train state) lives in the Durable Object SQLite store.
-- **Git notes are for provenance only.** Never query git notes for live state; use them only for auditable history.
-- **D1 for cross-spec queries.** Use D1 for any queries that span multiple specs.
+- **Git notes are for provenance only.** Never query git notes for live state; use them only for auditable history (target, not built).
+- **D1 for cross-spec queries.** Use D1 for any queries that span multiple specs (target, not built: do not assume a binding).
 - **Analytics Engine for metrics.** All performance and telemetry data goes to Analytics Engine.
 
 ---
@@ -161,11 +161,10 @@ Config rules that bit this repo twice:
   (copy it from `workers/gate-workflow/package.json`). Declaring `zod` in the worker is not enough, and local builds, tsc and the CI build hide the gap; `scripts/check-shared-postinstall.mjs` (a CI step) now asserts it
   (hit three times; `scientist-comparator` 2026-11-12, `docs/OPEN-QUESTIONS.md`).
 
-Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missing
-`API_AUTH_TOKEN` → 503, wrong bearer → 401, including `/health` and local dev. Workers read
-`API_AUTH_TOKEN` (`.dev.vars` locally). Clients must send `Authorization: Bearer`, from
-`BEEHIVE_API_TOKEN` in `.env`; local e2e uses `local.apiToken` in `tests/e2e/config.ts`,
-which must match `.dev.vars`.
+Auth is fail-closed on every fetch entry point (`workers/shared/auth.ts`): missing `API_AUTH_TOKEN` → 503, wrong bearer → 401,
+including `/health` and local dev. Exceptions: `beehive` serves `/`, `/about`, `/roadmap` and the session-authenticated UI before it; it also accepts
+service and user tokens (`workers/api/principal.ts`). Clients send `Authorization: Bearer` from `BEEHIVE_API_TOKEN` in `.env`. Local e2e:
+`scripts/start-e2e-workers.sh` passes `local.apiToken` (`tests/e2e/config.ts`) as `--var`; `.dev.vars` is only for plain `wrangler dev`.
 
 Local e2e (`npm run test:e2e:local`) makes real HTTP calls: start the workers on ports
 8787–8792 first (`scripts/start-e2e-workers.sh`, `docs/SETUP.md`). Before marking a milestone item done, grep for the
@@ -181,7 +180,7 @@ gotchas, deploy learnings).
 For implementation, see the canonical schema definitions:
 - **M1 Core Entities:** Spec DO SQLite tables for `organizations`, `repositories`, `specs`, `candidates`, `actors`, `gate_verdicts`, `trials`, `promotions`
 - **GitHub Integration:** `issues`, `issue_comments`, `issue_spec_links`, `issue_candidate_links` with `comment_policy` and `visibility` controls
-- **Storage Layers:** Spec DO (SQLite) for coordination, D1 for indexes, Analytics Engine for metrics, Git notes for provenance
+- **Storage Layers:** Spec DO (SQLite) for coordination, Analytics Engine for metrics (written, not yet read); D1 indexes and Git-notes provenance are targets
 
 > Read `docs/ARCHITECTURE.md` next. Do not begin implementation before understanding both this file and the architecture document.
 
