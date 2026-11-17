@@ -342,9 +342,10 @@ Live once push B (schema `m9`, table `user_tokens`) reaches the deploy flow. A u
 (`bh_usr_...`, `Authorization: Bearer` only) acts as **one human actor** that has a GitHub id; the edge
 overwrites any `X-Actor-ID` the client sends. Agent and service actors never hold one. Scopes, one per
 token: `read` (like a service token), `read_write` (the write allow-list in `workers/api/principal.ts`:
-orgs, repos, specs, spec stage and claim, candidates, pre-merge gate start, issues, issue stage and
-status, comments, links), `maintainer` (adds the comment-policy PATCH). Every scope gets 403 on actor
-admin, gate verdicts, trials, promotions, candidate `stage` and `execute`, lifecycle routes and
+orgs, repos, specs, claim, candidates, issues, issue status, comments), `maintainer` (adds the
+comment-policy PATCH). Every scope gets 403 on actor admin, gate verdicts, trials, promotions, candidate
+`stage` and `execute`, spec and issue `stage`, the issue link routes and the pre-merge gate start (closed
+2026-11-17 until the DO has ownership rules, `docs/plans/wave-0-plan.md` part 2), lifecycle routes and
 `/api/admin/*` (those stay master-only in M12). Without the `maintainer` scope the edge sends
 `X-Beehive-Maintainer-Cap: 1` on every DO request, so a maintainer's `read_write` token cannot close
 other people's issues or comment on locked ones. The DO reads the role live: demoting a maintainer

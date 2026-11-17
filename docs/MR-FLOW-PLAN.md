@@ -89,6 +89,8 @@ transaction rolls back the new spec row and uses the existing one. No partial un
   (`workers/api/principal.ts:261-276`): `PATCH /api/specs/:id/stage`, `POST /api/specs/:id/claim`, `POST /api/candidates`,
   `POST /api/issue-spec-links`, and `POST /api/issue-candidate-links` when the candidate's spec is implicit. MR routes create
   those rows themselves.
+  (2026-11-17: spec stage and both link routes are no longer open to user tokens, `docs/plans/wave-0-plan.md` part 2; this
+  refusal still matters for the master and tier-1 callers.)
 - Hidden by default (`?includeImplicit=1` shows them): `listSpecs` (`index.ts:4534`), the UI
   (`workers/api/ui-pages.ts:166,314,810,986,1189,1316`, `ui.ts:411,491`) and CLI `spec list`.
 

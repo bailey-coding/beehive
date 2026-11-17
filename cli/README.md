@@ -64,7 +64,8 @@ printf %s "$BEEHIVE_TOKEN" | beehive auth login --token-stdin
 
 A `bh_usr_` token (minted at `/app/settings/tokens`) makes the CLI act as its owner without the master token. The edge
 sets the actor from the token, so `--actor`, `BEEHIVE_ACTOR` and `defaultActor` are ignored (one warning on stderr).
-Some routes stay master-only and answer 403. `beehive auth whoami` shows the identity, scope and where the token came
+Some routes stay master-only and answer 403, including `spec stage` and `gate run` (closed to user tokens on 2026-11-17 until
+the Spec DO has ownership rules for them). `beehive auth whoami` shows the identity, scope and where the token came
 from; `show-token` prints only the first 12 characters. Token precedence: `--token`, then `BEEHIVE_API_TOKEN`, then the
 config file. The config file is written `0600` (directory `0700` when created); on Windows POSIX modes do not apply.
 

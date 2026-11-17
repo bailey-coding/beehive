@@ -1307,3 +1307,13 @@ The push of `d63abf7` built nine workers and failed `beehive-scientist-comparato
 `workers/shared`'s dependencies (same cause as the 2026-10-16 entry). It stayed on its 2026-11-03 version until the fix.
 **Fix**: `0a14bc1` adds the `postinstall`; all ten builds passed. **Guard**: CI did not assert that every worker importing a zod-using
 shared module declares the `postinstall` (see the 2026-10-16 note); now `scripts/check-shared-postinstall.mjs` (a `ci.yml` step) now asserts it.
+
+## 2026-11-17: repository create accepts any organization and namespace from any `read_write` user token
+
+Found by the whole-repo review (`docs/reviews/2026-11-16-review-a-spec-do-ledger.md` S6, `2026-11-16-review-d-edge-auth-ui.md` S3,
+build side confirmed in `2026-11-16-review-b2-build-gate-plumbing.md`). `POST /api/repositories` takes `organizationId`, `namespace` and
+`remoteUrl` from the body (`workers/spec-do/index.ts` `createRepository`); the DO checks no ownership. A user token can register a row naming
+another organization's Artifacts namespace, and preview-manager or the gate would build that repository with the platform token. Wave 0 left
+the route open (closing it would also block normal repository creation); the edge now refuses a foreign `agentId` on it (`docs/plans/wave-0-plan.md`
+part 1). **Status**: open; fix in the Spec DO (Wave 2): for non-master callers the namespace must equal the organization's name, and a
+duplicate `remote_url` is refused.

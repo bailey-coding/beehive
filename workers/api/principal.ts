@@ -255,25 +255,21 @@ export async function authenticate(
  * write route missing here is a 403, so a new route is closed to user tokens until it is added.
  * Never here: actor admin (create, trust, promotion authority), gate verdicts, trials,
  * promotions, candidate stage (no transition guard; rung outcomes go through it) and candidate
- * execute (retired, 410; still denied so a user token never learns more than 403), lifecycle and /api/admin/*. The DO
- * still applies its own rules (author match, creator-or-maintainer) on every route.
+ * execute (retired, 410; still denied so a user token never learns more than 403), lifecycle and /api/admin/*.
+ * Also not here, until the DO has ownership rules for them (docs/plans/wave-0-plan.md part 2): spec and issue stage, the two
+ * link routes, and the pre-merge gate start (it is broken and would mint a simulated pass).
+ * The DO checks the author only on issue create, issue status and comments. Org, repository, spec and candidate create and claim
+ * rely on the edge-set actor; repository create accepts any organization and namespace (known hole, OPEN-QUESTIONS 2026-11-17).
  */
 const USER_WRITE_ROUTES: Array<{ method: string; path: RegExp }> = [
   { method: 'POST', path: /^\/api\/organizations$/ },
   { method: 'POST', path: /^\/api\/repositories$/ },
   { method: 'POST', path: /^\/api\/specs$/ },
-  // Spec lifecycle stage, not an oracle rung
-  { method: 'PATCH', path: /^\/api\/specs\/[^/]+\/stage$/ },
   { method: 'POST', path: /^\/api\/specs\/[^/]+\/claim$/ },
   { method: 'POST', path: /^\/api\/candidates$/ },
-  // Starts the real gate workflow; the verdict is written by the gate, not the caller
-  { method: 'POST', path: /^\/api\/candidates\/[^/]+\/gate\/pre-merge$/ },
   { method: 'POST', path: /^\/api\/issues$/ },
-  { method: 'PATCH', path: /^\/api\/issues\/[^/]+\/stage$/ },
   { method: 'PATCH', path: /^\/api\/issues\/[^/]+\/status$/ },
   { method: 'POST', path: /^\/api\/issues\/[^/]+\/comments$/ },
-  { method: 'POST', path: /^\/api\/issue-spec-links$/ },
-  { method: 'POST', path: /^\/api\/issue-candidate-links$/ },
 ];
 
 /** Writes that also need the `maintainer` scope (the DO re-checks the live role). */
