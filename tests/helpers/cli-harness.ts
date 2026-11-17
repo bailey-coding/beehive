@@ -33,7 +33,8 @@ export interface CliHarness {
   readonly recorded: Recorded[];
   reset(): void;
   respondWith(responder: Responder | null): void;
-  runCli(args: string[], extraEnv?: Record<string, string>, opts?: { stdin?: string }): Promise<CliResult>;
+  /** An extraEnv value of `undefined` removes that variable (e.g. BEEHIVE_API_URL, to test the config file's apiUrl). */
+  runCli(args: string[], extraEnv?: Record<string, string | undefined>, opts?: { stdin?: string }): Promise<CliResult>;
   close(): Promise<void>;
 }
 
@@ -80,17 +81,16 @@ export async function startCliHarness(): Promise<CliHarness> {
     },
     runCli(args, extraEnv = {}, opts = {}) {
       return new Promise((resolve) => {
-        const child = spawn(TSX, [ENTRY, ...args], {
-          cwd: ROOT,
-          env: {
-            PATH: process.env.PATH,
-            HOME: home,
-            XDG_CONFIG_HOME: join(home, '.config'),
-            BEEHIVE_API_URL: `http://127.0.0.1:${port}`,
-            BEEHIVE_API_TOKEN: 'test',
-            ...extraEnv,
-          },
-        });
+        const env: Record<string, string | undefined> = {
+          PATH: process.env.PATH,
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, '.config'),
+          BEEHIVE_API_URL: `http://127.0.0.1:${port}`,
+          BEEHIVE_API_TOKEN: 'test',
+          ...extraEnv,
+        };
+        for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
+        const child = spawn(TSX, [ENTRY, ...args], { cwd: ROOT, env: env as NodeJS.ProcessEnv });
         let stdout = '';
         let stderr = '';
         child.stdout.on('data', (d) => (stdout += d));

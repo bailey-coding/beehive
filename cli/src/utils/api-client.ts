@@ -99,9 +99,11 @@ export interface RequestOptions {
 export class BeehiveClient {
   private client: AxiosInstance;
   private config: BeehiveConfig;
+  private dryRun: boolean;
 
-  constructor(config: BeehiveConfig) {
+  constructor(config: BeehiveConfig, options: { dryRun?: boolean } = {}) {
     this.config = config;
+    this.dryRun = options.dryRun === true;
     
     // Ensure API URL ends with /api
     let baseURL = config.apiUrl || 'https://beehive.bz23711.workers.dev';
@@ -163,6 +165,14 @@ export class BeehiveClient {
     data?: unknown,
     options?: RequestOptions
   ): Promise<T> {
+    // Global -n/--dry-run: nothing but a read leaves the process. This is the one network path (rawRequest delegates here), so
+    // no command can write in dry-run, and a command with several steps stops at its first write. Commands catch their own errors,
+    // so the stop is an exit 0 here, not a thrown error (docs/plans/wave-0-plan.md part 5).
+    if (this.dryRun && method !== 'GET') {
+      await new Promise<void>((resolve) => process.stdout.write(`dry run: ${method} /api${path}\n`, () => resolve()));
+      process.exit(0);
+    }
+
     const config: AxiosRequestConfig = {
       method,
       url: path,
@@ -655,6 +665,6 @@ export class BeehiveClient {
 /**
  * Create a BeehiveClient instance
  */
-export function createClient(config: BeehiveConfig): BeehiveClient {
-  return new BeehiveClient(config);
+export function createClient(config: BeehiveConfig, options: { dryRun?: boolean } = {}): BeehiveClient {
+  return new BeehiveClient(config, options);
 }

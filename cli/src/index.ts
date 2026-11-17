@@ -96,9 +96,10 @@ function createCli(): Command {
         .env('BEEHIVE_API_TOKEN')
     )
     .addOption(
+      // No default here: a default would always count as an explicit --url and override the config file's apiUrl
+      // (review e M2). The default lives in DEFAULT_CONFIG; precedence is --url, BEEHIVE_API_URL, config file, default.
       new Option('--url <url>', 'API base URL')
         .env('BEEHIVE_API_URL')
-        .default('https://beehive.bz23711.workers.dev')
     )
     .addOption(
       new Option('-f, --format <format>', 'Output format')
@@ -115,7 +116,7 @@ function createCli(): Command {
         .default(false)
     )
     .addOption(
-      new Option('-n, --dry-run', 'Dry run (no changes)')
+      new Option('-n, --dry-run', 'Dry run: print the first write instead of sending it (reads still run)')
         .default(false)
     );
 
@@ -139,7 +140,7 @@ async function createCliState(opts: GlobalOptions, tokenOptionSource?: string): 
   }
 
   // Create API client
-  const client = createClient(config);
+  const client = createClient(config, { dryRun: opts.dryRun === true });
 
   // Determine output format
   const outputFormat: OutputFormat = (opts.format as OutputFormat) || 'json';

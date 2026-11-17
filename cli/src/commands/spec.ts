@@ -57,15 +57,10 @@ export function registerSpecCommands(
     printOutput(s, { format: state.outputFormat, pretty: true });
   }));
 
-  spec.command('claim <spec-id>').description('Claim a spec').option('--actor <id>', 'Actor ID to claim as').option('--dry-run', 'Dry run without claiming').action(createHandler(async (state, ..._args) => {
+  spec.command('claim <spec-id>').description('Claim a spec').option('--actor <id>', 'Actor ID to claim as').action(createHandler(async (state, ..._args) => {
+    // Dry run is the global -n/--dry-run, enforced in the client (a local --dry-run here was swallowed by it, review e M1)
     const specId = _args[0] as string;
-    const opts = _args[1] as { actor?: string; dryRun?: boolean } || {};
-    
-    if (opts.dryRun) {
-      console.log(formatSuccess('Dry run - would claim spec'));
-      return;
-    }
-    
+    const opts = _args[1] as { actor?: string } || {};
     const result = await state.client.claimSpec(specId, { specId }, { actorId: opts.actor });
     printOutput(result, { format: state.outputFormat, pretty: true });
   }));

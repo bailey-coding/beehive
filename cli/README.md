@@ -105,7 +105,8 @@ Options:
   -f, --format <fmt>  Output format: json, table, yaml, compact (default: json)
   --pretty            Pretty-print JSON output
   -v, --verbose       Verbose output
-  -n, --dry-run       Dry run (no changes)
+  -n, --dry-run       Print the first write (method and path) instead of sending it, then exit 0.
+                      Reads still run. Covers API writes only: auth login/logout still write the config file.
 ```
 
 ### Commands
@@ -390,8 +391,8 @@ beehive debug verify-artifacts --list-repos
 # Test claim workflow
 beehive debug test-claim spec-abc123
 
-# Dry run (no actual claim)
-beehive debug test-claim spec-abc123 --dry-run
+# Dry run (no actual claim): the global flag
+beehive --dry-run debug test-claim spec-abc123
 
 # With specific actor
 beehive debug test-claim spec-abc123 --actor agent-xyz

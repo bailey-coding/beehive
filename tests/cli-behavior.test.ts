@@ -28,7 +28,7 @@ beforeEach(() => {
   h.reset();
 });
 
-const runCli = (args: string[], extraEnv: Record<string, string> = {}): Promise<CliResult> => h.runCli(args, extraEnv);
+const runCli = (args: string[], extraEnv: Record<string, string | undefined> = {}): Promise<CliResult> => h.runCli(args, extraEnv);
 
 async function expectRequest(args: string[], method: string, path: string, body?: unknown) {
   const { code, stderr } = await runCli(args);
@@ -230,5 +230,54 @@ describe('CLI requests', () => {
     const { code } = await runCli(['issue', 'create', 't', '--repository', 'r1', '--number', 'abc']);
     expect(code).not.toBe(0);
     expect(recorded).toHaveLength(0);
+  });
+});
+
+// Wave 0 part 5 (review e M1): the global -n/--dry-run stops at the first write, whatever command and flag position
+describe('dry run', () => {
+  it.each([
+    ['spec claim x --dry-run', ['spec', 'claim', 'x', '--dry-run']],
+    ['-n org create o', ['-n', 'org', 'create', 'o']],
+    ['--dry-run promotion create', ['--dry-run', 'promotion', 'create', 'c1', '--from-rung', 'shadow', '--to-rung', 'train']],
+    ['--dry-run debug test-claim', ['--dry-run', 'debug', 'test-claim', 's1']],
+  ])('%s sends no write and exits 0', async (_n, args) => {
+    const { code, stdout } = await runCli(args);
+    expect(code).toBe(0);
+    expect(recorded.filter((r) => r.method !== 'GET')).toHaveLength(0);
+    expect(stdout).toMatch(/dry run: (POST|PATCH|DELETE) \/api\//);
+  });
+
+  it('reads still run in dry run', async () => {
+    const { code } = await runCli(['--dry-run', 'spec', 'get', 's1']);
+    expect(code).toBe(0);
+    expect(recorded.map((r) => r.method)).toEqual(['GET']);
+  });
+});
+
+// Wave 0 part 5 (review e M2): the config file's apiUrl is used when neither --url nor BEEHIVE_API_URL is set
+describe('API URL precedence', () => {
+  const cfg = (apiUrl: string) => {
+    const f = join(home, 'url-config.json');
+    writeFileSync(f, JSON.stringify({ apiUrl, apiToken: 'test' }));
+    return ['--config', f];
+  };
+  const harnessUrl = () => `http://127.0.0.1:${h.port}`;
+
+  it('with BEEHIVE_API_URL unset, requests go to the config file apiUrl', async () => {
+    const { code } = await runCli([...cfg(harnessUrl()), 'spec', 'get', 's1'], { BEEHIVE_API_URL: undefined });
+    expect(code).toBe(0);
+    expect(recorded).toHaveLength(1);
+  });
+
+  it('BEEHIVE_API_URL beats the config file', async () => {
+    const { code } = await runCli([...cfg('http://127.0.0.1:9'), 'spec', 'get', 's1']);
+    expect(code).toBe(0);
+    expect(recorded).toHaveLength(1);
+  });
+
+  it('--url beats BEEHIVE_API_URL and the config file', async () => {
+    const { code } = await runCli([...cfg('http://127.0.0.1:9'), '--url', harnessUrl(), 'spec', 'get', 's1'], { BEEHIVE_API_URL: 'http://127.0.0.1:9' });
+    expect(code).toBe(0);
+    expect(recorded).toHaveLength(1);
   });
 });

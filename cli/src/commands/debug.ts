@@ -194,9 +194,10 @@ async function actionVerifyArtifacts(state: CliState, ..._args: unknown[]): Prom
  */
 async function actionTestClaim(state: CliState, ..._args: unknown[]): Promise<void> {
   try {
-    const args = _args as [{ specId?: string; actorId?: string; dryRun?: boolean }];
-    const opts = args[0] || {};
-    
+    // Commander passes (specId, options); this read args[0].specId and so always failed. Dry run is the global -n.
+    const [specId, cmdOpts] = _args as [string, { actor?: string }];
+    const opts = { specId, actorId: cmdOpts?.actor };
+
     if (!opts.specId) {
       console.error(formatError('Spec ID is required'));
       process.exit(1);
@@ -211,19 +212,6 @@ async function actionTestClaim(state: CliState, ..._args: unknown[]): Promise<vo
     
     if (!state.verbose) {
       spinner.update(`Testing claim for spec: ${spec.name}`);
-    }
-
-    if (opts.dryRun) {
-      if (!state.verbose) {
-        spinner.stop();
-      }
-      console.log(formatSuccess('Dry run - claim workflow would execute'));
-      console.log(`  Spec: ${spec.name} (${opts.specId})`);
-      console.log(`  Organization: ${spec.organizationId}`);
-      console.log(`  Stage: ${spec.stage}`);
-      console.log('');
-      console.log(formatInfo('No actual claim was made (dry run mode)'));
-      return;
     }
 
     // Use regular claim flow
@@ -709,7 +697,6 @@ export function registerDebugCommands(
     .description('Test the claim workflow')
     .argument('<spec-id>', 'Spec ID to claim')
     .option('-a, --actor <actor-id>', 'Actor ID')
-    .option('-n, --dry-run', 'Dry run')
     .action(createHandler(actionTestClaim));
 
   debug
