@@ -433,7 +433,6 @@ export class MalformedRequestError extends Error {
  * The request body as JSON. A parse failure is tagged, so the dispatch catch can tell it apart from a SyntaxError raised
  * while parsing a Spec DO answer (an upstream fault, which stays a 500).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function readJsonBody(request: Request): Promise<any> {
   try {
     return await request.json();
