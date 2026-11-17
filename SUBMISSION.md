@@ -1,5 +1,9 @@
 # Competition Submission - Beehive
 
+> **Historical: as submitted 2026-10-12. Not maintained.** Current status: `CONTRIBUTING.md` "What is real today" and
+> `docs/reviews/2026-11-17-synthesis.md`. Scripts named below were removed on 2026-11-17; use `npm run demo`. Do not run
+> `npm run deploy` or the `deploy:*` scripts: deploys are human-only (`docs/OPS.md`). `wrangler secret put` takes `--name`, not `-n`.
+
 > **Build the Next-Gen Git Platform - Cloudflare Competition**
 > 
 > **Submission Date:** October 12, 2026
