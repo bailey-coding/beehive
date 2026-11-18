@@ -46,8 +46,8 @@ function claimedCandidate(stage = 'pending') {
 }
 
 describe('contract 1: promotion-worker (merge train) -> gate-workflow -> Spec DO', () => {
-  // it.fails until part B (wave-1-plan): today the gate answers 500, the verdict's decided_by 'promotion-worker' is not an actor
-  it.fails('a passed_shadow candidate promoted train -> canary rides a car that merges, and the gate verdict is recorded', async () => {
+  // Failed before part B (wave-1-plan): the gate answered 500, the verdict's decided_by 'promotion-worker' was not an actor
+  it('a passed_shadow candidate promoted train -> canary rides a car that merges, and the gate verdict is recorded', async () => {
     const { candidate, spec } = claimedCandidate('passed_shadow');
     const worker = new PromotionWorker({
       ...w.base,

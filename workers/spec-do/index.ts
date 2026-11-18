@@ -427,6 +427,9 @@ import {
   SCIENTIST_COMPARATOR_ACTOR,
 } from '../shared/shadow-verdict';
 
+// Reserved system actors, created lazily when a verdict names one (wave-1-plan part B)
+import { SYSTEM_ACTORS, isSystemActor } from '../shared/system-actors';
+
 // Gate runs (shared with the gate worker)
 import {
   StartGateRunRequestSchema,
@@ -1508,8 +1511,20 @@ export class SpecDO {
     stmt.free();
   }
 
+  /** Create a reserved system actor's row if `id` names one; no-op otherwise. Agent, no authority, no role. */
+  private ensureSystemActor(id: string, at: number): void {
+    if (!isSystemActor(id)) return;
+    this.run(
+      `INSERT OR IGNORE INTO actors (id, type, name, promotion_authority, created_at) VALUES (?, 'agent', ?, 0, ?)`,
+      id,
+      SYSTEM_ACTORS[id],
+      at
+    );
+  }
+
   grantPromotionAuthority(id: string): void {
     if (!this.db) throw new Error('Database not initialized');
+    if (isSystemActor(id)) throw new ForbiddenError('a reserved system actor cannot hold promotion authority');
     
     const stmt = this.db.prepare(
       `UPDATE actors SET promotion_authority = true WHERE id = ?`
@@ -1878,6 +1893,8 @@ export class SpecDO {
     notes?: string
   ): GateVerdictRow {
     if (!this.db) throw new Error('Database not initialized');
+    // decided_by references actors(id): a reserved system actor gets its row on first use (the caller's transaction covers both writes)
+    this.ensureSystemActor(decidedBy, now());
 
     // gate_verdicts is the latest-summary table (UNIQUE(candidate_id, gate), schema-inline.ts:147): a repeat verdict
     // for the same (candidate, gate) updates the row in place instead of throwing, like the gate-runs write below.
@@ -2924,6 +2941,9 @@ export class SpecDO {
       }
       if (role !== null && this.isServiceActor(targetId)) {
         throw new ForbiddenError('a service account actor cannot hold a role');
+      }
+      if (role !== null && isSystemActor(targetId)) {
+        throw new ForbiddenError('a reserved system actor cannot hold a role');
       }
       const maintainers = this.queryAll(`SELECT COUNT(*) AS n FROM actors WHERE role = 'maintainer'`)[0].n as number;
       // A capped request never bootstraps either: self-grant is maintainer power too
@@ -4258,7 +4278,18 @@ export class SpecDO {
       
       if (path.match(/^\/api\/actors\/[^\/]+\/promotion-authority$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
-        this.grantPromotionAuthority(id);
+        try {
+          this.grantPromotionAuthority(id);
+        } catch (e) {
+          // Only this route's own refusal (a reserved system actor); the main catch below maps everything else as before
+          if (e instanceof ForbiddenError) {
+            return new Response(JSON.stringify({ success: false, error: e.message, timestamp: Date.now() }), {
+              status: 403,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          throw e;
+        }
         const actor = this.getActor(id);
         return new Response(JSON.stringify({ success: true, data: actor, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
@@ -4499,7 +4530,7 @@ export class SpecDO {
       
       if (path === '/api/gate-verdicts' && method === 'POST') {
         const body: CreateGateVerdictRequest = await request.json();
-        return this.idempotent(idem, 201, () => {
+        const write = () => {
           const verdict = this.createGateVerdict(
             body.candidateId,
             body.gate,
@@ -4510,7 +4541,12 @@ export class SpecDO {
             body.notes
           );
           return { success: true, data: verdict, timestamp: Date.now() };
-        });
+        };
+        // idempotent() opens no transaction without a key (the merge-train gate call sends none): the system-actor row and the verdict
+        // must commit together (wave-1-plan part B)
+        return idem
+          ? this.idempotent(idem, 201, write)
+          : new Response(JSON.stringify(this.state.storage.transactionSync(write)), { status: 201, headers: { 'Content-Type': 'application/json' } });
       }
       
       if (path === '/api/gate-verdicts' && method === 'GET') {
@@ -5176,11 +5212,7 @@ export class SpecDO {
   private recordShadowSamples(candidateId: string, samples: ShadowSample[]): ShadowSamplesResult {
     const at = now();
     // The verdict's decided_by references actors(id) with foreign keys on; a fresh ledger has no such row (plan B4/V6)
-    this.run(
-      `INSERT OR IGNORE INTO actors (id, type, name, promotion_authority, created_at) VALUES (?, 'agent', 'scientist comparator (service)', 0, ?)`,
-      SCIENTIST_COMPARATOR_ACTOR,
-      at
-    );
+    this.ensureSystemActor(SCIENTIST_COMPARATOR_ACTOR, at);
     const [row] = this.queryAll('SELECT * FROM shadow_scores WHERE candidate_id = ?', candidateId);
     let count = row ? Number(row.sample_count) : 0;
     let productionCount = row ? Number(row.production_count) : 0;
