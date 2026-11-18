@@ -8,7 +8,60 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-11-12
+**Last updated:** 2026-11-18
+
+## Handoff (2026-11-18): start here
+
+**Read first:** this section, then `docs/reviews/2026-11-17-synthesis.md` (the whole-repo review: findings, themes and the order of work). After that,
+read the older handoffs below for history only: they predate the review and some of their statuses are out of date.
+
+**Where `main` is.** `main` = `6a8bdf0`. It carries the review docs, Wave 0 and Wave 1. **None of it is deployed.** Production still runs `0a14bc1`
+or later (2026-11-12, see "Deploy status" below), and deploying is the maintainer's push to the Artifacts repo.
+
+**Wave 0** (`docs/plans/wave-0-plan.md`; edge, CLI and docs only):
+- **Edge auth:**
+  - a non-master caller cannot name another actor in `agentId` on claim or repository create;
+  - user tokens lose spec stage, issue stage, the two link routes and the broken `gate/pre-merge` route;
+  - a malformed body or path gets a 400 and any other throw a generic 500.
+- **Tests:** the session cookie and OAuth state checks now have tests.
+- **CLI:** the global `--dry-run` really blocks writes, and the config file's `apiUrl` is honored again.
+- **Cleanup:** 12 old scripts deleted.
+- **Docs:** dangerous instructions fixed; AGENTS.md labels D1, git notes, `scratch/*` and Workflows as targets.
+
+**Wave 1** (`docs/plans/wave-1-plan.md`; spine):
+- **Contract tests:** `tests/contract/` runs real workers over the real Spec DO, with no peer mocks.
+- **System actors:** `queue-consumer` and `promotion-worker` are created lazily in the verdict write. This fixes the push -> gate and merge-train
+  foreign-key failures.
+- **Comparator:** it reads the delta surface under either casing and falls back to the default surface instead of dropping every comparison.
+- **Queue consumer:** it matches a push on namespace and name, with opt-in Spec DO list filters.
+
+**After the next deploy:**
+1. Run the checks in `docs/OPS.md` "Wave 1": the system-actor rows, the comparator fallback log line, and `shadow_scores` rows for live canaries.
+2. User-visible changes:
+   - user tokens get 403 on `spec stage` and `gate run`;
+   - `--dry-run` prints instead of writing.
+
+**Open, owner in brackets:**
+- [maintainer] Verify the real Artifacts push message shape. Steps: `docs/OPEN-QUESTIONS.md` 2026-11-18.
+- [maintainer] `MIRROR_SAMPLE_PERCENT` is still 33. It was left there on purpose while there is no traffic; revisit before real traffic.
+- [agent, needs Fable credits] Fable double-check of the Wave 1 plan and code. It is marked pending in the plan; Opus did the reviews.
+- [agent] **Wave 2, ladder integrity** (spine; plan and independent review first): see the synthesis, "Proposed order of work", Wave 2:
+  - stage PATCH refuses upward moves;
+  - `deployCanary` validation;
+  - real canary evidence instead of the 15-minute timer;
+  - labelled gate verdicts and per-commit evidence;
+  - the tournament fixes;
+  - the tier-1 token split;
+  - the delta-surface shape decision (OPEN-QUESTIONS 2026-11-18);
+  - the repository-create namespace hole (OPEN-QUESTIONS 2026-11-17).
+- [agent] **Wave 3, hygiene:** see the synthesis. This includes the ARCHITECTURE rewrite, the CLI list crash, e2e state leaks, lint in CI, the
+  `debug tail -n` clash and dead code.
+
+**How we worked this round:**
+- Every wave went: plan, independent plan review, implement, mutation checks, independent code review, then merge only on the maintainer's word.
+- The review agents ran on Fable while it had credits, then on Opus.
+- Contract tests are written first and committed as `it.fails`; each fix commit flips its test, so the history shows red before green.
+- Local e2e uses a fresh `.wrangler/state`, because older runs leave canaries and orgs behind (review e S6).
 
 ## Deploy status (2026-11-12): read before the handoffs below
 
