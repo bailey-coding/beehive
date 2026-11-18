@@ -157,7 +157,8 @@ export class SpecDOClient {
    */
   async getDeclaredDeltaSurface(specId: string): Promise<string | null> {
     const spec = await this.getSpec(specId);
-    return spec?.declaredDeltaSurface || null;
+    // getSpec renders a missing field as the string 'null'
+    return spec && spec.declaredDeltaSurface !== 'null' ? spec.declaredDeltaSurface || null : null;
   }
 
   /**

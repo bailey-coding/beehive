@@ -23,8 +23,8 @@ export const SHADOW_MAX_DIFFS_PER_SAMPLE = 50;
 /** Error string of the coded 404 for an unknown or tombstoned candidate (the USER_TOKEN_NOT_FOUND pattern, plan B5/V8) */
 export const CANDIDATE_NOT_FOUND = 'candidate_not_found';
 
-/** The reserved service actor that decides shadow verdicts; created lazily by the route (an actors FK needs a row). One of SYSTEM_ACTORS. */
-export const SCIENTIST_COMPARATOR_ACTOR = 'scientist-comparator';
+/** The reserved service actor that decides shadow verdicts; created lazily by the route (an actors FK needs a row). Defined in SYSTEM_ACTORS. */
+export { SCIENTIST_COMPARATOR_ACTOR } from './system-actors';
 
 export function shadowMinSamples(): number {
   return SHADOW_MIN_SAMPLES;

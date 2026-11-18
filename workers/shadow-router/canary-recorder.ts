@@ -108,3 +108,8 @@ let shared: CanaryMetricsRecorder | null = null;
 export function getCanaryMetricsRecorder(): CanaryMetricsRecorder {
   return (shared ??= new CanaryMetricsRecorder());
 }
+
+/** Test hook: a fresh recorder (pending samples and a scheduled tail flush do not carry over to the next test) */
+export function resetCanaryMetricsRecorder(): void {
+  shared = null;
+}

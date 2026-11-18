@@ -9,6 +9,7 @@ import queueConsumer from '../../workers/queue-consumer/index';
 import comparator from '../../workers/scientist-comparator/index';
 import shadowRouter from '../../workers/shadow-router/index';
 import { resetLiveRefsCache } from '../../workers/shadow-router/live-refs-cache';
+import { resetCanaryMetricsRecorder } from '../../workers/shadow-router/canary-recorder';
 
 let w: ReturnType<typeof wire>;
 let agent: string;
@@ -30,6 +31,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   resetLiveRefsCache();
+  // Test 4 stops draining before the recorder's 10 s tail flush (code review should-fix 1)
+  resetCanaryMetricsRecorder();
 });
 
 const stageOf = (id: string) => (w.store.raw.prepare('SELECT stage FROM candidates WHERE id = ?').get(id) as { stage: string }).stage;

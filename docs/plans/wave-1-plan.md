@@ -206,3 +206,16 @@ pending** for when Fable is available again.
 | S6: harness determinism | Fixed. Unique event ids, `Math.random` pinned, router drain and cache reset. |
 | S7: `workers/api` missing from the dry-runs | Fixed. |
 | N1-N6 | All taken: the cap; the scoring wording; gate-workflow casing to Wave 2; the not-in-Wave-1 list; the unknown-id assertion; the seed reference and display name. |
+
+## Code review dispositions (2026-11-18, Opus; approve)
+
+| Finding | Disposition |
+|---|---|
+| S1: the canary recorder singleton leaks a pending tail flush and samples across contract tests | Fixed: a `resetCanaryMetricsRecorder()` test hook, called in `afterEach`. |
+| S2: the contract tests do not pin the snake_case read, because the fallback scores either way | Kept as is. The unit test `delta-surface-for.test.ts` "snake_case" is the guard for the wire casing; a contract case asserting a v1 surface's effect on the score waits for the Wave 2 shape decision. |
+| N3: `SCIENTIST_COMPARATOR_ACTOR` was a second literal, so it could drift from `SYSTEM_ACTORS` | Fixed: defined once in `system-actors.ts`, re-exported by `shadow-verdict.ts`. |
+| N4: `getDeclaredDeltaSurface` returned `'null'` | Fixed: it returns `null` again. |
+| N5: a push that never matches costs two repository lookups per attempt | Accepted (at most 10 Spec DO reads over 5 attempts); noted here. |
+| N6: a ledger name that differs from the Artifacts name, beyond the newest 100 rows, is still missed | Accepted: `claimSpec` derives both names itself, so this is unlikely today. Recorded here; the remote_url key works only on the unfiltered first page. |
+
+**Fable double-check of this plan and code: pending**, for when Fable is available again (maintainer, 2026-11-18).

@@ -6,10 +6,13 @@
  *
  * No imports: the Spec DO and every worker can import this without the shared postinstall.
  */
+/** The reserved actor that decides shadow verdicts (re-exported by shadow-verdict.ts, so the two can never drift apart) */
+export const SCIENTIST_COMPARATOR_ACTOR = 'scientist-comparator';
+
 export const SYSTEM_ACTORS: Readonly<Record<string, string>> = Object.freeze({
   'queue-consumer': 'queue consumer (service)',
   'promotion-worker': 'promotion worker (service)',
-  'scientist-comparator': 'scientist comparator (service)',
+  [SCIENTIST_COMPARATOR_ACTOR]: 'scientist comparator (service)',
 });
 
 export function isSystemActor(id: unknown): id is string {
