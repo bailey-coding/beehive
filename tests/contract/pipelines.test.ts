@@ -68,8 +68,8 @@ describe('contract 1: promotion-worker (merge train) -> gate-workflow -> Spec DO
 });
 
 describe('contract 2: queue-consumer -> gate-workflow -> Spec DO', () => {
-  // it.fails until parts B and D: today 'no repository found' (remote_url is the full git URL), then the same foreign key
-  it.fails('a push for a claimSpec-shaped repository is acked, with one verdict by queue-consumer and one push_received history row', async () => {
+  // Failed before parts B and D: 'no repository found' (remote_url is the full git URL), then the same foreign key
+  it('a push for a claimSpec-shaped repository is handled (not retried), with one verdict by queue-consumer and one push_received history row', async () => {
     const { candidate, name, sha } = claimedCandidate();
     const b = batch('beehive-artifacts-push', [{
       event: {
@@ -83,8 +83,8 @@ describe('contract 2: queue-consumer -> gate-workflow -> Spec DO', () => {
       received_at: Date.now(),
     }]);
     await queueConsumer.queue(b as never, { ...w.base, GATE_WORKFLOW: w.GATE_WORKFLOW, PREVIEW_MANAGER: w.PREVIEW_MANAGER } as never, w.ctx);
+    // The consumer acks by returning normally (queue-consumer/index.ts: no explicit ack); a retry would mean the push was not handled
     expect(b.messages[0].retry).not.toHaveBeenCalled();
-    expect(b.messages[0].ack).toHaveBeenCalled();
     expect(w.count(`SELECT COUNT(*) AS n FROM gate_verdicts WHERE candidate_id = ? AND decided_by = 'queue-consumer'`, candidate.id)).toBe(1);
     expect(w.count(`SELECT COUNT(*) AS n FROM entity_history WHERE entity_id = ? AND stage = 'push_received'`, candidate.id)).toBe(1);
   });

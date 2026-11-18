@@ -125,29 +125,65 @@ const PreviewManagerDeployRequestSchema = z.object({
   timestamp: z.number().int().positive(),
 });
 
+type RepositoryRef = { name: string; namespace: string; full_name: string };
+
+/**
+ * The ledger repository a push is for (docs/plans/wave-1-plan.md part D, review b2 S1). Keys, in order: namespace and name (both
+ * required by the message schema); remote_url equal to full_name (the old key, for ledgers that stored the short form); remote_url
+ * ending in /<namespace>/<name>.git (claimSpec stores its own name in `name` and the Artifacts name in remote_url, and the two can differ).
+ */
+export function matchRepository<T extends { namespace?: unknown; name?: unknown; remote_url?: unknown }>(rows: T[], repo: RepositoryRef): T | undefined {
+  return (
+    rows.find((r) => r.namespace === repo.namespace && r.name === repo.name) ??
+    rows.find((r) => r.remote_url === repo.full_name) ??
+    rows.find((r) => typeof r.remote_url === 'string' && r.remote_url.endsWith(`/${repo.namespace}/${repo.name}.git`))
+  );
+}
+
+/**
+ * Look the repository up with the Spec DO's opt-in namespace/name filter, then, on a miss, with today's unfiltered first page: an older
+ * Spec DO ignores the filter (so the first answer is that page anyway), and a ledger name that differs from the Artifacts name only
+ * matches by remote_url. Returns the Response on a non-OK answer so callers keep their own status handling.
+ */
+async function findRepository(specDoStub: SpecDoStub, repo: RepositoryRef): Promise<{ repo?: any } | Response> {
+  const query = (filtered: boolean) =>
+    specDoStub.fetch(
+      new Request(
+        `https://spec-do.internal/api/repositories?limit=100${filtered ? `&namespace=${encodeURIComponent(repo.namespace)}&name=${encodeURIComponent(repo.name)}` : ''}`,
+        { headers: { 'X-Actor-ID': 'queue-consumer' } }
+      )
+    );
+  for (const filtered of [true, false]) {
+    const resp = await query(filtered);
+    if (!resp.ok) return resp;
+    const data = (await resp.json()) as { data?: any[] };
+    const found = matchRepository(data.data || [], repo);
+    if (found) return { repo: found };
+  }
+  return {};
+}
+
+/** Candidates of one repository: the opt-in repositoryId filter, matched on the client too (an older Spec DO ignores the filter) */
+function candidatesOf(specDoStub: SpecDoStub, repositoryId: string): Promise<Response> {
+  return specDoStub.fetch(
+    new Request(`https://spec-do.internal/api/candidates?limit=100&repositoryId=${encodeURIComponent(repositoryId)}`, {
+      headers: { 'X-Actor-ID': 'queue-consumer' },
+    })
+  );
+}
+
 /**
  * Triggers preview deployment for candidate code via Preview Manager service
  */
 async function triggerPreviewDeployment(event: ArtifactsPushEvent, env: Env, specDoStub: SpecDoStub): Promise<void> {
   console.log(`[QueueConsumer] Triggering preview deployment for ${event.repository.full_name}@${event.commit.sha}`);
 
-  // First, fetch all repositories to find the one matching the event
-  const reposResp = await specDoStub.fetch(
-    new Request(`https://spec-do.internal/api/repositories?limit=100`, {
-      headers: { 'X-Actor-ID': 'queue-consumer' },
-    })
-  );
-
-  if (!reposResp.ok) {
-    console.error(`[QueueConsumer] Failed to fetch repositories: ${reposResp.status}`);
+  const lookup = await findRepository(specDoStub, event.repository);
+  if (lookup instanceof Response) {
+    console.error(`[QueueConsumer] Failed to fetch repositories: ${lookup.status}`);
     return;
   }
-
-  const reposData = await reposResp.json() as { data?: any[] };
-  const repositories = reposData.data || [];
-
-  // Find the repository by remote_url
-  const repo = repositories.find((r: any) => r.remote_url === event.repository.full_name);
+  const repo = lookup.repo;
 
   if (!repo) {
     console.log(`[QueueConsumer] No repository found for ${event.repository.full_name}, skipping`);
@@ -155,11 +191,7 @@ async function triggerPreviewDeployment(event: ArtifactsPushEvent, env: Env, spe
   }
 
   // Now fetch candidates and find the one with matching repository_id
-  const candidatesResp = await specDoStub.fetch(
-    new Request(`https://spec-do.internal/api/candidates?limit=100`, {
-      headers: { 'X-Actor-ID': 'queue-consumer' },
-    })
-  );
+  const candidatesResp = await candidatesOf(specDoStub, repo.id);
 
   if (!candidatesResp.ok) {
     console.error(`[QueueConsumer] Failed to fetch candidates for preview: ${candidatesResp.status}`);
@@ -287,27 +319,18 @@ async function processMessage(
     // Events are processed similarly, just logged with queue context
   }
 
-  // Find candidate by repository URL from Spec DO. A missing row is transient: the push can arrive
-  // before the repository or candidate is written. (Lookups cover the first 100 rows only.)
-  const reposResp = await specDoStub.fetch(
-    new Request(`https://spec-do.internal/api/repositories?limit=100`, {
-      headers: { 'X-Actor-ID': 'queue-consumer' },
-    })
-  );
-  if (!reposResp.ok) {
-    return { kind: classifyStatus(reposResp.status), reason: `repositories lookup answered ${reposResp.status}` };
+  // Find the candidate's repository in the Spec DO. A missing row is transient: the push can arrive before the repository or
+  // candidate is written. (Against a Spec DO older than the list filters, lookups cover the first 100 rows only.)
+  const lookup = await findRepository(specDoStub, event.repository);
+  if (lookup instanceof Response) {
+    return { kind: classifyStatus(lookup.status), reason: `repositories lookup answered ${lookup.status}` };
   }
-  const reposData = await reposResp.json() as { data?: any[] };
-  const repo = (reposData.data || []).find((r: any) => r.remote_url === event.repository.full_name);
+  const repo = lookup.repo;
   if (!repo) {
     return { kind: 'transient', reason: `no repository found for ${event.repository.full_name}` };
   }
 
-  const candidatesResp = await specDoStub.fetch(
-    new Request(`https://spec-do.internal/api/candidates?limit=100`, {
-      headers: { 'X-Actor-ID': 'queue-consumer' },
-    })
-  );
+  const candidatesResp = await candidatesOf(specDoStub, repo.id);
   if (!candidatesResp.ok) {
     return { kind: classifyStatus(candidatesResp.status), reason: `candidates lookup answered ${candidatesResp.status}` };
   }

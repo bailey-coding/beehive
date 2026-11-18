@@ -4320,7 +4320,11 @@ export class SpecDO {
       if (path === '/api/repositories' && method === 'GET') {
         const limit = parseInt(url.searchParams.get('limit') || '50');
         const offset = parseInt(url.searchParams.get('offset') || '0');
-        const repos = this.listRepositories(limit, offset, includeDeleted);
+        // Opt-in filter (wave-1-plan part D): both namespace and name, or neither; one alone is ignored, as an older Spec DO ignores both
+        const filterNamespace = url.searchParams.get('namespace');
+        const filterName = url.searchParams.get('name');
+        const match = filterNamespace && filterName ? { namespace: filterNamespace, name: filterName } : undefined;
+        const repos = this.listRepositories(limit, offset, includeDeleted, match);
         return new Response(JSON.stringify({ success: true, data: repos, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -4437,7 +4441,9 @@ export class SpecDO {
         const specId = url.searchParams.get('specId') ?? undefined;
         const agentId = url.searchParams.get('agentId') ?? undefined;
         const stage = url.searchParams.get('stage') ?? undefined;
-        const candidates = this.listCandidates(limit, offset, specId, agentId, stage, includeDeleted);
+        // Opt-in filter (wave-1-plan part D); an older Spec DO ignores it
+        const repositoryId = url.searchParams.get('repositoryId') ?? undefined;
+        const candidates = this.listCandidates(limit, offset, specId, agentId, stage, includeDeleted, repositoryId);
         // One query for the page, not one per row (queue-consumer and preview-manager list with limit=100)
         const shadowByCandidate = this.shadowFieldsForMany(candidates.map(c => c.id));
         return new Response(JSON.stringify({ success: true, data: candidates.map(c => this.candidateRowToResponse(c, shadowByCandidate)), timestamp: Date.now() }), {
@@ -5685,12 +5691,14 @@ export class SpecDO {
     return rows;
   }
 
-  listRepositories(limit: number, offset: number, includeDeleted = false): RepositoryRow[] {
+  /** `match` (both fields) narrows to one Artifacts repository; newest first (docs/plans/wave-1-plan.md part D) */
+  listRepositories(limit: number, offset: number, includeDeleted = false, match?: { namespace: string; name: string }): RepositoryRow[] {
     if (!this.db) return [];
     const stmt = this.db.prepare(
-      `SELECT * FROM repositories WHERE ${liveFilter(includeDeleted)} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      `SELECT * FROM repositories WHERE ${liveFilter(includeDeleted)}${match ? ' AND namespace = ? AND name = ?' : ''} ORDER BY created_at DESC LIMIT ? OFFSET ?`
     );
-    stmt.bind(limit, offset);
+    if (match) stmt.bind(match.namespace, match.name, limit, offset);
+    else stmt.bind(limit, offset);
     const rows: RepositoryRow[] = [];
     while (stmt.step()) {
       const row = this.rowToRepository(stmt);
@@ -5743,7 +5751,8 @@ export class SpecDO {
     specId?: string,
     agentId?: string,
     stage?: string,
-    includeDeleted = false
+    includeDeleted = false,
+    repositoryId?: string
   ): CandidateRow[] {
     if (!this.db) return [];
     let query = `SELECT * FROM candidates WHERE ${liveFilter(includeDeleted)}`;
@@ -5760,6 +5769,10 @@ export class SpecDO {
     if (stage) {
       query += ' AND stage = ?';
       params.push(stage);
+    }
+    if (repositoryId) {
+      query += ' AND repository_id = ?';
+      params.push(repositoryId);
     }
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
