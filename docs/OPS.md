@@ -662,6 +662,20 @@ The shadow router decides what a mirrored request carries to a candidate (`worke
 - Mixed-version window: an old promotion worker keeps writing stages through the stage PATCH (unchanged; PR-S still logs its off-by-one writes), and stages it already wrote stay off by one for in-flight candidates: a candidate at `passed_shadow` or `passed_train` plus `advance(train | canary)` is a 200 no-op, and one at `passed_canary` while on the canary rung is finished by `advance(full)`. No enforced evidence is bypassed (pre-merge and canary are still checked), but PR C must handle these candidates; a new promotion worker (PR C) against an old Spec DO gets a code-less 404 on `advance` and must answer 503 `ledger_too_old`, never "unknown candidate".
 - Rollback: a build older than this one has no route and ignores nothing (no schema change). Rollback and `failed` stage writes are never gated (rule 7); `advance` only moves up.
 
+## Wave 1: system actors, comparator fallback, push matching (2026-11-18)
+
+Plan: `docs/plans/wave-1-plan.md`. Spec DO, scientist-comparator, queue-consumer (and the shared modules they import). Any deploy order works.
+
+- **System actors.** The first gate verdict decided by `queue-consumer` (push path) or `promotion-worker` (merge train) creates that actor's row
+  (agent, no promotion authority; a role or authority grant for it answers 403). Check after the first such run:
+  `SELECT id, type, promotion_authority, role FROM actors WHERE id IN ('queue-consumer','promotion-worker','scientist-comparator')`.
+- **Comparator.** A comparison for a ledger spec is scored with the default delta surface when the stored surface is not a v1 object (every spec
+  stored through the edge today). Expect one Workers Logs line per spec and isolate: `stored delta surface is not a v1 object; using the default surface`,
+  and `shadow_scores` rows for live canaries (none before Wave 1: every comparison was dropped).
+- **Queue consumer.** A push is matched on `repository.namespace` + `repository.name` through the Spec DO's new opt-in list filters
+  (`/api/repositories?namespace=&name=`, `/api/candidates?repositoryId=`), falling back to the unfiltered first 100 rows. The push message shape
+  itself is unverified (`docs/OPEN-QUESTIONS.md` 2026-11-18).
+
 ## Promotion worker on advance (promotion-gaps PR C, 2026-11-10)
 
 - **Behavior change at this deploy.** `POST /promote` now asks the Spec DO whether a move is legal before it creates any state, and the stage is written by the Spec DO's `advance`, one rung at a time. A request that skips a rung, names a candidate the ledger does not know, lacks the enforced evidence (a passing pre-merge verdict; for `full`, a live canary soaked 15 minutes) or names a stale `fromRung` is refused with a status and a `code` instead of recorded (table below). `fromRung` is optional; `toRung` must be `shadow`, `train`, `canary` or `full`.

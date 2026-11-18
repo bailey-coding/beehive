@@ -1317,3 +1317,22 @@ another organization's Artifacts namespace, and preview-manager or the gate woul
 the route open (closing it would also block normal repository creation); the edge now refuses a foreign `agentId` on it (`docs/plans/wave-0-plan.md`
 part 1). **Status**: open; fix in the Spec DO (Wave 2): for non-master callers the namespace must equal the organization's name, and a
 duplicate `remote_url` is refused.
+
+## 2026-11-18: the Artifacts push message shape the queue consumer expects is unverified
+
+Found by the whole-repo review (`docs/reviews/2026-11-16-review-b2-build-gate-plumbing.md` S2). `workers/queue-consumer/index.ts` validates
+`{event:{id,type:'push',repository:{name,namespace,full_name},commit:{sha,...},ref,base_ref?,created_at}, received_at}` and drops anything else
+on the first delivery. Nothing in the repo produces that message except two hand-built scripts, and no Artifacts documentation describes it;
+no real push is known to have reached the gate this way. Wave 1 (`docs/plans/wave-1-plan.md` part D) now matches on `repository.namespace` and
+`repository.name` and keeps a miss transient, so a differing envelope is still dropped but a differing name is not. **Status**: open. Maintainer
+check (production Artifacts): push to a throwaway repository with the queue subscription set up, capture one message (`wrangler queues` or a
+tail), and record its shape here; if it differs, adapt the schema and switch contract test 2 (`tests/contract/pipelines.test.ts`) to the captured shape.
+
+## 2026-11-18: which stored shape is the spec's declared delta surface?
+
+The edge and `POST /api/specs` store `declaredDeltaSurface` as a JSON array of strings (`workers/shared/schemas.ts:138`); the comparator's
+parser expects a versioned object (`workers/scientist-comparator/delta-surface/parser.ts`). Since Wave 1 part C the comparator falls back to the
+default surface for anything that is not a v1 object (one log line per spec), so no comparison is dropped, but the declared surface has no effect
+on scoring for any spec stored through the edge. `gate-workflow/index.ts:797-798` reads the same field in camelCase (unused). **Status**: open,
+Wave 2: choose converting at write time or widening the parser (it changes the spec contract), with its own plan.
+
