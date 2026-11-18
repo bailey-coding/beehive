@@ -1,10 +1,10 @@
 ---
 category: planning
-status: draft
+status: active
 audience: human,agent
 ---
 
-# Wave 1: contract tests, then the three broken pipelines (plan, rev 1, 2026-11-18)
+# Wave 1: contract tests, then the three broken pipelines (plan, rev 2, 2026-11-18)
 
 From `docs/reviews/2026-11-17-synthesis.md`, "Proposed order of work", Wave 1. The maintainer approved starting it on 2026-11-18.
 
@@ -20,7 +20,7 @@ tier applies (AGENTS.md rule 2):
 
 | Pipeline | Breaks at | Finding |
 |---|---|---|
-| push -> queue-consumer -> gate -> Spec DO verdict | The verdict's `decided_by = 'queue-consumer'` is not an actor (a foreign key). That actor exists only in the local dev seed (`spec-do/index.ts:707-711`). | b2 M1 |
+| push -> queue-consumer -> gate -> Spec DO verdict | The verdict's `decided_by = 'queue-consumer'` is not an actor (a foreign key). That actor exists only in the local dev seed (`spec-do/seed.ts:125`, guarded by `DEV` at `spec-do/index.ts:709`). | b2 M1 |
 | promote (merge-train) -> gate -> Spec DO verdict | The same foreign key, with `decided_by = 'promotion-worker'` (`promotion-worker/merge-train.ts:463-470`) | b1 M2 |
 | comparator -> Spec DO shadow sample | The comparator reads `spec.declaredDeltaSurface`. The Spec DO returns `declared_delta_surface` (`spec-do/index.ts:2306`), and the stored value is a JSON array of strings (`shared/schemas.ts:138`), which `parseDeltaSurface` rejects. The throw is acked and the comparison dropped (`scientist-comparator/index.ts:207-224`, `:138-139`). | c M1 |
 
@@ -32,11 +32,25 @@ Two more problems stop the push path even with the actor fixed:
 
 **The harness.** A new directory, `tests/contract/`, picked up by the root vitest include `tests/**/*.test.ts`.
 
-`tests/contract/wire.ts` provides one real Spec DO (`makeSpecDo(makeSqliteState(), false)`: no dev seed, foreign keys on, as in production) and
-`wire()`. `wire()` returns env objects whose bindings are the **real** handlers:
-- `SPEC_DO`: an authed stub of the real Spec DO (the `authedDo` helper used by `promotion-worker/tests/advance-flow.test.ts`);
-- `GATE_WORKFLOW`: the real `gate-workflow` default `fetch`, with its own env wired back to the same Spec DO;
-- `PREVIEW_MANAGER`: a recording stub. Out of scope: preview builds are simulated (b2 S5).
+`tests/contract/wire.ts` provides one real Spec DO and `wire()`. The Spec DO comes from `makeSpecDo(makeSqliteState(), false)`:
+- the `false` is the `authed` flag, so the DO is raw and checks tokens like production (`spec-do/tests/sqlite-state.ts:76-78`);
+- there is no dev seed, because the env has no `DEV`;
+- foreign keys are on.
+
+`wire()` returns env objects whose bindings are the **real** handlers, following the rule in `spec-do/tests/do-tokens.ts:1-5`: workers get the raw DO
+and carry their own tokens.
+- **`SPEC_DO`** is `{ idFromName, get: () => ({ fetch: (r) => spec.fetch(r) }) }`. Every worker env carries `TEST_INTERNAL_ONLY`, so a worker that calls an
+  admin route fails in the test as it would in production.
+- **`API_AUTH_TOKEN`** is shared by every worker env. It is also the gate's `authGate` token.
+- **`GATE_WORKFLOW`** is the real `gate-workflow` default `fetch`, with its own env wired back to the same Spec DO.
+- **`PREVIEW_MANAGER`** is a recording stub. Out of scope: preview builds are simulated (b2 S5).
+- **`authedDo`** (both tokens) is used only for the test's own arrange calls, never as a worker binding.
+
+**Determinism.**
+- Every test uses its own queue event ids. gate-workflow keeps a module-level run map keyed by the hash of the idempotency key
+  (`gate-workflow/index.ts:246-275`), so a reused id replays an earlier result.
+- Tests 1 and 2 pin `vi.spyOn(Math, 'random').mockReturnValue(0.5)`. The simulated gate's 10% conformance warning is random (`:876`).
+- Test 4 drains the router's nested `ctx.waitUntil` work and calls `resetLiveRefsCache()` between tests (`shadow-router/live-refs-cache.ts:95`).
 
 **The rule for these files:** no `vi.fn()` and no hand-written fake for `SPEC_DO` or a peer binding. Only the network outside the platform
 (GitHub, Artifacts, candidate Workers) may be stubbed.
@@ -45,8 +59,8 @@ Two more problems stop the push path even with the actor fixed:
 
 | # | Path | Arrange | Assert | Fails today because |
 |---|---|---|---|---|
-| 1 | promotion-worker -> gate -> Spec DO | A candidate at `passed_train`, merge-train mode, a real `/promote` | The car ends `merged`, there is one `gate_verdicts` row decided by `promotion-worker`, and `/promote` answers success with the stage `advance` wrote (asserted from the ledger, not hard-coded) | b1 M2 (foreign key) |
-| 2 | queue-consumer -> gate -> Spec DO | A repository and candidate created the way `claimSpec` creates them (real `remote_url` shape), then one push message in the shape the consumer validates | The message is acked, there is one verdict decided by `queue-consumer`, and one `push_received` history row | b2 M1 (foreign key), b2 S1 (match key) |
+| 1 | promotion-worker -> gate -> Spec DO | A candidate at `passed_shadow`, merge-train mode, a real `/promote` with `fromRung: 'train'`, `toRung: 'canary'` (a `passed_train` candidate is a no-op that never calls the gate, plan review M1) | `/promote` answers 200 `moved`, the car ends `merged`, the stage is `passed_train`, and there is one `gate_verdicts` row decided by `promotion-worker` (the pattern of `advance-flow.test.ts:591-600`) | b1 M2 (foreign key): today 409 `gate_failed`, with the gate answering 500 (probe) |
+| 2 | queue-consumer -> gate -> Spec DO | A repository and candidate created the way `claimSpec` creates them (real `remote_url` shape), then one push message in the shape the consumer validates | The message is acked, there is one verdict decided by `queue-consumer`, and one `push_received` history row | b2 S1 (match key: no repository found, so it is retried) and, behind it, b2 M1 (foreign key). It goes green only after both B and D. |
 | 3 | comparator -> Spec DO | A spec created through `POST /api/specs` (stored delta surface `[]`, and one with `["/price"]`), a live candidate, one queue message with a `production` baseline | A `shadow_scores` row exists, and the message is acked, not dropped | c M1 |
 | 4 | shadow-router -> comparator | The real router `/mirror` handler with a live canary ref and a stubbed candidate fetch. Its captured queue message is fed into the comparator's `queue()` | The comparator accepts the router's real message shape and records a sample | c S7 (two hand-written interfaces); it passes once 3 passes, which pins the contract |
 
@@ -60,8 +74,14 @@ The CLI -> edge -> Spec DO test (e M3 #5) is out of Wave 1. It belongs with the 
   - `scientist-comparator`, which moves here from `shared/shadow-verdict.ts` and is re-exported there for compatibility.
 - **Spec DO.** `createGateVerdict` (`spec-do/index.ts:1871`) runs `INSERT OR IGNORE INTO actors (id, type, name, promotion_authority, created_at)`
   with type `agent` and authority 0, before the verdict insert, when `decidedBy` is a `SYSTEM_ACTORS` key.
-  - This is the pattern `recordShadowSamples` already uses for `scientist-comparator` (`:5178-5182`), which then calls the shared helper.
-  - It runs inside the caller's transaction (the route already uses `idempotent`, which is transactional).
+  - This is the pattern `recordShadowSamples` already uses for `scientist-comparator` (`:5178-5182`), which then calls the shared helper. That actor
+    keeps its display name, 'scientist comparator (service)'.
+  - **Transactions.** `idempotent()` opens no transaction without a key, and the merge-train gate call sends none. So the `POST /api/gate-verdicts`
+    route becomes `idem ? this.idempotent(idem, 201, m) : respond(201, transactionSync(m))`, as `handleShadowSamples` does (`:5169-5172`). The
+    actor row and the verdict then commit together or not at all.
+- **Guard.** `setActorRole` and `grantPromotionAuthority` refuse a `SYSTEM_ACTORS` id with 403, as `setActorRole` already refuses a service actor
+  (`:2924`). Today `setActorRole` lets an actor bootstrap itself to maintainer while no maintainer exists (`:2919-2934`), and
+  `grantPromotionAuthority` has no guard at all (`:1512-1519`).
 - **Why lazy, not at init.** It writes only when needed, a ledger that never sees one of these callers gets no row, and it matches the
   existing pattern. Seeding at `init()` would write on every cold start of the busy `main` instance.
 - **Not the fix:** creating the actors through `POST /api/actors`. `createActor` generates UUID ids (`:1465`), and the callers send the fixed string.
@@ -71,13 +91,18 @@ The CLI -> edge -> Spec DO test (e M3 #5) is out of Wave 1. It belongs with the 
   - A tier-1 caller could already set `decidedBy` to any existing actor, so this adds no new privilege.
   - The verdict route stays master-only at the edge (user tokens get 403, review d).
 - **Mixed-version.** This is a Spec DO change only, and callers are unchanged. Until the new Spec DO is live, verdicts fail exactly as they do today.
-- **Also fixed by part B:** the `history` POST from queue-consumer. `entity_history.changed_by` has no foreign key (`schema.sql:9-20`), so it never
-  failed, which corrects b2 M1's inference.
+- **Not broken:** the `history` POST from queue-consumer. `entity_history.changed_by` has no foreign key (`schema.sql:9-20`), so it never failed,
+  which corrects b2 M1's inference. The plan review's sweep confirmed that the gate verdict is the only foreign-key write any worker reaches with
+  a fixed system id. The others have no foreign key, or take the caller's actor:
+  - `promotion_states`, `deploy_refs`, `idempotency_keys` and `governance_events` have none;
+  - trials take the caller's actor.
 - **Tests:**
   - contract tests 1 and 2 go green;
   - a unit test in `workers/spec-do/tests`: a verdict decided by `queue-consumer` on a fresh ledger gives 201 and one actor row, and a
     second verdict adds no second row;
-  - a verdict decided by an unknown string still fails, so the existing foreign key keeps refusing non-system ids.
+  - a verdict decided by an unknown string still gets a non-2xx answer and writes no row;
+  - the role and authority guards answer 403 for each system id.
+- **Which contract tests go green:** test 1 goes green with B alone. Test 2 still stops at the repository match until D.
 
 ## Part C: the comparator reads the stored delta surface, or falls back (c M1)
 
@@ -87,11 +112,14 @@ The CLI -> edge -> Spec DO test (e M3 #5) is out of Wave 1. It belongs with the 
    value is a supported delta-surface object, and `getDefaultDeltaSurface()` otherwise. That covers missing, unparseable JSON, the array-of-strings
    shape `[]` or `["/price"]`, and an unsupported version.
    - On fallback it logs once per spec id per isolate: `[Scientist] spec <id>: stored delta surface is not a v1 object; using the default surface`.
+     The set of logged ids is cleared at 1,000 entries.
    - A malformed spec never drops a comparison. It is scored with the default surface, the same as before PR A (`b10b851`).
 3. **Not in Wave 1:** agreeing one stored shape. Specs store the edge's `string[]` today, while the comparator expects a versioned object. Choosing
    between converting at write time and widening the parser changes the spec contract, so it goes to Wave 2 with its own plan.
    - An OPEN-QUESTIONS line records the decision as pending.
-   - Until then the declared delta surface has no effect on scoring. The review already found that true for every stored spec.
+   - **No current score changes.** No stored spec parses today: the camelCase read is `undefined`, and the parser throws.
+   - **After the casing fix:** a v1 object stored by a tier-1 caller (the DO's `POST /api/specs` does not validate the field) would be honored.
+   - **Same bug elsewhere:** `gate-workflow/index.ts:797-798` has the same casing bug. Its value is unused; it goes to Wave 2 with this decision.
 4. **Tests:**
    - contract test 3;
    - unit tests for `deltaSurfaceFor` with an object, `[]`, `["/price"]`, `undefined`, invalid JSON and a wrong version;
@@ -100,12 +128,19 @@ The CLI -> edge -> Spec DO test (e M3 #5) is out of Wave 1. It belongs with the 
 
 ## Part D: the queue consumer finds the repository (b2 S1, S3)
 
-1. **Matching.** Parse `event.repository.full_name` as `<namespace>/<name>` (the shape the consumer's own zod schema and both scripts assume).
-   - Match a repository whose `namespace` and `name` are equal to those two parts.
-   - Keep `remote_url === full_name` as a second match, so ledgers or tests that stored the short form still match.
-   - A `full_name` without exactly one `/` is permanent: acked with an error log, the same class as a validation failure.
+1. **Matching.** Match on `event.repository.namespace` and `event.repository.name`. The consumer's schema already requires both
+   (`queue-consumer/index.ts:34-38`), so this adds no new assumption about `full_name`.
+   - The match keys, in order:
+     1. `namespace` and `name` equal;
+     2. `remote_url === full_name` (today's key, kept for ledgers or tests that stored the short form);
+     3. `remote_url` ending in `/<namespace>/<name>.git`. `claimSpec` stores its local name in `repositories.name`, while `remote_url` uses the name
+        the Artifacts API returned (`spec-do/index.ts:1799, 1815-1826`; `shared/artifacts.ts:151-154`), and the two can differ.
+   - No match stays **transient**, as today (`:302-303`). Until the real message shape is verified (part E), a permanent ack could silently drop
+     every push.
 2. **Spec DO filters, opt-in and additive:**
-   - `GET /api/repositories?namespace=<ns>&name=<name>` filters with `WHERE namespace = ? AND name = ?` (live rows; `include_deleted` as today);
+   - `GET /api/repositories?namespace=<ns>&name=<name>` filters with `WHERE namespace = ? AND name = ?` (live rows; `include_deleted` as today).
+     The filter applies only when both parameters are given; one alone is ignored, so the route behaves as today. Results stay newest first
+     (`ORDER BY created_at DESC`), and the consumer takes the first match.
    - `GET /api/candidates?repositoryId=<id>` adds `repository_id = ?` to the existing filters.
    - **Mixed-version:** an old Spec DO ignores unknown query parameters and returns its usual first page. The consumer still matches on the client
      side, so an old Spec DO behaves as today (100-row limit), and a new one finds any row.
@@ -130,14 +165,14 @@ No code change.
 
 ## Order and verification
 
-1. **Order:** A first. The four tests are written against today's code: 1-3 fail, 4 fails until 3 passes. Then B, C and D, each turning its tests
-   green, then E.
+1. **Order:** A first. The four tests are written against today's code: 1-3 fail, and 4 fails until 3 passes. Then B (test 1 green), C (tests 3
+   and 4 green) and D (test 2 green), then E.
 2. **One commit per part,** plus the test commits. Mutation checks on every new guard, after committing.
 3. **Before the code review:**
    - `npm test`, `npm run typecheck`, the docs-links test;
    - local e2e once (it does not run gate-workflow, the queue consumer or the comparator, so it checks only that nothing regressed);
    - a dry-run build of the four changed workers (`npx wrangler deploy --dry-run` in `workers/spec-do` via the root config, `scientist-comparator`,
-     `queue-consumer`, and `promotion-worker` for the shared import).
+     `queue-consumer`, `promotion-worker`, and `workers/api`, which also imports `shared/shadow-verdict.ts`).
 4. **Deploy notes for `docs/OPS.md`:**
    - After deploy, the first push or merge-train gate run creates the `queue-consumer` or `promotion-worker` actor row.
    - The first comparison for a ledger spec logs the fallback line and writes a `shadow_scores` row.
@@ -149,3 +184,25 @@ No code change.
 - e2e `m3-features.test.ts:542-545`, which accepts `gate_failed`. The local e2e stack does not run gate-workflow, so a merged car cannot be required
   there until the stack runs it (review e M3, Wave 3). Contract test 1 covers the path instead.
 - The gate's simulated verdicts and the `gate/pre-merge` edge route (Wave 2).
+- preview-manager `findCandidateByRepo` (`preview-manager/index.ts:436-455`, review b2 N3). Its queue handler has no consumer config, so the code is
+  dead; it goes to the Wave 3 dead-code removal.
+- **A deviation from the synthesis.** Its Wave 1 item 1 also listed the CLI contract test (#5) and the e2e `m3-features` fix
+  (`2026-11-17-synthesis.md:105-106`). Both move to Wave 3, for the reasons above.
+
+## Plan review dispositions (rev 1, 2026-11-18, Opus; approve with changes)
+
+Fable was unavailable (no usage credits), so an Opus agent did this review. The maintainer approved that, with **a Fable double-check of the plan
+pending** for when Fable is available again.
+
+| Finding | Disposition |
+|---|---|
+| M1: test 1 with a `passed_train` candidate is a no-op that never calls the gate, so it passes today | Fixed. It now starts at `passed_shadow` with train->canary; the probe confirmed it fails today and passes with the fix. |
+| M2: the harness contradicted itself on auth, and `authedDo` would hide tier errors | Fixed. Raw DO per worker, `TEST_INTERNAL_ONLY` in every worker env, `authedDo` only for arrange calls; the seed wording is corrected. |
+| S1: `idempotent()` has no transaction without a key, which is the merge-train path | Fixed. The route uses `transactionSync` when there is no key. |
+| S2: test 2 needs both B and D | Fixed, in the table and in Order. |
+| S3: match on the schema's `namespace` and `name` fields, and do not drop pushes as permanent | Fixed. Three match keys; a miss stays transient. |
+| S4: filter semantics undefined | Fixed. Both parameters or neither; newest first; take the first. |
+| S5: refuse role and authority grants for system actors | Fixed. 403 guards and tests. |
+| S6: harness determinism | Fixed. Unique event ids, `Math.random` pinned, router drain and cache reset. |
+| S7: `workers/api` missing from the dry-runs | Fixed. |
+| N1-N6 | All taken: the cap; the scoring wording; gate-workflow casing to Wave 2; the not-in-Wave-1 list; the unknown-id assertion; the seed reference and display name. |
