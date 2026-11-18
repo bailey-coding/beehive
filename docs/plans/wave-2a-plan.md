@@ -4,15 +4,15 @@ status: active
 audience: human,agent
 ---
 
-# Wave 2a: ladder guards (plan, rev 2, 2026-11-18)
+# Wave 2a: ladder guards (plan, rev 3, 2026-11-18)
 
 From `docs/reviews/2026-11-17-synthesis.md`, "Proposed order of work", Wave 2. The maintainer agreed on 2026-11-18 to split Wave 2 in two:
 - **2a (this plan):** the guards: small, self-contained checks in the Spec DO, the gate and the promotion worker;
 - **2b (a later plan):** canary evidence (synthesis Wave 2 item 3, problem 3), which is a design problem and waits on two decisions (the delta-surface
   shape, OPEN-QUESTIONS 2026-11-18, and the repository-create namespace hole, OPEN-QUESTIONS 2026-11-17).
 
-Rev 2 folds in the independent plan review (Opus, 2026-11-18: request changes, 2 must-fix, 11 should-fix, 8 nits). Dispositions are in the last
-section.
+Rev 2 folds in the independent plan review (Opus, 2026-11-18: request changes, 2 must-fix, 11 should-fix, 8 nits). Rev 3 folds in its re-check of
+rev 2 (approve with changes: 2 must-fix in D3, 2 should-fix, 2 nits). Dispositions are in the last section.
 
 **Spine.** Every part changes the Spec DO or the promotion train, so the heavy tier applies (AGENTS.md rule 2):
 - this plan gets an independent review before any code;
@@ -186,41 +186,53 @@ decision (`no_shadow_evidence`) rather than losing; that is today's rule for a m
 than `SHADOW_MIN_SAMPLES` samples are raised (the demo already posts enough). Test: an entrant with one sample has no score and the tournament is
 refused `no_shadow_evidence`.
 
-**D2. One open tournament per spec (b1-S6).** In `applyTournamentWrite` (`spec-do/index.ts:3282`), **any** write whose result is `pending` or
-`in_progress` for a spec that has another row (a different id) in `pending` or `in_progress` answers 409 `tournament_exists` with that row's id.
-This covers a new create, a `failed -> pending/in_progress` reopen (`ledger-state-machine.ts:37`), and a PATCH that changes `specId`
-(`promotion-ledger.ts:118`). The check runs in the write's transaction on the single-threaded DO, so two concurrent creates cannot both pass. No
+**D2. One open tournament per spec (b1-S6).** In `applyTournamentWrite` (`spec-do/index.ts:3282`), a write that **moves a row into an open state
+for its spec** answers 409 `tournament_exists` with the other row's id when the spec has another row (a different id) in `pending` or `in_progress`.
+"Moves into" means: a create; a `failed -> pending/in_progress` reopen (`ledger-state-machine.ts:37`); a PATCH that changes `specId`
+(`promotion-ledger.ts:118`). Same-status writes on an already open row (adding an entrant, the D3 winner write) are not checked, so a spec that
+already holds duplicate open rows in production keeps working on its newest row (the one the worker reads, `listTournaments(specId)[0]`). The check runs in the write's transaction on the single-threaded DO, so two concurrent creates cannot both pass. No
 unique index: production may already hold duplicates, and a failing index migration is a full outage (m12).
 - The promotion worker's create path, on `tournament_exists`, reads the tournament **by the id in the 409** and joins it.
 - Mixed version: an old promotion worker that gets the 409 fails that promotion with `tournament_error`; the retry finds the existing tournament on
   its first read. Acceptable for one window.
 - Tests: two creates for one spec, the second 409 with the first id; a reopen of an older failed row while a newer one is open, 409; a PATCH
-  moving a row onto a spec with an open tournament, 409; a contract test where two entrants arrive "together" end in one tournament with both.
+  moving a row onto a spec with an open tournament, 409; with two open rows already present, adding an entrant to the newest still succeeds; a
+  contract test where two entrants arrive "together" end in one tournament with both.
 
 **D3. The winner is written before `advance` (b1-S4).** Today, if `recordWinner` throws after `advance` succeeded, the catch records the tournament
 `failed`, spends an attempt and answers 500; a retry sees the winner past the rung (`passed_shadow`, `TARGET_STAGE.train`,
 `promotion-advance.ts:37-42`), the dry-run loop (`tournament.ts:135-150`) disqualifies it as `stale_from_rung` with a `tournament_loss` near-miss, and
 too few entrants remain.
 Change (the synthesis' option, as the review suggested):
-1. After `decideTournament` picks a winner, one version-checked `modifyTournament` write sets `winner` and stores the contested set
-   (`contested: string[]`, a new optional field on the record) on the row while it stays `in_progress` (`in_progress -> in_progress` is allowed,
-   `ledger-state-machine.ts:37`). Old workers treat a tournament as decided only when `winner && status === 'completed'` (`tournament.ts:103`), so
-   they ignore it.
-2. Then `advance`. A refused `advance` moves the row to `failed` and clears `winner` and `contested` in the same write, as today's failure path.
-3. Then complete: `recordWinner` becomes a `modifyTournament` write on the row as saved (not the stale `tournament.candidates`, `tournament.ts:483-497`),
-   so an entrant that joined meanwhile is kept; losers are exactly the stored `contested` set minus the winner.
+1. **Claim the decision in one write.** After `decideTournament` picks a winner, one version-checked `modifyTournament` write moves the row to
+   `in_progress` (from `pending`, `failed` or `in_progress`; this replaces today's separate `startTournament` write, `tournament.ts:177`) and sets
+   `winner` and the contested set. The contested set is stored in the existing `comparisons` array (`CandidateComparisonSchema`,
+   `promotion-ledger.ts:83-92`; nothing writes it today): one entry per contested loser, `{candidate1: winner, candidate2: loser, winner,
+   comparisonScore, comparedAt}`. The contested set is the winner plus the `candidate2` values. No new field, no new column, no schema change: the
+   strict `TournamentRecordSchema` (`promotion-ledger.ts:110-117`) of an old worker parses the row.
+   - The write's `mutate` **refuses** when the row it re-reads already has a `winner`, or is `completed`. `modifyTournament` re-applies `mutate` after a
+     version conflict (`casLoop`, `promotion-ledger.ts:281-290`), so of two racing runs only the first claims a winner; the second goes to step 4
+     (resume) instead of advancing its own pick. Old workers treat a tournament as decided only when `winner && status === 'completed'`
+     (`tournament.ts:103`), and one meeting an `in_progress` row with `winner` set refuses `not_enough_entrants` and writes nothing
+     (`tournament.ts:166-169`).
+2. **Then `advance`.** A refused `advance` writes the row `failed` and clears `winner` and `comparisons` with a **full-record** write
+   (`modifyTournament` replacing the record; `writeTournament` stores `t.winner ?? null`). A PATCH cannot clear them: `TournamentPatchSchema` has
+   `winner: z.string().optional()` and the DO merges `{...current, ...patch}` (`spec-do/index.ts:3092`), so today's `recordTournamentFailure` PATCH
+   (`tournament.ts:345-351`) moves to a full-record write for this path.
+3. **Then complete:** `recordWinner` becomes a `modifyTournament` write on the row as saved (not the stale `tournament.candidates`,
+   `tournament.ts:483-497`), so an entrant that joined meanwhile is kept; losers are exactly the stored contested set minus the winner.
 4. **Resume:** at the start of `executeTournament`, before the dry-run loop, a row that is `in_progress` with `winner` set is resumed instead of
    decided again: if the winner's stage is `passed_shadow` or later, the row is completed as in step 3; otherwise `advance` is retried for that winner
-   (then step 2 or 3). No history-note parsing is needed (notes are tier-1 writable at `spec-do/index.ts:4811` and cannot be proof).
+   (then step 2 or 3). No history-note parsing is needed (notes are tier-1 writable at `spec-do/index.ts:4811` and cannot be proof). A winner that
+   was failed or tombstoned meanwhile gets a refused `advance`, so the row goes to `failed` (step 2).
 5. A throw in step 3 is caught: the result is success (the winner moved) with `details.recordWinner = 'not recorded: ...'`, and the row is left
    `in_progress` with `winner` set for the next run to resume. It is not marked `failed` and spends no attempt.
-- Mixed version: the new optional field is opt-in (the ledger stores the record as JSON; `TournamentPatchSchema` must accept it; an old DO with a
-  strict schema answers 400, and the worker retries without `contested`, the `withCandidateIds` pattern). An old worker meeting a row with `winner`
-  set and `in_progress` decides it again as today; the winner is then past the rung and the decision is refused, which is today's behavior and no
-  worse.
+- Mixed version: no record field changes, so both directions are safe. Transitions used: `pending|failed -> in_progress`,
+  `in_progress -> in_progress`, `in_progress -> failed` (with `failureReason`), `in_progress -> completed`, all allowed by table (d) today.
 - Tests: `recordWinner` throws once (fault-injecting ledger stub): success, row not `failed`, next call completes it with the right winner and the
   right losers; the winner already moved on to `passed_train` before the retry: still completed, no `tournament_loss` for the winner; a refused
-  `advance` clears `winner`.
+  `advance` leaves the stored `winner` NULL and `comparisons` empty (read the row, not the response); two runs with interleaved reads (the second
+  run's first write conflicts) end with one winner and exactly one `advance` call.
 
 ## Part E: stuck promotion state (b1-S2)
 
@@ -264,7 +276,8 @@ Holders: `beehive-promotion-worker`, `beehive-canary-worker`, and `beehive` (the
 2. `getSpecDoStub` adds the header on those routes when the worker's env has the secret.
 3. The Spec DO, on a promotion route: if its secret is set and the header is missing or wrong, it logs `promotion_token_missing` to Workers Logs,
    and, except for an `advance` with `dryRun: true`, a flood-controlled `governance_events` row naming the route and the asserted actor; then it
-   **proceeds**. If the DO's secret is unset, nothing is logged. It never refuses in this wave.
+   **proceeds**. The auth gate runs before the body is parsed (`specDoAuthGate`, `spec-do-auth.ts:103`), so the gate only marks the request; the
+   governance row is written by the `advance` handler after it has parsed the body and knows `dryRun`. If the DO's secret is unset, nothing is logged. It never refuses in this wave.
 4. A test greps `workers/` for the three route strings and asserts every caller is one of the three holders.
 
 **Phase 2 (not this wave).** After the maintainer sets the secret on all three and a week of logs shows no `promotion_token_missing`, a small change
@@ -295,6 +308,8 @@ Full unit suite and local e2e (fresh `.wrangler/state`) before the code review; 
 - `evidence_unbound` and `commit_mismatch` rows: how often evidence could not be bound to the candidate's commit (input for enforcing it).
 - `promotion_token_missing`: absent once the secret is set on all three holders.
 - A stage PATCH to anything but `failed`/`rolled_back` answers 409 `use_advance`.
+- `scripts/prod-verify-promotion.sh` needs the new edge `advance` route: run it only after all ten builds have landed (an old edge answers 404,
+  a clear failure).
 
 ## Review dispositions (independent plan review, 2026-11-18, Opus)
 
@@ -321,3 +336,14 @@ Full unit suite and local e2e (fresh `.wrangler/state`) before the code review; 
 | N6 `evaluateEvidence` line | Fixed |
 | N7 gate check order; a-S3 for the gate | Fixed (C3) |
 | N8 deviations from the synthesis | Fixed: listed under "Deviations" |
+
+### Re-check of rev 2 (same reviewer, 2026-11-18): approve with changes
+
+| Finding | Disposition |
+|---|---|
+| M1 `contested` cannot be stored, and breaks old strict readers | Fixed: the contested set lives in the existing `comparisons` array; no new field (D3.1) |
+| M2 two racing runs can advance two winners | Fixed: the winner claim refuses when a winner exists; start and claim are one write; race test (D3.1) |
+| S1 a PATCH cannot clear `winner` | Fixed: the failure write is a full-record write; test reads the stored row (D3.2) |
+| S2 D2 blocks same-status writes on duplicate rows | Fixed: only transitions into an open state are checked; test with two open rows (D2) |
+| N1 the auth gate runs before the body | Fixed: the gate marks, the `advance` handler writes the row (F3) |
+| N2 prod-verify in the mixed window | Fixed: deploy-check note |
