@@ -123,7 +123,12 @@ export class SpecDOClient {
    * Get spec definition by ID (null when the spec does not exist)
    */
   async getSpec(specId: string): Promise<{ id: string; declaredDeltaSurface: string } | null> {
-    return this.read(`/api/specs/${encodeURIComponent(specId)}`);
+    // The Spec DO answers snake_case (declared_delta_surface, spec-do rowToSpec); camelCase is read too, so either casing works
+    // against an old or a new Spec DO (review c M1, docs/plans/wave-1-plan.md part C)
+    const row = await this.read<{ id: string; declared_delta_surface?: unknown; declaredDeltaSurface?: unknown }>(`/api/specs/${encodeURIComponent(specId)}`);
+    if (!row) return null;
+    const surface = row.declared_delta_surface ?? row.declaredDeltaSurface;
+    return { id: row.id, declaredDeltaSurface: typeof surface === 'string' ? surface : JSON.stringify(surface ?? null) };
   }
 
   /**

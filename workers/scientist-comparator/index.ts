@@ -221,7 +221,7 @@ async function processComparison(
     candidates.map(async (candidate) => {
       const specId = candidate.specId;
       const spec = specs.get(specId);
-      const deltaSurface = spec ? parseDeltaSurface(spec.declaredDeltaSurface) : getDefaultDeltaSurface();
+      const deltaSurface = spec ? deltaSurfaceFor(spec) : getDefaultDeltaSurface();
 
       return compareCandidate(
         message,
@@ -291,6 +291,29 @@ async function processComparison(
     averageScore: averageScore.toFixed(2),
     durationMs: Date.now() - startTime,
   });
+}
+
+/** Spec ids whose fallback was already logged in this isolate; cleared at the cap so memory stays bounded */
+const loggedFallback = new Set<string>();
+const LOGGED_FALLBACK_CAP = 1_000;
+
+/**
+ * The spec's declared delta surface, or the default surface when the stored value is not a supported v1 object (missing, invalid JSON,
+ * the edge's string array such as [] or ["/price"], an unsupported version). A malformed spec is never a reason to drop a comparison:
+ * it is scored with the default surface, as before PR A (review c M1, docs/plans/wave-1-plan.md part C). Which stored shape is
+ * canonical is a Wave 2 decision.
+ */
+export function deltaSurfaceFor(spec: { id: string; declaredDeltaSurface: string }): ReturnType<typeof getDefaultDeltaSurface> {
+  try {
+    return parseDeltaSurface(spec.declaredDeltaSurface);
+  } catch {
+    if (!loggedFallback.has(spec.id)) {
+      if (loggedFallback.size >= LOGGED_FALLBACK_CAP) loggedFallback.clear();
+      loggedFallback.add(spec.id);
+      console.warn(`[Scientist] spec ${spec.id}: stored delta surface is not a v1 object; using the default surface`);
+    }
+    return getDefaultDeltaSurface();
+  }
 }
 
 /**

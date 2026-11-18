@@ -94,8 +94,8 @@ const comparatorEnv = () => ({ ...w.base, ANALYTICS: { writeDataPoint: () => {} 
 const scored = (id: string) => w.count('SELECT COUNT(*) AS n FROM shadow_scores WHERE candidate_id = ?', id);
 
 describe('contract 3: scientist-comparator -> Spec DO', () => {
-  // it.fails until part C: today 'Delta surface must be an object, got undefined', acked and dropped
-  it.fails.each([[[]], [['/price']]])('a candidate whose spec was stored through POST /api/specs (surface %j) gets a shadow sample', async (surface) => {
+  // Failed before part C: 'Delta surface must be an object, got undefined', acked and dropped
+  it.each([[[]], [['/price']]])('a candidate whose spec was stored through POST /api/specs (surface %j) gets a shadow sample', async (surface) => {
     const res = await w.direct.fetch(
       new Request('https://spec-do.internal/api/specs', {
         method: 'POST',
@@ -123,8 +123,8 @@ describe('contract 3: scientist-comparator -> Spec DO', () => {
 });
 
 describe('contract 4: shadow-router /mirror -> queue message -> scientist-comparator', () => {
-  // it.fails until part C (the comparator drops it, as in contract 3)
-  it.fails('the message the real router enqueues for a live canary is accepted by the real comparator and scored', async () => {
+  // Failed before part C (the comparator dropped it, as in contract 3)
+  it('the message the real router enqueues for a live canary is accepted by the real comparator and scored', async () => {
     const { candidate, spec, sha } = claimedCandidate('passed_train');
     const deploy = await w.direct.fetch(
       new Request('https://spec-do.internal/canary-deployments', {
