@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
 import type { SpecDO } from '../index';
+import { isSystemActor, SYSTEM_ACTORS } from '../../shared/system-actors';
 
 let store: SqliteState;
 let spec: SpecDO;
@@ -82,5 +83,13 @@ describe('a reserved system actor holds no role and no promotion authority', () 
     );
     expect(res.status).toBe(403);
     expect(actorRows('queue-consumer')[0].role).toBeNull();
+  });
+});
+
+describe('isSystemActor', () => {
+  it('is true only for the reserved ids, never for another string or an inherited property name', () => {
+    for (const id of Object.keys(SYSTEM_ACTORS)) expect(isSystemActor(id)).toBe(true);
+    for (const id of ['not-an-actor', 'master', 'constructor', 'toString', '__proto__', '', 'Queue-Consumer']) expect(isSystemActor(id)).toBe(false);
+    expect(isSystemActor(undefined)).toBe(false);
   });
 });
