@@ -43,6 +43,9 @@ workers are involved). The fix commit flips it, so the history shows red before 
 
 ## Decisions for the maintainer
 
+**Decided 2026-11-20:** the maintainer accepted all three recommendations below (M1 log only, M2 log-only token with the secret set later by the
+maintainer, M3 the new prod-verify shape).
+
 - **M1. Does `deployCanary` require `passed_train`?** Recommendation: **not yet; log it.** Today the canary SLO tests, the e2e canary flows and the
   2026-10-25 production canary deploy `pending` candidates. Requiring `passed_train` makes the only canary path depend on the tournament and merge
   train, which are not proven in production. Part B writes a `governance_events` row (`canary_stage_precondition`, same flood control as
