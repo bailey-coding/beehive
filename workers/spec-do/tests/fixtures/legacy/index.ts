@@ -54,7 +54,12 @@ const ALTERS: [since: number, sql: string][] = [
 const DEFERRED_INDEX = /^CREATE INDEX IF NOT EXISTS \w+ ON \w+\((deleted_at|actor_id)\);$/;
 
 // Snapshots whose base schema.sql already has candidates.preview_*
-const BASE_HAS_PREVIEW_COLUMNS: ReadonlySet<string> = new Set(['m13-550b563.sql']);
+const BASE_HAS_PREVIEW_COLUMNS: ReadonlySet<string> = new Set(['m13-550b563.sql', 'm15-5b06d0c.sql']);
+
+// m15 (last shape before m16 added gate_verdicts.commit_sha/simulated, wave-2a part C): seed a verdict so the step's ALTERs meet a row
+const M15_VERDICT_SEED = [
+  "INSERT INTO gate_verdicts (id, candidate_id, gate, status, score, complexity_delta, notes, created_at, decided_by) VALUES ('gv-1', 'cand-1', 'pre-merge', 'pass', 90, 0, 'old', 1, 'act-1')",
+];
 
 function historicalDdl(file: string, version: number): string[] {
   const lines = read(file).split('\n');
@@ -76,7 +81,8 @@ function historical(): LegacyFixture[] {
     .map((f) => {
       const startVersion = f.split('-')[0];
       const finding = NO_USER_TOKENS.test(f) ? 'OPEN-QUESTIONS 2026-10-26: a ledger at this commit has no user_tokens and current m9 never creates it' : undefined;
-      return { name: f.replace(/\.sql$/, ''), ddl: historicalDdl(f, Number(startVersion.slice(1))), seed: BASE_SEED, startVersion, finding };
+      const seed = startVersion === 'm15' ? [...BASE_SEED, ...M15_VERDICT_SEED] : BASE_SEED;
+      return { name: f.replace(/\.sql$/, ''), ddl: historicalDdl(f, Number(startVersion.slice(1))), seed, startVersion, finding };
     });
 }
 

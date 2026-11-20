@@ -25,6 +25,7 @@ COMMITS=(
   "98d43df m10"
   "19705f8 m11"
   "550b563 m13"
+  "5b06d0c m15"
 )
 
 mkdir -p "$OUT"
