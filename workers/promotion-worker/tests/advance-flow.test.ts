@@ -50,7 +50,7 @@ async function world(mode: PromotionMode, vars: { doSource?: string; tournamentS
     ANALYTICS: { writeDataPoint: vi.fn() },
     PROMOTION_MODE: mode,
     MAX_CONCURRENT_CANDIDATES: '10',
-    PROMOTION_TIMEOUT: '300000',
+    PROMOTION_TIMEOUT: '3600', // seconds, as in wrangler.toml (wave-2a part E)
     API_AUTH_TOKEN: 'test-auth-token',
     ...(vars.tournamentSource !== undefined ? { TOURNAMENT_SHADOW_SOURCE: vars.tournamentSource } : {}),
     ...TEST_INTERNAL_ONLY,
@@ -1154,4 +1154,86 @@ describe('wave-2a part D: tournament guards', () => {
     expect(w.stageOf(b)).toBe('passed_premerge');
     expect(row(w)[0]).toMatchObject({ status: 'completed', winner: a });
   });
+});
+
+// ============================================================================
+// Wave 2a part E (docs/plans/wave-2a-plan.md; review b1-S2): a promotion state left pending or in_progress by a failed request stops blocking
+// the candidate after PROMOTION_TIMEOUT seconds (it is cancelled as abandoned), and bookkeeping after a move is best effort.
+// ============================================================================
+describe('wave-2a part E: stuck promotion states', () => {
+  const stuck = async (w: Awaited<ReturnType<typeof world>>, candidateId: string, minutesAgo: number, status = 'in_progress') => {
+    const startedAt = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    const create = await w.direct.fetch(new Request('https://spec-do.internal/promotion-states', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Actor-ID': w.agent },
+      body: JSON.stringify({ id: `stuck-${candidateId}`, candidateId, specId: w.specId, currentRung: 'pre-merge', targetRung: 'shadow', status: 'pending', mode: 'tournament', startedAt }),
+    }));
+    expect(create.status).toBe(201);
+    if (status === 'in_progress') {
+      const patch = await w.direct.fetch(new Request(`https://spec-do.internal/promotion-states/stuck-${candidateId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'in_progress', startedAt }),
+      }));
+      expect(patch.status).toBe(200);
+    }
+  };
+
+  it.fails('a state older than PROMOTION_TIMEOUT no longer blocks: the promotion runs and the old state is cancelled as abandoned, with no invalid_transition row', async () => {
+    for (const status of ['pending', 'in_progress']) {
+      const w = await world('tournament');
+      const c = w.candidate();
+      w.passPremerge(c);
+      await stuck(w, c, 120, status);
+      const res = await w.promote({ candidateId: c, toRung: 'shadow' });
+      expect(res.status, status).toBe(200);
+      expect(w.stageOf(c)).toBe('passed_premerge');
+      const old = w.states(c).find((s) => s.id === `stuck-${c}`)!;
+      expect(old).toMatchObject({ status: 'cancelled', failureReason: expect.stringMatching(/^abandoned/) });
+      expect(w.events('invalid_transition')).toEqual([]);
+    }
+  });
+
+  it('a state younger than PROMOTION_TIMEOUT still blocks (409)', async () => {
+    const w = await world('tournament');
+    const c = w.candidate();
+    w.passPremerge(c);
+    await stuck(w, c, 10);
+    expect((await w.promote({ candidateId: c, toRung: 'shadow' })).status).toBe(409);
+    expect(w.stageOf(c)).toBe('pending');
+  });
+
+  it.fails('a failure writing the completed state after the move is logged, and the caller gets the move, not a 500', async () => {
+    const w = await world('tournament');
+    const c = w.candidate();
+    w.passPremerge(c);
+    w.box.hook = async (request) => {
+      if (request.method === 'PATCH' && new URL(request.url).pathname.startsWith('/promotion-states/') && ((await request.clone().json()) as { status?: string }).status === 'completed') {
+        return Response.json({ success: false, error: 'ledger down' }, { status: 500 });
+      }
+      return undefined;
+    };
+    const res = await w.promote({ candidateId: c, toRung: 'shadow' });
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ success: true, outcome: 'moved' });
+    expect(w.stageOf(c)).toBe('passed_premerge');
+  });
+
+  it.fails('a failure writing the failed state after a refusal is logged, and the caller gets the refusal, not a 500', async () => {
+    const w = await world('tournament');
+    const c = w.candidate();
+    w.passPremerge(c);
+    w.box.hook = async (request) => {
+      const u = new URL(request.url);
+      // the dry run passes; the real advance is refused after the promotion state exists, and writing that state's failure fails too
+      if (u.pathname.endsWith('/advance') && !((await request.clone().json()) as { dryRun?: boolean }).dryRun) {
+        return Response.json({ success: false, error: 'stage changed', code: 'not_next_rung' }, { status: 409 });
+      }
+      if (request.method === 'PATCH' && u.pathname.startsWith('/promotion-states/') && ((await request.clone().json()) as { status?: string }).status === 'failed') {
+        return Response.json({ success: false, error: 'ledger down' }, { status: 500 });
+      }
+      return undefined;
+    };
+    const res = await w.promote({ candidateId: c, toRung: 'shadow' });
+    expect(res.status).toBe(409);
+    expect(res.json.code).toBe('not_next_rung');
+  });
+
 });
