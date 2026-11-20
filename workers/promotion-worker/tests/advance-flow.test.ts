@@ -1135,6 +1135,17 @@ describe('wave-2a part D: tournament guards', () => {
     expect(row(w)[0]).toMatchObject({ status: 'completed', winner: b });
   });
 
+  it('S1: a 5xx again while resuming keeps the claim too (still no failure, no attempt spent)', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.box.hook = async (request) => ((await isRealAdvance(request)) ? Response.json({ success: false, error: 'boom' }, { status: 500 }) : undefined);
+    await w.promote({ candidateId: b, toRung: 'train' });
+    const again = await w.promote({ candidateId: a, toRung: 'train' }); // resumes the claim; the advance fails the same way
+    expect(again.status).toBe(502);
+    expect(again.json.code).toBe('ledger_error');
+    expect(row(w)[0]).toMatchObject({ status: 'in_progress', winner: b, attempts: 0 });
+  });
+
   it('S1: an advance that committed but whose answer was lost is completed by the next request, not moved again and not disqualified', async () => {
     const { w, a, b } = await pair(85, 95);
     await w.promote({ candidateId: a, toRung: 'train' });
