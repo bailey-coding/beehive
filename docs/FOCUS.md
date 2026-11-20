@@ -21,8 +21,9 @@ not deployed.** The maintainer accepted decisions M1-M3 (2026-11-20). What it do
 - E: abandoned promotion states stop blocking after `PROMOTION_TIMEOUT`.
 - F: `SPEC_DO_PROMOTION_TOKEN`, log-only; the maintainer sets it on `beehive`, `beehive-promotion-worker`, `beehive-canary-worker`.
 
-Verified: unit 105 files / 2476 tests, typecheck clean, local e2e 62 passed / 19 skipped, 90 mutations (one accepted survivor, see the plan).
-Next: the independent code review, dispositions, then merge on the maintainer's word. Then Wave 2b (canary evidence) needs its own plan.
+Independent code review (Opus, 2026-11-20): approve with changes, no must-fix; S1-S5 and N1-N8 fixed, dispositions at the end of the plan.
+Verified after the fixes: unit 105 files / 2481 tests, typecheck clean, local e2e (fresh state) 62 passed / 19 skipped, 96 mutations (one
+accepted survivor, see the plan). Next: merge to `main` on the maintainer's word; then Wave 2b (canary evidence) needs its own plan.
 
 ## Handoff (2026-11-18): previous
 
