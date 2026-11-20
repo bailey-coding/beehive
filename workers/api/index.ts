@@ -261,6 +261,11 @@ async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): P
         if (path.match(/^\/api\/candidates\/[^\/]+\/stage$/) && method === 'PATCH') {
           return handleUpdateCandidateStage(actorRequest, specDoStub);
         }
+        // Master only (not on the user-token allow-list): the replacement for the upward stage PATCH (docs/plans/wave-2a-plan.md part A4).
+        // One rung per call, with the evidence each rung enforces; the Spec DO's answer passes through unchanged.
+        if (path.match(/^\/api\/candidates\/[^\/]+\/advance$/) && method === 'POST') {
+          return handleAdvanceCandidate(actorRequest, specDoStub);
+        }
         // Shadow samples (m15): master/service tier only (not on the user-token allow-list). Like canary-metrics, any tier-1 holder
         // can forge samples; the comparator reaches the Spec DO directly, so this route is for e2e, the demo and the maintainer.
         if (path.match(/^\/api\/candidates\/[^\/]+\/shadow-samples$/) && method === 'POST') {
@@ -1847,6 +1852,15 @@ async function handleUpdateCandidateStage(
   const actorId = request.actorId;
   const response = await sendToSpecDo(stub, `/api/candidates/${id}/stage`, 'PATCH', body, actorId);
   return response;
+}
+
+async function handleAdvanceCandidate(
+  request: ActorRequest,
+  stub: SpecDoStub
+): Promise<Response> {
+  const id = extractParentId(request.url);
+  const body: unknown = await readJsonBody(request);
+  return sendToSpecDo(stub, `/api/candidates/${id}/advance`, 'POST', body, request.actorId);
 }
 
 /** Forwards the body and the Idempotency-Key to the Spec DO's shadow-samples route; its 404/400/409 answers pass through as they are. */

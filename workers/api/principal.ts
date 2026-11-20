@@ -254,7 +254,8 @@ export async function authenticate(
  * Writes a user token may make (S9 matrix, docs/M12-IMPL-PLAN.md section 4). An allow-list: a
  * write route missing here is a 403, so a new route is closed to user tokens until it is added.
  * Never here: actor admin (create, trust, promotion authority), gate verdicts, trials,
- * promotions, candidate stage (no transition guard; rung outcomes go through it) and candidate
+ * promotions, candidate stage (the DO writes only failed/rolled_back through it, wave-2a part A, and rung outcomes go through it),
+ * candidate advance (master only, wave-2a part A4) and candidate
  * execute (retired, 410; still denied so a user token never learns more than 403), lifecycle and /api/admin/*.
  * Also not here, until the DO has ownership rules for them (docs/plans/wave-0-plan.md part 2): spec and issue stage, the two
  * link routes, and the pre-merge gate start (it is broken and would mint a simulated pass).

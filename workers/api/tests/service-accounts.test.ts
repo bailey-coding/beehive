@@ -470,7 +470,7 @@ describe('service token security properties (edge + real DO)', () => {
 
 // wave-2a-plan part A4: the master-only edge route that replaces the upward stage PATCH for fixtures and prod-verify
 describe('POST /api/candidates/:id/advance (master only)', () => {
-  it.fails('forwards to the Spec DO advance route with the body and the actor, and passes its answer through', async () => {
+  it('forwards to the Spec DO advance route with the body and the actor, and passes its answer through', async () => {
     const { call, calls } = setup();
     const res = await call('/api/candidates/A/advance', 'POST', {
       token: MASTER,

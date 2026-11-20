@@ -54,7 +54,7 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('candidate stage PATCH: only failed and rolled_back', () => {
-  it.fails('refuses an upward move with 409 use_advance and leaves the stage alone', async () => {
+  it('refuses an upward move with 409 use_advance and leaves the stage alone', async () => {
     const { c } = seed();
     const before = historyCount('candidate', c.id);
     const r = await call(`/api/candidates/${c.id}/stage`, 'PATCH', { stage: 'promoted' });
@@ -64,14 +64,14 @@ describe('candidate stage PATCH: only failed and rolled_back', () => {
     expect(historyCount('candidate', c.id)).toBe(before);
   });
 
-  it.fails('refuses a one-step forward move too (only advance checks evidence)', async () => {
+  it('refuses a one-step forward move too (only advance checks evidence)', async () => {
     const { c } = seed();
     const r = await call(`/api/candidates/${c.id}/stage`, 'PATCH', { stage: 'passed_premerge' });
     expect(r.status).toBe(409);
     expect(row('candidates', c.id)!.stage).toBe('pending');
   });
 
-  it.fails('refuses a backward ladder move', async () => {
+  it('refuses a backward ladder move', async () => {
     const { c } = seed();
     setStage(c.id, 'passed_train');
     const r = await call(`/api/candidates/${c.id}/stage`, 'PATCH', { stage: 'passed_shadow' });
@@ -96,7 +96,7 @@ describe('candidate stage PATCH: only failed and rolled_back', () => {
     expect((await call(`/api/candidates/${c.id}/stage`, 'PATCH', { stage: 'passed_shadow' })).status).toBe(200);
   });
 
-  it.fails('answers 404 for a tombstoned candidate and does not write (today the write commits before the 404)', async () => {
+  it('answers 404 for a tombstoned candidate and does not write (today the write commits before the 404)', async () => {
     const { c } = seed();
     tombstone('candidates', c.id);
     const before = historyCount('candidate', c.id);
@@ -107,13 +107,13 @@ describe('candidate stage PATCH: only failed and rolled_back', () => {
     expect(historyCount('candidate', c.id)).toBe(before);
   });
 
-  it.fails('answers 404 for an unknown candidate and writes no history row', async () => {
+  it('answers 404 for an unknown candidate and writes no history row', async () => {
     const r = await call('/api/candidates/nope/stage', 'PATCH', { stage: 'failed' });
     expect(r.status).toBe(404);
     expect(historyCount('candidate', 'nope')).toBe(0);
   });
 
-  it.fails('answers 400 for an unknown stage', async () => {
+  it('answers 400 for an unknown stage', async () => {
     const { c } = seed();
     const r = await call(`/api/candidates/${c.id}/stage`, 'PATCH', { stage: 'shipped' });
     expect(r.status).toBe(400);
@@ -127,13 +127,13 @@ describe.each([
 ] as const)('$kind stage PATCH integrity', ({ kind, table, path, good, initial }) => {
   const idOf = (s: ReturnType<typeof seed>) => (kind === 'spec' ? s.spec.id : s.issue.id);
 
-  it.fails('answers 404 for an unknown id and writes no history row', async () => {
+  it('answers 404 for an unknown id and writes no history row', async () => {
     const r = await call(`/api/${path}/nope/stage`, 'PATCH', { stage: good });
     expect(r.status).toBe(404);
     expect(historyCount(kind, 'nope')).toBe(0);
   });
 
-  it.fails('answers 404 for a tombstoned row and leaves its stage alone', async () => {
+  it('answers 404 for a tombstoned row and leaves its stage alone', async () => {
     const id = idOf(seed());
     tombstone(table, id);
     const before = historyCount(kind, id);
@@ -143,7 +143,7 @@ describe.each([
     expect(historyCount(kind, id)).toBe(before);
   });
 
-  it.fails('answers 400 for an unknown stage, not a 500 from the CHECK constraint', async () => {
+  it('answers 400 for an unknown stage, not a 500 from the CHECK constraint', async () => {
     const id = idOf(seed());
     const r = await call(`/api/${path}/${id}/stage`, 'PATCH', { stage: 'nonsense' });
     expect(r.status).toBe(400);

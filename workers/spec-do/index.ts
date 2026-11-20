@@ -351,9 +351,13 @@ import {
   INVALID_TRANSITION_CAP_PER_WINDOW,
   MAX_GOVERNANCE_DETAIL_BYTES,
   MAX_GOVERNANCE_SUBJECT_CHARS,
+  STAGE_PATCH_TARGETS,
+  USE_ADVANCE,
+  isCandidateStage,
   type CandidateWriteSource,
   type GovernanceViolation,
 } from '../shared/governance-state-machine';
+import { SpecStageSchema, IssueStageSchema } from '../shared/schemas';
 
 // Ledger lifecycle contract (tombstones, maintainer role, purge; shared with the edge)
 import {
@@ -1590,19 +1594,23 @@ export class SpecDO {
     return row;
   }
 
-  transitionSpec(id: string, newStage: SpecRow['stage'], changedBy: string, notes?: string): void {
+  /** A stage PATCH refusal (wave-2a-plan part A): nothing was written. */
+  private stagePatchError(status: number, error: string, code?: string): Response {
+    return new Response(JSON.stringify({ success: false, error, ...(code ? { code } : {}), timestamp: Date.now() }), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  /** Stage write + history row in one transaction, on a live spec only. False (nothing written) for an unknown or tombstoned id. */
+  transitionSpec(id: string, newStage: SpecRow['stage'], changedBy: string, notes?: string): boolean {
     if (!this.db) throw new Error('Database not initialized');
-    
-    // Update spec
-    const updateStmt = this.db.prepare(
-      `UPDATE specs SET stage = ? WHERE id = ?`
-    );
-    updateStmt.bind(newStage, id);
-    updateStmt.step();
-    updateStmt.free();
-    
-    // Record history
-    this.recordHistory('spec', id, newStage, changedBy, notes);
+    return this.state.storage.transactionSync(() => {
+      if (!this.queryAll('SELECT 1 FROM specs WHERE id = ? AND deleted_at IS NULL', id)[0]) return false;
+      this.run(`UPDATE specs SET stage = ? WHERE id = ? AND deleted_at IS NULL`, newStage, id);
+      this.recordHistory('spec', id, newStage, changedBy, notes);
+      return true;
+    });
   }
 
   // ============================================================================
@@ -2211,17 +2219,15 @@ export class SpecDO {
     });
   }
 
-  transitionIssue(id: string, newStage: IssueRow['stage'], changedBy: string, notes?: string): void {
+  /** Stage write + history row in one transaction, on a live issue only. False (nothing written) for an unknown or tombstoned id. */
+  transitionIssue(id: string, newStage: IssueRow['stage'], changedBy: string, notes?: string): boolean {
     if (!this.db) throw new Error('Database not initialized');
-    
-    const updateStmt = this.db.prepare(
-      `UPDATE issues SET stage = ? WHERE id = ?`
-    );
-    updateStmt.bind(newStage, id);
-    updateStmt.step();
-    updateStmt.free();
-    
-    this.recordHistory('issue', id, newStage, changedBy, notes);
+    return this.state.storage.transactionSync(() => {
+      if (!this.queryAll('SELECT 1 FROM issues WHERE id = ? AND deleted_at IS NULL', id)[0]) return false;
+      this.run(`UPDATE issues SET stage = ? WHERE id = ? AND deleted_at IS NULL`, newStage, id);
+      this.recordHistory('issue', id, newStage, changedBy, notes);
+      return true;
+    });
   }
 
   // ============================================================================
@@ -4410,7 +4416,8 @@ export class SpecDO {
       if (path.match(/^\/api\/specs\/[^\/]+\/stage$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
         const body: UpdateSpecStageRequest = await request.json();
-        this.transitionSpec(id, body.stage, actorId, body.notes);
+        if (!SpecStageSchema.safeParse(body?.stage).success) return this.stagePatchError(400, `Invalid spec stage: ${String(body?.stage)}`);
+        if (!this.transitionSpec(id, body.stage, actorId, body.notes)) return this.stagePatchError(404, 'Not found');
         const spec = this.getSpec(id);
         return new Response(JSON.stringify({ success: true, data: spec, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
@@ -4468,14 +4475,19 @@ export class SpecDO {
       if (path.match(/^\/api\/candidates\/[^\/]+\/stage$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
         const body: UpdateCandidateStageRequest = await request.json();
-        this.transitionCandidate(id, body.stage, actorId, body.notes);
-        const candidate = this.getCandidate(id);
-        if (!candidate) {
-          return new Response(JSON.stringify({ success: false, error: 'Not found', timestamp: Date.now() }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' },
-          });
+        // wave-2a-plan part A: checks before any write. No await between the checks and the write, so nothing interleaves on the DO.
+        if (!isCandidateStage(body?.stage)) return this.stagePatchError(400, `Invalid candidate stage: ${String(body?.stage)}`);
+        const current = this.getCandidate(id);
+        if (!current) return this.stagePatchError(404, CANDIDATE_NOT_FOUND);
+        if (body.stage !== current.stage && !STAGE_PATCH_TARGETS.includes(body.stage)) {
+          return this.stagePatchError(
+            409,
+            `The stage PATCH only writes ${STAGE_PATCH_TARGETS.join(' or ')}; use POST /api/candidates/${id}/advance to move '${current.stage}' to '${body.stage}'`,
+            USE_ADVANCE
+          );
         }
+        this.transitionCandidate(id, body.stage, actorId, body.notes);
+        const candidate = this.getCandidate(id)!;
         return new Response(JSON.stringify({ success: true, data: this.candidateRowToResponse(candidate), timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -4721,7 +4733,8 @@ export class SpecDO {
       if (path.match(/^\/api\/issues\/[^\/]+\/stage$/) && method === 'PATCH') {
         const id = this.extractParentId(path);
         const body: UpdateIssueStageRequest = await request.json();
-        this.transitionIssue(id, body.stage, actorId, body.notes);
+        if (!IssueStageSchema.safeParse(body?.stage).success) return this.stagePatchError(400, `Invalid issue stage: ${String(body?.stage)}`);
+        if (!this.transitionIssue(id, body.stage, actorId, body.notes)) return this.stagePatchError(404, 'Not found');
         const issue = this.issueView(this.getIssue(id));
         return new Response(JSON.stringify({ success: true, data: issue, timestamp: Date.now() }), {
           headers: { 'Content-Type': 'application/json' },

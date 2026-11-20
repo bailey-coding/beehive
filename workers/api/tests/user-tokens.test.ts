@@ -486,6 +486,7 @@ const WRITE_ROUTES: Array<[method: string, path: string, cls: RouteClass]> = [
   ['POST', '/api/specs/x1/claim', 'write'],
   ['POST', '/api/candidates', 'write'],
   ['PATCH', '/api/candidates/x1/stage', 'denied'],
+  ['POST', '/api/candidates/x1/advance', 'denied'],
   ['POST', '/api/candidates/x1/shadow-samples', 'denied'],
   ['POST', '/api/gate-verdicts', 'denied'],
   ['POST', '/api/candidates/x1/gate/pre-merge', 'denied'],

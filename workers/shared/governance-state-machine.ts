@@ -42,6 +42,14 @@ export const CANDIDATE_STAGES = [
 ] as const;
 export type CandidateStage = (typeof CANDIDATE_STAGES)[number];
 
+/**
+ * The only stages the stage PATCH writes (docs/plans/wave-2a-plan.md part A): leaving the ladder is never gated (AGENTS.md rule 7). Every
+ * other move goes through `advance`, which checks the evidence; the PATCH answers 409 USE_ADVANCE for it.
+ */
+export const STAGE_PATCH_TARGETS: readonly CandidateStage[] = ['failed', 'rolled_back'];
+export const USE_ADVANCE = 'use_advance';
+export const isCandidateStage = (s: unknown): s is CandidateStage => typeof s === 'string' && (CANDIDATE_STAGES as readonly string[]).includes(s);
+
 /** Ladder order, for skip-ahead and backward detection. failed and rolled_back are off the ladder. */
 export const CANDIDATE_LADDER: readonly CandidateStage[] = [
   'pending', 'passed_premerge', 'passed_shadow', 'passed_train', 'passed_canary', 'promoted',

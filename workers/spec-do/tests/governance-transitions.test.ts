@@ -78,14 +78,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('candidate stage PATCH: log-only', () => {
-  it('a violation (pending -> passed_train) answers 200, writes the stage and history, and exactly one event', async () => {
+// Since wave-2a part A the PATCH writes only failed and rolled_back (anything else is 409 use_advance, nothing written; stage-patch-guard.test.ts).
+// The table (c) log still runs on the edges it allows: pending -> rolled_back is a non-enforceable rollback_before_train violation, and
+// these tests use it to exercise the logging machinery.
+describe('candidate stage PATCH: log-only on the edges it still writes', () => {
+  it('a violation (pending -> rolled_back) answers 200, writes the stage and history, and exactly one event', async () => {
     const { c, spec: s } = seed();
-    const res = await patchStage(c.id, 'passed_train', 'secret client note');
+    const res = await patchStage(c.id, 'rolled_back', 'secret client note');
     expect(res.status).toBe(200);
-    expect(res.json.data.stage).toBe('passed_train');
-    expect(stageOf(c.id)).toBe('passed_train');
-    expect(history(c.id).map((h) => h.stage)).toEqual(['pending', 'passed_train']);
+    expect(res.json.data.stage).toBe('rolled_back');
+    expect(stageOf(c.id)).toBe('rolled_back');
+    expect(history(c.id).map((h) => h.stage)).toEqual(['pending', 'rolled_back']);
 
     const rows = events();
     expect(rows).toHaveLength(1);
@@ -95,29 +98,32 @@ describe('candidate stage PATCH: log-only', () => {
       actor_id: null,
       asserted_actor_id: actor,
       subject: `candidate:${c.id}`,
-      reason: 'candidate_stage:pending->passed_train',
+      reason: 'candidate_stage:pending->rolled_back',
     });
     expect(e.detail).not.toContain('secret client note');
     expect(new TextEncoder().encode(e.detail).length).toBeLessThanOrEqual(MAX_GOVERNANCE_DETAIL_BYTES);
     expect(JSON.parse(e.detail)).toEqual({
-      v: 1, machine: 'candidate_stage', rule: 'skip_ahead', from: 'pending', to: 'passed_train', enforceable: true,
+      v: 1, machine: 'candidate_stage', rule: 'rollback_before_train', from: 'pending', to: 'rolled_back', enforceable: false,
       source: 'stage_patch', candidateId: c.id, specId: s.id, orgName,
     });
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('the full valid ladder and a rollback write no event', async () => {
+  it('valid exits write no event: passed_train -> rolled_back, passed_canary -> failed, rolled_back -> failed', async () => {
     const { c } = seed();
-    for (const stage of ['passed_premerge', 'passed_shadow', 'passed_train', 'passed_canary', 'promoted', 'rolled_back']) {
-      expect((await patchStage(c.id, stage)).status).toBe(200);
-    }
-    expect(stageOf(c.id)).toBe('rolled_back');
+    setStage(c.id, 'passed_train');
+    expect((await patchStage(c.id, 'rolled_back')).status).toBe(200);
+    setStage(c.id, 'passed_canary');
+    expect((await patchStage(c.id, 'failed')).status).toBe(200);
+    setStage(c.id, 'rolled_back');
+    expect((await patchStage(c.id, 'failed')).status).toBe(200);
     expect(events()).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
 
   it('same-state writes write no event', async () => {
     const { c } = seed();
+    setStage(c.id, 'passed_premerge');
     await patchStage(c.id, 'passed_premerge');
     await patchStage(c.id, 'passed_premerge');
     await patchStage(c.id, 'passed_premerge');
@@ -128,31 +134,40 @@ describe('candidate stage PATCH: log-only', () => {
   it('runs the stage write, history and event in one transaction', async () => {
     const { c } = seed();
     const before = store.transactions.count;
-    await patchStage(c.id, 'passed_train');
+    await patchStage(c.id, 'rolled_back');
     expect(store.transactions.count - before).toBe(1);
     expect(events()).toHaveLength(1);
   });
 
-  it('a throw in recordHistory now rolls back the stage UPDATE', async () => {
+  it('a throw in recordHistory rolls back the stage UPDATE', async () => {
     const { c } = seed();
     vi.spyOn(spec as any, 'recordHistory').mockImplementation(() => { throw new Error('history down'); });
-    const res = await patchStage(c.id, 'passed_premerge');
+    const res = await patchStage(c.id, 'failed');
     expect(res.status).toBeGreaterThanOrEqual(500);
     expect(stageOf(c.id)).toBe('pending');
     expect(events()).toEqual([]);
   });
 
-  it('an unknown id keeps the old behavior (history row, 404) and writes no event', async () => {
-    const res = await patchStage('no-such-candidate', 'promoted');
-    expect(res.status).toBe(404);
-    expect(history('no-such-candidate').map((h) => h.stage)).toEqual(['promoted']);
+  it('a refused move (pending -> passed_train) writes nothing: no stage, no history, no event', async () => {
+    const { c } = seed();
+    const res = await patchStage(c.id, 'passed_train');
+    expect(res.status).toBe(409);
+    expect(stageOf(c.id)).toBe('pending');
+    expect(history(c.id)).toHaveLength(1);
     expect(events()).toEqual([]);
   });
 
-  it('an unknown stage still fails the CHECK (500, no history row) and writes no event', async () => {
+  it('an unknown id is 404 with no history row and no event', async () => {
+    const res = await patchStage('no-such-candidate', 'failed');
+    expect(res.status).toBe(404);
+    expect(history('no-such-candidate')).toEqual([]);
+    expect(events()).toEqual([]);
+  });
+
+  it('an unknown stage is 400 with no history row and no event', async () => {
     const { c } = seed();
     const res = await patchStage(c.id, 'bogus');
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
     expect(stageOf(c.id)).toBe('pending');
     expect(history(c.id)).toHaveLength(1);
     expect(events()).toEqual([]);
@@ -161,15 +176,16 @@ describe('candidate stage PATCH: log-only', () => {
   it('a tombstoned candidate writes no event (log only for a live row)', async () => {
     const { c } = seed();
     store.raw.prepare('UPDATE candidates SET deleted_at = ? WHERE id = ?').run(Date.now(), c.id);
-    await patchStage(c.id, 'promoted');
+    await patchStage(c.id, 'failed');
     expect(events()).toEqual([]);
   });
 
-  it('failed -> passed_premerge via PATCH is reset_needs_execute (no legal re-run path exists since execute was retired)', async () => {
+  it('failed -> passed_premerge via PATCH is refused (no legal re-run path exists since execute was retired)', async () => {
     const { c } = seed();
     setStage(c.id, 'failed');
-    await patchStage(c.id, 'passed_premerge');
-    expect(events().map((e) => JSON.parse(e.detail).rule)).toEqual(['reset_needs_execute']);
+    expect((await patchStage(c.id, 'passed_premerge')).status).toBe(409);
+    expect(stageOf(c.id)).toBe('failed');
+    expect(events()).toEqual([]);
   });
 });
 
@@ -180,14 +196,14 @@ describe('flood control', () => {
     const { c } = seed();
     for (let i = 0; i < 3; i++) {
       setStage(c.id, 'pending');
-      await patchStage(c.id, 'passed_train');
+      await patchStage(c.id, 'rolled_back');
     }
     expect(events()).toHaveLength(1);
     expect(warn).toHaveBeenCalledTimes(3);
 
     vi.setSystemTime(new Date(Date.now() + INVALID_TRANSITION_WINDOW_MS + 1));
     setStage(c.id, 'pending');
-    await patchStage(c.id, 'passed_train');
+    await patchStage(c.id, 'rolled_back');
     expect(events()).toHaveLength(2);
   });
 
@@ -196,14 +212,14 @@ describe('flood control', () => {
     const ids = Array.from({ length: INVALID_TRANSITION_CAP_PER_WINDOW + 1 }, (_, i) =>
       spec.createCandidate(s.id, repo.id, String(i).padStart(40, '0'), 'b'.repeat(40), actor).id
     );
-    for (const id of ids) await patchStage(id, 'passed_shadow');
+    for (const id of ids) await patchStage(id, 'rolled_back');
     const rows = events();
     expect(rows).toHaveLength(INVALID_TRANSITION_CAP_PER_WINDOW);
     expect(rows.filter((r) => JSON.parse(r.detail).capReached === true).map((r) => r.subject)).toEqual([
       `candidate:${ids[INVALID_TRANSITION_CAP_PER_WINDOW - 1]}`,
     ]);
     expect(warn).toHaveBeenCalledTimes(INVALID_TRANSITION_CAP_PER_WINDOW + 1);
-    for (const id of ids) expect(stageOf(id)).toBe('passed_shadow');
+    for (const id of ids) expect(stageOf(id)).toBe('rolled_back');
   });
 });
 
@@ -214,9 +230,9 @@ describe('flood control: trailing-hour window', () => {
     vi.setSystemTime(t0);
     const { repo, spec: s } = seed();
     const make = (i: number) => spec.createCandidate(s.id, repo.id, String(i).padStart(40, '0'), 'b'.repeat(40), actor).id;
-    await patchStage(make(0), 'passed_shadow'); // the oldest row, at t0
+    await patchStage(make(0), 'rolled_back'); // the oldest row, at t0
     vi.setSystemTime(t0 + 60_000);
-    for (let i = 1; i < INVALID_TRANSITION_CAP_PER_WINDOW; i++) await patchStage(make(i), 'passed_shadow');
+    for (let i = 1; i < INVALID_TRANSITION_CAP_PER_WINDOW; i++) await patchStage(make(i), 'rolled_back');
     const capped = () => events().filter((r) => JSON.parse(r.detail).capReached === true);
     expect(events()).toHaveLength(INVALID_TRANSITION_CAP_PER_WINDOW);
     expect(capped()).toHaveLength(1);
@@ -224,7 +240,7 @@ describe('flood control: trailing-hour window', () => {
     // Past the oldest row only: 99 rows remain in the trailing hour, so the next row reaches the cap again
     vi.setSystemTime(t0 + INVALID_TRANSITION_WINDOW_MS + 1);
     const late = make(1000);
-    await patchStage(late, 'passed_shadow');
+    await patchStage(late, 'rolled_back');
     expect(capped().map((r) => r.subject)).toEqual([
       events()[INVALID_TRANSITION_CAP_PER_WINDOW - 1].subject,
       `candidate:${late}`,
@@ -260,10 +276,10 @@ describe('failure isolation', () => {
   it('a failing event INSERT (trigger RAISE(ABORT)) leaves the PATCH at 200 with stage and history committed', async () => {
     const { c } = seed();
     store.raw.exec(`CREATE TRIGGER gov_fail BEFORE INSERT ON governance_events BEGIN SELECT RAISE(ABORT, 'x'); END`);
-    const res = await patchStage(c.id, 'passed_train');
+    const res = await patchStage(c.id, 'rolled_back');
     expect(res.status).toBe(200);
-    expect(stageOf(c.id)).toBe('passed_train');
-    expect(history(c.id).map((h) => h.stage)).toEqual(['pending', 'passed_train']);
+    expect(stageOf(c.id)).toBe('rolled_back');
+    expect(history(c.id).map((h) => h.stage)).toEqual(['pending', 'rolled_back']);
     expect(events()).toEqual([]);
     expect(error).toHaveBeenCalledTimes(1);
   });
@@ -271,10 +287,10 @@ describe('failure isolation', () => {
   it('a throwing check leaves the PATCH at 200 with stage and history written', async () => {
     const { c } = seed();
     hooks.throwInCheck = true;
-    const res = await patchStage(c.id, 'passed_train');
+    const res = await patchStage(c.id, 'rolled_back');
     expect(res.status).toBe(200);
-    expect(stageOf(c.id)).toBe('passed_train');
-    expect(history(c.id).map((h) => h.stage)).toEqual(['pending', 'passed_train']);
+    expect(stageOf(c.id)).toBe('rolled_back');
+    expect(history(c.id).map((h) => h.stage)).toEqual(['pending', 'rolled_back']);
     expect(events()).toEqual([]);
     expect(error).toHaveBeenCalledTimes(1);
   });
