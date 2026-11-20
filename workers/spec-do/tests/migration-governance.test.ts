@@ -32,7 +32,8 @@ describe('migration m14: governance tables and the epoch', () => {
   it('every legacy start in the matrix, including the m13 snapshot, ends with the five empty tables and an epoch', async () => {
     const fixtures = legacyFixtures();
     expect(fixtures.some((f) => f.name.startsWith('m13-'))).toBe(true);
-    for (const f of fixtures) {
+    // Shapes from before m14 (the m15 snapshot already has the tables; migration-matrix covers it)
+    for (const f of fixtures.filter((x) => x.startVersion === null || Number(x.startVersion.slice(1)) < 14)) {
       const s = loadLegacyLedger({ ddl: f.ddl, seed: f.seed, version: f.startVersion });
       for (const t of GOVERNANCE_TABLES) expect(tables(s), `${f.name} before`).not.toContain(t);
       await makeSpecDo(s).init();

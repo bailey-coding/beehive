@@ -32,7 +32,7 @@ import {
 } from './schema-inline';
 
 // The version runMigrations() must end at; bump with each new migration step
-const LATEST_SCHEMA_VERSION = 'm15';
+const LATEST_SCHEMA_VERSION = 'm16';
 
 // Idempotency key constants
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
@@ -64,6 +64,7 @@ const SPEC_MISMATCH = 'spec_mismatch';
 const COMMIT_MISMATCH = 'commit_mismatch';
 const COMMIT_MISMATCH_EVENT = 'commit_mismatch';
 const CANARY_STAGE_PRECONDITION_EVENT = 'canary_stage_precondition';
+const EVIDENCE_UNBOUND_EVENT = 'evidence_unbound';
 /** Stages from which a canary is the next rung's evidence; anything lower is logged (maintainer decision M1) */
 const CANARY_STAGE_OK = new Set(['passed_train', 'passed_canary', 'promoted']);
 
@@ -586,6 +587,9 @@ interface GateVerdictRow {
   created_at: number;
   decided_by: string;
   stage: 'pending' | 'passed' | 'failed';
+  /** m16: the commit the verdict was decided for, and whether the gate was simulated; null when the writer did not say */
+  commit_sha: string | null;
+  simulated: boolean | null;
 }
 
 interface TrialRow {
@@ -1232,6 +1236,9 @@ export class SpecDO {
       // m14 -> m15: shadow_scores (the scientist comparator's per-candidate aggregate). One new table, no writers outside the
       // shadow-samples route (docs/plans/promotion-gaps-plan.md PR A)
       ['m15', () => this.db!.exec(SHADOW_SCORES_SQL)],
+      // m15 -> m16: gate_verdicts.commit_sha and simulated (nullable; NULL = written before m16 or by a caller that does not send them).
+      // Additive columns only; the base table has them too, so a fresh ledger matches (docs/plans/wave-2a-plan.md part C)
+      ['m16', () => this.addColumnsIfMissing('gate_verdicts', ['commit_sha TEXT', 'simulated INTEGER'])],
     ];
     if (steps[steps.length - 1][0] !== LATEST_SCHEMA_VERSION) {
       throw new Error('SpecDO migration steps do not end at LATEST_SCHEMA_VERSION');
@@ -1912,9 +1919,12 @@ export class SpecDO {
     score: number,
     complexityDelta: number,
     decidedBy: string,
-    notes?: string
+    notes?: string,
+    binding: { commitSha?: string | null; simulated?: boolean | null } = {}
   ): GateVerdictRow {
     if (!this.db) throw new Error('Database not initialized');
+    const commitSha = binding.commitSha || null;
+    const simulated = typeof binding.simulated === 'boolean' ? binding.simulated : null;
     // decided_by references actors(id): a reserved system actor gets its row on first use (the caller's transaction covers both writes)
     this.ensureSystemActor(decidedBy, now());
 
@@ -1926,13 +1936,15 @@ export class SpecDO {
     const at = now();
     const stmt = this.db.prepare(
       `INSERT INTO gate_verdicts
-       (id, candidate_id, gate, status, score, complexity_delta, notes, created_at, decided_by, stage)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+       (id, candidate_id, gate, status, score, complexity_delta, notes, created_at, decided_by, stage, commit_sha, simulated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
        ON CONFLICT(candidate_id, gate) DO UPDATE SET
          status = excluded.status, score = excluded.score, complexity_delta = excluded.complexity_delta,
-         notes = excluded.notes, created_at = excluded.created_at, decided_by = excluded.decided_by`
+         notes = excluded.notes, created_at = excluded.created_at, decided_by = excluded.decided_by,
+         commit_sha = excluded.commit_sha, simulated = excluded.simulated`
     );
-    stmt.bind(id, candidateId, gate, status, score, complexityDelta, notes || null, at, decidedBy);
+    // A later verdict without a commit clears the old one (review S2): the row describes the latest verdict only
+    stmt.bind(id, candidateId, gate, status, score, complexityDelta, notes || null, at, decidedBy, commitSha, simulated === null ? null : simulated ? 1 : 0);
     stmt.step();
     stmt.free();
 
@@ -1949,6 +1961,8 @@ export class SpecDO {
       created_at: at,
       decided_by: decidedBy,
       stage: 'pending',
+      commit_sha: commitSha,
+      simulated,
     };
   }
 
@@ -2405,6 +2419,8 @@ export class SpecDO {
       created_at: row.created_at as number,
       decided_by: row.decided_by as string,
       stage: row.stage as 'pending' | 'passed' | 'failed',
+      commit_sha: (row.commit_sha as string | null | undefined) ?? null,
+      simulated: row.simulated == null ? null : Number(row.simulated) === 1,
     };
   }
 
@@ -4586,7 +4602,11 @@ export class SpecDO {
             body.score,
             body.complexityDelta,
             body.decidedBy || actorId,
-            body.notes
+            body.notes,
+            {
+              commitSha: typeof body.commitSha === 'string' ? body.commitSha : null,
+              simulated: typeof body.simulated === 'boolean' ? body.simulated : null,
+            }
           );
           return { success: true, data: verdict, timestamp: Date.now() };
         };
@@ -5189,6 +5209,17 @@ export class SpecDO {
         const head = this.deployHead(candidate.spec_id, 'canary');
         if (!head || head.candidateId !== candidate.id) return;
         evidenceCommit = head.commitSha ?? '';
+      } else if (rung === 'pre-merge') {
+        const v = this.getGateVerdict(candidate.id, 'pre-merge');
+        if (!v) return;
+        evidenceCommit = v.commit_sha ?? '';
+        // Part C4: a verdict that cannot be bound to the candidate's commit (either side unknown) is counted, to size the enforcement step
+        if (evidenceCommit === '' || candidateCommit === '') {
+          this.logGovernanceEvent(EVIDENCE_UNBOUND_EVENT, `candidate:${candidate.id}`, rung, actorId, {
+            candidateId: candidate.id, specId: candidate.spec_id, rung, evidenceCommit: evidenceCommit || null, candidateCommit: candidateCommit || null,
+          });
+          return;
+        }
       } else {
         return;
       }

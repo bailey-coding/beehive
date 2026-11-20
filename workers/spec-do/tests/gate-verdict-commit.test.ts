@@ -54,13 +54,13 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('schema m16: gate_verdicts.commit_sha and simulated', () => {
-  it.fails('a fresh ledger has both columns and is stamped m16', async () => {
+  it('a fresh ledger has both columns and is stamped m16', async () => {
     const fresh = await freshLedger();
     expect(columns(fresh, 'gate_verdicts')).toEqual(expect.arrayContaining(['commit_sha', 'simulated']));
     expect(LATEST_VERSION).toBe('m16');
   });
 
-  it.fails('an m15 ledger gains both columns, its verdict keeps its values with NULL in the new columns, and a re-run changes nothing', async () => {
+  it('an m15 ledger gains both columns, its verdict keeps its values with NULL in the new columns, and a re-run changes nothing', async () => {
     const fx = legacyFixtures().find((f) => f.startVersion === 'm15')!;
     const s = loadLegacyLedger({ ddl: fx.ddl, seed: fx.seed, version: 'm15' });
     await makeSpecDo(s).init();
@@ -75,7 +75,7 @@ describe('schema m16: gate_verdicts.commit_sha and simulated', () => {
 });
 
 describe('POST /api/gate-verdicts stores the commit and the simulated flag', () => {
-  it.fails('stores and returns them', async () => {
+  it('stores and returns them', async () => {
     const c = seed();
     const r = await postVerdict(c.id, { commitSha: SHA_A, simulated: true });
     expect(r.status).toBe(201);
@@ -83,7 +83,7 @@ describe('POST /api/gate-verdicts stores the commit and the simulated flag', () 
     expect(verdictRow(c.id)).toMatchObject({ commit_sha: SHA_A, simulated: 1 });
   });
 
-  it.fails('a later verdict without them clears both (the upsert overwrites, review S2)', async () => {
+  it('a later verdict without them clears both (the upsert overwrites, review S2)', async () => {
     const c = seed();
     await postVerdict(c.id, { commitSha: SHA_A, simulated: true });
     await postVerdict(c.id);
@@ -97,7 +97,7 @@ describe('POST /api/gate-verdicts stores the commit and the simulated flag', () 
 });
 
 describe('advance: pre-merge evidence and the commit (log-only in 2a)', () => {
-  it.fails('a verdict for another commit: a real advance moves and writes one commit_mismatch row', async () => {
+  it('a verdict for another commit: a real advance moves and writes one commit_mismatch row', async () => {
     const c = seed(SHA_A);
     await postVerdict(c.id, { commitSha: SHA_B });
     const r = await call(`/api/candidates/${c.id}/advance`, 'POST', { toRung: 'shadow' });
@@ -109,7 +109,7 @@ describe('advance: pre-merge evidence and the commit (log-only in 2a)', () => {
     expect(events('evidence_unbound')).toEqual([]);
   });
 
-  it.fails('a verdict with no commit: a real advance moves and writes one evidence_unbound row', async () => {
+  it('a verdict with no commit: a real advance moves and writes one evidence_unbound row', async () => {
     const c = seed(SHA_A);
     await postVerdict(c.id);
     expect((await call(`/api/candidates/${c.id}/advance`, 'POST', { toRung: 'shadow' })).status).toBe(200);
@@ -118,7 +118,7 @@ describe('advance: pre-merge evidence and the commit (log-only in 2a)', () => {
     expect(JSON.parse(rows[0].detail)).toMatchObject({ rung: 'pre-merge', candidateCommit: SHA_A });
   });
 
-  it.fails('a candidate with no commit (claimed) is unbound too', async () => {
+  it('a candidate with no commit (claimed) is unbound too', async () => {
     const c = seed('');
     await postVerdict(c.id, { commitSha: SHA_A });
     expect((await call(`/api/candidates/${c.id}/advance`, 'POST', { toRung: 'shadow' })).status).toBe(200);

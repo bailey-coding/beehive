@@ -230,7 +230,7 @@ describe('a ledger newer than this code (m<N> above the latest)', () => {
       })
     );
 
-  it.each(['m16', 'm17', 'm99', 'm100', 'm999999'])(
+  it.each(['m17', 'm18', 'm99', 'm100', 'm999999'])(
     'init() at %s warns once, runs no step, and leaves the version and the extra table alone',
     async (v) => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -19,7 +19,8 @@ async function readJson(res: Response): Promise<JsonResponse> {
 // Valid UUIDs for testing
 const TEST_CANDIDATE_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEST_SPEC_ID = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
-const TEST_COMMIT_SHA = 'abc123def456';
+// The gate needs a full sha or the candidate's stored commit (wave-2a part C)
+const TEST_COMMIT_SHA = 'abc123def456'.padEnd(40, '0');
 const TEST_BASE_COMMIT_SHA = 'def456abc123';
 const TEST_ACTOR_ID = 'agent-001';
 
@@ -90,6 +91,12 @@ function mockSpecDoResponse(path: string, response: unknown, status: number = 20
   });
 }
 
+// The ledger candidate the gate checks before it runs (wave-2a part C): filed under TEST_SPEC_ID at TEST_COMMIT_SHA
+const TEST_CANDIDATE_ROW = { data: { id: TEST_CANDIDATE_ID, specId: TEST_SPEC_ID, commitSha: TEST_COMMIT_SHA } };
+function mockValidCandidate() {
+  mockSpecDoResponse(`/api/candidates/${TEST_CANDIDATE_ID}`, TEST_CANDIDATE_ROW);
+}
+
 // Mock a successful spec response
 function mockValidSpec() {
   const mockSpec = {
@@ -121,6 +128,7 @@ describe('Pre-merge Gate Workflow', () => {
     specDoRoutes.clear();
     mockEnv.SPEC_DO.idFromName.mockReturnValue('do-id');
     mockSpecDoResponse('/api/gate-verdicts', { success: true });
+    mockValidCandidate();
   });
 
   describe('auth gate', () => {
@@ -548,6 +556,7 @@ describe('Gate start idempotency', () => {
       fetch: vi.fn().mockImplementation(async (req: Request) => {
         const url = new URL(req.url);
         if (url.pathname === `/api/specs/${TEST_SPEC_ID}`) return Response.json(spec);
+        if (url.pathname === `/api/candidates/${TEST_CANDIDATE_ID}`) return Response.json(TEST_CANDIDATE_ROW);
         if (url.pathname === '/api/gate-verdicts') {
           verdictPosts.push(req.clone());
           const code = verdictStatuses.shift() ?? 201;
@@ -609,6 +618,7 @@ describe('Gate start idempotency', () => {
 
   it('runs again after the spec fetch failed under the same key', async () => {
     const key = nextKey();
+    mockValidCandidate();
     mockSpecDoResponse(`/api/specs/${TEST_SPEC_ID}`, { error: 'down' }, 503);
     const failed = await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
     expect(failed.status).toBe(500);
@@ -710,7 +720,7 @@ describe('Gate start idempotency', () => {
   it('answers 409 (not inFlight) for the same key with a different body', async () => {
     const key = nextKey();
     await callHandler('/gates/pre-merge', 'POST', body, { 'Idempotency-Key': key });
-    const other = await callHandler('/gates/pre-merge', 'POST', { ...body, commitSha: 'fff000' }, { 'Idempotency-Key': key });
+    const other = await callHandler('/gates/pre-merge', 'POST', { ...body, commitSha: 'f'.repeat(40) }, { 'Idempotency-Key': key });
     expect(other.status).toBe(409);
     expect((await readJson(other)).inFlight).toBeUndefined();
   });

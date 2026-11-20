@@ -46,7 +46,7 @@ const verdicts = (candidateId: string) =>
   w.store.raw.prepare('SELECT * FROM gate_verdicts WHERE candidate_id = ?').all(candidateId) as Record<string, any>[];
 
 describe('the gate refuses before it runs', () => {
-  it.fails('a spec that is not the candidate\'s: 400 spec_mismatch, no verdict', async () => {
+  it('a spec that is not the candidate\'s: 400 spec_mismatch, no verdict', async () => {
     const { c } = candidate();
     const other = candidate();
     const res = await gate({ candidateId: c.id, specId: other.spec.id, commitSha: SHA });
@@ -55,13 +55,13 @@ describe('the gate refuses before it runs', () => {
     expect(verdicts(c.id)).toEqual([]);
   });
 
-  it.fails('an unknown candidate: 404, no verdict', async () => {
+  it('an unknown candidate: 404, no verdict', async () => {
     const { spec } = candidate();
     const res = await gate({ candidateId: '00000000-0000-4000-8000-000000000000', specId: spec.id, commitSha: SHA });
     expect(res.status).toBe(404);
   });
 
-  it.fails('a tombstoned candidate: 404, no verdict', async () => {
+  it('a tombstoned candidate: 404, no verdict', async () => {
     const { spec, c } = candidate();
     w.store.raw.prepare('UPDATE candidates SET deleted_at = 1 WHERE id = ?').run(c.id);
     const res = await gate({ candidateId: c.id, specId: spec.id, commitSha: SHA });
@@ -69,7 +69,7 @@ describe('the gate refuses before it runs', () => {
     expect(verdicts(c.id)).toEqual([]);
   });
 
-  it.fails('a commit that is not 40 lowercase hex: 400, no verdict', async () => {
+  it('a commit that is not 40 lowercase hex: 400, no verdict', async () => {
     const { spec, c } = candidate();
     for (const commitSha of ['not-a-sha', 'abc123', 'C'.repeat(40), `${SHA}0`]) {
       const res = await gate({ candidateId: c.id, specId: spec.id, commitSha });
@@ -80,7 +80,7 @@ describe('the gate refuses before it runs', () => {
 });
 
 describe('the gate runs', () => {
-  it.fails('records a verdict marked simulated, for the commit it ran on, with [simulated] notes', async () => {
+  it('records a verdict marked simulated, for the commit it ran on, with [simulated] notes', async () => {
     const { spec, c } = candidate();
     const res = await gate({ candidateId: c.id, specId: spec.id, commitSha: SHA });
     expect(res.status).toBe(201);
@@ -89,7 +89,7 @@ describe('the gate runs', () => {
     expect(v.notes).toMatch(/^\[simulated\] /);
   });
 
-  it.fails('accepts a non-hex commit equal to the candidate\'s stored one (older candidates; the merge train sends the stored sha)', async () => {
+  it('accepts a non-hex commit equal to the candidate\'s stored one (older candidates; the merge train sends the stored sha)', async () => {
     const { spec, c } = candidate('sha1');
     const res = await gate({ candidateId: c.id, specId: spec.id, commitSha: 'sha1' });
     expect(res.status).toBe(201);

@@ -142,6 +142,8 @@ CREATE TABLE IF NOT EXISTS gate_verdicts (
   created_at INTEGER NOT NULL,
   decided_by TEXT NOT NULL,
   stage TEXT DEFAULT 'pending' CHECK(stage IN ('pending', 'passed', 'failed')),
+  commit_sha TEXT,
+  simulated INTEGER,
   FOREIGN KEY (candidate_id) REFERENCES candidates(id),
   FOREIGN KEY (decided_by) REFERENCES actors(id),
   UNIQUE(candidate_id, gate)

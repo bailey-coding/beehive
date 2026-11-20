@@ -571,6 +571,17 @@ export const GateWorkflowRequestSchema = z.object({
 // Gate worker's own routes, reached over a Service binding (so absolute URLs; the host names the binding).
 // One module owns them so a caller (promotion worker's merge train) and the worker's route table cannot drift;
 // a contract test in workers/gate-workflow/tests pins this. The DO-side gate-run routes live in gate-run-schema.ts.
+/** A full git commit id: 40 lowercase hex (wave-2a-plan part C) */
+export const GIT_SHA_RE = /^[0-9a-f]{40}$/;
+export const GitShaSchema = z.string().regex(GIT_SHA_RE, 'must be 40 lowercase hex characters');
+/**
+ * The commit the pre-merge gate may run for: a full sha, or exactly the candidate's stored commit (candidates created before the check carry
+ * shorter values, and the merge train sends the stored one). One rule for the gate and its tests.
+ */
+export function isAcceptableGateCommit(commitSha: string, storedCommitSha: string | null | undefined): boolean {
+  return GitShaSchema.safeParse(commitSha).success || (!!storedCommitSha && commitSha === storedCommitSha);
+}
+
 export const GATE_WORKFLOW_ORIGIN = 'http://beehive-gate-workflow';
 export const GATE_PRE_MERGE_PATH = '/gates/pre-merge';
 

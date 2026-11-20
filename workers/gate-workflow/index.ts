@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { authGate } from '../shared/auth';
 import { getSpecDoStub, type SpecDoStub } from '../shared/spec-do-auth';
 // Constants only: this module declares its own local GateWorkflowRequestSchema below, so importing that name too would collide
-import { GATE_PRE_MERGE_PATH } from '../shared/schemas';
+import { GATE_PRE_MERGE_PATH, isAcceptableGateCommit } from '../shared/schemas';
 
 interface Env {
   SPEC_DO: DurableObjectNamespace;
@@ -99,8 +99,29 @@ const IN_FLIGHT_STALE_MS = 120_000;
 
 /** A failure with the HTTP status the caller should see (the queue consumer classifies on it). */
 class GateHttpError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
+  }
+}
+
+/**
+ * Checks before the gate runs anything (docs/plans/wave-2a-plan.md part C; review b2-S4): the candidate is live in the ledger, filed under
+ * the named spec, and the commit is a full sha or exactly the candidate's stored one. Throws a GateHttpError (404 / 400) otherwise; a Spec DO
+ * failure is a 500 (retryable), never "not found".
+ */
+async function checkGateRequest(env: Env, candidateId: string, specId: string, commitSha: string): Promise<void> {
+  const res = await getSpecDoStub(env).fetch(
+    new Request(`https://spec-do.internal/api/candidates/${encodeURIComponent(candidateId)}`, { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+  );
+  if (res.status === 404) throw new GateHttpError(`Candidate ${candidateId} not found`, 404, 'candidate_not_found');
+  if (!res.ok) throw new GateHttpError(`Failed to read candidate ${candidateId}: Spec DO answered ${res.status}`, 500);
+  const row = ((await res.json()) as { data?: { specId?: string; spec_id?: string; commitSha?: string; commit_sha?: string } }).data ?? {};
+  const candidateSpec = row.specId ?? row.spec_id;
+  if (candidateSpec !== specId) {
+    throw new GateHttpError(`Candidate ${candidateId} belongs to spec ${String(candidateSpec)}, not ${specId}`, 400, 'spec_mismatch');
+  }
+  if (!isAcceptableGateCommit(commitSha, row.commitSha ?? row.commit_sha)) {
+    throw new GateHttpError(`commitSha must be 40 lowercase hex characters or the candidate's stored commit`, 400, 'invalid_commit');
   }
 }
 
@@ -243,6 +264,8 @@ async function handleStartPreMergeGate(
     const rawBody = await request.text();
     const body = GateWorkflowRequestSchema.parse(JSON.parse(rawBody));
     const { candidateId, specId, commitSha, baseCommitSha, actorId } = body;
+    // Before any run-map entry or spec read: a refused request leaves nothing behind
+    await checkGateRequest(env, candidateId, specId, commitSha);
 
     // With an Idempotency-Key the verdict id is derived from it, so a redelivery maps to the same run
     const idempotencyKey = request.headers.get(IDEMPOTENCY_KEY_HEADER) ?? undefined;
@@ -339,7 +362,7 @@ async function handleStartPreMergeGate(
     });
 
     // Record verdict in Spec DO; throws unless the Spec DO confirmed it
-    await recordGateVerdict(env, result, actorId, idempotencyKey);
+    await recordGateVerdict(env, result, actorId, commitSha, idempotencyKey);
     setOwned(verdictId, {
       bodyHash,
       startedMs: startedAt,
@@ -368,6 +391,7 @@ async function handleStartPreMergeGate(
     return jsonResponse({
       success: false,
       error: ((error as Error)?.message || String(error)) || String(error),
+      ...(error instanceof GateHttpError && error.code ? { code: error.code } : {}),
       timestamp: now(),
     }, status);
   }
@@ -920,8 +944,8 @@ function aggregateResults(
   // Determine status
   const status = score >= 80 ? 'pass' : 'fail';
   
-  // Generate notes
-  const notes = [
+  // Generate notes. The gate is simulated (no real tests run yet): say so in the row, so a simulated pass never reads as a real one (b2-S4)
+  const notes = '[simulated] ' + [
     `Test score: ${testScore.toFixed(1)}/100`,
     `Conformance score: ${conformanceScore.toFixed(1)}/100`,
     `Complexity score: ${complexityScore.toFixed(1)}/100`,
@@ -935,6 +959,7 @@ async function recordGateVerdict(
   env: Env,
   result: GateWorkflowResult,
   actorId: string,
+  commitSha: string,
   idempotencyKey?: string
 ): Promise<void> {
   // Record the verdict in the Spec DO
@@ -948,6 +973,9 @@ async function recordGateVerdict(
     complexityDelta: result.complexityDelta,
     notes: result.notes,
     decidedBy: actorId,
+    // m16 (wave-2a part C): an older Spec DO ignores both fields (its route casts the body)
+    commitSha,
+    simulated: true,
   };
   
   const response = await specDoStub.fetch(

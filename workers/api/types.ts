@@ -371,6 +371,9 @@ export interface CreateGateVerdictRequest {
   complexityDelta: number;
   notes?: string;
   decidedBy?: string;
+  /** m16 (wave-2a part C): the commit the verdict was decided for, and whether the gate was simulated */
+  commitSha?: string | null;
+  simulated?: boolean | null;
 }
 
 export interface GateVerdictResponse {
