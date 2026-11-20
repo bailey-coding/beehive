@@ -31,6 +31,7 @@ describe('isPromotionRoute: exactly the promotion writes', () => {
     ['GET', '/canary-deployments', false],
     ['GET', '/canary-deployments/d-1', false],
     ['POST', '/canary-deployments/d-1/rollback', false],
+    ['PATCH', '/canary-deployments/d-1/rollback', false],
     ['POST', '/deploy-refs/rollback', false],
     ['PATCH', '/api/candidates/c-1/stage', false],
     ['POST', '/canary-metrics', false],
@@ -117,6 +118,16 @@ describe('the Spec DO: log-only', () => {
     await seed();
     expect((await canary('nope')).status).toBe(201);
     expect(events()).toHaveLength(1);
+  });
+
+  it('secret set: the auto-rollback switch (PATCH /canary-deployments/:id) without the header proceeds and logs; with it, does not', async () => {
+    build(PROMO);
+    await seed();
+    const id = ((await (await canary(PROMO)).json()) as { data: { deployment: { id: string } } }).data.deployment.id;
+    expect((await call(`/canary-deployments/${id}`, 'PATCH', { autoRollback: false }, PROMO)).status).toBe(200);
+    expect(events()).toEqual([]);
+    expect((await call(`/canary-deployments/${id}`, 'PATCH', { autoRollback: true })).status).toBe(200);
+    expect(events().map((r) => JSON.parse(r.detail).route)).toEqual(['PATCH /canary-deployments/:id']);
   });
 
   it('secret set, right header: no row', async () => {
