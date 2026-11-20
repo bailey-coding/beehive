@@ -11,6 +11,12 @@ import type { PromotionLedgerClient, PromotionStatePatch } from '../shared/promo
 /**
  * Manages promotion state stored in the Spec DO
  */
+/** PROMOTION_TIMEOUT in seconds (wrangler.toml: "3600"); missing, non-numeric or not positive means 3600 */
+export function promotionTimeoutSeconds(raw: string | undefined): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 3600;
+}
+
 export class PromotionStateManager {
   private readonly ledger: PromotionLedgerClient;
 
@@ -128,15 +134,28 @@ export class PromotionStateManager {
   }
 
   /**
-   * Check if a candidate can be promoted (no active promotions)
+   * Check if a candidate can be promoted (no active promotions). Every promotion state is created and finished inside one /promote request, so
+   * one still pending or in_progress after PROMOTION_TIMEOUT seconds was abandoned by a request that failed (a ledger write threw): it is
+   * cancelled with an `abandoned` reason and no longer blocks (docs/plans/wave-2a-plan.md part E; review b1-S2). `cancelled` is an allowed
+   * exit from both statuses in table (d), as for /cancel. The cancel is best effort: if it fails, the new attempt still runs and it is logged.
    */
   async canPromote(candidateId: string): Promise<boolean> {
     const state = await this.getPromotionState(candidateId);
-    return state === null || 
-           state.status === 'completed' || 
-           state.status === 'failed' || 
-           state.status === 'rolled_back' ||
-           state.status === 'cancelled';
+    if (state === null) return true;
+    if (state.status !== 'pending' && state.status !== 'in_progress') return true;
+    const timeoutMs = promotionTimeoutSeconds(this.env.PROMOTION_TIMEOUT) * 1000;
+    const startedMs = Date.parse(state.startedAt);
+    if (!Number.isFinite(startedMs) || Date.now() - startedMs <= timeoutMs) return false;
+    try {
+      await this.updatePromotionState(state.id, {
+        status: 'cancelled',
+        completedAt: new Date().toISOString(),
+        failureReason: `abandoned: ${state.status} for more than ${timeoutMs / 1000}s`,
+      });
+    } catch (error) {
+      console.error(`[State] Could not cancel abandoned promotion state ${state.id}:`, error instanceof Error ? error.message : String(error));
+    }
+    return true;
   }
 
   /**

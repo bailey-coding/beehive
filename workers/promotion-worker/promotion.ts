@@ -144,16 +144,18 @@ export class PromotionWorker {
         result = await this.advanceDirectly(resolved, mode);
       }
 
+      // Bookkeeping after the move is best effort, as recordMove is (wave-2a part E, review b1-S2): the stage is the truth, so a failed state write is
+      // logged and the caller gets the move's real result; the state left pending/in_progress stops blocking after PROMOTION_TIMEOUT (canPromote)
       if (result.success) {
         // Only a candidate whose stage moved reached the target rung; a waiting, queued or eliminated attempt finished where it started
         const moved = result.outcome === 'moved' || result.outcome === 'noop';
-        await this.stateManager.markAsCompleted(promotionState.id, moved ? promotionState.targetRung : fromRung);
+        await this.stateManager.markAsCompleted(promotionState.id, moved ? promotionState.targetRung : fromRung).catch((e: unknown) => this.logStateWrite(promotionState.id, 'completed', e));
         // Someone else's stage moved in this call (a tournament winner, a merged car): their ledger shows who moved, when and why
         for (const move of result.moves ?? []) {
           if (move.candidateId !== request.candidateId) await this.recordMove(move, request, mode);
         }
       } else {
-        await this.stateManager.markAsFailed(promotionState.id, result.code ? `${result.code}: ${result.message}` : result.message);
+        await this.stateManager.markAsFailed(promotionState.id, result.code ? `${result.code}: ${result.message}` : result.message).catch((e: unknown) => this.logStateWrite(promotionState.id, 'failed', e));
       }
 
       await this.logAnalytics('promotion', {
@@ -176,6 +178,10 @@ export class PromotionWorker {
         timestamp: new Date().toISOString()
       });
     }
+  }
+
+  private logStateWrite(stateId: string, status: string, error: unknown): void {
+    console.error(`[Promotion] Could not mark promotion state ${stateId} ${status} (it stops blocking after PROMOTION_TIMEOUT):`, error instanceof Error ? error.message : String(error));
   }
 
   /** The shared result fields */

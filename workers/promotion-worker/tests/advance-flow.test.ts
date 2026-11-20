@@ -15,6 +15,7 @@ import { authedDo, TEST_INTERNAL_ONLY } from '../../spec-do/tests/do-tokens';
 import { getPromotionLedger } from '../spec-do';
 import { decideTournament } from '../tournament';
 import { SHADOW_MIN_SAMPLES } from '../../shared/shadow-verdict';
+import { promotionTimeoutSeconds } from '../state';
 
 const gateFetch = vi.fn();
 const shadowRouterFetch = vi.fn();
@@ -1161,6 +1162,12 @@ describe('wave-2a part D: tournament guards', () => {
 // the candidate after PROMOTION_TIMEOUT seconds (it is cancelled as abandoned), and bookkeeping after a move is best effort.
 // ============================================================================
 describe('wave-2a part E: stuck promotion states', () => {
+  it('PROMOTION_TIMEOUT is seconds; missing, non-numeric or not positive is 3600', () => {
+    expect(promotionTimeoutSeconds('3600')).toBe(3600);
+    expect(promotionTimeoutSeconds('60')).toBe(60);
+    for (const raw of [undefined, '', 'soon', '0', '-5']) expect(promotionTimeoutSeconds(raw), String(raw)).toBe(3600);
+  });
+
   const stuck = async (w: Awaited<ReturnType<typeof world>>, candidateId: string, minutesAgo: number, status = 'in_progress') => {
     const startedAt = new Date(Date.now() - minutesAgo * 60_000).toISOString();
     const create = await w.direct.fetch(new Request('https://spec-do.internal/promotion-states', {
@@ -1176,7 +1183,7 @@ describe('wave-2a part E: stuck promotion states', () => {
     }
   };
 
-  it.fails('a state older than PROMOTION_TIMEOUT no longer blocks: the promotion runs and the old state is cancelled as abandoned, with no invalid_transition row', async () => {
+  it('a state older than PROMOTION_TIMEOUT no longer blocks: the promotion runs and the old state is cancelled as abandoned, with no invalid_transition row', async () => {
     for (const status of ['pending', 'in_progress']) {
       const w = await world('tournament');
       const c = w.candidate();
@@ -1200,7 +1207,7 @@ describe('wave-2a part E: stuck promotion states', () => {
     expect(w.stageOf(c)).toBe('pending');
   });
 
-  it.fails('a failure writing the completed state after the move is logged, and the caller gets the move, not a 500', async () => {
+  it('a failure writing the completed state after the move is logged, and the caller gets the move, not a 500', async () => {
     const w = await world('tournament');
     const c = w.candidate();
     w.passPremerge(c);
@@ -1216,7 +1223,7 @@ describe('wave-2a part E: stuck promotion states', () => {
     expect(w.stageOf(c)).toBe('passed_premerge');
   });
 
-  it.fails('a failure writing the failed state after a refusal is logged, and the caller gets the refusal, not a 500', async () => {
+  it('a failure writing the failed state after a refusal is logged, and the caller gets the refusal, not a 500', async () => {
     const w = await world('tournament');
     const c = w.candidate();
     w.passPremerge(c);
