@@ -7,11 +7,13 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { SLOMonitor } from '../slo';
 import { RollbackManager } from '../rollback';
 import type { Env } from '../types';
-import { makeSqliteState, makeSpecDo } from '../../spec-do/tests/sqlite-state';
+import { makeSqliteState, makeSpecDo, type SqliteState } from '../../spec-do/tests/sqlite-state';
+import { seedLedgerCandidate } from '../../spec-do/tests/ledger-seed';
 import { LATENCY_BUCKET_COUNT, latencyBucketIndex, type CanaryMetricSample } from '../../shared/deploy-refs';
 import type { SpecDO } from '../../spec-do/index';
 
 let spec: SpecDO;
+let store: SqliteState;
 let env: Env;
 
 const call = (path: string, method = 'GET', body?: unknown) =>
@@ -31,6 +33,8 @@ function violatingSample(): CanaryMetricSample {
 
 /** Deploy a canary and post violating samples for it (before the next deploy supersedes it: a superseded one answers 409) */
 async function deployViolating(candidateId: string): Promise<string> {
+  await spec.init();
+  seedLedgerCandidate(store.raw, candidateId, 'spec-a'); // a canary needs a live candidate under the spec (wave-2a part B)
   const res = await call('/canary-deployments', 'POST', {
     candidateId, specId: 'spec-a', url: `https://${candidateId}.example.workers.dev`, workerVersionId: `ver-${candidateId}`,
     commitSha: 'sha', trafficPercentage: 10, holdoutPercentage: 5,
@@ -47,7 +51,8 @@ const cycle = () => new SLOMonitor(env).runCycle(new RollbackManager(env));
 beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  spec = makeSpecDo(makeSqliteState());
+  store = makeSqliteState();
+  spec = makeSpecDo(store);
   const stub = { fetch: (input: Request | string, init?: RequestInit) => spec.fetch(new Request(input, init)) };
   env = {
     SPEC_DO: { idFromName: () => 'id', get: () => stub },

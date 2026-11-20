@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SpecDO, CANARY_TICK_INTERVAL_MS } from '../index';
 import { makeSqliteState, type SqliteState } from './sqlite-state';
+import { seedLedgerCandidate } from './ledger-seed';
 import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 
 let store: SqliteState;
@@ -27,8 +28,9 @@ const call = (path: string, method = 'GET', body?: unknown) =>
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   );
+// A canary needs a live candidate under the named spec (wave-2a part B)
 const deployCanary = (candidateId = 'cand-a', specId = 'spec-a') =>
-  call('/canary-deployments', 'POST', {
+  (seedLedgerCandidate(store.raw, candidateId, specId), call)('/canary-deployments', 'POST', {
     candidateId, specId, url: `https://${candidateId}.example.workers.dev`, workerVersionId: `ver-${candidateId}`,
     commitSha: 'sha', trafficPercentage: 10, holdoutPercentage: 5,
   });

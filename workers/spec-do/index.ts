@@ -58,6 +58,15 @@ interface IdempotencyContext {
 }
 
 /** A 409. `code` is set only where a caller branches on it (the deploy-ref CAS); every other 409 stays code-less. */
+/** wave-2a-plan part B: coded refusals of a canary deploy, and the log-only events of parts B and C */
+const SPEC_NOT_FOUND = 'spec_not_found';
+const SPEC_MISMATCH = 'spec_mismatch';
+const COMMIT_MISMATCH = 'commit_mismatch';
+const COMMIT_MISMATCH_EVENT = 'commit_mismatch';
+const CANARY_STAGE_PRECONDITION_EVENT = 'canary_stage_precondition';
+/** Stages from which a canary is the next rung's evidence; anything lower is logged (maintainer decision M1) */
+const CANARY_STAGE_OK = new Set(['passed_train', 'passed_canary', 'promoted']);
+
 class ConflictError extends Error {
   constructor(message: string, readonly code?: string) {
     super(message);
@@ -91,7 +100,12 @@ function checkExpectedVersion(
     ? null
     : { code: VERSION_CONFLICT, message: `record is at version ${actual}, not ${expected}; re-read and retry` };
 }
-class NotFoundError extends Error {}
+class NotFoundError extends Error {
+  /** A coded 404 (e.g. candidate_not_found); the deploy-ref routes default to RECORD_NOT_FOUND */
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
+}
 class ForbiddenError extends Error {}
 /**
  * Thrown by the m12 migration step when actors share a github_user_id. The message lists those values and
@@ -3597,7 +3611,7 @@ export class SpecDO {
         }
       }
     } catch (e) {
-      if (e instanceof NotFoundError) return fail(e.message, 404, RECORD_NOT_FOUND);
+      if (e instanceof NotFoundError) return fail(e.message, 404, e.code ?? RECORD_NOT_FOUND);
       if (e instanceof ConflictError) return fail(e.message, 409, e.code);
       if (e instanceof BadRequestError) return fail(e.message, 400);
       throw e;
@@ -3640,11 +3654,27 @@ export class SpecDO {
   /** Record a canary and move the spec's canary ref to it, in one transaction. */
   deployCanary(request: CanaryDeployRequest, actorId: string): CanaryMoveResult {
     return this.state.storage.transactionSync(() => {
-      // Ids need no ledger row (like the promotion ledger), but a tombstoned one is gone
-      const candidate = this.queryAll('SELECT deleted_at FROM candidates WHERE id = ?', request.candidateId)[0];
-      if (candidate && candidate.deleted_at != null) throw new NotFoundError(`Candidate ${request.candidateId} not found`);
-      const spec = this.queryAll('SELECT deleted_at FROM specs WHERE id = ?', request.specId)[0];
-      if (spec && spec.deleted_at != null) throw new NotFoundError(`Spec ${request.specId} not found`);
+      // A live candidate filed under the named spec, at the named commit when both are known (wave-2a-plan part B; review a-S4, b1-S8)
+      const spec = this.queryAll('SELECT 1 FROM specs WHERE id = ? AND deleted_at IS NULL', request.specId)[0];
+      if (!spec) throw new NotFoundError(`Spec ${request.specId} not found`, SPEC_NOT_FOUND);
+      const candidate = this.queryAll(
+        'SELECT spec_id, stage, commit_sha FROM candidates WHERE id = ? AND deleted_at IS NULL',
+        request.candidateId
+      )[0];
+      if (!candidate) throw new NotFoundError(`Candidate ${request.candidateId} not found`, CANDIDATE_NOT_FOUND);
+      if (candidate.spec_id !== request.specId) {
+        throw new ConflictError(`Candidate ${request.candidateId} belongs to spec ${String(candidate.spec_id)}, not ${request.specId}`, SPEC_MISMATCH);
+      }
+      const candidateSha = String(candidate.commit_sha ?? '');
+      if (request.commitSha && candidateSha !== '' && request.commitSha !== candidateSha) {
+        throw new ConflictError(`Canary commit ${request.commitSha} is not candidate ${request.candidateId}'s commit ${candidateSha}`, COMMIT_MISMATCH);
+      }
+      // Maintainer decision M1 (wave-2a): a canary below passed_train is allowed and logged; 2b makes it enforceable with the canary evidence
+      if (!CANARY_STAGE_OK.has(String(candidate.stage))) {
+        this.logGovernanceEvent(CANARY_STAGE_PRECONDITION_EVENT, `candidate:${request.candidateId}`, String(candidate.stage), actorId, {
+          candidateId: request.candidateId, specId: request.specId, stage: String(candidate.stage),
+        });
+      }
 
       const ref = this.moveDeployRef(
         request.specId,
@@ -5031,6 +5061,7 @@ export class SpecDO {
       return { ok: false, status: 409, error: `Cannot leave rung ${e.rung}: ${e.detail ?? e.status}`, code: 'evidence_missing', evidence };
     }
     if (!dryRun) for (const e of missing) this.logEvidenceMissing(candidate.id, candidate.spec_id, previousStage, req.toRung, e, actorId);
+    if (!dryRun) this.logEvidenceCommit(candidate, decision.leaving, actorId);
     if (dryRun) return { ok: true, data: { ...base, stage: previousStage, noop: false, writes: decision.writes, evidence } };
 
     // Each write goes through transitionCandidate, so history rows and the PR-S table (c) log are exactly as for a stage PATCH
@@ -5108,30 +5139,67 @@ export class SpecDO {
    * Flood control as for invalid_transition: one row per (candidate, rung, status) per trailing hour, at most INVALID_TRANSITION_CAP_PER_WINDOW rows an hour.
    */
   private logEvidenceMissing(candidateId: string, specId: string, fromStage: string, toRung: string, e: EvidenceResult, actorId: string): void {
+    // Before the window query, like logTransitionViolation: a failing read must still leave this line
+    console.warn('[SpecDO] evidence_missing', { candidateId, rung: e.rung, status: e.status, mode: e.mode, toRung });
+    this.logGovernanceEvent(EVIDENCE_MISSING_EVENT, `candidate:${candidateId}`, `${e.rung}:${e.status}`, actorId, {
+      candidateId, specId, rung: e.rung, status: e.status, mode: e.mode, detail: e.detail, fromStage, toRung,
+    });
+  }
+
+  /**
+   * One flood-controlled, log-only governance_events row (evidence_missing, canary_stage_precondition, commit_mismatch, ...): never throws, never
+   * refuses. At most one row per (event, subject, reason) per trailing hour, and at most INVALID_TRANSITION_CAP_PER_WINDOW rows of the event an
+   * hour; the row that reaches the cap says so. A detail over MAX_GOVERNANCE_DETAIL_BYTES is replaced by a truncation marker.
+   */
+  private logGovernanceEvent(event: string, subjectRaw: string, reason: string, actorId: string | null, detailFields: Record<string, unknown>): void {
     try {
-      const subject = `candidate:${candidateId}`.slice(0, MAX_GOVERNANCE_SUBJECT_CHARS);
-      const reason = `${e.rung}:${e.status}`;
+      const subject = subjectRaw.slice(0, MAX_GOVERNANCE_SUBJECT_CHARS);
       const at = now();
-      // Before the window query, like logTransitionViolation: a failing read must still leave this line
-      console.warn('[SpecDO] evidence_missing', { candidateId, rung: e.rung, status: e.status, mode: e.mode, toRung });
       const w = this.queryAll(
         `SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN subject = ? AND reason = ? THEN 1 ELSE 0 END), 0) AS same
            FROM governance_events WHERE event = ? AND created_at >= ?`,
-        subject, reason, EVIDENCE_MISSING_EVENT, at - INVALID_TRANSITION_WINDOW_MS
+        subject, reason, event, at - INVALID_TRANSITION_WINDOW_MS
       )[0];
       if (Number(w?.same ?? 0) > 0 || Number(w?.total ?? 0) >= INVALID_TRANSITION_CAP_PER_WINDOW) return;
       let detail = JSON.stringify({
-        v: 1, candidateId, specId, rung: e.rung, status: e.status, mode: e.mode, detail: e.detail, fromStage, toRung,
+        v: 1, ...detailFields,
         ...(Number(w?.total ?? 0) + 1 === INVALID_TRANSITION_CAP_PER_WINDOW ? { capReached: true } : {}),
       });
       if (new TextEncoder().encode(detail).length > MAX_GOVERNANCE_DETAIL_BYTES) detail = JSON.stringify({ v: 1, truncated: true });
       this.run(
         `INSERT INTO governance_events (id, event, actor_id, asserted_actor_id, subject, reason, detail, created_at)
          VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
-        generateId(), EVIDENCE_MISSING_EVENT, actorId, subject, reason, detail, at
+        generateId(), event, actorId, subject, reason, detail, at
       );
     } catch (err) {
-      console.error('[SpecDO] evidence_missing log failed', candidateId, err instanceof Error ? err.message : String(err));
+      console.error(`[SpecDO] ${event} log failed`, subjectRaw, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Log-only commit binding of the evidence for the rung being left (wave-2a-plan parts B4, C4): a commit_mismatch row when the evidence was
+   * produced for another commit than the candidate's. Called from advance's non-dry-run branch only (the dry-run contract writes nothing).
+   * Enforcement waits for a candidates.commit_sha writer (b2-S8). Reads only, then logs; never throws.
+   */
+  private logEvidenceCommit(candidate: CandidateRow, rung: EvidenceRung, actorId: string): void {
+    try {
+      const candidateCommit = candidate.commit_sha ?? '';
+      let evidenceCommit = '';
+      if (rung === 'canary') {
+        const head = this.deployHead(candidate.spec_id, 'canary');
+        if (!head || head.candidateId !== candidate.id) return;
+        evidenceCommit = head.commitSha ?? '';
+      } else {
+        return;
+      }
+      if (evidenceCommit !== '' && candidateCommit !== '' && evidenceCommit !== candidateCommit) {
+        console.warn('[SpecDO] commit_mismatch', { candidateId: candidate.id, rung, evidenceCommit, candidateCommit });
+        this.logGovernanceEvent(COMMIT_MISMATCH_EVENT, `candidate:${candidate.id}`, `${rung}:${evidenceCommit.slice(0, 12)}`, actorId, {
+          candidateId: candidate.id, specId: candidate.spec_id, rung, evidenceCommit, candidateCommit,
+        });
+      }
+    } catch (err) {
+      console.error('[SpecDO] commit binding check failed', candidate.id, err instanceof Error ? err.message : String(err));
     }
   }
 

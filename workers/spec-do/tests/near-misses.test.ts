@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { seedLedgerCandidate } from './ledger-seed';
 import { NEAR_MISS_REASONS, NearMissReasonSchema, type NearMiss } from '../../shared/near-miss';
 
 let store: SqliteState;
@@ -195,6 +196,7 @@ describe('merge train: a car that fails, is rolled back or is removed is a train
 describe('deploy ref rollback: the candidate that was live is an slo_rollback near-miss', () => {
   it('records the rolled-back candidate with the reason as evidence', async () => {
     const body = (c: string) => ({ candidateId: c, specId: 'spec-a', url: `https://${c}.example.workers.dev`, workerVersionId: `ver-${c}`, commitSha: `sha-${c}`, trafficPercentage: 10, holdoutPercentage: 5 });
+    for (const c of ['cand-a', 'cand-b']) seedLedgerCandidate(store.raw, c, 'spec-a');
     expect((await call('/canary-deployments', 'POST', body('cand-a'), { 'X-Actor-ID': 'canary-worker' })).status).toBe(201);
     expect((await call('/canary-deployments', 'POST', body('cand-b'), { 'X-Actor-ID': 'canary-worker' })).status).toBe(201);
     const rb = await call('/deploy-refs/rollback', 'POST', { specId: 'spec-a', rung: 'canary', reason: 'latency_p95' }, { 'X-Actor-ID': 'operator' });
@@ -205,6 +207,7 @@ describe('deploy ref rollback: the candidate that was live is an slo_rollback ne
   });
 
   const deployAB = async () => {
+    for (const c of ['cand-a', 'cand-b']) seedLedgerCandidate(store.raw, c, 'spec-a');
     const body = (c: string) => ({ candidateId: c, specId: 'spec-a', url: `https://${c}.example.workers.dev`, workerVersionId: `ver-${c}`, commitSha: `sha-${c}`, trafficPercentage: 10, holdoutPercentage: 5 });
     expect((await call('/canary-deployments', 'POST', body('cand-a'), { 'X-Actor-ID': 'canary-worker' })).status).toBe(201);
     expect((await call('/canary-deployments', 'POST', body('cand-b'), { 'X-Actor-ID': 'canary-worker' })).status).toBe(201);

@@ -294,9 +294,11 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
 
   describe('M3 Features - Canary', () => {
     it.skipIf(shouldSkip)('should deploy canary with valid configuration', async () => {
+      // A canary needs a live ledger candidate under the named spec (wave-2a part B)
+      const w = await seedWorld('canary');
       const requestBody = {
-        candidateId: `e2e-test-${Date.now()}`,
-        specId: 'test-spec',
+        candidateId: await candidateAt(w),
+        specId: w.specId,
         trafficPercentage: 5,
         holdoutPercentage: 5,
       };
@@ -340,7 +342,8 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
     // The switch belongs to a live canary, so the test deploys one first (it used to
     // configure a candidate with no canary, which has nothing to switch: 404).
     it.skipIf(shouldSkip)('should verify auto-rollback is configurable', async () => {
-      const candidateId = `e2e-rollback-test-${Date.now()}`;
+      const w = await seedWorld('autorollback');
+      const candidateId = await candidateAt(w); // a live ledger candidate under the spec (wave-2a part B)
       const headers = {
         'Authorization': `Bearer ${PRODUCTION_AUTH_TOKEN}`,
         'Content-Type': 'application/json',
@@ -348,7 +351,7 @@ describe(`E2E Tests - ${e2eConfig.environment}`, () => {
       const deployResponse = await fetch(`${WORKER_URLS.canary}/deploy-canary`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ candidateId, specId: `e2e-spec-${Date.now()}`, trafficPercentage: 5, holdoutPercentage: 5 }),
+        body: JSON.stringify({ candidateId, specId: w.specId, trafficPercentage: 5, holdoutPercentage: 5 }),
       });
       expect(deployResponse.status).toBe(200);
 

@@ -340,6 +340,14 @@ describe('Cross-Worker Flow Tests', () => {
 
   describe('Canary Deployment Flow', () => {
     let deploymentId: string;
+    // A canary needs a live ledger candidate under the named spec (wave-2a part B): real rows, not random ids
+    let ab: string[];
+    beforeEach(async () => {
+      const w = await seedWorld('canary');
+      ab = [await candidateAt(w), await candidateAt(w)];
+      ctx.specId = w.specId;
+      ctx.candidateId = ab[0];
+    });
 
     it('should deploy a canary with valid configuration', async () => {
       const result = await deployCanary(
@@ -411,24 +419,25 @@ describe('Cross-Worker Flow Tests', () => {
     }
 
     it('should rollback a canary by moving the deploy ref, and the shadow router follows it within the cache TTL', async () => {
-      const first = await deployCanary(`${ctx.candidateId}-a`, ctx.specId, 10);
-      const second = await deployCanary(`${ctx.candidateId}-b`, ctx.specId, 10);
+      const [idA, idB] = ab;
+      const first = await deployCanary(idA, ctx.specId, 10);
+      const second = await deployCanary(idB, ctx.specId, 10);
       expect((await getDeployment(first.deployment.id)).deployment.status).toBe('superseded');
 
       // The shadow router reads the live canary ref from the Spec DO
-      const before = await shadowSplitsUntil((ids) => ids.includes(`${ctx.candidateId}-b`));
-      expect(before).toContain(`${ctx.candidateId}-b`);
+      const before = await shadowSplitsUntil((ids) => ids.includes(idB));
+      expect(before).toContain(idB);
 
-      const rolled = await rollbackCanary(`${ctx.candidateId}-b`, ctx.specId);
+      const rolled = await rollbackCanary(idB, ctx.specId);
       expect(rolled.success).toBe(true);
       expect(rolled.deployment.status).toBe('rolled_back');
-      expect(rolled.deployRef).toMatchObject({ candidateId: `${ctx.candidateId}-a`, action: 'rollback' });
+      expect(rolled.deployRef).toMatchObject({ candidateId: idA, action: 'rollback' });
       expect((await getDeployment(first.deployment.id)).deployment.status).toBe('deployed');
       expect((await getDeployment(second.deployment.id)).deployment.status).toBe('rolled_back');
 
-      const after = await shadowSplitsUntil((ids) => !ids.includes(`${ctx.candidateId}-b`) && ids.includes(`${ctx.candidateId}-a`));
-      expect(after).not.toContain(`${ctx.candidateId}-b`);
-      expect(after).toContain(`${ctx.candidateId}-a`);
+      const after = await shadowSplitsUntil((ids) => !ids.includes(idB) && ids.includes(idA));
+      expect(after).not.toContain(idB);
+      expect(after).toContain(idA);
     }, 30000);
   });
 
@@ -530,6 +539,13 @@ describe('Cross-Worker Flow Tests', () => {
       if (config.environment === 'local') {
         console.log('Skipping oracle ladder flow for local environment');
         return;
+      }
+
+      // Real ledger rows: a canary needs a live candidate under the named spec (wave-2a part B)
+      {
+        const w0 = await seedWorld('oracle');
+        ctx.specId = w0.specId;
+        ctx.candidateId = await candidateAt(w0);
       }
 
       // Step 1: Verify Statsig configuration in shadow router

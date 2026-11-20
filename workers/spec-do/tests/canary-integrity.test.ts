@@ -45,7 +45,7 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('deployCanary: the candidate must be live and under the named spec', () => {
-  it.fails('refuses a candidate id with no ledger row: coded 404, no deploy ref, no canary', async () => {
+  it('refuses a candidate id with no ledger row: coded 404, no deploy ref, no canary', async () => {
     seedLedgerCandidate(store.raw, 'real', 'spec-a');
     const r = await canary('ghost', 'spec-a');
     expect(r.status).toBe(404);
@@ -54,7 +54,7 @@ describe('deployCanary: the candidate must be live and under the named spec', ()
     expect(count('SELECT COUNT(*) AS n FROM canary_deployments')).toBe(0);
   });
 
-  it.fails('refuses a spec id with no ledger row: coded 404', async () => {
+  it('refuses a spec id with no ledger row: coded 404', async () => {
     seedLedgerCandidate(store.raw, 'cand', 'spec-a');
     const r = await canary('cand', 'ghost-spec');
     expect(r.status).toBe(404);
@@ -62,7 +62,7 @@ describe('deployCanary: the candidate must be live and under the named spec', ()
     expect(refs()).toBe(0);
   });
 
-  it.fails('refuses a candidate filed under another spec: 409 spec_mismatch, no deploy ref', async () => {
+  it('refuses a candidate filed under another spec: 409 spec_mismatch, no deploy ref', async () => {
     seedLedgerCandidate(store.raw, 'cand', 'spec-a');
     seedLedgerCandidate(store.raw, 'other', 'spec-b');
     const r = await canary('cand', 'spec-b');
@@ -81,7 +81,7 @@ describe('deployCanary: the candidate must be live and under the named spec', ()
     expect(refs()).toBe(0);
   });
 
-  it.fails('refuses a commit that is not the candidate\'s: 409 commit_mismatch', async () => {
+  it('refuses a commit that is not the candidate\'s: 409 commit_mismatch', async () => {
     seedLedgerCandidate(store.raw, 'cand', 'spec-a', { commitSha: SHA_A });
     const r = await canary('cand', 'spec-a', { commitSha: SHA_B });
     expect(r.status).toBe(409);
@@ -100,7 +100,7 @@ describe('deployCanary: the candidate must be live and under the named spec', ()
 });
 
 describe('deployCanary: stage precondition is logged, not enforced (maintainer decision M1)', () => {
-  it.fails('a pending candidate is deployed and one canary_stage_precondition row is written', async () => {
+  it('a pending candidate is deployed and one canary_stage_precondition row is written', async () => {
     seedLedgerCandidate(store.raw, 'cand', 'spec-a');
     expect((await canary('cand', 'spec-a')).status).toBe(201);
     const rows = events('canary_stage_precondition');
@@ -124,7 +124,7 @@ describe('canary evidence and the commit (log-only in 2a)', () => {
     store.raw.prepare('UPDATE candidates SET commit_sha = ? WHERE id = ?').run(SHA_B, 'cand');
   };
 
-  it.fails('a real advance(full) logs one commit_mismatch row and still moves (evidence unchanged in 2a)', async () => {
+  it('a real advance(full) logs one commit_mismatch row and still moves (evidence unchanged in 2a)', async () => {
     await setup();
     const r = await call('/api/candidates/cand/advance', 'POST', { toRung: 'full' });
     expect(r.status).toBe(200);

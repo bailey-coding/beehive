@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { seedLedgerCandidate } from './ledger-seed';
 import { LATEST_VERSION } from './legacy-ledger';
 import {
   LATENCY_BUCKET_COUNT,
@@ -45,6 +46,7 @@ function sample(latencies: number[], errors = 0, minuteBucket = minute()): Canar
 }
 
 async function deployCanary(candidateId = 'cand-a', specId = 'spec-a'): Promise<string> {
+  seedLedgerCandidate(store.raw, candidateId, specId); // a canary needs a live candidate under the spec (wave-2a part B)
   const res = await call('/canary-deployments', 'POST', {
     candidateId, specId, url: `https://${candidateId}.example.workers.dev`, workerVersionId: `ver-${candidateId}`,
     commitSha: 'sha', trafficPercentage: 10, holdoutPercentage: 5,

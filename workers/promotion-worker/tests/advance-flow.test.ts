@@ -87,7 +87,7 @@ async function world(mode: PromotionMode, vars: { doSource?: string; tournamentS
       new Request('https://spec-do.internal/canary-deployments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Actor-ID': 'canary-worker' },
-        body: JSON.stringify({ candidateId: id, specId: s.id, url: `https://${id}.example.workers.dev`, workerVersionId: `ver-${id}`, commitSha: 'sha', trafficPercentage: 10, holdoutPercentage: 5 }),
+        body: JSON.stringify({ candidateId: id, specId: s.id, url: `https://${id}.example.workers.dev`, workerVersionId: `ver-${id}`, trafficPercentage: 10, holdoutPercentage: 5 }),
       })
     );
     expect(res.status).toBe(201);

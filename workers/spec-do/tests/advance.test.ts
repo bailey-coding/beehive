@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { SpecDO } from '../index';
 import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
+import { seedLedgerCandidate } from './ledger-seed';
 import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import {
   ADVANCE_STAGE_ORDER,
@@ -55,6 +56,8 @@ function seed(name = 'adv-org') {
 }
 
 async function deployCanary(candidateId: string, specId: string) {
+  // A canary needs a live candidate under the spec (wave-2a part B): a no-op for a seeded candidate, a row for a bystander id
+  seedLedgerCandidate(store.raw, candidateId, specId);
   const res = await call('/canary-deployments', 'POST', {
     candidateId,
     specId,

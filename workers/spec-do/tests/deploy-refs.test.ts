@@ -12,6 +12,7 @@ import { makeSqliteState, makeSpecDo, type SqliteState } from './sqlite-state';
 import { LATEST_VERSION } from './legacy-ledger';
 import { authedDo, TEST_DO_TOKENS } from './do-tokens';
 import type { CanaryDeployment, CanaryMoveResult, DeployRef, LiveRef } from '../../shared/deploy-refs';
+import { seedLedgerCandidate } from './ledger-seed';
 
 let store: SqliteState;
 let spec: SpecDO;
@@ -31,6 +32,8 @@ async function data<T>(res: Response): Promise<T> {
 }
 
 async function deploy(candidateId: string, specId = 'spec-a', extra: Record<string, unknown> = {}): Promise<CanaryMoveResult> {
+  // A canary needs a live candidate under the named spec (wave-2a part B); the seeded row has no commit, so any commitSha is accepted
+  seedLedgerCandidate(store.raw, candidateId, specId);
   const res = await call('/canary-deployments', 'POST', {
     candidateId,
     specId,
@@ -125,6 +128,7 @@ describe('canary deploy request validation (trust boundary for the shadow router
   });
 
   it('accepts a UUID candidate id with a workers.dev url', async () => {
+    seedLedgerCandidate(store.raw, '0f1e2d3c-4b5a-4968-8777-665544332211', 's');
     const res = await call('/canary-deployments', 'POST', body({ candidateId: '0f1e2d3c-4b5a-4968-8777-665544332211' }));
     expect(res.status).toBe(201);
   });
@@ -142,6 +146,8 @@ describe('canary url pinned to the account subdomain (WORKERS_SUBDOMAIN)', () =>
     const pinned = new SpecDO(pinnedState.state as never, { ...TEST_DO_TOKENS, WORKERS_SUBDOMAIN: 'bz23711' } as never);
     const authed = authedDo(pinned);
     await authed.init();
+    seedLedgerCandidate(pinnedState.raw, 'cand-pin', 's');
+    seedLedgerCandidate(store.raw, 'cand-pin', 's');
     for (const url of ['https://x.evil.workers.dev', 'https://bz23711.workers.dev', 'https://x.bz237110.workers.dev', 'https://x.bz23711.workers.dev.evil.example', 'https://x.other.workers.dev']) {
       expect((await post(authed, url)).status, url).toBe(400);
     }
@@ -251,7 +257,7 @@ describe('reads', () => {
 describe('lifecycle guard', () => {
   it('a live deploy ref blocks tombstoning its candidate; after rollback it does not', async () => {
     const { actor: maint, spec: s, candidate: c } = seedCandidate();
-    const { deployment: d } = await deploy(c.id, s.id);
+    const { deployment: d } = await deploy(c.id, s.id, { commitSha: c.commit_sha });
 
     const tomb = () => call('/internal/tombstone', 'POST', { entityType: 'candidate', id: c.id }, maint);
     const refused = await tomb();
@@ -390,6 +396,7 @@ describe('ref rollback idempotency (Idempotency-Key) and X-Expected-Head', () =>
 
   it('other deploy routes ignore the key', async () => {
     const body = (c: string) => ({ candidateId: c, specId: 'spec-a', url: `https://${c}.example.workers.dev`, workerVersionId: `ver-${c}`, trafficPercentage: 10, holdoutPercentage: 5 });
+    seedLedgerCandidate(store.raw, 'cand-a', 'spec-a');
     expect((await post('/canary-deployments', body('cand-a'), { 'Idempotency-Key': 'k1' })).status).toBe(201);
     expect((await post('/canary-deployments', body('cand-a'), { 'Idempotency-Key': 'k1' })).status).toBe(201);
     expect(count('SELECT COUNT(*) AS n FROM canary_deployments')).toBe(2);
