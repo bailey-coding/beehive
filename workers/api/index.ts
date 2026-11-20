@@ -13,6 +13,8 @@ interface Env {
   // Spec DO tokens (workers/shared/spec-do-auth.ts); this is the only worker holding the admin token
   SPEC_DO_INTERNAL_TOKEN?: string;
   SPEC_DO_ADMIN_TOKEN?: string;
+  /** Promotion writes token (wave-2a part F, log-only phase 1): the DO's own secret, and attached to the master advance this worker forwards */
+  SPEC_DO_PROMOTION_TOKEN?: string;
   API_AUTH_TOKEN?: string;
   // Service binding to beehive-preview-manager: deletes the Workers of purged candidates (workers/api/purge-cleanup.ts)
   PREVIEW_MANAGER?: { fetch(input: string, init?: RequestInit): Promise<Response> };

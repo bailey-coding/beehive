@@ -37,7 +37,7 @@ describe('isPromotionRoute: exactly the promotion writes', () => {
     ['POST', '/api/candidates/c-1/advance/x', false],
     ['POST', '/api/candidates/advance', false],
   ];
-  it.fails.each(cases)('%s %s -> %s', (method, path, expected) => {
+  it.each(cases)('%s %s -> %s', (method, path, expected) => {
     expect(a.isPromotionRoute!(method, path)).toBe(expected);
   });
 });
@@ -47,7 +47,7 @@ describe('the client adds the header on promotion routes only, and only when its
   const raw = { fetch: async (r: Request) => (sent.push(r), new Response('{}')) } as never;
   beforeEach(() => void (sent.length = 0));
 
-  it.fails('with the secret: on advance and canary writes, not on reads or rollbacks', async () => {
+  it('with the secret: on advance and canary writes, not on reads or rollbacks', async () => {
     const stub = a.authedSpecDoStub(raw, { SPEC_DO_INTERNAL_TOKEN: 'i', SPEC_DO_PROMOTION_TOKEN: PROMO } as never);
     await stub.fetch('/api/candidates/c/advance', { method: 'POST', body: '{}' });
     await stub.fetch('/canary-deployments', { method: 'POST', body: '{}' });
@@ -99,7 +99,7 @@ describe('the Spec DO: log-only', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it.fails('secret set, no header: advance and the canary deploy PROCEED, each logs one row and a Workers Logs line', async () => {
+  it('secret set, no header: advance and the canary deploy PROCEED, each logs one row and a Workers Logs line', async () => {
     build(PROMO);
     await seed();
     const adv = await call('/api/candidates/cand/advance', 'POST', { toRung: 'shadow' });
@@ -112,7 +112,7 @@ describe('the Spec DO: log-only', () => {
     expect(warn.mock.calls.some((c) => String(c[0]).includes('promotion_token_missing'))).toBe(true);
   });
 
-  it.fails('secret set, wrong header: proceeds and logs', async () => {
+  it('secret set, wrong header: proceeds and logs', async () => {
     build(PROMO);
     await seed();
     expect((await canary('nope')).status).toBe(201);

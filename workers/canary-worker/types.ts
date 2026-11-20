@@ -85,6 +85,8 @@ export interface Env {
   SPEC_DO: DurableObjectNamespace;
   // Tier-1 secret for Spec DO calls (workers/shared/spec-do-auth.ts); no admin token on this worker
   SPEC_DO_INTERNAL_TOKEN?: string;
+  /** Promotion writes token (wave-2a part F, log-only phase 1): set by the maintainer; attached by getSpecDoStub on promotion routes */
+  SPEC_DO_PROMOTION_TOKEN?: string;
   PREVIEW_MANAGER: Service;
   ANALYTICS: AnalyticsEngine;
   API_AUTH_TOKEN?: string;

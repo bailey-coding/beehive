@@ -67,6 +67,8 @@ const CANARY_STAGE_PRECONDITION_EVENT = 'canary_stage_precondition';
 const EVIDENCE_UNBOUND_EVENT = 'evidence_unbound';
 /** wave-2a part D2: a second open tournament for a spec */
 const TOURNAMENT_EXISTS = 'tournament_exists';
+/** wave-2a part F: a promotion write without the promotion token (log-only, phase 1) */
+const PROMOTION_TOKEN_MISSING_EVENT = 'promotion_token_missing';
 /** Stages from which a canary is the next rung's evidence; anything lower is logged (maintainer decision M1) */
 const CANARY_STAGE_OK = new Set(['passed_train', 'passed_canary', 'promoted']);
 
@@ -335,7 +337,7 @@ function parseEvidence(raw: unknown): unknown {
 
 // Artifacts client
 import { createFork, createRepoToken, type ArtifactsConfig } from '../shared/artifacts';
-import { specDoAuthGate, MAINTAINER_CAP_HEADER, USER_TOKEN_NOT_FOUND, USER_TOKEN_ACTOR_NOT_FOUND } from '../shared/spec-do-auth';
+import { specDoAuthGate, MAINTAINER_CAP_HEADER, USER_TOKEN_NOT_FOUND, USER_TOKEN_ACTOR_NOT_FOUND, promotionTokenMissing, promotionRouteOf } from '../shared/spec-do-auth';
 
 // Promotion ledger contract (shared with the promotion worker)
 import type { ZodType } from 'zod';
@@ -513,6 +515,8 @@ interface Env {
   // Two-tier internal auth for the DO's own fetch router (workers/shared/spec-do-auth.ts)
   SPEC_DO_INTERNAL_TOKEN?: string;
   SPEC_DO_ADMIN_TOKEN?: string;
+  /** wave-2a part F: the promotion-writes token, log-only in phase 1 (workers/shared/spec-do-auth.ts) */
+  SPEC_DO_PROMOTION_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
   // The account's workers.dev subdomain: when set, a canary url must be one of its Workers (shared/deploy-refs.ts)
@@ -3578,6 +3582,7 @@ export class SpecDO {
           if (!isAcceptableCanaryUrl(p.data.url, this.env.WORKERS_SUBDOMAIN)) {
             return fail(`Invalid canary deployment: url must be an https Worker on this account's workers.dev subdomain`, 400);
           }
+          this.logPromotionTokenMissing(request, actorId);
           const moved = this.deployCanary(p.data, actorId);
           await this.armCanaryAlarm();
           return json(moved, 201);
@@ -3589,6 +3594,7 @@ export class SpecDO {
         if (id !== undefined && sub === undefined && method === 'PATCH') {
           const p = parse(CanaryPatchSchema, 'canary deployment patch');
           if ('error' in p) return p.error;
+          this.logPromotionTokenMissing(request, actorId);
           const deployment = this.setCanaryAutoRollback(id, p.data.autoRollback);
           return deployment ? json(deployment) : notFound('Canary deployment');
         }
@@ -4183,11 +4189,30 @@ export class SpecDO {
     });
   }
 
+  /** Requests to a promotion route that lacked the promotion token (wave-2a part F, phase 1: logged, never refused) */
+  private readonly promotionTokenMisses = new WeakSet<Request>();
+
+  /** The governance row for a promotion write without the promotion token; flood-controlled per (route, asserted actor), never throws */
+  private logPromotionTokenMissing(request: Request, actorId: string | null): void {
+    if (!this.promotionTokenMisses.has(request)) return;
+    const route = promotionRouteOf(request.method, new URL(request.url).pathname) ?? 'unknown';
+    this.logGovernanceEvent(PROMOTION_TOKEN_MISSING_EVENT, `route:${route}`, String(actorId ?? ''), actorId, { route, assertedActorId: actorId });
+  }
+
   // Fetch from Durable Object
   async fetch(request: Request): Promise<Response> {
     // Internal token check first: before routing, before the schema is touched
     const denied = specDoAuthGate(request, this.env);
     if (denied) return denied;
+    // Promotion token, phase 1 (wave-2a part F): never refused; the request is marked and proceeds. The Workers Logs line is written here; the
+    // governance row by the route's handler, which knows whether an advance is a dry run (the dry-run contract writes nothing)
+    if (promotionTokenMissing(request, this.env)) {
+      this.promotionTokenMisses.add(request);
+      console.warn('[SpecDO] promotion_token_missing', {
+        route: promotionRouteOf(request.method, new URL(request.url).pathname),
+        assertedActorId: request.headers.get('X-Actor-ID'),
+      });
+    }
 
     // Promotion mode is key-value state: answer before the SQL schema is touched
     if (new URL(request.url).pathname === '/promotion-mode') {
@@ -5063,6 +5088,7 @@ export class SpecDO {
     }
     const parsed = AdvanceRequestSchema.safeParse(raw);
     if (!parsed.success) return respond(400, { success: false, error: `Invalid advance request: ${zodMessage(parsed.error)}` });
+    if (parsed.data.dryRun !== true) this.logPromotionTokenMissing(request, actorId);
 
     const out = this.state.storage.transactionSync(() => this.advanceCandidate(candidateId, parsed.data, actorId));
     if (out.ok) return respond(200, { success: true, data: out.data });

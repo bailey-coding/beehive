@@ -17,6 +17,12 @@
 
 export const INTERNAL_TOKEN_HEADER = 'X-Beehive-Internal';
 export const ADMIN_TOKEN_HEADER = 'X-Beehive-Admin';
+/**
+ * A third token for the promotion writes (docs/plans/wave-2a-plan.md part F; review a-S8), held only by beehive-promotion-worker,
+ * beehive-canary-worker and beehive. PHASE 1, LOG-ONLY: the DO never refuses for it; when its own SPEC_DO_PROMOTION_TOKEN is set and a call to
+ * a promotion route lacks it, the call proceeds and is logged as promotion_token_missing. Refusing (403) is a later, separately reviewed change.
+ */
+export const PROMOTION_TOKEN_HEADER = 'X-Beehive-Promotion';
 
 /**
  * Sent by the edge on every DO request made for a user token without the `maintainer` scope.
@@ -41,6 +47,7 @@ const DEFAULT_SPEC_DO_NAME = 'main';
 export interface SpecDoAuthEnv {
   SPEC_DO_INTERNAL_TOKEN?: string;
   SPEC_DO_ADMIN_TOKEN?: string;
+  SPEC_DO_PROMOTION_TOKEN?: string;
 }
 
 /** A calling worker's env: the binding plus whichever tokens that worker was given. */
@@ -64,6 +71,37 @@ const ADMIN_PATTERNS: Array<{ method: string; path: RegExp }> = [
   // Sets the flag that lets an actor promote; the edge allows it for the master principal only
   { method: 'PATCH', path: /^\/api\/actors\/[^/]+\/promotion-authority$/ },
 ];
+
+/**
+ * The promotion writes: `advance` and the canary deploy writes (a deploy and the auto-rollback switch). Not the stage PATCH (it writes only
+ * failed/rolled_back since wave-2a part A) and not any rollback route: rollback is never gated (AGENTS.md rule 7). Single source for DO and clients.
+ */
+const PROMOTION_PATTERNS: Array<{ method: string; path: RegExp; template: string }> = [
+  { method: 'POST', path: /^\/api\/candidates\/[^/]+\/advance$/, template: 'POST /api/candidates/:id/advance' },
+  { method: 'POST', path: /^\/canary-deployments$/, template: 'POST /canary-deployments' },
+  { method: 'PATCH', path: /^\/canary-deployments\/[^/]+$/, template: 'PATCH /canary-deployments/:id' },
+];
+
+/** The route template of a promotion write, or null for any other route */
+export function promotionRouteOf(method: string, pathname: string): string | null {
+  const m = method.toUpperCase();
+  return PROMOTION_PATTERNS.find((p) => p.method === m && p.path.test(pathname))?.template ?? null;
+}
+
+export function isPromotionRoute(method: string, pathname: string): boolean {
+  return promotionRouteOf(method, pathname) !== null;
+}
+
+/**
+ * For a promotion route on a DO whose SPEC_DO_PROMOTION_TOKEN is set: true when the request lacks the right token. False otherwise (another
+ * route, or the secret unset: nothing to compare against). Phase 1 only reports it; never a refusal.
+ */
+export function promotionTokenMissing(request: Request, env: SpecDoAuthEnv | undefined): boolean {
+  const secret = env?.SPEC_DO_PROMOTION_TOKEN;
+  if (!secret || !isPromotionRoute(request.method, new URL(request.url).pathname)) return false;
+  const presented = request.headers.get(PROMOTION_TOKEN_HEADER);
+  return presented === null || !timingSafeEqual(presented, secret);
+}
 
 /** Routes that need the admin token on top of the internal one. Single source for DO and clients. */
 export function isAdminRoute(method: string, pathname: string): boolean {
@@ -136,6 +174,9 @@ export function authedSpecDoStub(stub: SpecDoStub, env: SpecDoAuthEnv): SpecDoSt
       if (env.SPEC_DO_INTERNAL_TOKEN) request.headers.set(INTERNAL_TOKEN_HEADER, env.SPEC_DO_INTERNAL_TOKEN);
       if (env.SPEC_DO_ADMIN_TOKEN && isAdminRoute(request.method, new URL(request.url).pathname)) {
         request.headers.set(ADMIN_TOKEN_HEADER, env.SPEC_DO_ADMIN_TOKEN);
+      }
+      if (env.SPEC_DO_PROMOTION_TOKEN && isPromotionRoute(request.method, new URL(request.url).pathname)) {
+        request.headers.set(PROMOTION_TOKEN_HEADER, env.SPEC_DO_PROMOTION_TOKEN);
       }
       return stub.fetch(request);
     },
