@@ -83,6 +83,17 @@ describe('POST /api/gate-verdicts stores the commit and the simulated flag', () 
     expect(verdictRow(c.id)).toMatchObject({ commit_sha: SHA_A, simulated: 1 });
   });
 
+  it('reads them back on GET (true/false/null, not the stored integer)', async () => {
+    const c = seed();
+    await postVerdict(c.id, { commitSha: SHA_A, simulated: true });
+    const r = await call(`/api/candidates/${c.id}/gate-verdicts`);
+    expect(r.json.data[0]).toMatchObject({ commit_sha: SHA_A, simulated: true });
+    await postVerdict(c.id, { commitSha: SHA_A, simulated: false });
+    expect((await call(`/api/candidates/${c.id}/gate-verdicts`)).json.data[0].simulated).toBe(false);
+    await postVerdict(c.id);
+    expect((await call(`/api/candidates/${c.id}/gate-verdicts`)).json.data[0]).toMatchObject({ commit_sha: null, simulated: null });
+  });
+
   it('a later verdict without them clears both (the upsert overwrites, review S2)', async () => {
     const c = seed();
     await postVerdict(c.id, { commitSha: SHA_A, simulated: true });
