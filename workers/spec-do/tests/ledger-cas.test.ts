@@ -265,3 +265,57 @@ describe('m7 -> m8 migration', () => {
     expect(columns('merge_trains')).toContain('version');
   });
 });
+
+// wave-2a-plan part D2 (review b1-S6): at most one open (pending / in_progress) tournament per spec. Only writes that open a row for its spec
+// are checked (create, a failed row reopened, a row moved to another spec); same-status writes on an open row are not, so a spec that already
+// holds duplicate open rows keeps working on its newest one.
+describe('one open tournament per spec (D2)', () => {
+  const insertRaw = (s: SpecDO, id: string, status: string, createdAt: number) =>
+    (s as unknown as { run: (sql: string, ...p: unknown[]) => void }).run(
+      `INSERT INTO tournaments (id, spec_id, status, winner, candidates, comparisons, started_at, created_at, updated_at, version, attempts)
+       VALUES (?, 'spec-1', ?, NULL, ?, '[]', '2026-10-16T00:00:00.000Z', ?, ?, 1, 0)`,
+      id, status, JSON.stringify([candidate('c1')]), createdAt, createdAt
+    );
+
+  it.fails('a second create for the spec while one is open is 409 tournament_exists, naming the open one, and writes nothing', async () => {
+    expect((await call('/tournament-status', 'POST', tournament())).status).toBe(201);
+    const res = await call('/tournament-status', 'POST', tournament({ id: 't2' }));
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code?: string; error?: string };
+    expect(body.code).toBe('tournament_exists');
+    expect(body.error).toContain('t1');
+    expect(spec.listTournaments('spec-1').map((t) => t.id)).toEqual(['t1']);
+  });
+
+  it('a create after the open one completed or failed is allowed; another spec is independent', async () => {
+    await call('/tournament-status', 'POST', tournament({ id: 't-done', status: 'completed', winner: 'c1' }));
+    expect((await call('/tournament-status', 'POST', tournament({ id: 't-new' }))).status).toBe(201);
+    expect((await call('/tournament-status', 'POST', tournament({ id: 't-other', specId: 'spec-2' }))).status).toBe(201);
+  });
+
+  it.fails('reopening an older failed row while a newer one is open is 409 tournament_exists', async () => {
+    expect((await call('/tournament-status', 'POST', tournament({ id: 't-old' }))).status).toBe(201);
+    expect((await call('/tournament-status/t-old', 'PATCH', { status: 'in_progress' })).status).toBe(200);
+    expect((await call('/tournament-status/t-old', 'PATCH', { status: 'failed', failureReason: 'x' })).status).toBe(200);
+    expect((await call('/tournament-status', 'POST', tournament({ id: 't-open' }))).status).toBe(201);
+    const res = await call('/tournament-status/t-old', 'PATCH', { status: 'pending' });
+    expect(res.status).toBe(409);
+    expect(await code(res)).toBe('tournament_exists');
+  });
+
+  it.fails('moving an open row onto a spec that has an open tournament is 409 tournament_exists', async () => {
+    await call('/tournament-status', 'POST', tournament({ id: 't-a' }));
+    await call('/tournament-status', 'POST', tournament({ id: 't-b', specId: 'spec-2' }));
+    const res = await call('/tournament-status/t-b', 'PATCH', { specId: 'spec-1' });
+    expect(res.status).toBe(409);
+    expect(await code(res)).toBe('tournament_exists');
+  });
+
+  it('with two open rows already present (production may hold some), same-status writes to the newest still succeed', async () => {
+    insertRaw(spec, 't-dup-old', 'pending', 1);
+    insertRaw(spec, 't-dup-new', 'pending', 2);
+    const res = await call('/tournament-status/t-dup-new', 'PATCH', { candidates: [candidate('c1'), candidate('c2')] });
+    expect(res.status).toBe(200);
+    expect((await call('/tournament-status/t-dup-new', 'PATCH', { status: 'in_progress' })).status).toBe(200);
+  });
+});

@@ -14,6 +14,7 @@ import { makeSqliteState, makeSpecDo } from '../../spec-do/tests/sqlite-state';
 import { authedDo, TEST_INTERNAL_ONLY } from '../../spec-do/tests/do-tokens';
 import { getPromotionLedger } from '../spec-do';
 import { decideTournament } from '../tournament';
+import { SHADOW_MIN_SAMPLES } from '../../shared/shadow-verdict';
 
 const gateFetch = vi.fn();
 const shadowRouterFetch = vi.fn();
@@ -1007,5 +1008,146 @@ describe('production-only shadow sources (D2-prep, plan section 16; default off)
     await w.samples(a, 50, 'placeholder', MIN);
     await w.samples(b, 40, 'placeholder', MIN);
     expect((await dryEvidence(w, a)).status).toBe('missing'); // not `failed`: the tournament's failed-entrant refusal cannot fire
+  });
+});
+
+// ============================================================================
+// Wave 2a part D (docs/plans/wave-2a-plan.md): the tournament's minimum sample count (b1-S5), one open tournament per spec (b1-S6), and a
+// winner claimed before `advance` so a failure after the move cannot corrupt the tournament (b1-S4). Scores here are all passing (>= 80):
+// with SHADOW_MIN_SAMPLES samples a lower average is a failing shadow verdict, which disqualifies the entrant.
+// ============================================================================
+describe('wave-2a part D: tournament guards', () => {
+  const MIN = SHADOW_MIN_SAMPLES;
+  async function pair(scoreA: number, scoreB: number, nA = MIN, nB = MIN) {
+    const w = await world('tournament');
+    const a = w.candidate('passed_premerge');
+    const b = w.candidate('passed_premerge');
+    await w.samples(a, scoreA, 'placeholder', nA);
+    await w.samples(b, scoreB, 'placeholder', nB);
+    return { w, a, b };
+  }
+  const row = (w: Awaited<ReturnType<typeof world>>) =>
+    w.store.raw.prepare('SELECT * FROM tournaments WHERE spec_id = ? ORDER BY created_at DESC, rowid DESC').all(w.specId) as Record<string, any>[];
+  const isRealAdvance = async (request: Request) =>
+    new URL(request.url).pathname.endsWith('/advance') && !((await request.clone().json()) as { dryRun?: boolean }).dryRun;
+
+  it.fails('D1: an entrant with fewer than SHADOW_MIN_SAMPLES samples has no score, so one sample at 100 does not beat a full sample at 99', async () => {
+    const { w, a, b } = await pair(100, 99, 1, MIN);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(409);
+    expect(res.json.code).toBe('no_shadow_evidence');
+    expect(w.stageOf(a)).toBe('passed_premerge');
+    expect(w.stageOf(b)).toBe('passed_premerge');
+  });
+
+  it.fails('D2: two entrants that each find no tournament end in one tournament, and it decides', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    // b's first read misses a's tournament (it was created in between), so b tries to create its own
+    let missed = false;
+    w.box.hook = async (request) => {
+      const u = new URL(request.url);
+      if (!missed && request.method === 'GET' && u.pathname === '/tournament-status' && u.searchParams.get('specId')) {
+        missed = true;
+        return Response.json({ success: false, error: 'Tournament not found', code: 'record_not_found' }, { status: 404 });
+      }
+      return undefined;
+    };
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(200);
+    expect(res.json.details).toMatchObject({ winner: b });
+    expect(row(w)).toHaveLength(1);
+    expect(w.stageOf(b)).toBe('passed_shadow');
+  });
+
+  it.fails('D3: a failure recording the winner after the move: success, the tournament stays claimed (not failed, no attempt spent), and the next call completes it', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    let failed = false;
+    w.box.hook = async (request) => {
+      if (!failed && request.url.includes('/tournament-status') && request.method !== 'GET') {
+        const body = (await request.clone().json()) as { status?: string };
+        if (body.status === 'completed') {
+          failed = true;
+          return Response.json({ success: false, error: 'ledger down' }, { status: 500 });
+        }
+      }
+      return undefined;
+    };
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ success: true, outcome: 'moved' });
+    expect(String(res.json.details?.recordWinner)).toMatch(/not recorded/);
+    expect(w.stageOf(b)).toBe('passed_shadow');
+    expect(row(w)[0]).toMatchObject({ status: 'in_progress', winner: b, attempts: 0 });
+
+    // The loser asks again: the claimed tournament is completed with the right winner and loser, and nothing moves twice
+    const again = await w.promote({ candidateId: a, toRung: 'train' });
+    expect(again.json).toMatchObject({ success: true, outcome: 'eliminated' });
+    expect(row(w)[0]).toMatchObject({ status: 'completed', winner: b });
+    expect(w.stageOf(a)).toBe('passed_premerge');
+    expect(w.spec.listNearMisses({ candidateId: a, reason: 'tournament_loss', limit: 10, offset: 0 })).toHaveLength(1);
+    expect(w.spec.listNearMisses({ candidateId: b, reason: 'tournament_loss', limit: 10, offset: 0 })).toHaveLength(0);
+  });
+
+  it.fails('D3: a claimed winner that has already moved on (passed_train) is still recorded as the winner, never disqualified', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    let failed = false;
+    w.box.hook = async (request) => {
+      if (!failed && request.url.includes('/tournament-status') && request.method !== 'GET' && ((await request.clone().json()) as { status?: string }).status === 'completed') {
+        failed = true;
+        return Response.json({ success: false, error: 'ledger down' }, { status: 500 });
+      }
+      return undefined;
+    };
+    await w.promote({ candidateId: b, toRung: 'train' });
+    w.store.raw.prepare("UPDATE candidates SET stage = 'passed_train' WHERE id = ?").run(b);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    expect(row(w)[0]).toMatchObject({ status: 'completed', winner: b });
+    expect(w.spec.listNearMisses({ candidateId: b, reason: 'tournament_loss', limit: 10, offset: 0 })).toHaveLength(0);
+  });
+
+  it('D3: a refused advance leaves no winner and no contested set in the stored row', async () => {
+    const { w, a, b } = await pair(95, 85);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.box.hook = async (request) => {
+      if (await isRealAdvance(request)) w.store.raw.prepare("UPDATE candidates SET stage = 'failed' WHERE id = ?").run(a);
+      return undefined;
+    };
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(409);
+    expect(row(w)[0]).toMatchObject({ status: 'failed', winner: null, comparisons: '[]' });
+  });
+
+  it.fails('D3: two runs racing: the second sees the first one\'s claim and resumes it, so exactly one candidate is advanced', async () => {
+    const { w, a, b } = await pair(85, 95); // b would win this run's decision
+    await w.promote({ candidateId: a, toRung: 'train' });
+    let injected = false;
+    let realAdvances = 0;
+    w.box.hook = async (request) => {
+      if (await isRealAdvance(request)) realAdvances += 1;
+      if (!injected && request.method === 'POST' && new URL(request.url).pathname === '/tournament-status') {
+        const body = (await request.clone().json()) as { winner?: string; status?: string };
+        if (body.winner && body.status === 'in_progress') {
+          // Another run claimed the tournament for `a` just before this run's claim lands
+          injected = true;
+          const [t] = w.spec.listTournaments(w.specId);
+          const claim = { ...t, status: 'in_progress', winner: a, comparisons: [{ candidate1: a, candidate2: b, winner: a, comparisonScore: 0, comparedAt: new Date().toISOString() }] };
+          delete (claim as Record<string, unknown>).attempts;
+          const res = await w.direct.fetch(new Request('https://spec-do.internal/tournament-status', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Expected-Version': String(t.version) }, body: JSON.stringify({ ...claim, version: undefined }),
+          }));
+          expect(res.status).toBe(200);
+        }
+      }
+      return undefined;
+    };
+    await w.promote({ candidateId: b, toRung: 'train' });
+    expect(realAdvances).toBe(1);
+    expect(w.stageOf(a)).toBe('passed_shadow');
+    expect(w.stageOf(b)).toBe('passed_premerge');
+    expect(row(w)[0]).toMatchObject({ status: 'completed', winner: a });
   });
 });
