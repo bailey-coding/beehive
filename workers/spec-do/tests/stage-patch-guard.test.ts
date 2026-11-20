@@ -150,6 +150,16 @@ describe.each([
     expect(row(table, id)!.stage).toBe(initial);
   });
 
+  it('runs the stage write and the history row in one transaction: a throw in recordHistory rolls the stage back', async () => {
+    const id = idOf(seed());
+    vi.spyOn(spec as any, 'recordHistory').mockImplementation(() => {
+      throw new Error('history down');
+    });
+    const r = await call(`/api/${path}/${id}/stage`, 'PATCH', { stage: good });
+    expect(r.status).toBeGreaterThanOrEqual(500);
+    expect(row(table, id)!.stage).toBe(initial);
+  });
+
   it('still writes a valid stage', async () => {
     const id = idOf(seed());
     const r = await call(`/api/${path}/${id}/stage`, 'PATCH', { stage: good });
