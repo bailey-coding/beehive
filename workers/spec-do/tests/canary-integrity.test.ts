@@ -134,6 +134,14 @@ describe('canary evidence and the commit (log-only in 2a)', () => {
     expect(JSON.parse(rows[0].detail)).toMatchObject({ rung: 'canary', evidenceCommit: SHA_A, candidateCommit: SHA_B });
   });
 
+  it('a canary on the candidate\'s own commit writes no row on a real advance', async () => {
+    seedLedgerCandidate(store.raw, 'cand', 'spec-a', { commitSha: SHA_A, stage: 'passed_train' });
+    expect((await canary('cand', 'spec-a', { commitSha: SHA_A })).status).toBe(201);
+    store.raw.prepare('UPDATE deploy_refs SET moved_at = moved_at - 3600000').run();
+    expect((await call('/api/candidates/cand/advance', 'POST', { toRung: 'full' })).status).toBe(200);
+    expect(events('commit_mismatch')).toEqual([]);
+  });
+
   it('a dry run writes no row', async () => {
     await setup();
     expect((await call('/api/candidates/cand/advance', 'POST', { toRung: 'full', dryRun: true })).status).toBe(200);
