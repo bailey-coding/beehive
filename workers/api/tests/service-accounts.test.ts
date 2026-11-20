@@ -467,3 +467,30 @@ describe('service token security properties (edge + real DO)', () => {
     expect((await ctx.call('/api/service-accounts', 'POST', { token: MASTER, body: { name: 'x', scopes: 'write' } })).status).toBe(410);
   });
 });
+
+// wave-2a-plan part A4: the master-only edge route that replaces the upward stage PATCH for fixtures and prod-verify
+describe('POST /api/candidates/:id/advance (master only)', () => {
+  it.fails('forwards to the Spec DO advance route with the body and the actor, and passes its answer through', async () => {
+    const { call, calls } = setup();
+    const res = await call('/api/candidates/A/advance', 'POST', {
+      token: MASTER,
+      body: { toRung: 'shadow', dryRun: true },
+      headers: { 'X-Actor-ID': 'maint-1' },
+    });
+    const fwd = calls.find((c) => c.path === '/api/candidates/A/advance');
+    expect(fwd?.method).toBe('POST');
+    expect(fwd?.headers.get('X-Actor-ID')).toBe('maint-1');
+    // Unknown candidate: the DO's coded 404 comes back unchanged
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as any).error).toBe('candidate_not_found');
+  });
+
+  it('is 403 for a read service token and never reaches the Spec DO', async () => {
+    const { call, calls } = setup();
+    const { json } = await mint(call);
+    calls.length = 0;
+    const res = await call('/api/candidates/A/advance', 'POST', { token: json.data.token.plaintext, body: { toRung: 'shadow' } });
+    expect(res.status).toBe(403);
+    expect(calls.map((c) => c.path)).not.toContain('/api/candidates/A/advance');
+  });
+});
