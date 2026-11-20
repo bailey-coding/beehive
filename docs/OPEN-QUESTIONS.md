@@ -1298,7 +1298,13 @@ Needed before shadow can be enforced (a follow-up plan, "option 2"): mirror `pas
 - **Queue.** `processQueueMessage` (`workers/promotion-worker/index.ts`) acks every message because `promoteCandidate` returns a Response and never throws, so a 502 `ledger_error` or a deploy-window 503 `ledger_too_old` is dropped, not retried. No producer of `promotion-events` exists today; make 5xx throw when one is added.
 - **Overlapping decisions.** The tournament's read-scores, decide, advance-winner sequence is not one compare-and-swap, and `recordWinner` writes the candidate list from a copy read earlier: two requests deciding at once (a third entrant joining mid-decision) can each advance a different winner. Predates PR C. Fix with a decide-and-claim write in the Spec DO (spine), alongside the "decides on the second arrival" rule above.
 
-**Status**: Open.
+**Status (2026-11-20, Wave 2a, `docs/plans/wave-2a-plan.md` part D, not deployed):** overlapping decisions fixed: the winner and the contested
+set are claimed in one version-checked write before `advance` (a run that finds another run's claim resumes it), the completion is a
+compare-and-swap on the record as saved, and a failure after the move leaves the claim for the next run (review b1-S4). Also fixed: one open
+tournament per spec (b1-S6, `409 tournament_exists`) and a minimum sample count for the tournament score (b1-S5). The exhausted-tournament reset
+and the queue acks are still open.
+
+**Status**: Open (exhausted reset, queue acks).
 
 ## 2026-11-12: scientist-comparator Workers Build failed on missing shared `postinstall` (third occurrence)
 

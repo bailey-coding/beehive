@@ -676,6 +676,58 @@ Plan: `docs/plans/wave-1-plan.md`. Spec DO, scientist-comparator, queue-consumer
   (`/api/repositories?namespace=&name=`, `/api/candidates?repositoryId=`), falling back to the unfiltered first 100 rows. The push message shape
   itself is unverified (`docs/OPEN-QUESTIONS.md` 2026-11-18).
 
+## Wave 2a: ladder guards (2026-11-20)
+
+Plan: `docs/plans/wave-2a-plan.md` (rev 3 plus implementation notes). Spec DO (schema **m16**), edge, gate-workflow, promotion worker, canary
+worker. Any deploy order works; the notes per item say what an old peer sees.
+
+**Before the push:** count live candidates whose commit is neither empty nor 40 lowercase hex
+(`SELECT COUNT(*) FROM candidates WHERE deleted_at IS NULL AND commit_sha != '' AND commit_sha NOT GLOB '[0-9a-f]*' ...`, or read them and check
+in a script). The gate still runs for them (it accepts exactly the candidate's stored commit), so a nonzero count is fine but worth knowing.
+
+**Behavior changes (user-visible):**
+- **Stage PATCH** (`PATCH /api/candidates/:id/stage`) writes only `failed` and `rolled_back`; anything else is `409 use_advance`, nothing written.
+  Every stage PATCH (candidate, spec, issue) answers 404 before writing for an unknown or tombstoned row (it used to write first), and 400 for an
+  unknown stage (it used to be a 500).
+- **New edge route `POST /api/candidates/:id/advance`**, master only (service and user tokens get 403). It replaces the upward PATCH for fixtures and
+  `scripts/prod-verify-promotion.sh`, one rung per call, with the evidence each rung enforces. It reverses promotion-gaps V13 ("advance is
+  internal"), by maintainer decision M3. **Run `prod-verify-promotion.sh` only after all ten builds have landed**: an old edge answers 404.
+- **Canary deploy** (`POST /canary-deployments`): coded `404 candidate_not_found` / `404 spec_not_found` for an id with no live ledger row,
+  `409 spec_mismatch` for a candidate filed under another spec, `409 commit_mismatch` when the deploy names another commit than the candidate's
+  (an empty candidate commit is accepted). The production path (canary worker -> preview-manager) already sends ledger candidates and their commits.
+- **Pre-merge gate** (gate-workflow): reads the candidate first and refuses `404 candidate_not_found` (unknown or tombstoned), `400 spec_mismatch`,
+  `400 invalid_commit` (not 40 lowercase hex and not the candidate's stored commit). Its notes start `[simulated] `; the verdict row carries
+  `commit_sha` and `simulated = 1`.
+- **Tournament:** an entrant needs `SHADOW_MIN_SAMPLES` (20) shadow samples to have a score, as in the production source; with 20 samples an
+  average below 80 is a failing shadow verdict, so such an entrant is disqualified, as before. A second open tournament for a spec is
+  `409 tournament_exists` (the worker joins the existing one). The winner is claimed on the tournament (`in_progress` + `winner` + the contested
+  losers in `comparisons`) before it moves; if recording the result fails after the move, the result says `details.recordWinner: "not recorded ..."`
+  and the next promotion request for that spec completes the tournament.
+- **Promotion states:** one left `pending`/`in_progress` longer than `PROMOTION_TIMEOUT` seconds (3600) is cancelled with
+  `failureReason: "abandoned: ..."` by the next request for that candidate, which then runs. A failed state write after a move is logged
+  (`Could not mark promotion state ...`) and the caller gets the move's result, not a 500.
+
+**Deploy checks:**
+- `schema_version = m16`; `PRAGMA table_info(gate_verdicts)` lists `commit_sha` and `simulated` (NULL on rows written before m16).
+- New gate verdicts: `notes LIKE '[simulated] %'`, `simulated = 1`, `commit_sha` set.
+- `governance_events` (all log-only, flood-controlled, one row per subject and reason per hour):
+  - `evidence_unbound`: pre-merge evidence that could not be bound to the candidate's commit (either side empty). Expected for claimed candidates
+    (no `commit_sha` writer yet, b2-S8) and for verdicts written before m16. This is the input for enforcing the commit match later.
+  - `commit_mismatch`: pre-merge or canary evidence produced for another commit than the candidate's (a real `advance` only, never a dry run).
+  - `canary_stage_precondition`: a canary deployed for a candidate below `passed_train` (maintainer decision M1: allowed and logged; 2b enforces).
+  - `promotion_token_missing`: see the next item.
+
+**Promotion token (phase 1, log-only).** Secret `SPEC_DO_PROMOTION_TOKEN`, header `X-Beehive-Promotion`, on `POST /api/candidates/:id/advance`,
+`POST /canary-deployments` and `PATCH /canary-deployments/:id` (not the stage PATCH and no rollback route: rollback is never gated, rule 7).
+- The maintainer sets the same value as a secret on **`beehive`** (the DO host and the edge), **`beehive-promotion-worker`** and
+  **`beehive-canary-worker`**. Nothing else needs it. Until it is set on `beehive`, nothing is compared and nothing is logged.
+- With it set on `beehive`, a call to those routes without the right header **proceeds** and is logged: Workers Logs
+  `[SpecDO] promotion_token_missing` (route, asserted actor) and a `governance_events` row (none for a dry-run `advance`). Set it on the two
+  workers in the same push window to avoid noise.
+- Phase 2 (a later, separately reviewed change) refuses with 403, after a week with no `promotion_token_missing` rows.
+
+**Rollback** (a revert push): m16's two columns stay and are ignored by older code; nothing else is stored.
+
 ## Promotion worker on advance (promotion-gaps PR C, 2026-11-10)
 
 - **Behavior change at this deploy.** `POST /promote` now asks the Spec DO whether a move is legal before it creates any state, and the stage is written by the Spec DO's `advance`, one rung at a time. A request that skips a rung, names a candidate the ledger does not know, lacks the enforced evidence (a passing pre-merge verdict; for `full`, a live canary soaked 15 minutes) or names a stale `fromRung` is refused with a status and a `code` instead of recorded (table below). `fromRung` is optional; `toRung` must be `shadow`, `train`, `canary` or `full`.

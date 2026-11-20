@@ -350,3 +350,27 @@ Full unit suite and local e2e (fresh `.wrangler/state`) before the code review; 
 | S2 D2 blocks same-status writes on duplicate rows | Fixed: only transitions into an open state are checked; test with two open rows (D2) |
 | N1 the auth gate runs before the body | Fixed: the gate marks, the `advance` handler writes the row (F3) |
 | N2 prod-verify in the mixed window | Fixed: deploy-check note |
+
+## Implementation notes (2026-11-20)
+
+All six parts are on `ccr-cd33bfbc-7yd3mx`, not merged, not deployed. Each part was committed as failing tests (`it.fails`) first, then the fix
+that flips them, then mutation checks (every new guard broken in turn, a test must fail; 90 mutations in total, every survivor but one fixed with a new test).
+Full unit suite 105 files / 2476 tests, typecheck clean; local e2e (fresh `.wrangler/state`) 62 passed / 19 skipped / 0 failed, as before.
+
+Where the code differs from rev 3, and why:
+- **A4 reverses promotion-gaps V13.** `workers/api/tests/advance-not-exposed.test.ts` pinned "advance is not routed at the edge". It now pins the
+  new rule (POST master-only, other methods 404). A master `advance` is narrower than the master stage PATCH it replaces (one rung, with evidence).
+- **D2, the worker joins by re-reading by spec, not by the id in the 409** (review S7 asked for the id). The worker creates a tournament only when
+  its read by spec found none, so on `tournament_exists` the open row the Spec DO names is the spec's only (and newest) row; the DO has no
+  get-by-id route for tournaments. The 409 message still names the id.
+- **D3, any failed winner `advance` still fails the tournament** (and spends an attempt), now also clearing the claim with a full-record write.
+  Rev 3 left this as written; keeping it preserves `tournament_exhausted` (an `advance` that keeps failing stops after three attempts). Only a
+  failure after a confirmed move (recording the result) leaves the claim for the next run.
+- **D1 changes existing tests' scores.** With `SHADOW_MIN_SAMPLES` samples an average below 80 is a failing shadow verdict, which disqualifies the
+  entrant, so tournament tests now rank in the passing band (`P(s) = 80 + s/5`, same order and ties).
+- **C3, the gate's sha rule is a function, not a schema** (`isAcceptableGateCommit` in `workers/shared/schemas.ts`): "40 hex, or exactly the
+  candidate's stored commit" needs the candidate, so the request schemas keep `min(1)` and the gate checks after reading the candidate.
+- **B, about 40 test call sites** that deployed canaries for ids with no ledger row now seed one (`workers/spec-do/tests/ledger-seed.ts`), and the
+  e2e canary tests use real candidates.
+- **Accepted mutation survivor (D3):** `runningId = null` after the winner's move. It stops a later throw from failing a tournament whose winner
+  moved; nothing after it can throw today (`completeClaimed` never throws, the trial write is caught), so no test can reach it. Kept as a guard.

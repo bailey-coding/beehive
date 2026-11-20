@@ -8,9 +8,23 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-11-18
+**Last updated:** 2026-11-20
 
-## Handoff (2026-11-18): start here
+## Handoff (2026-11-20): Wave 2a implemented, awaiting code review and merge
+
+**Wave 2a** (`docs/plans/wave-2a-plan.md` rev 3, two plan reviews, implementation notes at the end) is on `ccr-cd33bfbc-7yd3mx`: **not merged,
+not deployed.** The maintainer accepted decisions M1-M3 (2026-11-20). What it does, and the deploy checks: `docs/OPS.md` "Wave 2a".
+- A: stage PATCH writes only failed/rolled_back (409 `use_advance`), 404 before write, 400 for unknown stages; master-only edge `advance`.
+- B: `deployCanary` needs a live candidate under the spec and its commit; below `passed_train` is logged (M1).
+- C: schema **m16** (`gate_verdicts.commit_sha`, `simulated`); the gate checks candidate, spec and sha, and labels `[simulated]`; commit binding logged.
+- D: tournament minimum samples, one open tournament per spec, winner claimed before `advance`.
+- E: abandoned promotion states stop blocking after `PROMOTION_TIMEOUT`.
+- F: `SPEC_DO_PROMOTION_TOKEN`, log-only; the maintainer sets it on `beehive`, `beehive-promotion-worker`, `beehive-canary-worker`.
+
+Verified: unit 105 files / 2476 tests, typecheck clean, local e2e 62 passed / 19 skipped, 90 mutations (one accepted survivor, see the plan).
+Next: the independent code review, dispositions, then merge on the maintainer's word. Then Wave 2b (canary evidence) needs its own plan.
+
+## Handoff (2026-11-18): previous
 
 **Read first:** this section, then `docs/reviews/2026-11-17-synthesis.md` (the whole-repo review: findings, themes and the order of work). After that,
 read the older handoffs below for history only: they predate the review and some of their statuses are out of date.
@@ -45,7 +59,8 @@ or later (2026-11-12, see "Deploy status" below), and deploying is the maintaine
 - [maintainer] Verify the real Artifacts push message shape. Steps: `docs/OPEN-QUESTIONS.md` 2026-11-18.
 - [maintainer] `MIRROR_SAMPLE_PERCENT` is still 33. It was left there on purpose while there is no traffic; revisit before real traffic.
 - [agent, needs Fable credits] Fable double-check of the Wave 1 plan and code. It is marked pending in the plan; Opus did the reviews.
-- [agent] **Wave 2, ladder integrity** (spine; plan and independent review first): see the synthesis, "Proposed order of work", Wave 2:
+- [agent] **Wave 2, ladder integrity**: split by the maintainer (2026-11-18) into 2a (guards; implemented, see the 2026-11-20 handoff) and 2b
+  (canary evidence, the delta-surface decision and the namespace hole; plan not started). The original list:
   - stage PATCH refuses upward moves;
   - `deployCanary` validation;
   - real canary evidence instead of the 15-minute timer;
