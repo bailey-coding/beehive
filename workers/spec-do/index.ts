@@ -57,7 +57,6 @@ interface IdempotencyContext {
   path: string;
 }
 
-/** A 409. `code` is set only where a caller branches on it (the deploy-ref CAS); every other 409 stays code-less. */
 /** wave-2a-plan part B: coded refusals of a canary deploy, and the log-only events of parts B and C */
 const SPEC_NOT_FOUND = 'spec_not_found';
 const SPEC_MISMATCH = 'spec_mismatch';
@@ -72,6 +71,7 @@ const PROMOTION_TOKEN_MISSING_EVENT = 'promotion_token_missing';
 /** Stages from which a canary is the next rung's evidence; anything lower is logged (maintainer decision M1) */
 const CANARY_STAGE_OK = new Set(['passed_train', 'passed_canary', 'promoted']);
 
+/** A 409. `code` is set where a caller branches on it (the deploy-ref CAS, and the canary deploy's spec_mismatch / commit_mismatch). */
 class ConflictError extends Error {
   constructor(message: string, readonly code?: string) {
     super(message);
@@ -1700,8 +1700,8 @@ export class SpecDO {
 
   /**
    * Stage write + history row in one transaction. The table (c) check is LOG-ONLY (PR-S): a violation
-   * becomes an invalid_transition row in governance_events and the write still lands. An unknown id
-   * keeps its old behavior (no-op UPDATE, history row; the route answers 404).
+   * becomes an invalid_transition row in governance_events and the write still lands. Callers check the row first: the stage PATCH
+   * (live row, failed/rolled_back only, wave-2a part A) and advance (a live candidate); an unknown id would be a no-op UPDATE with a history row.
    */
   transitionCandidate(id: string, newStage: CandidateRow['stage'], changedBy: string, notes?: string): void {
     if (!this.db) throw new Error('Database not initialized');

@@ -266,7 +266,9 @@ async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): P
         // Master only (not on the user-token allow-list): the replacement for the upward stage PATCH (docs/plans/wave-2a-plan.md part A4).
         // One rung per call, with the evidence each rung enforces; the Spec DO's answer passes through unchanged.
         if (path.match(/^\/api\/candidates\/[^\/]+\/advance$/) && method === 'POST') {
-          return handleAdvanceCandidate(actorRequest, specDoStub);
+          // Without the promotion token (wave-2a part F, review S3): the master token is shared by every worker, so the edge must not turn a
+          // master caller into a promotion-token holder; its advances reach the DO unmarked and are logged as promotion_token_missing
+          return handleAdvanceCandidate(actorRequest, getSpecDoStub({ ...env, SPEC_DO_PROMOTION_TOKEN: undefined }, DEFAULT_SPEC_DO_NAME));
         }
         // Shadow samples (m15): master/service tier only (not on the user-token allow-list). Like canary-metrics, any tier-1 holder
         // can forge samples; the comparator reaches the Spec DO directly, so this route is for e2e, the demo and the maintainer.

@@ -89,6 +89,10 @@ describe('contract 2: queue-consumer -> gate-workflow -> Spec DO', () => {
     // The consumer acks by returning normally (queue-consumer/index.ts: no explicit ack); a retry would mean the push was not handled
     expect(b.messages[0].retry).not.toHaveBeenCalled();
     expect(w.count(`SELECT COUNT(*) AS n FROM gate_verdicts WHERE candidate_id = ? AND decided_by = 'queue-consumer'`, candidate.id)).toBe(1);
+    // wave-2a part C (review N5): the push path's verdict says it was simulated and which commit it was for
+    expect(w.store.raw.prepare(`SELECT simulated, commit_sha, notes FROM gate_verdicts WHERE candidate_id = ?`).get(candidate.id)).toMatchObject({
+      simulated: 1, commit_sha: sha, notes: expect.stringMatching(/^\[simulated\] /),
+    });
     expect(w.count(`SELECT COUNT(*) AS n FROM entity_history WHERE entity_id = ? AND stage = 'push_received'`, candidate.id)).toBe(1);
   });
 });

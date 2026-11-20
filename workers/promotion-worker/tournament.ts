@@ -35,6 +35,12 @@ export type TournamentRefusalCode = 'no_shadow_evidence' | 'tie' | 'tournament_c
 /** Thrown inside the claim write when the tournament already has a winner (another run claimed it first): this run resumes that claim */
 class ClaimLost extends Error {}
 
+/**
+ * advance failures that say nothing about whether the move happened (a thrown fetch, a 5xx, an older Spec DO): the claim stays, so the next run
+ * reads the winner's stage and finishes or retries (review S1). Only a definite refusal (a coded 404 or 409) fails the tournament and clears it.
+ */
+const INDETERMINATE_ADVANCE = new Set(['ledger_error', 'ledger_too_old']);
+
 /** Stages at or past the tournament's target (`passed_shadow`): a claimed winner here has moved, so its tournament only needs completing */
 const AT_OR_PAST_TARGET = new Set(['passed_shadow', 'passed_train', 'passed_canary', 'promoted']);
 
@@ -210,7 +216,13 @@ export class TournamentManager {
         { toRung: TOURNAMENT_TO_RUNG as 'train', fromRung: TOURNAMENT_FROM_RUNG, notes: `Tournament ${claimed.id} winner` },
         request.actorId
       );
-      if (!advanced.ok) throw new TournamentRefusal(advanced.code, `Winner ${decision.winnerId} could not advance: ${advanced.message}`);
+      if (!advanced.ok) {
+        if (INDETERMINATE_ADVANCE.has(advanced.code)) {
+          runningId = null; // the move may have committed: keep the claim (no failure write, no attempt spent); the next request resumes it
+          return result({ success: false, code: advanced.code, message: `Winner ${decision.winnerId}: ${advanced.message} (the claim stays; the next request resumes it)` });
+        }
+        throw new TournamentRefusal(advanced.code, `Winner ${decision.winnerId} could not advance: ${advanced.message}`);
+      }
 
       // The winner moved: from here on nothing fails the tournament. A failure recording the result leaves the claim for the next run to complete.
       runningId = null;
@@ -408,7 +420,7 @@ export class TournamentManager {
 
   /**
    * The claim: one version-checked write that moves the tournament to in_progress with the winner and the contested set (one `comparisons` entry
-   * per contested loser). Throws ClaimLost when the record as re-read already has a winner or is completed (another run decided first).
+   * per contested loser). Throws ClaimLost when the record as re-read is completed or is in_progress with a winner (another run claimed it first); a stale winner on a failed or pending row is overwritten.
    */
   private async claimWinner(
     tournamentId: string,
@@ -418,7 +430,11 @@ export class TournamentManager {
   ): Promise<TournamentWithId> {
     const at = new Date().toISOString();
     const saved = await getPromotionLedger(this.env).modifyTournament(specId, (cur) => {
-      if (cur.id !== tournamentId || cur.winner || cur.status === 'completed') throw new ClaimLost(`Tournament ${tournamentId} was claimed or replaced by another run`);
+      // A winner is a live claim only on an in_progress row (review S2): a stale one on a failed or pending row (an old worker's PATCH keeps it) is
+      // overwritten, or that spec could never be decided again
+      if (cur.id !== tournamentId || cur.status === 'completed' || (cur.status === 'in_progress' && cur.winner)) {
+        throw new ClaimLost(`Tournament ${tournamentId} was claimed or replaced by another run`);
+      }
       const winnerScore = decision.scores[decision.winnerId] ?? 0;
       const comparisons = [...contested]
         .filter((id) => id !== decision.winnerId)
@@ -492,10 +508,18 @@ export class TournamentManager {
         request.actorId
       );
       if (!advanced.ok) {
-        await this.recordTournamentFailure(t.id, `${advanced.code}: Winner ${winnerId} could not advance: ${advanced.message}`, request.specId);
-        return result({ success: false, code: advanced.code, message: `Winner ${winnerId} could not advance: ${advanced.message}` });
+        if (INDETERMINATE_ADVANCE.has(advanced.code)) {
+          return result({ success: false, code: advanced.code, message: `Winner ${winnerId}: ${advanced.message} (the claim stays; the next request resumes it)` });
+        }
+        // A definite refusal: unless the winner has meanwhile reached the target some other way (then only completing is left), the claim is void
+        const now = await getCandidate(this.env, winnerId).then((r) => String(r.stage ?? ''), () => '');
+        if (!AT_OR_PAST_TARGET.has(now)) {
+          await this.recordTournamentFailure(t.id, `${advanced.code}: Winner ${winnerId} could not advance: ${advanced.message}`, request.specId);
+          return result({ success: false, code: advanced.code, message: `Winner ${winnerId} could not advance: ${advanced.message}` });
+        }
+      } else {
+        movedNow = !advanced.data.noop;
       }
-      movedNow = !advanced.data.noop;
     }
     const recorded = await this.completeClaimed(t.id, request.specId);
     const losers = new Set(t.comparisons.filter((c) => c.winner === winnerId).map((c) => c.candidate2));

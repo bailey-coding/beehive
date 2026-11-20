@@ -681,15 +681,23 @@ Plan: `docs/plans/wave-1-plan.md`. Spec DO, scientist-comparator, queue-consumer
 Plan: `docs/plans/wave-2a-plan.md` (rev 3 plus implementation notes). Spec DO (schema **m16**), edge, gate-workflow, promotion worker, canary
 worker. Any deploy order works; the notes per item say what an old peer sees.
 
-**Before the push:** count live candidates whose commit is neither empty nor 40 lowercase hex
-(`SELECT COUNT(*) FROM candidates WHERE deleted_at IS NULL AND commit_sha != '' AND commit_sha NOT GLOB '[0-9a-f]*' ...`, or read them and check
-in a script). The gate still runs for them (it accepts exactly the candidate's stored commit), so a nonzero count is fine but worth knowing.
+**Before the push** (dashboard SQL editor, read-only):
+- Candidates whose commit is neither empty nor 40 lowercase hex:
+  `SELECT COUNT(*) FROM candidates WHERE deleted_at IS NULL AND commit_sha != '' AND (length(commit_sha) != 40 OR commit_sha GLOB '*[^0-9a-f]*')`.
+  The gate still runs for them (it accepts exactly the candidate's stored commit), so a nonzero count is fine but worth knowing.
+- Specs with more than one open tournament (the race D2 closes may already have left some):
+  `SELECT spec_id, COUNT(*) FROM tournaments WHERE status IN ('pending','in_progress') GROUP BY spec_id HAVING COUNT(*) > 1`.
+  Expect none. If a spec has some and its newest row later fails, reopening it answers `409 tournament_exists` until the older open row is
+  closed by hand (report it; do not edit rows without a plan).
 
 **Behavior changes (user-visible):**
 - **Stage PATCH** (`PATCH /api/candidates/:id/stage`) writes only `failed` and `rolled_back`; anything else is `409 use_advance`, nothing written.
   Every stage PATCH (candidate, spec, issue) answers 404 before writing for an unknown or tombstoned row (it used to write first), and 400 for an
   unknown stage (it used to be a 500).
-- **New edge route `POST /api/candidates/:id/advance`**, master only (service and user tokens get 403). It replaces the upward PATCH for fixtures and
+- **New edge route `POST /api/candidates/:id/advance`**, master only (service and user tokens get 403). The master token is the same on every
+  worker, so any of them (or the maintainer CLI) can reach `advance` through this route; the edge forwards it **without** the promotion token,
+  so these calls are logged as `promotion_token_missing` (route `POST /api/candidates/:id/advance`, the asserted actor) and phase 2 must decide
+  about them explicitly. It replaces the upward PATCH for fixtures and
   `scripts/prod-verify-promotion.sh`, one rung per call, with the evidence each rung enforces. It reverses promotion-gaps V13 ("advance is
   internal"), by maintainer decision M3. **Run `prod-verify-promotion.sh` only after all ten builds have landed**: an old edge answers 404.
 - **Canary deploy** (`POST /canary-deployments`): coded `404 candidate_not_found` / `404 spec_not_found` for an id with no live ledger row,
@@ -712,7 +720,8 @@ in a script). The gate still runs for them (it accepts exactly the candidate's s
 - New gate verdicts: `notes LIKE '[simulated] %'`, `simulated = 1`, `commit_sha` set.
 - `governance_events` (all log-only, flood-controlled, one row per subject and reason per hour):
   - `evidence_unbound`: pre-merge evidence that could not be bound to the candidate's commit (either side empty). Expected for claimed candidates
-    (no `commit_sha` writer yet, b2-S8) and for verdicts written before m16. This is the input for enforcing the commit match later.
+    (no `commit_sha` writer yet, b2-S8), for verdicts written before m16, and for every `scripts/prod-verify-promotion.sh` run (its fixture verdict
+    names no commit). This is the input for enforcing the commit match later.
   - `commit_mismatch`: pre-merge or canary evidence produced for another commit than the candidate's (a real `advance` only, never a dry run).
   - `canary_stage_precondition`: a canary deployed for a candidate below `passed_train` (maintainer decision M1: allowed and logged; 2b enforces).
   - `promotion_token_missing`: see the next item.
@@ -720,13 +729,17 @@ in a script). The gate still runs for them (it accepts exactly the candidate's s
 **Promotion token (phase 1, log-only).** Secret `SPEC_DO_PROMOTION_TOKEN`, header `X-Beehive-Promotion`, on `POST /api/candidates/:id/advance`,
 `POST /canary-deployments` and `PATCH /canary-deployments/:id` (not the stage PATCH and no rollback route: rollback is never gated, rule 7).
 - The maintainer sets the same value as a secret on **`beehive`** (the DO host and the edge), **`beehive-promotion-worker`** and
-  **`beehive-canary-worker`**. Nothing else needs it. Until it is set on `beehive`, nothing is compared and nothing is logged.
+  **`beehive-canary-worker`**. Nothing else needs it. It does not cover the edge's master `advance` route (see above), which is forwarded without it. Until it is set on `beehive`, nothing is compared and nothing is logged.
 - With it set on `beehive`, a call to those routes without the right header **proceeds** and is logged: Workers Logs
   `[SpecDO] promotion_token_missing` (route, asserted actor) and a `governance_events` row (none for a dry-run `advance`). Set it on the two
   workers in the same push window to avoid noise.
 - Phase 2 (a later, separately reviewed change) refuses with 403, after a week with no `promotion_token_missing` rows.
 
-**Rollback** (a revert push): m16's two columns stay and are ignored by older code; nothing else is stored.
+**Rollback** (a revert push): m16's two columns stay and are ignored by older code; nothing else is stored. Older code's verdict upsert leaves
+them untouched, so a verdict rewritten during the revert keeps the earlier commit, which can show as a (log-only) `commit_mismatch` after the
+next forward deploy.
+- **Tournament claims.** A 5xx or lost answer on the winner's `advance` leaves the tournament `in_progress` with its winner (no attempt spent);
+  the next promotion request for that spec reads the winner's stage and completes or retries. Only a definite refusal fails the tournament.
 
 ## Promotion worker on advance (promotion-gaps PR C, 2026-11-10)
 

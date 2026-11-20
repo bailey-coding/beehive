@@ -156,17 +156,21 @@ describe('the Spec DO: log-only', () => {
 
 describe('only the three holders call the promotion routes', () => {
   // beehive-promotion-worker (advance), beehive-canary-worker (canary writes), beehive (the edge's master advance; the DO itself)
-  const HOLDERS = ['workers/promotion-worker/', 'workers/canary-worker/', 'workers/api/', 'workers/spec-do/', 'workers/shared/'];
+  // workers/shared: only the modules that DEFINE the routes and their client (review N4: not the whole directory)
+  const HOLDERS = [
+    'workers/promotion-worker/', 'workers/canary-worker/', 'workers/api/', 'workers/spec-do/',
+    'workers/shared/promotion-advance.ts', 'workers/shared/deploy-refs.ts', 'workers/shared/spec-do-auth.ts',
+  ];
   const files = (dir: string): string[] =>
     readdirSync(dir).flatMap((f) => {
       const p = join(dir, f);
       if (f === 'node_modules' || f === 'tests') return [];
       return statSync(p).isDirectory() ? files(p) : p.endsWith('.ts') ? [p] : [];
     });
-  it('no other worker source names /advance or /canary-deployments', () => {
+  it('no other worker source names /advance or /canary-deployments, or uses ADVANCE_PATH or the canary write methods of the deploy-refs client', () => {
     const offenders = files('workers')
       .filter((f) => !HOLDERS.some((h) => f.startsWith(h)))
-      .filter((f) => /\/advance['`]|\/canary-deployments/.test(readFileSync(f, 'utf8')));
+      .filter((f) => /\/advance['`]|\/canary-deployments|ADVANCE_PATH|\.deployCanary\(|\.setAutoRollback\(|DEPLOY_PATHS\.canaryDeployment/.test(readFileSync(f, 'utf8')));
     expect(offenders).toEqual([]);
   });
 });

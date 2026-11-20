@@ -213,6 +213,8 @@ Change (the synthesis' option, as the review suggested):
    `promotion-ledger.ts:83-92`; nothing writes it today): one entry per contested loser, `{candidate1: winner, candidate2: loser, winner,
    comparisonScore, comparedAt}`. The contested set is the winner plus the `candidate2` values. No new field, no new column, no schema change: the
    strict `TournamentRecordSchema` (`promotion-ledger.ts:110-117`) of an old worker parses the row.
+   (Corrected after the code review, S2: an old worker does NOT always "write nothing" on a claimed row. With three or more contested entrants,
+   or a higher-scoring late joiner, it decides again and can advance a second winner, as two old runs could before. Bounded to the deploy window.)
    - The write's `mutate` **refuses** when the row it re-reads already has a `winner`, or is `completed`. `modifyTournament` re-applies `mutate` after a
      version conflict (`casLoop`, `promotion-ledger.ts:281-290`), so of two racing runs only the first claims a winner; the second goes to step 4
      (resume) instead of advancing its own pick. Old workers treat a tournament as decided only when `winner && status === 'completed'`
@@ -374,3 +376,21 @@ Where the code differs from rev 3, and why:
   e2e canary tests use real candidates.
 - **Accepted mutation survivor (D3):** `runningId = null` after the winner's move. It stops a later throw from failing a tournament whose winner
   moved; nothing after it can throw today (`completeClaimed` never throws, the trial write is caught), so no test can reach it. Kept as a guard.
+
+## Code review (independent, Opus, 2026-11-20): approve with changes
+
+| Finding | Disposition |
+|---|---|
+| S1 a 5xx on the winner's advance cleared the claim though the move may have committed | Fixed: only a definite refusal fails and clears; `ledger_error`/`ledger_too_old` keep the claim (no attempt spent) and the next request resumes; a resumed winner refused because it reached the target another way is completed. Three tests (5xx, committed-but-lost, refused-but-moved); the `tournament_exhausted` test now burns attempts with definite 409s |
+| S2 a stale winner on a failed/pending row stranded the tournament; the mixed-version sentence was wrong | Fixed: a winner is a live claim only on an `in_progress` row, a stale one is overwritten (test); plan text corrected under D3.1 |
+| S3 the edge made every master-token caller a promotion-token holder | Fixed: the edge forwards `advance` without the promotion token (test); OPS says the edge route is logged and phase 2 must decide |
+| S4 OPS pre-push SQL missed non-hex values | Fixed with the reviewer's verified query |
+| S5 no count of duplicate open tournaments | Fixed: added to the OPS pre-push checks |
+| N1 ConflictError doc misplaced and false | Fixed |
+| N2 stale transitionCandidate doc | Fixed |
+| N3 vacuous score-80 test | Deleted (score 0 is covered in `promotion-candidate-routes.test.ts`) |
+| N4 holders scan exempted all of workers/shared and grepped literals only | Fixed: only the defining modules are exempt; ADVANCE_PATH and the client's canary write methods are flagged |
+| N5 no queue-consumer -> gate -> DO assertion for part C | Fixed: contract test 2 asserts `simulated = 1`, the push sha and the `[simulated]` notes |
+| N6 rollback keeps old commits | Noted in OPS |
+| N7 ClaimLost on a pending re-read is a generic 500 | Mostly gone with S2 (a stale winner on a pending row no longer raises ClaimLost); the remaining case (the row was replaced) stays `tournament_error`, retryable |
+| N8 prod-verify writes an evidence_unbound row | Noted in OPS |

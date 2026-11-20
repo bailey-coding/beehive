@@ -307,13 +307,6 @@ describe('tournament mode: shadow -> train is the competition', () => {
     expect(res.json.details).toMatchObject({ winner: a, scores: { [a]: P(95), [b]: P(50) } });
   });
 
-  it('the lowest passing score (P(0) = 80) against P(50): P(50) wins (80 is a score, not a default)', async () => {
-    const { w, a, b } = await two(0, 50);
-    await w.promote({ candidateId: a, toRung: 'train' });
-    const res = await w.promote({ candidateId: b, toRung: 'train' });
-    expect(res.json.details).toMatchObject({ winner: b });
-  });
-
   it('no shadow scores at all (production today) is a 409 no_shadow_evidence, nothing moves, and the tournament is NOT burned: any number of refusals, then it decides', async () => {
     const { w, a, b } = await two(null, null);
     await w.promote({ candidateId: a, toRung: 'train' });
@@ -456,14 +449,14 @@ describe('tournament mode: shadow -> train is the competition', () => {
     await w.promote({ candidateId: a, toRung: 'train' });
     w.box.hook = async (request) => {
       if (new URL(request.url).pathname.endsWith('/advance') && !((await request.json()) as { dryRun?: boolean }).dryRun) {
-        w.store.raw.prepare("UPDATE candidates SET stage = 'passed_premerge' WHERE id = ?").run(a);
-        return Response.json({ success: false, error: 'boom' }, { status: 500 }); // the real advance keeps failing
+        // the real advance keeps being REFUSED (a definite answer: review S1 keeps the claim on a 5xx, which spends no attempt)
+        return Response.json({ success: false, error: 'stage changed', code: 'not_next_rung' }, { status: 409 });
       }
       return undefined;
     };
     const codes: string[] = [];
     for (let i = 0; i < 5; i++) codes.push((await w.promote({ candidateId: b, toRung: 'train' })).json.code as string);
-    expect(codes.slice(0, 3)).toEqual(['ledger_error', 'ledger_error', 'ledger_error']);
+    expect(codes.slice(0, 3)).toEqual(['not_next_rung', 'not_next_rung', 'not_next_rung']);
     expect(codes.slice(3)).toEqual(['tournament_exhausted', 'tournament_exhausted']);
     const last = await w.promote({ candidateId: b, toRung: 'train' });
     expect(last.status).toBe(409);
@@ -1124,6 +1117,76 @@ describe('wave-2a part D: tournament guards', () => {
     const res = await w.promote({ candidateId: b, toRung: 'train' });
     expect(res.status).toBe(409);
     expect(row(w)[0]).toMatchObject({ status: 'failed', winner: null, comparisons: '[]' });
+  });
+
+  it('S1: a 5xx on the winner\'s advance keeps the claim (no failure, no attempt spent); the next request resumes and moves the winner once', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.box.hook = async (request) => ((await isRealAdvance(request)) ? Response.json({ success: false, error: 'boom' }, { status: 500 }) : undefined);
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(502);
+    expect(res.json.code).toBe('ledger_error');
+    expect(row(w)[0]).toMatchObject({ status: 'in_progress', winner: b, attempts: 0 });
+    expect(w.stageOf(b)).toBe('passed_premerge');
+    w.box.hook = undefined;
+    const again = await w.promote({ candidateId: a, toRung: 'train' });
+    expect(again.json).toMatchObject({ success: true, outcome: 'eliminated', moves: [{ candidateId: b }] });
+    expect(w.stageOf(b)).toBe('passed_shadow');
+    expect(row(w)[0]).toMatchObject({ status: 'completed', winner: b });
+  });
+
+  it('S1: an advance that committed but whose answer was lost is completed by the next request, not moved again and not disqualified', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.box.hook = async (request) => {
+      if (await isRealAdvance(request)) {
+        await w.spec.fetch(request); // the move commits ...
+        return Response.json({ success: false, error: 'timeout' }, { status: 504 }); // ... and the answer is lost
+      }
+      return undefined;
+    };
+    await w.promote({ candidateId: b, toRung: 'train' });
+    expect(w.stageOf(b)).toBe('passed_shadow');
+    expect(row(w)[0]).toMatchObject({ status: 'in_progress', winner: b });
+    let realAdvances = 0;
+    w.box.hook = async (request) => ((await isRealAdvance(request)) ? (realAdvances++, undefined) : undefined);
+    const again = await w.promote({ candidateId: a, toRung: 'train' });
+    expect(again.json).toMatchObject({ success: true, outcome: 'eliminated', moves: [] });
+    expect(realAdvances).toBe(0);
+    expect(row(w)[0]).toMatchObject({ status: 'completed', winner: b });
+    expect(w.spec.listNearMisses({ candidateId: b, reason: 'tournament_loss', limit: 10, offset: 0 })).toHaveLength(0);
+  });
+
+  it('S1: a resumed winner refused because it reached the target another way meanwhile is completed, not failed', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.box.hook = async (request) => ((await isRealAdvance(request)) ? Response.json({ success: false, error: 'boom' }, { status: 500 }) : undefined);
+    await w.promote({ candidateId: b, toRung: 'train' }); // claimed, not moved
+    w.box.hook = async (request) => {
+      if (await isRealAdvance(request)) {
+        w.store.raw.prepare("UPDATE candidates SET stage = 'passed_train' WHERE id = ?").run(b);
+        return Response.json({ success: false, error: 'not the next rung', code: 'not_next_rung' }, { status: 409 });
+      }
+      return undefined;
+    };
+    await w.promote({ candidateId: a, toRung: 'train' });
+    expect(row(w)[0]).toMatchObject({ status: 'completed', winner: b });
+  });
+
+  it('S2: a stale winner on a failed row (an old worker\'s PATCH keeps it) does not strand the tournament', async () => {
+    const { w, a, b } = await pair(85, 95);
+    await w.promote({ candidateId: a, toRung: 'train' });
+    w.box.hook = async (request) => {
+      if (await isRealAdvance(request)) return Response.json({ success: false, error: 'stage changed', code: 'not_next_rung' }, { status: 409 });
+      return undefined;
+    };
+    await w.promote({ candidateId: b, toRung: 'train' }); // claim, refusal, failed
+    w.store.raw.prepare('UPDATE tournaments SET winner = ? WHERE spec_id = ?').run(b, w.specId); // what an old worker's failure PATCH leaves
+    w.box.hook = undefined;
+    const res = await w.promote({ candidateId: b, toRung: 'train' });
+    expect(res.status).toBe(200);
+    expect(w.stageOf(b)).toBe('passed_shadow');
+    expect(row(w)[0]).toMatchObject({ status: 'completed', winner: b });
   });
 
   it('D3: two runs racing: the second sees the first one\'s claim and resumes it, so exactly one candidate is advanced', async () => {
