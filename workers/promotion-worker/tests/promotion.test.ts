@@ -5,6 +5,7 @@
  * Covers: Tournament Mode, Merge-Train Mode, and Common Logic
  */
 
+import { SHADOW_MIN_SAMPLES } from '../../shared/shadow-verdict';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import handler from '../index';
 import { PromotionWorker } from '../promotion';
@@ -622,7 +623,8 @@ describe('Spec DO promotion ledger wiring', () => {
         new Request(`https://spec-do.internal/api/candidates/${id}/shadow-samples`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Actor-ID': 'scientist-comparator' },
-          body: JSON.stringify({ samples: [{ requestId: `r-${id}`, score: value, matched: true, diffs: [] }] }),
+          // SHADOW_MIN_SAMPLES samples: fewer is no tournament score (wave-2a part D1)
+          body: JSON.stringify({ samples: Array.from({ length: SHADOW_MIN_SAMPLES }, (_, i) => ({ requestId: `r-${id}-${i}`, score: value, matched: true, diffs: [] })) }),
         })
       );
       expect(res.status).toBe(200);
@@ -655,8 +657,8 @@ describe('Spec DO promotion ledger wiring', () => {
     const { spec, env, specId, candidate, score, request } = await realWorld('tournament');
     const c1 = candidate('passed_premerge');
     const c2 = candidate('passed_premerge');
-    await score(c1, 60);
-    await score(c2, 90);
+    await score(c1, 85); // passing scores: below 80 with enough samples is a failing shadow verdict (wave-2a part D1)
+    await score(c2, 95);
     const worker = new PromotionWorker(env);
 
     await worker.promoteCandidate(request(c1));

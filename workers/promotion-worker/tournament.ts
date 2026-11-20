@@ -13,7 +13,8 @@ import {
   Env,
 } from './types';
 import { getCandidate, getPromotionLedger, advanceCandidate, recordDecidedTrial } from './spec-do';
-import { shadowMinProductionSamples, isProductionSource } from '../shared/shadow-verdict';
+import { shadowMinProductionSamples, shadowMinSamples, isProductionSource } from '../shared/shadow-verdict';
+import { SpecDoLedgerError } from '../shared/promotion-ledger';
 
 /**
  * Extended tournament type with ID
@@ -30,6 +31,12 @@ export const TOURNAMENT_FROM_RUNG: Rung = 'shadow';
 export const TOURNAMENT_TO_RUNG: Rung = 'train';
 
 export type TournamentRefusalCode = 'no_shadow_evidence' | 'tie' | 'tournament_completed' | 'not_enough_entrants' | 'tournament_exhausted';
+
+/** Thrown inside the claim write when the tournament already has a winner (another run claimed it first): this run resumes that claim */
+class ClaimLost extends Error {}
+
+/** Stages at or past the tournament's target (`passed_shadow`): a claimed winner here has moved, so its tournament only needs completing */
+const AT_OR_PAST_TARGET = new Set(['passed_shadow', 'passed_train', 'passed_canary', 'promoted']);
 
 /** A decision that cannot be made, with a stable code. Before a winner exists it only reads (no attempt is spent); after, the tournament is recorded failed (retryable). The caller gets the code. */
 export class TournamentRefusal extends Error {
@@ -106,6 +113,12 @@ export class TournamentManager {
         });
       }
 
+      // A tournament whose winner was claimed but never completed (the run stopped after the claim, or recording the winner failed after the
+      // move): finish that decision before anything else; never decide it again (wave-2a-plan part D3, review b1-S4)
+      if (tournament.status === 'in_progress' && tournament.winner) {
+        return await this.resumeClaim(tournament, request, result);
+      }
+
       const updatedTournament = await this.addCandidateToTournament(
         tournament,
         request.candidateId,
@@ -174,22 +187,34 @@ export class TournamentManager {
       const decision = decideTournament(entrants);
       if (decision.kind === 'refused') throw new TournamentRefusal(decision.code, decision.message);
 
-      // A winner exists: now the tournament really runs
-      if (current.status !== 'in_progress') {
-        await this.startTournament(current.id);
+      // A winner exists: claim it on the tournament in one version-checked write (start + winner + the contested set, stored as `comparisons`),
+      // BEFORE the move (wave-2a-plan part D3). A run that finds another run's claim resumes that one instead of advancing its own pick.
+      let claimed: TournamentWithId;
+      try {
+        claimed = await this.claimWinner(current.id, request.specId, decision, contested);
+      } catch (e) {
+        if (!(e instanceof ClaimLost)) throw e;
+        const now = await this.getTournamentBySpec(request.specId);
+        if (now && now.status === 'in_progress' && now.winner) return await this.resumeClaim(now, request, result);
+        if (now && now.status === 'completed' && now.winner) {
+          return result({ success: false, code: 'tournament_completed', message: `Tournament for spec ${request.specId} already completed with winner ${now.winner}` });
+        }
+        throw e;
       }
-      runningId = current.id;
+      runningId = claimed.id;
 
-      // The Spec DO decides whether the winner may move; a refusal here (the verdict flipped, the stage changed) fails the tournament, retryably
+      // The Spec DO decides whether the winner may move; a refusal or error here fails the tournament (retryable) and clears the claim
       const advanced = await advanceCandidate(
         this.env,
         decision.winnerId,
-        { toRung: TOURNAMENT_TO_RUNG as 'train', fromRung: TOURNAMENT_FROM_RUNG, notes: `Tournament ${current.id} winner` },
+        { toRung: TOURNAMENT_TO_RUNG as 'train', fromRung: TOURNAMENT_FROM_RUNG, notes: `Tournament ${claimed.id} winner` },
         request.actorId
       );
       if (!advanced.ok) throw new TournamentRefusal(advanced.code, `Winner ${decision.winnerId} could not advance: ${advanced.message}`);
 
-      await this.recordWinner(decision.winnerId, current, contested);
+      // The winner moved: from here on nothing fails the tournament. A failure recording the result leaves the claim for the next run to complete.
+      runningId = null;
+      const recorded = await this.completeClaimed(claimed.id, request.specId);
 
       // The decision as ledger evidence, AFTER the winner moved (a trial and a near-miss for the loser say somebody won). Best effort: the stage is
       // the truth, so a trial that cannot be written (an actorId that is no actor row is a foreign-key failure) is reported, not a failed tournament.
@@ -230,6 +255,7 @@ export class TournamentManager {
           winner: decision.winnerId,
           scores: decision.scores,
           ...(ineligible.size ? { disqualified: Object.fromEntries(ineligible) } : {}),
+          ...(recorded === true ? {} : { recordWinner: recorded }),
           ...trial,
         },
       });
@@ -237,7 +263,7 @@ export class TournamentManager {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[Tournament] Error: ${errorMessage}`);
       // The ledger's failure reason leads with the code, so `tie` / `no_shadow_evidence` / an advance refusal is searchable there
-      if (runningId) await this.recordTournamentFailure(runningId, error instanceof TournamentRefusal ? `${error.code}: ${errorMessage}` : errorMessage);
+      if (runningId) await this.recordTournamentFailure(runningId, error instanceof TournamentRefusal ? `${error.code}: ${errorMessage}` : errorMessage, request.specId);
 
       return result({
         success: false,
@@ -322,9 +348,19 @@ export class TournamentManager {
       status: 'pending',
     };
 
-    const saved = await this.saveTournament(tournament);
-    console.log(`[Tournament] Created new tournament: ${saved.id} for spec ${specId}`);
-    return saved;
+    try {
+      const saved = await this.saveTournament(tournament);
+      console.log(`[Tournament] Created new tournament: ${saved.id} for spec ${specId}`);
+      return saved;
+    } catch (e) {
+      // Another run created the spec's tournament between our read and our create (wave-2a-plan part D2): join that one. The spec had no
+      // tournament at our read, so the open one the Spec DO names is the spec's newest.
+      if (!(e instanceof SpecDoLedgerError && e.code === 'tournament_exists')) throw e;
+      const winner = await this.getTournamentBySpec(specId);
+      if (!winner) throw e;
+      console.log(`[Tournament] Joined tournament ${winner.id} for spec ${specId} (created concurrently)`);
+      return winner;
+    }
   }
 
   /**
@@ -353,12 +389,125 @@ export class TournamentManager {
    * failures and stops retries after MAX_TOURNAMENT_ATTEMPTS). Best effort: the original
    * error is what the caller sees, so a ledger error here is only logged.
    */
-  private async recordTournamentFailure(tournamentId: string, reason: string): Promise<void> {
+  private async recordTournamentFailure(tournamentId: string, reason: string, specId?: string): Promise<void> {
     try {
+      if (specId) {
+        // A full-record write (POST), so the claimed winner and the contested set are cleared: a PATCH merges and cannot unset them (review S1)
+        const saved = await getPromotionLedger(this.env).modifyTournament(specId, (cur) => {
+          if (cur.id !== tournamentId) return null;
+          const { winner: _winner, completedAt: _completedAt, ...rest } = cur;
+          return { ...rest, status: 'failed', failureReason: reason, comparisons: [] };
+        });
+        if (saved && saved.id === tournamentId) return;
+      }
       await this.updateTournament(tournamentId, { status: 'failed', failureReason: reason });
     } catch (error) {
       console.error(`[Tournament] Could not record failure of ${tournamentId}:`, error);
     }
+  }
+
+  /**
+   * The claim: one version-checked write that moves the tournament to in_progress with the winner and the contested set (one `comparisons` entry
+   * per contested loser). Throws ClaimLost when the record as re-read already has a winner or is completed (another run decided first).
+   */
+  private async claimWinner(
+    tournamentId: string,
+    specId: string,
+    decision: Extract<TournamentDecision, { kind: 'winner' }>,
+    contested: Set<string>
+  ): Promise<TournamentWithId> {
+    const at = new Date().toISOString();
+    const saved = await getPromotionLedger(this.env).modifyTournament(specId, (cur) => {
+      if (cur.id !== tournamentId || cur.winner || cur.status === 'completed') throw new ClaimLost(`Tournament ${tournamentId} was claimed or replaced by another run`);
+      const winnerScore = decision.scores[decision.winnerId] ?? 0;
+      const comparisons = [...contested]
+        .filter((id) => id !== decision.winnerId)
+        .map((loser) => ({
+          candidate1: decision.winnerId,
+          candidate2: loser,
+          winner: decision.winnerId,
+          comparisonScore: winnerScore - (decision.scores[loser] ?? 0),
+          comparedAt: at,
+        }));
+      const { failureReason: _reason, failedAt: _failedAt, ...rest } = cur;
+      return { ...rest, status: 'in_progress', winner: decision.winnerId, comparisons };
+    });
+    if (!saved) throw new Error(`Tournament for spec ${specId} disappeared while claiming its winner`);
+    return saved as TournamentWithId;
+  }
+
+  /**
+   * Complete a claimed tournament on the record as saved (an entrant that joined meanwhile is kept): the winner is `winner`, the losers are the
+   * contested set stored at the claim. True when written; otherwise the reason, and the claim stays for the next run (never throws).
+   */
+  private async completeClaimed(tournamentId: string, specId: string): Promise<true | string> {
+    try {
+      const at = new Date().toISOString();
+      const saved = await getPromotionLedger(this.env).modifyTournament(specId, (cur) => {
+        if (cur.id !== tournamentId || !cur.winner || cur.status === 'completed') return null;
+        const losers = new Set(cur.comparisons.filter((c) => c.winner === cur.winner).map((c) => c.candidate2));
+        return {
+          ...cur,
+          status: 'completed',
+          completedAt: at,
+          candidates: cur.candidates.map((c) =>
+            c.candidateId === cur.winner
+              ? { ...c, status: 'winner' as const, promotedAt: at }
+              : c.status === 'competing' && losers.has(c.candidateId) ? { ...c, status: 'eliminated' as const } : c
+          ),
+        };
+      });
+      if (saved && saved.id === tournamentId && saved.status === 'completed') return true;
+      return 'not recorded: the tournament was no longer the claimed one';
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      console.error(`[Tournament] Winner moved but tournament ${tournamentId} was not completed (the next run completes it): ${why}`);
+      return `not recorded: ${why.slice(0, 200)}`;
+    }
+  }
+
+  /**
+   * Finish a claimed tournament (in_progress with a winner): a winner at or past the target stage has moved, so only completing is left; otherwise
+   * the move is retried. Never decides again. The requester's outcome: the winner `moved` (this call moved it) or `noop`, a contested loser
+   * `eliminated`, anyone else `tournament_completed`.
+   */
+  private async resumeClaim(
+    t: TournamentWithId,
+    request: ResolvedPromotionRequest,
+    result: (r: Pick<PromotionResult, 'success' | 'message'> & Partial<PromotionResult>) => PromotionResult
+  ): Promise<PromotionResult> {
+    const winnerId = t.winner as string;
+    let stage: string | null = null;
+    try {
+      stage = String((await getCandidate(this.env, winnerId)).stage ?? '');
+    } catch {
+      stage = null; // unreadable: the real advance below says what the ledger thinks (a definite refusal fails the tournament)
+    }
+    let movedNow = false;
+    if (!stage || !AT_OR_PAST_TARGET.has(stage)) {
+      const advanced = await advanceCandidate(
+        this.env,
+        winnerId,
+        { toRung: TOURNAMENT_TO_RUNG as 'train', fromRung: TOURNAMENT_FROM_RUNG, notes: `Tournament ${t.id} winner` },
+        request.actorId
+      );
+      if (!advanced.ok) {
+        await this.recordTournamentFailure(t.id, `${advanced.code}: Winner ${winnerId} could not advance: ${advanced.message}`, request.specId);
+        return result({ success: false, code: advanced.code, message: `Winner ${winnerId} could not advance: ${advanced.message}` });
+      }
+      movedNow = !advanced.data.noop;
+    }
+    const recorded = await this.completeClaimed(t.id, request.specId);
+    const losers = new Set(t.comparisons.filter((c) => c.winner === winnerId).map((c) => c.candidate2));
+    const moves = movedNow ? [{ candidateId: winnerId, fromRung: TOURNAMENT_FROM_RUNG, toRung: TOURNAMENT_TO_RUNG }] : [];
+    const details = { tournamentId: t.id, winner: winnerId, resumed: true, ...(recorded === true ? {} : { recordWinner: recorded }) };
+    if (request.candidateId === winnerId) {
+      return result({ success: true, outcome: movedNow ? 'moved' : 'noop', message: `Tournament winner: ${winnerId}`, moves, details });
+    }
+    if (losers.has(request.candidateId)) {
+      return result({ success: true, outcome: 'eliminated', message: `Tournament winner: ${winnerId} promoted to ${request.toRung}`, moves, details });
+    }
+    return result({ success: false, code: 'tournament_completed', message: `Tournament for spec ${request.specId} was decided with winner ${winnerId}`, details });
   }
 
   /**
@@ -429,13 +578,22 @@ export class TournamentManager {
    * A score of 0 is a real score.
    */
   private async readShadowScore(candidateId: string): Promise<number | null> {
-    const row = (await getCandidate(this.env, candidateId)) as { shadowScore?: unknown; shadowProductionScore?: unknown; shadowProductionCount?: unknown };
+    const row = (await getCandidate(this.env, candidateId)) as { shadowScore?: unknown; shadowMetrics?: unknown; shadowProductionScore?: unknown; shadowProductionCount?: unknown };
     if (this.productionSource()) {
       // Production samples only, and enough of them. A Spec DO without the fields (older) answers no score: fail closed.
       const count = row.shadowProductionCount;
       return typeof row.shadowProductionScore === 'number' && typeof count === 'number' && count >= shadowMinProductionSamples() ? row.shadowProductionScore : null;
     }
-    return typeof row.shadowScore === 'number' ? row.shadowScore : null;
+    // The all-sample score needs as many samples as the shadow verdict (wave-2a-plan part D1, review b1-S5): one sample at 100 must not beat
+    // 500 at 99. The count is in shadowMetrics (a JSON string); a missing or unreadable count is no score (fail closed, like the production source).
+    if (typeof row.shadowScore !== 'number') return null;
+    let total: unknown;
+    try {
+      total = typeof row.shadowMetrics === 'string' ? (JSON.parse(row.shadowMetrics) as { totalRequests?: unknown }).totalRequests : undefined;
+    } catch {
+      total = undefined;
+    }
+    return typeof total === 'number' && total >= shadowMinSamples() ? row.shadowScore : null;
   }
 
   /**
@@ -467,35 +625,6 @@ export class TournamentManager {
     };
   }
 
-  /**
-   * Mark the tournament in progress
-   */
-  private async startTournament(tournamentId: string): Promise<void> {
-    await this.updateTournamentStatus(tournamentId, {
-      status: 'in_progress',
-    });
-    console.log(`[Tournament] Started tournament: ${tournamentId}`);
-  }
 
-  /**
-   * Record the winner and the eliminated entrants, then complete the tournament. The winner's stage was already written by `advance`.
-   */
-  private async recordWinner(winnerId: string, tournament: TournamentWithId, contested: Set<string>): Promise<void> {
-    const at = new Date().toISOString();
-    // Only the entrants that took part in this contest are decided; a disqualified one stays disqualified and one that joined mid-decision stays competing
-    const updatedCandidates = tournament.candidates.map(c =>
-      c.candidateId === winnerId
-        ? { ...c, status: 'winner' as const, promotedAt: at }
-        : c.status === 'competing' && contested.has(c.candidateId) ? { ...c, status: 'eliminated' as const } : c
-    );
 
-    // One write: winner, candidate statuses and completion together, or a failure between two writes would leave a failed tournament with
-    // no competing entrant to ever decide it again
-    await this.updateTournament(tournament.id, {
-      status: 'completed',
-      winner: winnerId,
-      candidates: updatedCandidates,
-      completedAt: at,
-    });
-  }
 }

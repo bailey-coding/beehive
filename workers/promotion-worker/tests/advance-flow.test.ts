@@ -69,7 +69,8 @@ async function world(mode: PromotionMode, vars: { doSource?: string; tournamentS
     const res = await worker.promoteCandidate({ specId: s.id, actorId: agent, ...body } as PromotionRequest);
     return { status: res.status, json: (await res.json()) as PromotionResult & Record<string, any> };
   };
-  const samples = async (id: string, score: number, baseline: 'placeholder' | 'production' = 'placeholder', n = 1) => {
+  // SHADOW_MIN_SAMPLES by default: fewer is no tournament score (wave-2a part D1)
+  const samples = async (id: string, score: number, baseline: 'placeholder' | 'production' = 'placeholder', n = SHADOW_MIN_SAMPLES) => {
     for (let i = 0; i < n; i++) await postSample(id, score, baseline);
   };
   const postSample = async (id: string, score: number, baseline: 'placeholder' | 'production') => {
@@ -245,12 +246,15 @@ describe.each(['tournament', 'merge-train'] as PromotionMode[])('direct moves, %
 });
 
 describe('tournament mode: shadow -> train is the competition', () => {
+  // Test scores s are posted as 80 + s/5: with SHADOW_MIN_SAMPLES samples an average below 80 is a failing shadow verdict, which disqualifies
+  // the entrant (wave-2a part D1), so every ranking here happens in the passing band, in the same order and with the same ties
+  const P = (score: number) => 80 + score / 5;
   async function two(scoreA: number | null, scoreB: number | null) {
     const w = await world('tournament');
     const a = w.candidate('passed_premerge');
     const b = w.candidate('passed_premerge');
-    if (scoreA !== null) await w.samples(a, scoreA);
-    if (scoreB !== null) await w.samples(b, scoreB);
+    if (scoreA !== null) await w.samples(a, P(scoreA));
+    if (scoreB !== null) await w.samples(b, P(scoreB));
     return { w, a, b };
   }
 
@@ -270,7 +274,7 @@ describe('tournament mode: shadow -> train is the competition', () => {
     const res = await w.promote({ candidateId: b, toRung: 'train' });
     expect(res.status).toBe(200);
     expect(res.json).toMatchObject({ success: true, outcome: 'moved', moves: [{ candidateId: b, fromRung: 'shadow', toRung: 'train' }] });
-    expect(res.json.details).toMatchObject({ winner: b, scores: { [a]: 60, [b]: 90 } });
+    expect(res.json.details).toMatchObject({ winner: b, scores: { [a]: P(60), [b]: P(90) } });
     expect(w.stageOf(b)).toBe('passed_shadow');
     expect(w.stageOf(a)).toBe('passed_premerge');
     const [t] = w.spec.listTournaments(w.specId);
@@ -297,12 +301,12 @@ describe('tournament mode: shadow -> train is the competition', () => {
   it('arrival order never decides: a score that lands after a candidate joined counts', async () => {
     const { w, a, b } = await two(null, 50);
     await w.promote({ candidateId: a, toRung: 'train' }); // joins with no score at all
-    await w.samples(a, 95); // the score lands after the join
+    await w.samples(a, P(95)); // the score lands after the join
     const res = await w.promote({ candidateId: b, toRung: 'train' });
-    expect(res.json.details).toMatchObject({ winner: a, scores: { [a]: 95, [b]: 50 } });
+    expect(res.json.details).toMatchObject({ winner: a, scores: { [a]: P(95), [b]: P(50) } });
   });
 
-  it('a score of 0 against 50: 50 wins (0 is a score, not a default of 80)', async () => {
+  it('the lowest passing score (P(0) = 80) against P(50): P(50) wins (80 is a score, not a default)', async () => {
     const { w, a, b } = await two(0, 50);
     await w.promote({ candidateId: a, toRung: 'train' });
     const res = await w.promote({ candidateId: b, toRung: 'train' });
@@ -324,8 +328,8 @@ describe('tournament mode: shadow -> train is the competition', () => {
     expect(w.states(b)).toMatchObject([{ status: 'failed' }, { status: 'failed' }, { status: 'failed' }, { status: 'failed' }, { status: 'failed' }, { status: 'failed' }]);
     expect(w.store.raw.prepare('SELECT COUNT(*) AS n FROM trials').get()).toEqual({ n: 0 });
     // the scores land: the same tournament decides
-    await w.samples(a, 70);
-    await w.samples(b, 80);
+    await w.samples(a, P(70));
+    await w.samples(b, P(80));
     const decided = await w.promote({ candidateId: b, toRung: 'train' });
     expect(decided.status).toBe(200);
     expect(decided.json.outcome).toBe('moved');
@@ -335,7 +339,7 @@ describe('tournament mode: shadow -> train is the competition', () => {
     const { w, a, b } = await two(80, null);
     await w.promote({ candidateId: a, toRung: 'train' });
     expect((await w.promote({ candidateId: b, toRung: 'train' })).json.code).toBe('no_shadow_evidence');
-    await w.samples(b, 85);
+    await w.samples(b, P(85));
     const retry = await w.worker.retryPromotion(b, w.agent);
     expect(retry.status).toBe(200);
     expect(w.stageOf(b)).toBe('passed_shadow');
@@ -381,10 +385,10 @@ describe('tournament mode: shadow -> train is the competition', () => {
     expect(w.store.raw.prepare('SELECT COUNT(*) AS n FROM trials').get()).toEqual({ n: 0 });
     // the failed leader no longer blocks a new contest: a replacement (score 40) joins b (score 10) and the tournament decides, c ahead
     const c = w.candidate('passed_premerge');
-    await w.samples(c, 40);
+    await w.samples(c, P(40));
     const next = await w.promote({ candidateId: c, toRung: 'train' });
     expect(next.status).toBe(200);
-    expect(next.json.details).toMatchObject({ winner: c, scores: { [b]: 10, [c]: 40 } });
+    expect(next.json.details).toMatchObject({ winner: c, scores: { [b]: P(10), [c]: P(40) } });
     expect(next.json.details?.disqualified).toBeUndefined(); // a was disqualified in the earlier attempt and does not compete again
     expect(w.spec.listTournaments(w.specId)[0].candidates.find((x) => x.candidateId === a)?.status).toBe('disqualified');
   });
@@ -543,7 +547,7 @@ describe('tournament mode: shadow -> train is the competition', () => {
     expect(again.json.outcome).toBe('waiting');
     // a third candidate joins b: two competing entrants, the tournament decides
     const c = w.candidate('passed_premerge');
-    await w.samples(c, 90);
+    await w.samples(c, P(90));
     const res = await w.promote({ candidateId: c, toRung: 'train' });
     expect(res.status).toBe(200);
     expect(res.json.details).toMatchObject({ winner: c });
@@ -567,7 +571,7 @@ describe('tournament mode: shadow -> train is the competition', () => {
   it('a completed tournament refuses a third candidate with 409 tournament_completed', async () => {
     const { w, a, b } = await two(60, 90);
     const c = w.candidate('passed_premerge');
-    await w.samples(c, 99);
+    await w.samples(c, P(99));
     await w.promote({ candidateId: a, toRung: 'train' });
     await w.promote({ candidateId: b, toRung: 'train' });
     const res = await w.promote({ candidateId: c, toRung: 'train' });
@@ -826,8 +830,8 @@ describe('the promotion state of a candidate that moved but was not the requeste
     const w = await world('tournament');
     const a = w.candidate('passed_premerge');
     const b = w.candidate('passed_premerge');
-    await w.samples(a, 95);
-    await w.samples(b, 10);
+    await w.samples(a, 99);
+    await w.samples(b, 82); // passing scores (wave-2a part D1: a failing shadow verdict disqualifies)
     await w.promote({ candidateId: a, toRung: 'train' });
     w.box.hook = async (request) => {
       if (request.method === 'POST' && new URL(request.url).pathname === '/promotion-states') {
@@ -1031,7 +1035,7 @@ describe('wave-2a part D: tournament guards', () => {
   const isRealAdvance = async (request: Request) =>
     new URL(request.url).pathname.endsWith('/advance') && !((await request.clone().json()) as { dryRun?: boolean }).dryRun;
 
-  it.fails('D1: an entrant with fewer than SHADOW_MIN_SAMPLES samples has no score, so one sample at 100 does not beat a full sample at 99', async () => {
+  it('D1: an entrant with fewer than SHADOW_MIN_SAMPLES samples has no score, so one sample at 100 does not beat a full sample at 99', async () => {
     const { w, a, b } = await pair(100, 99, 1, MIN);
     await w.promote({ candidateId: a, toRung: 'train' });
     const res = await w.promote({ candidateId: b, toRung: 'train' });
@@ -1041,7 +1045,7 @@ describe('wave-2a part D: tournament guards', () => {
     expect(w.stageOf(b)).toBe('passed_premerge');
   });
 
-  it.fails('D2: two entrants that each find no tournament end in one tournament, and it decides', async () => {
+  it('D2: two entrants that each find no tournament end in one tournament, and it decides', async () => {
     const { w, a, b } = await pair(85, 95);
     await w.promote({ candidateId: a, toRung: 'train' });
     // b's first read misses a's tournament (it was created in between), so b tries to create its own
@@ -1061,7 +1065,7 @@ describe('wave-2a part D: tournament guards', () => {
     expect(w.stageOf(b)).toBe('passed_shadow');
   });
 
-  it.fails('D3: a failure recording the winner after the move: success, the tournament stays claimed (not failed, no attempt spent), and the next call completes it', async () => {
+  it('D3: a failure recording the winner after the move: success, the tournament stays claimed (not failed, no attempt spent), and the next call completes it', async () => {
     const { w, a, b } = await pair(85, 95);
     await w.promote({ candidateId: a, toRung: 'train' });
     let failed = false;
@@ -1091,7 +1095,7 @@ describe('wave-2a part D: tournament guards', () => {
     expect(w.spec.listNearMisses({ candidateId: b, reason: 'tournament_loss', limit: 10, offset: 0 })).toHaveLength(0);
   });
 
-  it.fails('D3: a claimed winner that has already moved on (passed_train) is still recorded as the winner, never disqualified', async () => {
+  it('D3: a claimed winner that has already moved on (passed_train) is still recorded as the winner, never disqualified', async () => {
     const { w, a, b } = await pair(85, 95);
     await w.promote({ candidateId: a, toRung: 'train' });
     let failed = false;
@@ -1121,7 +1125,7 @@ describe('wave-2a part D: tournament guards', () => {
     expect(row(w)[0]).toMatchObject({ status: 'failed', winner: null, comparisons: '[]' });
   });
 
-  it.fails('D3: two runs racing: the second sees the first one\'s claim and resumes it, so exactly one candidate is advanced', async () => {
+  it('D3: two runs racing: the second sees the first one\'s claim and resumes it, so exactly one candidate is advanced', async () => {
     const { w, a, b } = await pair(85, 95); // b would win this run's decision
     await w.promote({ candidateId: a, toRung: 'train' });
     let injected = false;

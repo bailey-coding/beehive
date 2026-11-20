@@ -24,15 +24,20 @@ function envWith(respond: (request: Request) => Response | Promise<Response>) {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
+const metrics = { passRate: 0, failureRate: 0, latencyP95: 0, latencyP50: 0, errorRate: 0, throughput: 0, score: 0, conformanceScore: 0, complexityDelta: 0, stability: 0 };
+const entrant = (candidateId: string, status = 'competing') => ({ candidateId, specId: 's1', score: 0, status, metrics });
 const tournament = {
   id: 't1',
+  mode: 'tournament',
   specId: 's1',
-  status: 'in_progress',
-  candidates: [
-    { candidateId: 'c1', status: 'competing' },
-    { candidateId: 'c2', status: 'competing' },
-  ],
+  status: 'pending',
+  candidates: [entrant('c1'), entrant('c2')],
+  comparisons: [] as unknown[],
+  startedAt: '2026-11-01T00:00:00.000Z',
+  version: 1,
 };
+/** Enough samples for a tournament score (wave-2a part D1) */
+const scored = (shadowScore: number, totalRequests = 20) => ({ shadowScore, shadowMetrics: JSON.stringify({ totalRequests }) });
 
 describe('tournament candidate routes', () => {
   it('reads metrics from GET /api/candidates/:id', async () => {
@@ -51,19 +56,43 @@ describe('tournament candidate routes', () => {
     await expect((new TournamentManager(env) as any).readShadowScore('c1')).rejects.toThrow(/404/);
   });
 
-  it('a candidate with no shadow score reads as null, and a score of 0 as 0', async () => {
-    const answers: Record<string, unknown> = { c1: { id: 'c1' }, c2: { id: 'c2', shadowScore: 0 } };
+  it('a candidate with no shadow score, or fewer than SHADOW_MIN_SAMPLES samples, reads as null, and a score of 0 as 0', async () => {
+    const answers: Record<string, unknown> = {
+      c1: { id: 'c1' },
+      c2: { id: 'c2', ...scored(0) },
+      c3: { id: 'c3', ...scored(100, 19) }, // one short of the minimum (wave-2a part D1)
+      c4: { id: 'c4', shadowScore: 100 }, // no count at all: fail closed
+      c5: { id: 'c5', shadowScore: 100, shadowMetrics: '{not json' },
+    };
     const { env } = envWith((request) => json({ success: true, data: answers[new URL(request.url).pathname.split('/').pop()!] }));
     const manager = new TournamentManager(env) as any;
     expect(await manager.readShadowScore('c1')).toBeNull();
     expect(await manager.readShadowScore('c2')).toBe(0);
+    expect(await manager.readShadowScore('c3')).toBeNull();
+    expect(await manager.readShadowScore('c4')).toBeNull();
+    expect(await manager.readShadowScore('c5')).toBeNull();
   });
 
+  // The tournament record the ledger holds: GET by spec answers it, a POST replaces it (the worker's compare-and-swap writes, wave-2a part D3)
+  let stored: Record<string, any>;
+  const writes: Array<Record<string, any>> = [];
   const run = (respond: (request: Request) => Response | Promise<Response>) => {
-    const { env, calls } = envWith(respond);
+    stored = structuredClone(tournament);
+    writes.length = 0;
+    const { env, calls } = envWith(async (request) => {
+      const u = new URL(request.url);
+      if (u.pathname === '/tournament-status' && request.method === 'GET') return json(stored);
+      if (u.pathname === '/tournament-status' && request.method === 'POST') {
+        const body = (await request.clone().json()) as Record<string, any>;
+        writes.push(body);
+        stored = { ...body, version: stored.version + 1 };
+        return json(stored);
+      }
+      return respond(request);
+    });
     const manager = new TournamentManager(env) as any;
-    vi.spyOn(manager, 'getOrCreateTournament').mockResolvedValue(tournament);
-    vi.spyOn(manager, 'addCandidateToTournament').mockResolvedValue(tournament);
+    vi.spyOn(manager, 'getOrCreateTournament').mockImplementation(async () => stored);
+    vi.spyOn(manager, 'addCandidateToTournament').mockImplementation(async () => stored);
     const update = vi.spyOn(manager, 'updateTournament').mockResolvedValue(undefined);
     const execute = () =>
       manager.executeTournament({ candidateId: 'c2', specId: 's1', fromRung: 'shadow', toRung: 'train', actorId: 'agent-1' });
@@ -73,8 +102,8 @@ describe('tournament candidate routes', () => {
   const route = (overrides: Record<string, (request: Request) => Response | Promise<Response>> = {}) => (request: Request): Response | Promise<Response> => {
     const path = `${request.method} ${new URL(request.url).pathname}`;
     if (overrides[path]) return overrides[path](request);
-    if (path === 'GET /api/candidates/c1') return json({ success: true, data: { shadowScore: 90 } });
-    if (path === 'GET /api/candidates/c2') return json({ success: true, data: { shadowScore: 50 } });
+    if (path === 'GET /api/candidates/c1') return json({ success: true, data: scored(90) });
+    if (path === 'GET /api/candidates/c2') return json({ success: true, data: scored(85) });
     if (path === 'POST /api/trials') return json({ success: true, data: { id: 'tr1' } }, 201);
     if (path === 'POST /api/trials/tr1/decide') return json({ success: true, data: {} });
     // Every entrant's dry run, and the winner's real advance
@@ -87,19 +116,27 @@ describe('tournament candidate routes', () => {
     const result = await execute();
     expect(result).toMatchObject({ success: true, outcome: 'eliminated', moves: [{ candidateId: 'c1', fromRung: 'shadow', toRung: 'train' }] });
     const paths = calls.map((c) => `${c.method} ${new URL(c.url).pathname}`);
-    // dry-run each entrant, read both scores, advance the winner, THEN record the trial
+    // dry-run each entrant, read both scores, CLAIM the winner (read + versioned write), advance it, complete (read + write), THEN the trial
     expect(paths).toEqual([
       'POST /api/candidates/c1/advance', 'POST /api/candidates/c2/advance', 'GET /api/candidates/c1', 'GET /api/candidates/c2',
-      'POST /api/candidates/c1/advance', 'POST /api/trials', 'POST /api/trials/tr1/decide',
+      'GET /tournament-status', 'POST /tournament-status',
+      'POST /api/candidates/c1/advance',
+      'GET /tournament-status', 'POST /tournament-status',
+      'POST /api/trials', 'POST /api/trials/tr1/decide',
     ]);
     expect(await calls[0].json()).toMatchObject({ dryRun: true, toRung: 'train', fromRung: 'shadow' });
-    const adv = calls[4];
+    const adv = calls[6];
     expect(adv.headers.get('X-Actor-ID')).toBe('agent-1');
-    expect(await adv.json()).toMatchObject({ toRung: 'train', fromRung: 'shadow' });
-    expect(calls[4].method + calls[4].url).not.toContain('dryRun');
-    expect(calls[5].headers.get('Idempotency-Key')).toBe('tournament:t1:c1:c2');
-    expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ winner: 'c1' }));
-    expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'completed', winner: 'c1' }));
+    const advBody = (await adv.json()) as Record<string, unknown>;
+    expect(advBody).toMatchObject({ toRung: 'train', fromRung: 'shadow' });
+    expect(advBody.dryRun).toBeUndefined();
+    expect(calls[5].headers.get('X-Expected-Version')).toBe('1');
+    expect(calls[9].headers.get('Idempotency-Key')).toBe('tournament:t1:c1:c2');
+    // the claim: in_progress with the winner and the contested loser, before the move; then the completion
+    expect(writes[0]).toMatchObject({ status: 'in_progress', winner: 'c1', comparisons: [{ candidate1: 'c1', candidate2: 'c2', winner: 'c1' }] });
+    expect(writes[1]).toMatchObject({ status: 'completed', winner: 'c1', completedAt: expect.any(String) });
+    expect(Object.fromEntries(writes[1].candidates.map((c: any) => [c.candidateId, c.status]))).toEqual({ c1: 'winner', c2: 'eliminated' });
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("fails the tournament, retryably, when the winner's advance is rejected, and relays the Spec DO's code", async () => {
@@ -112,8 +149,11 @@ describe('tournament candidate routes', () => {
     }));
     const result = await execute();
     expect(result).toMatchObject({ success: false, code: 'not_next_rung' });
-    expect(update).toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'failed', failureReason: expect.stringContaining('not_next_rung') }));
-    expect(update).not.toHaveBeenCalledWith('t1', expect.objectContaining({ status: 'completed' }));
+    // the claim, then ONE full-record failure write that clears the claimed winner and the contested set (a PATCH could not clear them)
+    expect(writes.map((w) => w.status)).toEqual(['in_progress', 'failed']);
+    expect(writes[1]).toMatchObject({ failureReason: expect.stringContaining('not_next_rung'), comparisons: [] });
+    expect(writes[1].winner).toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('an older Spec DO without the advance route stops the attempt as ledger_too_old: nobody is disqualified, nothing is written', async () => {
@@ -124,6 +164,7 @@ describe('tournament candidate routes', () => {
     const result = await execute();
     expect(result).toMatchObject({ success: false, code: 'ledger_too_old' });
     expect(update).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
     expect(calls.every((c) => c.method === 'POST' && new URL(c.url).pathname.endsWith('/advance'))).toBe(true);
   });
 
@@ -132,25 +173,31 @@ describe('tournament candidate routes', () => {
     const result = await execute();
     expect(result).toMatchObject({ success: false, code: 'ledger_error' });
     expect(update).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
   });
 
-  it('recordWinner is ONE write (status, winner, statuses, completion) and leaves an entrant that was not in the contest competing', async () => {
-    const { env } = envWith(() => json({ success: true, data: {} }));
-    const manager = new TournamentManager(env) as any;
-    const update = vi.spyOn(manager, 'updateTournament').mockResolvedValue(undefined);
-    const t = {
-      id: 't1', specId: 's1', status: 'in_progress',
-      candidates: [
-        { candidateId: 'c1', status: 'competing' }, { candidateId: 'c2', status: 'competing' },
-        { candidateId: 'c3', status: 'disqualified' }, { candidateId: 'late', status: 'competing' },
-      ],
+  it('completing a claimed tournament is ONE write (status, statuses, completion): losers are the contested set stored at the claim, a late entrant stays competing', async () => {
+    run(() => json({ success: false }, 500));
+    stored = {
+      ...structuredClone(tournament),
+      status: 'in_progress',
+      winner: 'c1',
+      comparisons: [{ candidate1: 'c1', candidate2: 'c2', winner: 'c1', comparisonScore: 5, comparedAt: '2026-11-01T00:00:00.000Z' }],
+      candidates: [entrant('c1'), entrant('c2'), entrant('c3', 'disqualified'), entrant('late')],
     };
-    await manager.recordWinner('c1', t, new Set(['c1', 'c2']));
-    expect(update).toHaveBeenCalledTimes(1);
-    const patch = update.mock.calls[0][1] as { status: string; winner: string; completedAt: string; candidates: Array<{ candidateId: string; status: string }> };
-    expect(patch).toMatchObject({ status: 'completed', winner: 'c1', completedAt: expect.any(String) });
-    expect(Object.fromEntries(patch.candidates.map((c) => [c.candidateId, c.status]))).toEqual({ c1: 'winner', c2: 'eliminated', c3: 'disqualified', late: 'competing' });
+    const { env } = envWith(async (request) => {
+      if (request.method === 'GET') return json(stored);
+      const body = (await request.clone().json()) as Record<string, any>;
+      writes.push(body);
+      return json({ ...body, version: 2 });
+    });
+    const manager = new TournamentManager(env) as any;
+    expect(await manager.completeClaimed('t1', 's1')).toBe(true);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ status: 'completed', winner: 'c1', completedAt: expect.any(String) });
+    expect(Object.fromEntries(writes[0].candidates.map((c: any) => [c.candidateId, c.status]))).toEqual({ c1: 'winner', c2: 'eliminated', c3: 'disqualified', late: 'competing' });
   });
+
 });
 
 describe('merge train rollback', () => {

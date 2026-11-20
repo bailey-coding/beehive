@@ -277,7 +277,7 @@ describe('one open tournament per spec (D2)', () => {
       id, status, JSON.stringify([candidate('c1')]), createdAt, createdAt
     );
 
-  it.fails('a second create for the spec while one is open is 409 tournament_exists, naming the open one, and writes nothing', async () => {
+  it('a second create for the spec while one is open is 409 tournament_exists, naming the open one, and writes nothing', async () => {
     expect((await call('/tournament-status', 'POST', tournament())).status).toBe(201);
     const res = await call('/tournament-status', 'POST', tournament({ id: 't2' }));
     expect(res.status).toBe(409);
@@ -288,12 +288,17 @@ describe('one open tournament per spec (D2)', () => {
   });
 
   it('a create after the open one completed or failed is allowed; another spec is independent', async () => {
-    await call('/tournament-status', 'POST', tournament({ id: 't-done', status: 'completed', winner: 'c1' }));
+    expect((await call('/tournament-status', 'POST', tournament({ id: 't-done' }))).status).toBe(201);
+    expect((await call('/tournament-status/t-done', 'PATCH', { status: 'in_progress' })).status).toBe(200);
+    expect((await call('/tournament-status/t-done', 'PATCH', { status: 'completed', winner: 'c1', completedAt: '2026-10-16T01:00:00.000Z' })).status).toBe(200);
     expect((await call('/tournament-status', 'POST', tournament({ id: 't-new' }))).status).toBe(201);
+    expect((await call('/tournament-status/t-new', 'PATCH', { status: 'in_progress' })).status).toBe(200);
+    expect((await call('/tournament-status/t-new', 'PATCH', { status: 'failed', failureReason: 'x' })).status).toBe(200);
+    expect((await call('/tournament-status', 'POST', tournament({ id: 't-newer' }))).status).toBe(201);
     expect((await call('/tournament-status', 'POST', tournament({ id: 't-other', specId: 'spec-2' }))).status).toBe(201);
   });
 
-  it.fails('reopening an older failed row while a newer one is open is 409 tournament_exists', async () => {
+  it('reopening an older failed row while a newer one is open is 409 tournament_exists', async () => {
     expect((await call('/tournament-status', 'POST', tournament({ id: 't-old' }))).status).toBe(201);
     expect((await call('/tournament-status/t-old', 'PATCH', { status: 'in_progress' })).status).toBe(200);
     expect((await call('/tournament-status/t-old', 'PATCH', { status: 'failed', failureReason: 'x' })).status).toBe(200);
@@ -303,7 +308,7 @@ describe('one open tournament per spec (D2)', () => {
     expect(await code(res)).toBe('tournament_exists');
   });
 
-  it.fails('moving an open row onto a spec that has an open tournament is 409 tournament_exists', async () => {
+  it('moving an open row onto a spec that has an open tournament is 409 tournament_exists', async () => {
     await call('/tournament-status', 'POST', tournament({ id: 't-a' }));
     await call('/tournament-status', 'POST', tournament({ id: 't-b', specId: 'spec-2' }));
     const res = await call('/tournament-status/t-b', 'PATCH', { specId: 'spec-1' });

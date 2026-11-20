@@ -65,6 +65,8 @@ const COMMIT_MISMATCH = 'commit_mismatch';
 const COMMIT_MISMATCH_EVENT = 'commit_mismatch';
 const CANARY_STAGE_PRECONDITION_EVENT = 'canary_stage_precondition';
 const EVIDENCE_UNBOUND_EVENT = 'evidence_unbound';
+/** wave-2a part D2: a second open tournament for a spec */
+const TOURNAMENT_EXISTS = 'tournament_exists';
 /** Stages from which a canary is the next rung's evidence; anything lower is logged (maintainer decision M1) */
 const CANARY_STAGE_OK = new Set(['passed_train', 'passed_canary', 'promoted']);
 
@@ -3331,6 +3333,21 @@ export class SpecDO {
     const attempts = current ? (row.attempts as number) : 0;
     const violation = checkTournamentTransition(current, next, attempts);
     if (violation) return { refused: violation };
+
+    // One open tournament per spec (wave-2a-plan part D2, review b1-S6). Checked only on a write that opens this row for its spec (a create,
+    // a reopen of a failed or completed row, a move to another spec): a same-status write on an open row is never refused, so a spec that
+    // already holds duplicate open rows keeps working on its newest one. In the write's transaction on the single-threaded DO: no race.
+    const OPEN = ['pending', 'in_progress'];
+    const opens = OPEN.includes(next.status) && (!current || !OPEN.includes(current.status) || current.specId !== next.specId);
+    if (opens) {
+      const other = this.queryAll(
+        `SELECT id FROM tournaments WHERE spec_id = ? AND status IN ('pending', 'in_progress') AND id != ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+        next.specId, id
+      )[0];
+      if (other) {
+        return { refused: { code: TOURNAMENT_EXISTS, message: `Spec ${next.specId} already has an open tournament: ${String(other.id)}` } };
+      }
+    }
 
     const entersFailed = next.status === 'failed' && current?.status !== 'failed';
     const resets = next.status === 'pending' && current?.status === 'failed';

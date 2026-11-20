@@ -218,8 +218,11 @@ describe('/tournament-status', () => {
   });
 
   it('GET by spec returns the newest tournament; /all lists every one', async () => {
-    await call('/tournament-status', 'POST', tournament({ id: 't1' }));
-    await call('/tournament-status', 'POST', tournament({ id: 't2' }));
+    await call('/tournament-status', 'POST', tournament({ id: 't1', candidates: twoCandidates }));
+    // one open tournament per spec (wave-2a part D2): t1 ends before t2 is created
+    await call('/tournament-status/t1', 'PATCH', { status: 'in_progress' });
+    expect((await call('/tournament-status/t1', 'PATCH', { status: 'failed', failureReason: 'x' })).status).toBe(200);
+    expect((await call('/tournament-status', 'POST', tournament({ id: 't2' }))).status).toBe(201);
     await call('/tournament-status', 'POST', tournament({ id: 't3', specId: 'spec-2', candidates: [] }));
 
     expect(((await (await call('/tournament-status?specId=spec-1')).json()) as TournamentRecord).id).toBe('t2');
