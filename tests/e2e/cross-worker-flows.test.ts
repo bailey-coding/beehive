@@ -19,7 +19,7 @@ import {
 } from './config';
 import { createRequest, readJson, fetchWithRetry, createTestContext } from './helpers';
 import { WorkerType } from './auth';
-import { seedWorld, candidateAt, setStage, passPremerge, stageOf } from './promotion-fixtures';
+import { seedWorld, candidateAt, advanceTo, passPremerge, stageOf } from './promotion-fixtures';
 
 // Re-export types from m3-features.test.ts for consistency
 type RequestClassification = {
@@ -465,7 +465,7 @@ describe('Cross-Worker Flow Tests', () => {
       expect(result1.toRung).toBe('shadow');
 
       // shadow -> train is the tournament (see m3-features); here the candidate stands for one that won it
-      await setStage(w, candidateId, 'passed_shadow');
+      await advanceTo(w, candidateId, 'passed_shadow');
 
       // train -> canary: a direct advance in tournament mode (the train evidence is logged, not enforced)
       const result2 = await promoteCandidate(candidateId, w.specId, 'train', 'canary', w.actor);
@@ -567,7 +567,7 @@ describe('Cross-Worker Flow Tests', () => {
       await passPremerge(w, laddered);
       const promo1 = await promoteCandidate(laddered, w.specId, undefined, 'shadow', w.actor);
       expect(promo1.success).toBe(true);
-      await setStage(w, laddered, 'passed_shadow'); // stands for winning the shadow tournament
+      await advanceTo(w, laddered, 'passed_shadow'); // stands for winning the shadow tournament
       const promo2 = await promoteCandidate(laddered, w.specId, undefined, 'canary', w.actor);
       expect(promo2.success).toBe(true);
 

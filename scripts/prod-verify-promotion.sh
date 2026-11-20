@@ -61,14 +61,17 @@ ORG="$(call POST "$API" /api/organizations "{\"name\":\"test-org-e2e-prodcheck-$
 [ -n "$ORG" ] || { fail "could not create org"; exit 1; }
 REPO="$(call POST "$API" /api/repositories "{\"name\":\"repo\",\"organizationId\":\"$ORG\",\"repoType\":\"baseline\",\"remoteUrl\":\"https://example.invalid/r.git\",\"namespace\":\"prodcheck\"}" "$ACTOR" | id_of)"
 SPEC="$(call POST "$API" /api/specs "{\"name\":\"spec\",\"contract\":\"{}\",\"declaredDeltaSurface\":[],\"organizationId\":\"$ORG\"}" "$ACTOR" | id_of)"
-C1="$(call POST "$API" /api/candidates "{\"specId\":\"$SPEC\",\"repositoryId\":\"$REPO\",\"commitSha\":\"sha1\",\"baseCommitSha\":\"base\"}" "$ACTOR" | id_of)"
-C2="$(call POST "$API" /api/candidates "{\"specId\":\"$SPEC\",\"repositoryId\":\"$REPO\",\"commitSha\":\"sha2\",\"baseCommitSha\":\"base\"}" "$ACTOR" | id_of)"
+C1="$(call POST "$API" /api/candidates "{\"specId\":\"$SPEC\",\"repositoryId\":\"$REPO\",\"commitSha\":\"$(printf '1%.0s' {1..40})\",\"baseCommitSha\":\"$(printf 'b%.0s' {1..40})\"}" "$ACTOR" | id_of)"
+C2="$(call POST "$API" /api/candidates "{\"specId\":\"$SPEC\",\"repositoryId\":\"$REPO\",\"commitSha\":\"$(printf '2%.0s' {1..40})\",\"baseCommitSha\":\"$(printf 'b%.0s' {1..40})\"}" "$ACTOR" | id_of)"
 [ -n "$REPO" ] && [ -n "$SPEC" ] && [ -n "$C1" ] && [ -n "$C2" ] || { fail "seed incomplete (repo=$REPO spec=$SPEC c1=$C1 c2=$C2)"; exit 1; }
 echo "org=$ORG spec=$SPEC candidates=$C1 $C2"
 
 echo "== place the candidates on the shadow rung and give them shadow scores"
+# The stage PATCH writes only failed/rolled_back since wave-2a part A: a passing pre-merge verdict, then the master-only edge advance.
+# Needs the wave-2a deploy fully landed (an older edge answers 404 for advance; docs/OPS.md).
 for c in "$C1" "$C2"; do
-  [ "$(call PATCH "$API" "/api/candidates/$c/stage" '{"stage":"passed_premerge","notes":"prod-verify fixture"}' "$ACTOR" | jq -r '.data.stage // empty')" = "passed_premerge" ] || fail "could not place $c on the shadow rung"
+  call POST "$API" /api/gate-verdicts "{\"candidateId\":\"$c\",\"gate\":\"pre-merge\",\"status\":\"pass\",\"score\":90,\"complexityDelta\":0,\"notes\":\"prod-verify fixture\"}" "$ACTOR" >/dev/null
+  [ "$(call POST "$API" "/api/candidates/$c/advance" '{"toRung":"shadow","notes":"prod-verify fixture"}' "$ACTOR" | jq -r '.data.stage // empty')" = "passed_premerge" ] || fail "could not place $c on the shadow rung"
 done
 samples() { jq -nc --arg p "$1" --argjson s "$2" '{samples: [range(0;20) | {requestId: ($p + "-" + (. | tostring)), score: $s, matched: false, diffs: [], baseline: "production"}]}'; }
 for pair in "$C1:85" "$C2:95"; do
