@@ -1345,13 +1345,15 @@ Wave 2: choose converting at write time or widening the parser (it changes the s
 
 ## 2026-11-22: the planned real gate lets a candidate edit the check that judges it
 
-Prompted by Anthropic's account of how the Claude Code team verifies agent-written code (The New Stack, 2026-11-20): "if a change can
-modify the check that judges it, the check is broken"; review rules are read from the base branch, and a result counts only for the commit
-it examined. Beehive has the last part (`gate_verdicts.commit_sha`, m16), but not the first. `POST /sandbox/test` runs "a commit's own tests"
-(`workers/sandbox-runner/index.ts:154`, `test-sandbox.ts:323`): the command is fixed by the gate's config (D13), yet `package.json`'s `test`
-script and every test file come from the candidate's checkout. `docs/REAL-GATE-IMPL-PLAN.md` section 1 already records the limit
-(`"test":"true"` passes; the gate proves only that the repo's own test command exited 0) and slice 9 states it publicly, but no plan closes it.
+Prompted by Anthropic's account of how the Claude Code team verifies agent-written code
+(https://thenewstack.io/anthropic-claude-code-verification/, 2026-11-20): if a change can modify the check that judges it, the check is broken;
+review rules are read from the base branch, and a result counts only for the commit it examined. Beehive records the commit
+(`gate_verdicts.commit_sha`, m16) but only logs a mismatch (`logEvidenceCommit`; enforcement waits on b2-S8), and has nothing for the first part.
+`POST /sandbox/test` runs "a commit's own tests" (`workers/sandbox-runner/index.ts:154`, `test-sandbox.ts:323`): the command is fixed by the
+gate (`docs/REAL-GATE-IMPL-PLAN.md` section 1 step 4), yet `package.json`'s `test` script and every test file come from the candidate's checkout.
+Section 1 of that plan already records the limit (`"test":"true"` passes), and slice 9 is planned to state it publicly, but no plan closes it.
 
 Why it matters more here than in a single-team repo: candidates for one spec compete, so a candidate that deletes or weakens a failing test
 gains on the honest ones, and the pre-merge rung is the only rung before mirrored traffic. Nothing is exposed today (the gate is simulated,
-slice 7a not started). **Status**: open. Proposed design: `docs/REAL-GATE-IMPL-PLAN.md` section 10 (draft, needs plan review, spine rule 2).
+slice 7a not started). Also undocumented and needed by the fix: whether a container `exec` can run as a user other than the image's `USER`
+(spike S6). **Status**: open. Proposed design: `docs/REAL-GATE-IMPL-PLAN.md` section 10 (rev 2, after an independent plan review).
