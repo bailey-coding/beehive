@@ -8,12 +8,12 @@ audience: human,agent
 *This document is a living focus tracker. Update it at the start/end of each session.
 Completed items are removed, not struck through; history lives in git.*
 
-**Last updated:** 2026-11-20
+**Last updated:** 2026-11-22
 
-## Handoff (2026-11-20): Wave 2a implemented, awaiting code review and merge
+## Handoff (2026-11-22): Wave 2a merged to `main`, not deployed
 
-**Wave 2a** (`docs/plans/wave-2a-plan.md` rev 3, two plan reviews, implementation notes at the end) is on `ccr-cd33bfbc-7yd3mx`: **not merged,
-not deployed.** The maintainer accepted decisions M1-M3 (2026-11-20). What it does, and the deploy checks: `docs/OPS.md` "Wave 2a".
+**Wave 2a** (`docs/plans/wave-2a-plan.md` rev 3, two plan reviews, implementation notes at the end) is **merged to `main`** (`e988862`, 2026-11-22, CI run 327 green):
+**not deployed.** The maintainer accepted decisions M1-M3 (2026-11-20). What it does, and the deploy checks: `docs/OPS.md` "Wave 2a".
 - A: stage PATCH writes only failed/rolled_back (409 `use_advance`), 404 before write, 400 for unknown stages; master-only edge `advance`.
 - B: `deployCanary` needs a live candidate under the spec and its commit; below `passed_train` is logged (M1).
 - C: schema **m16** (`gate_verdicts.commit_sha`, `simulated`); the gate checks candidate, spec and sha, and labels `[simulated]`; commit binding logged.
@@ -23,7 +23,7 @@ not deployed.** The maintainer accepted decisions M1-M3 (2026-11-20). What it do
 
 Independent code review (Opus, 2026-11-20): approve with changes, no must-fix; S1-S5 and N1-N8 fixed, dispositions at the end of the plan.
 Verified after the fixes: unit 105 files / 2481 tests, typecheck clean, local e2e (fresh state) 62 passed / 19 skipped, 96 mutations (one
-accepted survivor, see the plan). Next: merge to `main` on the maintainer's word; then Wave 2b (canary evidence) needs its own plan.
+accepted survivor, see the plan). Next: the maintainer's deploy (secret and pre-push checks in `docs/OPS.md` "Wave 2a"); then Wave 2b (canary evidence) needs its own plan.
 
 ## Handoff (2026-11-18): previous
 
