@@ -239,3 +239,38 @@ Also: the queue must exist before the push that adds the consumer (human); the n
 - **D11 `unverified` passes** (exit 0, no parsable counts): display-only in slice 1; slice 2's policy decides whether a repo may require verified counts. *Recommend: allow, show it, let the policy tighten.*
 - **D12 abuse limits:** 50 runs per organization per 24 h, 1 running per repository, 3 globally, gate trigger from the production push queue only. *Recommend these starting numbers.*
 - **D13 `installDirs`:** a per-repo constant in the gate's config (this repo: root, `cli/`, each `workers/*/` with a lockfile), never read from the repo (repo-controlled). *Recommend yes; replaced by `repo_policies.gate` in slice 2.*
+
+## 10. Follow-up (draft, 2026-11-22, not reviewed): a judge the candidate cannot edit [SPINE]
+
+**Problem.** Section 1's verdict is "the repo's own test command exited 0". Every input to it except the command (`package.json` scripts,
+test files, test config) is in the candidate's commit, so a candidate can delete or weaken a test and still pass. Rule adopted from Anthropic's
+Claude Code verification practice: **if a change can modify the check that judges it, the check is broken** (`docs/OPEN-QUESTIONS.md` 2026-11-22).
+Slice 1 ships as planned; this section is the slice that makes `pass` mean something across competing candidates. It is a design to review,
+not an accepted plan: it needs an independent plan review before code (AGENTS.md rule 2).
+
+**Proposal (recommendation first).**
+1. **Spec-owned acceptance suite.** A spec may declare `acceptance: { repo, commitSha, testDir, command }`: tests that live outside every
+   candidate's fork (a spec repository in Artifacts, pinned to a 40-hex commit when the spec version is created, immutable per spec version).
+   The sandbox clones the candidate at its commit (unchanged), then clones the suite at the pinned commit into a directory the candidate's
+   tree cannot shadow (outside the candidate's checkout, read-only for the test user), installs it with its own lockfile, and runs its command
+   against the candidate's build. Same network, limits and log rules as section 1.
+2. **Two results, one verdict.** `gate_runs` records `checks.acceptance` (the judge) and `checks.own_tests` (advisory evidence). The verdict is
+   `acceptance`; a spec without a suite keeps today's behavior with `checks.acceptance = 'not_declared'`, shown as such (never as a pass).
+   Whether a repo may require a declared suite is a `repo_policies.gate` decision (slice 2), like D11.
+3. **Evidence that the judge ran unmodified.** The run stores the suite's commit and the SHA-256 of its test tree, and the verdict counts only
+   for (candidate commit, suite commit). A new suite commit invalidates earlier `pass` results for that spec version's candidates (re-run, not reuse).
+4. **Own-test diff as a review signal.** The gate records which test files the candidate changed against its base commit (removed, skipped,
+   assertion count down); the review agent and the UI show it. Not a verdict input in this slice (false positives on legitimate refactors).
+5. **Gaming rules for agents** (AGENTS.md, after review): no `.skip`/`.only`, no added sleeps, no rerun-until-green; a test that cannot be
+   fixed is deleted with the reason in the commit message. Enforceable later by item 4.
+
+**Open questions for the review.** (a) Where the suite lives: a dedicated Artifacts repo per spec vs a path in the spec's repository (the
+latter lets a spec edit and its suite land together, but then the suite's pin must still come from the spec version, never from a candidate).
+(b) The interface between suite and candidate: an HTTP contract against the candidate run locally (matches the stateless candidate shape
+and Shadow's oracle) vs importing the candidate's modules (couples the suite to a layout). *Recommend HTTP.* (c) Cost: a second install per
+run; measure in the first production run of slice 7a before sizing. (d) Mixed-version window: the spec field and `checks` keys are additive and
+opt-in; an old gate ignores `acceptance`, so the summary must not read as a judged pass until every worker is on the new version.
+
+**Related, smaller follow-ups from the same source (not planned):** a per-candidate "how was this verified" record including `simulated`
+and `none`; converting demotions and rollbacks into regression checks the ladder selects per change; grading the review agent
+(`docs/AGENTS-REVIEWER.md`) against this repo's past reverts with a held-out set.

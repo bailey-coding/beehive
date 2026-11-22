@@ -1342,3 +1342,16 @@ default surface for anything that is not a v1 object (one log line per spec), so
 on scoring for any spec stored through the edge. `gate-workflow/index.ts:797-798` reads the same field in camelCase (unused). **Status**: open,
 Wave 2: choose converting at write time or widening the parser (it changes the spec contract), with its own plan.
 
+
+## 2026-11-22: the planned real gate lets a candidate edit the check that judges it
+
+Prompted by Anthropic's account of how the Claude Code team verifies agent-written code (The New Stack, 2026-11-20): "if a change can
+modify the check that judges it, the check is broken"; review rules are read from the base branch, and a result counts only for the commit
+it examined. Beehive has the last part (`gate_verdicts.commit_sha`, m16), but not the first. `POST /sandbox/test` runs "a commit's own tests"
+(`workers/sandbox-runner/index.ts:154`, `test-sandbox.ts:323`): the command is fixed by the gate's config (D13), yet `package.json`'s `test`
+script and every test file come from the candidate's checkout. `docs/REAL-GATE-IMPL-PLAN.md` section 1 already records the limit
+(`"test":"true"` passes; the gate proves only that the repo's own test command exited 0) and slice 9 states it publicly, but no plan closes it.
+
+Why it matters more here than in a single-team repo: candidates for one spec compete, so a candidate that deletes or weakens a failing test
+gains on the honest ones, and the pre-merge rung is the only rung before mirrored traffic. Nothing is exposed today (the gate is simulated,
+slice 7a not started). **Status**: open. Proposed design: `docs/REAL-GATE-IMPL-PLAN.md` section 10 (draft, needs plan review, spine rule 2).
