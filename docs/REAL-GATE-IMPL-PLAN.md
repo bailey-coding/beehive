@@ -239,3 +239,75 @@ Also: the queue must exist before the push that adds the consumer (human); the n
 - **D11 `unverified` passes** (exit 0, no parsable counts): display-only in slice 1; slice 2's policy decides whether a repo may require verified counts. *Recommend: allow, show it, let the policy tighten.*
 - **D12 abuse limits:** 50 runs per organization per 24 h, 1 running per repository, 3 globally, gate trigger from the production push queue only. *Recommend these starting numbers.*
 - **D13 `installDirs`:** a per-repo constant in the gate's config (this repo: root, `cli/`, each `workers/*/` with a lockfile), never read from the repo (repo-controlled). *Recommend yes; replaced by `repo_policies.gate` in slice 2.*
+
+## 10. Follow-up (draft rev 2, 2026-11-22): a judge the candidate cannot edit [SPINE]
+
+**Status:** rev 1 was rejected by an independent plan review (2026-11-22; three blocking findings: one uid cannot isolate the judge,
+invalidation contradicted an immutable pin, an old runner could yield an unjudged pass). Rev 2 responds to all twelve; the re-review accepted it with changes, applied in rev 3. It is still a
+design for the maintainer, not an accepted plan; code needs the spike below and an implementation review (AGENTS.md rule 2).
+
+**Problem.** Section 1's verdict is "the repo's own test command exited 0". The command is fixed by the gate (section 1 step 4), but every
+other input (`package.json` scripts, test files, test config) is in the candidate's commit, so a candidate can delete or weaken a test and still
+pass. Proposed rule, from Anthropic's description of how the Claude Code team verifies agent-written code
+(https://thenewstack.io/anthropic-claude-code-verification/, 2026-11-20): if a change can modify the check that judges it, the check is broken.
+Slice 1 ships as planned; this is the slice after it (`docs/OPEN-QUESTIONS.md` 2026-11-22).
+
+**Proposal (recommendation first).**
+1. **Spec-owned acceptance suite, pinned at spec creation.** A spec may declare `acceptance: { repo, commitSha, command, startCommand }`:
+   tests in an Artifacts repository no candidate fork contains, pinned to a 40-hex commit. Specs have no versions (`schema.sql:84-96`; the only
+   update is `stage`), so the pin is **fixed when the spec is created and never changes: a new suite means a new spec**. Nothing is ever
+   invalidated, the dedupe key of section 3 (candidate, gate, sha) stays correct, and nothing already on the train, in canary or promoted is
+   touched. The cost: a buggy suite can only be fixed by creating a new spec, which restarts that spec's competition. Stored in a new nullable `specs.acceptance` column (additive migration, next free number).
+2. **Isolation by uid and by container, not by permissions within one uid.** Today everything runs as `node` (`Dockerfile.test:16`), which owns
+   `/workspace` and can signal or ptrace anything else it runs, and the phase wrapper kills only its own process group (`test-sandbox.ts:66-69`),
+   so a `setsid` child outlives a phase. Therefore:
+   - The **judge run** is its own container, separate from the candidate's own-test run (the existing `/sandbox/test`, unchanged). No
+     candidate code ever ran in it before the suite was installed.
+   - Inside it, three uids: **root** clones and installs the suite into `/judge` (root-owned, not writable by others); **`candidate`** installs
+     and serves the candidate from `/workspace/candidate`; **`judge`** runs the suite command against it. Logs are written by root-owned
+     wrapper processes, not by the candidate uid.
+   - Before the suite starts and after it ends, every process of the `candidate` uid except the server is killed (`pkill -KILL -u candidate`),
+     and the readiness probe runs only after that. The server is still candidate code and keeps running while the suite runs; with separate
+     uids it can affect only its own answers and its own CPU and memory use, not the suite, its files or the logs.
+   - Whether a Cloudflare container `exec` can run as another user (or the image must start as root and drop privileges with `setpriv`) is
+     undocumented: **spike S6** before code, result to OPEN-QUESTIONS. S6 also measures an offline `wrangler dev` start (never measured).
+3. **How the candidate is served.** Candidates are small stateless Workers. `startCommand` (argv, from the spec, like the test command never run
+   through `sh -c`) starts the candidate offline (both installs happen before the network is closed, as in section 1 step 3), normally `wrangler dev`/workerd from the candidate's own lockfile, on a port fixed by the gate
+   (`PORT` in the env). The gate polls `http://127.0.0.1:$PORT/` until any HTTP answer, for at most 30 s, else class `start_failed`. The suite talks to
+   the candidate over HTTP only, never by importing its modules (matches Shadow's oracle and keeps the suite independent of a candidate's layout).
+4. **Budget.** Judge container: suite clone + install 120 s, candidate install 120 s, start 30 s, suite 240 s, overall 600 s (section 1's
+   limits, reallocated; 510 s of phases). For a spec with a suite, one `gate_runs` row per (candidate, `pre-merge`, sha) as today: the gate
+   starts the judge container and the own-test container **in parallel** under the same 600 s deadline, and records both in that row
+   (the judge decides `status`, the own-test result is advisory in `checks.tests`). The row is one slot against section 2's caps but holds
+   two containers, so the global cap of 3 rows means up to 6 containers. The own-test run can be skipped by policy (open question (c)). Only the root install was ever measured (section 1), so 7a's production timing must be done before these numbers are fixed.
+5. **Results and the verdict.** `gate_runs.checks` keeps `tests` (not renamed) and gains an optional `acceptance`: `pass | fail | not_declared`.
+   For a spec with a suite the verdict is `acceptance`; without one it is today's verdict with `acceptance = not_declared`, shown as such and
+   never as a judged pass. The run also stores the suite commit and the SHA-256 of its installed tree. Whether a repository may require specs
+   with a suite is a per-repository policy (`repo_policies.gate`, `docs/MR-FLOW-PLAN.md:72`); the suite itself is per spec.
+   Failure classes to add to section 4's table: `start_failed` (no HTTP answer within 30 s) and a suite failure or suite timeout are
+   `fail` (the candidate); a suite clone or install failure is `error` with class `suite_unavailable` (the spec's problem, not retried past
+   the attempt cap, shown to the spec author); failing to set up the uids or drop privileges is `sandbox_unavailable` (`error`, retried).
+6. **Test-change signal (advisory).** For the own-test run, record test files removed or skipped and assertion counts against the base commit,
+   shown to review agents and in the UI, never a verdict input. Depends on a correct `base_commit_sha`: today the consumer sends the head sha
+   when `base_ref` is set (section 0, `queue-consumer :331`), so this item waits for that fix.
+7. **Rules for agents** (proposed for AGENTS.md after review): no `.skip`/`.only`, no added sleeps, no rerun-until-green; a test that cannot be
+   fixed is deleted with the reason in the commit message.
+
+**Mixed-version windows (add to section 6).** A failure must never record a pass:
+- *new gate → old runner:* `validateTestRequest` drops unknown fields (`test-sandbox.ts:127-131`), so an old runner would answer an
+  acceptance request with an own-test result. The judge run uses a **new route** (`/sandbox/judge`), whose 404 on an old runner is
+  `sandbox_unavailable` → retry → `error`; the gate also requires `acceptance` in the result and treats its absence as `error`.
+- *new gate → old DO:* `GateRunChecksSchema` is strict (`gate-run-schema.ts:81-87`), so a new `acceptance` key gets a 400. The DO widens the
+  schema (accepts with and without the key). The gate always sends the key; on a 400 it retries without the key and records the run as
+  `error`, never as a pass. No deploy order is needed: during the window judged runs record `error` and are re-run later.
+- *old edge → new spec field:* `CreateSpecRequestSchema` is not strict (`shared/schemas.ts:133-139`), so an old `beehive` silently stores a spec
+  without its suite. The create response echoes `acceptance`, and the CLI/UI checks it and fails loudly when it is missing.
+
+**Open questions for the maintainer.** (a) Where suites live: one Artifacts repository per spec, or a path in a shared specs repository (pinned
+the same way). *Recommend one per spec.* (b) Overfitting: candidate agents that can read the suite can tune to its exact cases. Is part of the suite
+held out (stored in a repository candidate tokens cannot read, run by the judge only)? *Recommend a held-out part from the first spec.*
+(c) Whether the own-test run is kept at all once a suite exists (cost vs evidence).
+
+**Related, smaller follow-ups from the same source (not planned):** a per-candidate "how was this verified" record including `simulated`
+and `none`; converting demotions and rollbacks into regression checks the ladder selects per change; grading the review agent
+(`docs/AGENTS-REVIEWER.md`) against this repo's past reverts with a held-out set.
